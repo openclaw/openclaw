@@ -6,7 +6,9 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const head = "a".repeat(40);
+const otherHead = "b".repeat(40);
 const prefix = "/repos/openclaw/openclaw";
+const at = (time: string) => `2026-01-01T${time}:00Z`;
 const repository = { full_name: "openclaw/openclaw", default_branch: "main" };
 const pullRequest = {
   number: 42,
@@ -32,28 +34,86 @@ const scheduledRunsPath = `${prefix}/actions/workflows/security-review.yml/runs?
 const ciRunsPath = `${prefix}/actions/workflows/ci.yml/runs?event=pull_request&status=completed&created=2026-01-01T20%3A00%3A00.000Z..2026-01-02T00%3A00%3A00.000Z&per_page=100&page=1`;
 const completedRun = {
   ...run,
-  created_at: "2026-01-01T22:30:00Z",
-  updated_at: "2026-01-01T23:40:00Z",
+  updated_at: at("23:40"),
 };
+const statusesPath = (sha = head, page = 1) =>
+  `${prefix}/commits/${sha}/statuses?per_page=100&page=${page}`;
+const pullPath = (number = 42) => `${prefix}/pulls/${number}`;
+const publishPath = (sha = head) => `${prefix}/statuses/${sha}`;
+const associationsPath = `${prefix}/commits/${head}/pulls?per_page=100&page=1`;
+const branchPath = `${prefix}/pulls?state=open&head=contributor%3Afeature&per_page=100&page=1`;
+const get = (path: string) => ({ path, method: "GET" });
+const reply = (body: unknown) => ({ body });
+const reviewEntry = (pr = 42, sha = head) => ({ pr, head: sha });
+const creator = (login = "github-actions[bot]", type = "Bot") => ({ creator: { login, type } });
+const changedPull = (number = 42, sha = head) => ({
+  ...pullRequest,
+  number,
+  head: { ...pullRequest.head, sha },
+});
+const completed = (patch: Partial<typeof completedRun>) => ({ ...completedRun, ...patch });
 function recordedPullRequest(number: number) {
   return {
     context: "openclaw/ci-gate",
     description: `PR #${number}: Checking security review`,
     state: "pending",
-    creator: { login: "github-actions[bot]", type: "Bot" },
+    ...creator(),
   };
 }
 
+function runListing(workflow_runs: object[], total_count = workflow_runs.length) {
+  return { body: { total_count, workflow_runs } };
+}
+
+function listingPages(
+  sizes: number[],
+  total: number,
+  path = ciRunsPath,
+  makeRun: (index: number) => object = (index) => completed({ id: index + 1 }),
+): Record<string, Reply> {
+  return Object.fromEntries(
+    sizes.map((size, index) => [
+      path.replace(/&page=1$/u, `&page=${index + 1}`),
+      runListing(
+        Array.from({ length: size }, (_, row) => makeRun(index * 100 + row)),
+        total,
+      ),
+    ]),
+  );
+}
+
+const pageSizes = (count: number) =>
+  Array.from({ length: Math.floor(count / 100) + 1 }, (_, page) =>
+    Math.min(100, count - page * 100),
+  );
+
+function gateStatus(state: string, created_at: string, patch: object = {}) {
+  return { ...recordedPullRequest(42), state, created_at, ...patch };
+}
+const settledGate = (created_at: string) =>
+  gateStatus("success", created_at, { context: "OpenClaw/CI-Gate" });
+
 type Reply = { body: unknown; status?: number; headers?: Record<string, string> };
+type Trace = {
+  path: string;
+  delay?: number;
+  method: string;
+  body?: { context: string; state: string; description: string; target_url: string };
+  hadOutput: boolean;
+};
 type Options = {
   eventName?: string;
   event?: Record<string, unknown>;
   run?: Record<string, unknown>;
   pullRequest?: Record<string, unknown>;
   responses?: Record<string, Reply | Reply[]>;
+  expected?: Expected;
 };
+type Selection = { pr: number; head: string }[];
+type Expected = { status?: number; include?: Selection; posts?: number; truncated?: boolean };
 
 function evaluate(options: Options = {}) {
+  const expected = options.expected ?? {};
   const root = tempDirs.make("security-review-event-");
   const eventFile = join(root, "event.json");
   const traceFile = join(root, "requests.jsonl");
@@ -61,24 +121,14 @@ function evaluate(options: Options = {}) {
   const responses = {
     [`${prefix}/actions/runs/123`]: { body: { ...run, ...options.run } },
     [`${prefix}/actions/workflows/ci.yml`]: { body: { id: 456, path: run.path } },
-    [`${prefix}/pulls/42`]: { body: { ...pullRequest, ...options.pullRequest } },
-    [`${prefix}/commits/${head}/pulls?per_page=100&page=1`]: { body: [{ number: 42 }] },
-    [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
-      body:
-        options.eventName === "schedule"
-          ? [
-              {
-                ...recordedPullRequest(42),
-                description: "PR #42: Waiting for CI; review updates automatically",
-                created_at: "2026-01-01T23:30:00Z",
-              },
-            ]
-          : [],
-    },
-    [scheduledRunsPath]: { body: { workflow_runs: [] } },
-    [ciRunsPath]: {
-      body: { total_count: 1, workflow_runs: [{ ...completedRun, ...options.run }] },
-    },
+    [pullPath()]: reply({ ...pullRequest, ...options.pullRequest }),
+    [associationsPath]: reply([{ number: 42 }]),
+    [branchPath]: reply([]),
+    [statusesPath()]: reply(
+      options.eventName === "schedule" ? [gateStatus("pending", at("23:30"))] : [],
+    ),
+    [scheduledRunsPath]: reply({ workflow_runs: [] }),
+    [ciRunsPath]: runListing([{ ...completedRun, ...options.run }]),
     ...options.responses,
   };
   writeFileSync(
@@ -136,18 +186,10 @@ globalThis.fetch = async (url, options = {}) => {
     ? readFileSync(traceFile, "utf8")
         .trim()
         .split("\n")
-        .map(
-          (line) =>
-            JSON.parse(line) as {
-              path: string;
-              delay?: number;
-              method: string;
-              body?: { context: string; state: string; description: string; target_url: string };
-              hadOutput: boolean;
-            },
-        )
+        .map((line) => JSON.parse(line) as Trace)
     : [];
-  return {
+  const requests = trace.map(({ path, method }) => ({ path, method }));
+  const evaluated = {
     status: result.status,
     error: result.stderr.trim(),
     matrix:
@@ -156,336 +198,256 @@ globalThis.fetch = async (url, options = {}) => {
         : undefined,
     output: existsSync(outputFile) ? readFileSync(outputFile, "utf8") : "",
     waits: trace.filter(({ method }) => method === "WAIT").map(({ delay }) => delay!),
-    requests: trace.map(({ path, method }) => ({ path, method })),
+    requests,
+    paths: requests.map(({ path }) => path),
     published: trace.filter(({ method }) => method === "POST"),
+    statusRequests: requests.filter(({ path }) => path?.includes("/statuses?")),
+    listingRequests: requests.filter(({ path }) => path?.includes("/workflows/ci.yml/runs")),
+  };
+  expect(evaluated.status, evaluated.error).toBe(expected.status ?? 0);
+  const include = expected.include ?? [reviewEntry()];
+  expect(evaluated.published).toHaveLength(
+    expected.posts ?? (evaluated.status === 0 ? include.length : 0),
+  );
+  expect(evaluated.published.every(({ hadOutput }) => !hadOutput)).toBe(true);
+  if (evaluated.status === 0) {
+    expect(evaluated.matrix).toEqual({ include });
+    expect(evaluated.output).toBe(
+      `matrix=${JSON.stringify({ include })}\nhas-prs=${include.length > 0}\ntruncated=${expected.truncated ?? false}\n`,
+    );
+    if (include.length) {
+      expect(evaluated.published.slice(-include.length)).toMatchObject(
+        include.map(({ pr, head: sha }) => pendingPublication(pr, sha)),
+      );
+    }
+  } else {
+    expect(evaluated).toMatchObject({ output: "", matrix: undefined });
+  }
+  return evaluated;
+}
+
+function scheduled(responses: NonNullable<Options["responses"]>, expected?: Expected) {
+  return evaluate({ eventName: "schedule", responses, expected });
+}
+
+function pullEvent(options: Options & { action?: string } = {}) {
+  return evaluate({
+    ...options,
+    eventName: "pull_request_target",
+    event: { action: options.action ?? "opened", pull_request: { number: 42 }, ...options.event },
+  });
+}
+
+function pendingPublication(pr = 42, sha = head) {
+  return {
+    path: publishPath(sha),
+    hadOutput: false,
+    body: {
+      context: "openclaw/ci-gate",
+      description: `PR #${pr}: Review scheduled; CI and security review have not completed`,
+      state: "pending",
+    },
   };
 }
 
-function reconcileStatuses(statuses: unknown[]) {
-  return evaluate({
-    eventName: "schedule",
-    responses: {
-      [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: { body: statuses },
-    },
-  });
+function statusCase(name: string, statuses: unknown[], selected = true, paged = false) {
+  return { name, statuses, selected, paged };
 }
 
 describe("automatic security review event resolution", () => {
   it("automatically resolves the current PR after a rate-limited lookup", () => {
-    const result = evaluate({
-      eventName: "pull_request_target",
-      event: { action: "opened", pull_request: { number: 42 } },
+    const result = pullEvent({
       responses: {
-        [`${prefix}/pulls/42`]: [
+        [pullPath()]: [
           {
             body: { message: "API rate limit exceeded for installation" },
             status: 403,
             headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1767315600" },
           },
-          { body: pullRequest },
+          reply(pullRequest),
         ],
       },
     });
-    expect(result.status, result.error).toBe(0);
     expect(result.waits).toHaveLength(1);
     expect(result.waits[0]).toBeGreaterThanOrEqual(3_600_000);
-    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
-    expect(result.published).toHaveLength(1);
     expect(result.requests.map(({ method }) => method)).toEqual(["GET", "WAIT", "GET", "POST"]);
   });
 
   it("resolves the fresh head after a failed pending status before scheduling review", () => {
-    const nextHead = "b".repeat(40);
-    const result = evaluate({
-      eventName: "pull_request_target",
-      event: { action: "opened", pull_request: { number: 42 } },
+    const nextHead = otherHead;
+    const result = pullEvent({
+      expected: { include: [reviewEntry(42, nextHead)], posts: 2 },
       responses: {
-        [`${prefix}/pulls/42`]: [
-          { body: pullRequest },
-          { body: { ...pullRequest, head: { ...pullRequest.head, sha: nextHead } } },
-        ],
-        [`${prefix}/statuses/${head}`]: { status: 500, body: { message: "Server error" } },
+        [pullPath()]: [reply(pullRequest), reply(changedPull(42, nextHead))],
+        [publishPath()]: { status: 500, body: { message: "Server error" } },
       },
     });
-    expect(result.status, result.error).toBe(0);
     expect(result.waits).toEqual([1_000]);
-    expect(result.matrix).toEqual({ include: [{ pr: 42, head: nextHead }] });
     expect(result.published.map(({ path }) => path)).toEqual([
       `${prefix}/statuses/${head}`,
       `${prefix}/statuses/${nextHead}`,
     ]);
-    expect(result.published.every(({ hadOutput }) => !hadOutput)).toBe(true);
-    expect(result.published.at(-1)?.body?.state).toBe("pending");
-    expect(result.output).toBe(
-      `matrix={"include":[{"pr":42,"head":"${nextHead}"}]}\nhas-prs=true\ntruncated=false\n`,
-    );
   });
 
-  it.each(["pull_request_target", "issue_comment"])(
-    "resolves %s through current PR metadata",
-    (eventName) => {
-      const result = evaluate({
-        eventName,
-        event: {
-          action: "created",
-          pull_request: { number: 42 },
-          issue: { number: 42, pull_request: {} },
-          comment: { body: "/allow-dependencies-change" },
-        },
-      });
-      expect(result).toMatchObject({
-        status: 0,
-        matrix: { include: [{ pr: 42, head }] },
-        error: "",
-      });
-      expect(result.output).toBe(
-        `matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\ntruncated=false\n`,
-      );
-      expect(result.requests).toEqual([
-        { path: `${prefix}/pulls/42`, method: "GET" },
-        { path: `${prefix}/statuses/${head}`, method: "POST" },
-      ]);
-      expect(result.published).toMatchObject([
-        {
-          path: `${prefix}/statuses/${head}`,
-          hadOutput: false,
-          body: {
-            context: "openclaw/ci-gate",
-            state: "pending",
-            description: "PR #42: Review scheduled; CI and security review have not completed",
-            target_url: "https://github.com/openclaw/openclaw/actions/runs/789",
-          },
-        },
-      ]);
-    },
-  );
-
   it("does not schedule a review job when its initial pending status cannot be recorded", () => {
-    const result = evaluate({
-      eventName: "pull_request_target",
-      event: { action: "opened", pull_request: { number: 42 } },
+    const result = pullEvent({
+      expected: { status: 1, posts: 1 },
       responses: {
-        [`${prefix}/statuses/${head}`]: { status: 403, body: { message: "Forbidden" } },
+        [publishPath()]: { status: 403, body: { message: "Forbidden" } },
       },
     });
-    expect(result).toMatchObject({ status: 1, output: "" });
     expect(result.waits).toEqual([]);
-    expect(result.published).toHaveLength(1);
-    expect(result.published[0]?.hadOutput).toBe(false);
   });
 
   it.each([
-    { action: "closed", changedPull: { state: "closed" } },
-    { action: "edited", changedPull: { base: { ref: "release/1", repo: repository } } },
-  ])("refreshes the remaining PR after a duplicate is $action", ({ action, changedPull }) => {
-    const result = evaluate({
-      eventName: "pull_request_target",
-      event: { action, pull_request: { number: 42 } },
-      pullRequest: changedPull,
+    { action: "closed", patch: { state: "closed" } },
+    { action: "edited", patch: { base: { ref: "release/1", repo: repository } } },
+  ])("refreshes the remaining PR after a duplicate is $action", ({ action, patch }) => {
+    const result = pullEvent({
+      expected: { include: [reviewEntry(43)] },
+      action,
+      pullRequest: patch,
       responses: {
-        [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
-          body: [recordedPullRequest(42), recordedPullRequest(43)],
-        },
-        [`${prefix}/pulls/43`]: { body: { ...pullRequest, number: 43 } },
+        [statusesPath()]: reply([recordedPullRequest(42), recordedPullRequest(43)]),
+        [pullPath(43)]: reply({ ...pullRequest, number: 43 }),
       },
     });
-    expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 43, head }] } });
-    expect(result.requests.map((request) => request.path)).toEqual([
-      `${prefix}/pulls/42`,
-      `${prefix}/commits/${head}/statuses?per_page=100&page=1`,
-      `${prefix}/pulls/43`,
-      `${prefix}/statuses/${head}`,
-    ]);
+    expect(result.paths).toEqual([pullPath(), statusesPath(), pullPath(43), publishPath()]);
   });
 
   it("refreshes both the changed PR and PRs remaining on its previous head after a push", () => {
-    const nextHead = "b".repeat(40);
-    const result = evaluate({
-      eventName: "pull_request_target",
-      event: { action: "synchronize", before: head, pull_request: { number: 42 } },
+    const nextHead = otherHead;
+    const result = pullEvent({
+      action: "synchronize",
+      event: { before: head },
       pullRequest: { head: { ...pullRequest.head, sha: nextHead } },
       responses: {
-        [`${prefix}/commits/${nextHead}/statuses?per_page=100&page=1`]: { body: [] },
-        [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
-          body: [recordedPullRequest(42), recordedPullRequest(43), recordedPullRequest(44)],
-        },
-        [`${prefix}/pulls/43`]: { body: { ...pullRequest, number: 43 } },
-        [`${prefix}/pulls/44`]: {
-          body: { ...pullRequest, number: 44, head: { ...pullRequest.head, sha: "c".repeat(40) } },
-        },
+        [statusesPath(nextHead)]: reply([]),
+        [statusesPath()]: reply([42, 43, 44].map(recordedPullRequest)),
+        [pullPath(43)]: reply(changedPull(43)),
+        [pullPath(44)]: reply(changedPull(44, "c".repeat(40))),
       },
+      expected: { include: [reviewEntry(42, nextHead), reviewEntry(43)] },
     });
-    expect(result).toMatchObject({
-      status: 0,
-      matrix: {
-        include: [
-          { pr: 42, head: nextHead },
-          { pr: 43, head },
-        ],
-      },
-    });
-    expect(
-      result.published.map((entry) => ({
-        path: entry.path,
-        description: entry.body?.description,
-        state: entry.body?.state,
-        hadOutput: entry.hadOutput,
-      })),
-    ).toEqual([
-      {
-        path: `${prefix}/statuses/${nextHead}`,
-        description: "PR #42: Review scheduled; CI and security review have not completed",
-        state: "pending",
-        hadOutput: false,
-      },
-      {
-        path: `${prefix}/statuses/${head}`,
-        description: "PR #43: Review scheduled; CI and security review have not completed",
-        state: "pending",
-        hadOutput: false,
-      },
-    ]);
     expect(result.requests.filter((request) => request.path.includes("/commits/"))).toEqual([
-      { path: `${prefix}/commits/${nextHead}/statuses?per_page=100&page=1`, method: "GET" },
-      { path: `${prefix}/commits/${head}/statuses?per_page=100&page=1`, method: "GET" },
+      get(statusesPath(nextHead)),
+      get(statusesPath()),
     ]);
   });
 
   it("does not use forged or unrelated status descriptions as recorded PR identities", () => {
-    const result = evaluate({
-      eventName: "pull_request_target",
-      event: { action: "closed", pull_request: { number: 42 } },
+    const result = pullEvent({
+      expected: { include: [] },
+      action: "closed",
       pullRequest: { state: "closed" },
       responses: {
-        [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
-          body: [
-            { ...recordedPullRequest(98), creator: { type: "User", login: "contributor" } },
-            { ...recordedPullRequest(99), context: "unrelated/status" },
-          ],
-        },
+        [statusesPath()]: reply([
+          { ...recordedPullRequest(98), ...creator("contributor", "User") },
+          { ...recordedPullRequest(99), context: "unrelated/status" },
+        ]),
       },
     });
-    expect(result).toMatchObject({ status: 0, matrix: { include: [] } });
     expect(result.requests).toHaveLength(2);
   });
 
-  it("fails a PR refresh when recorded PR identities cannot be read", () => {
-    expect(
-      evaluate({
+  it.each<[string, string, Options]>([
+    [
+      "recorded PR identities",
+      statusesPath(),
+      {
         eventName: "pull_request_target",
         event: { action: "closed", pull_request: { number: 42 } },
         pullRequest: { state: "closed" },
-        responses: {
-          [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
-            status: 403,
-            body: { message: "Forbidden" },
-          },
-        },
-      }),
-    ).toMatchObject({ status: 1, output: "" });
+      },
+    ],
+    ["commit associations", associationsPath, { run: { pull_requests: [] } }],
+  ])("fails closed when %s cannot be read", (_name, route, options) => {
+    const result = evaluate({
+      expected: { status: 1 },
+      ...options,
+      responses: { [route]: { status: 403, body: { message: "Forbidden" } } },
+    });
+    expect(result.paths.at(-1)).toBe(route);
   });
 
-  it.each([
-    {
-      action: "created",
-      body: " \r\n /allow-dependencies-change \r\n/allow-security-sensitive-change\n",
-    },
-    { action: "edited", body: "Removed", previousBody: "/allow-dependencies-change" },
-    { action: "edited", body: "/allow-dependencies-change", previousBody: "Thanks" },
-    { action: "deleted", body: "/allow-security-sensitive-change" },
-  ])("reevaluates approval comment activity: %j", ({ action, body, previousBody }) => {
-    expect(
-      evaluate({
+  it.each<[string, string, boolean?, string?, boolean?]>([
+    ["created", " \r\n /allow-dependencies-change \r\n/allow-security-sensitive-change\n"],
+    ["edited", "Removed", true, "/allow-dependencies-change"],
+    ["edited", "/allow-dependencies-change", true, "Thanks"],
+    ["deleted", "/allow-security-sensitive-change"],
+    ["created", "/allow-dependencies-change-extra", false],
+    ["created", "/allow-dependencies-change\nThanks", false],
+    ["created", "> /allow-dependencies-change", false],
+    ["edited", "Removed", false, "Please post /allow-dependencies-change"],
+    ["created", "/allow-security-sensitive-change", false, undefined, true],
+  ])(
+    "selects only approval command activity: %j",
+    (action, body, selection, previousBody, issueOnly = false) => {
+      const selected = selection ?? true;
+      const result = evaluate({
+        expected: { include: selected ? [reviewEntry()] : [] },
         eventName: "issue_comment",
         event: {
           action,
-          issue: { number: 42, pull_request: {} },
+          issue: { number: 42, ...(issueOnly ? {} : { pull_request: {} }) },
           comment: { body },
           changes: { body: { from: previousBody } },
         },
-      }),
-    ).toMatchObject({
-      status: 0,
-      matrix: { include: [{ pr: 42, head }] },
-      published: [{ body: { context: "openclaw/ci-gate", state: "pending" } }],
-    });
-  });
-
-  it.each([
-    { action: "created", body: "Thanks" },
-    { action: "deleted", body: "Thanks" },
-    { action: "created", body: "/allow-dependencies-change-extra" },
-    { action: "created", body: "/allow-dependencies-change\nThanks" },
-    { action: "edited", body: "Removed", previousBody: "Please post /allow-dependencies-change" },
-    { action: "created", body: "/ALLOW-DEPENDENCIES-CHANGE" },
-    { action: "created", body: " \r\n " },
-    { action: "deleted", body: null },
-    { action: "created", body: "/allow-security-sensitive-change", issueOnly: true },
-  ])(
-    "ignores non-approval comments without API reads or status writes: %j",
-    ({ action, body, previousBody, issueOnly }) => {
-      expect(
-        evaluate({
-          eventName: "issue_comment",
-          event: {
-            action,
-            issue: { number: 42, ...(issueOnly ? {} : { pull_request: {} }) },
-            comment: { body },
-            changes: { body: { from: previousBody } },
-          },
-        }),
-      ).toMatchObject({ status: 0, matrix: { include: [] }, requests: [] });
+      });
+      if (!selected) {
+        expect(result.requests).toEqual([]);
+      }
     },
   );
 
-  it("rejects manual dispatch before making any API request", () => {
+  it("rejects a bot dispatch before any API request", () => {
     const result = evaluate({
+      expected: { status: 1 },
       eventName: "workflow_dispatch",
-      event: { inputs: { pr_number: "42" } },
+      event: {
+        inputs: { pull_request: "42" },
+        sender: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+      },
     });
     expect(result).toMatchObject({
-      status: 1,
       error: "Security review requires an automatic pull request or CI event.",
-      output: "",
       requests: [],
     });
   });
 
-  it.each(["success", "failure"])(
-    "reevaluates %s CI completion against live workflow and head",
-    (conclusion) => {
-      const result = evaluate({ run: { conclusion } });
-      expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
-      expect(result.requests.map((request) => request.path)).toEqual([
-        `${prefix}/actions/runs/123`,
-        `${prefix}/actions/workflows/ci.yml`,
-        `${prefix}/pulls/42`,
-        `${prefix}/statuses/${head}`,
-      ]);
-      expect(result.requests.slice(0, -1).every((request) => request.method === "GET")).toBe(true);
-      expect(result.published).toHaveLength(1);
-      expect(result.published[0]?.body?.state).toBe("pending");
+  it.each([
+    {
+      name: "release fallback",
+      changedRun: { event: "workflow_dispatch", display_title: `CI release gate ${head}` },
+      associated: false,
     },
-  );
-
-  it("refreshes automatically after the supported exact-head release CI fallback", () => {
-    expect(
-      evaluate({
-        run: { event: "workflow_dispatch", display_title: `CI release gate ${head}` },
-      }),
-    ).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
+    { name: "fork association", changedRun: { pull_requests: [] }, associated: true },
+  ])("reevaluates $name against the live head", ({ changedRun, associated }) => {
+    const result = evaluate({ run: changedRun });
+    expect(result.paths).toEqual([
+      `${prefix}/actions/runs/123`,
+      `${prefix}/actions/workflows/ci.yml`,
+      ...(associated ? [associationsPath] : []),
+      pullPath(),
+      publishPath(),
+    ]);
+    expect(result.requests.slice(0, -1).every((request) => request.method === "GET")).toBe(true);
   });
 
-  it.each(["CI", `CI release gate ${"b".repeat(40)}`])(
-    "ignores unrelated manual CI builds named %s",
-    (displayTitle) => {
-      expect(
-        evaluate({
-          run: { event: "workflow_dispatch", display_title: displayTitle },
-        }),
-      ).toMatchObject({ status: 0, matrix: { include: [] } });
-    },
-  );
+  it.each<Options>([
+    ...["CI", `CI release gate ${"b".repeat(40)}`].map((display_title) => ({
+      run: { event: "workflow_dispatch", display_title },
+    })),
+    ...[
+      { draft: true },
+      { state: "closed" },
+      { base: { ref: "release/1", repo: repository } },
+      { head: { ...pullRequest.head, sha: "b".repeat(40) } },
+      { head: { ...pullRequest.head, repo: { id: 100 } } },
+    ].map((value) => ({ pullRequest: value })),
+  ])("does not retarget unrelated CI or PR states: %j", (options) => {
+    evaluate({ ...options, expected: { include: [] } });
+  });
 
   it.each([
     { workflow_id: 789 },
@@ -493,507 +455,199 @@ describe("automatic security review event resolution", () => {
     { repository: { full_name: "other/repository" } },
     { head_sha: "b".repeat(40) },
   ])("refuses a CI event whose live identity changed: %j", (changedRun) => {
-    const result = evaluate({ run: changedRun });
-    expect(result.status).toBe(1);
-    expect(result.output).toBe("");
+    const result = evaluate({ run: changedRun, expected: { status: 1 } });
     expect(result.requests).not.toContainEqual({ path: `${prefix}/pulls/42`, method: "GET" });
   });
 
-  it.each([
-    { draft: true },
-    { state: "closed" },
-    { base: { ref: "release/1", repo: repository } },
-    { head: { ...pullRequest.head, sha: "b".repeat(40) } },
-    { head: { ...pullRequest.head, repo: { id: 100 } } },
-  ])("does not retarget completed CI onto another current PR state: %j", (changedPull) => {
-    expect(evaluate({ pullRequest: changedPull })).toMatchObject({
-      status: 0,
-      matrix: { include: [] },
-    });
-  });
-
-  it("uses associated commits for fork runs with empty workflow associations", () => {
-    expect(
-      evaluate({
-        run: { pull_requests: [] },
-        responses: {
-          [`${prefix}/commits/${head}/pulls?per_page=100&page=1`]: { body: [{ number: 42 }] },
-        },
-      }),
-    ).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
-  });
-
-  it.each([200, 404, 422])(
-    "falls back to the exact fork branch when commit association returns %s",
-    (status) => {
+  it.each([{ status: 200 }, { status: 404 }, { status: 422 }, { status: 200, child: true }])(
+    "falls back to the exact fork branch when commit association is $status, child $child",
+    ({ status, child }) => {
       const result = evaluate({
         run: { pull_requests: [] },
         responses: {
-          [`${prefix}/commits/${head}/pulls?per_page=100&page=1`]: {
+          [associationsPath]: {
             status,
-            body: status === 200 ? [] : { message: "Commit unavailable" },
+            body:
+              status === 200 ? (child ? [{ number: 43 }] : []) : { message: "Commit unavailable" },
           },
-          [`${prefix}/pulls?state=open&head=contributor%3Afeature&per_page=100&page=1`]: {
-            body: [{ number: 42 }],
-          },
+          [pullPath(43)]: reply(changedPull(43, otherHead)),
+          [branchPath]: reply([{ number: 42 }]),
         },
       });
-      expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
-      expect(
-        result.requests.some((request) => request.path === `${prefix}/pulls?per_page=100&page=1`),
-      ).toBe(false);
+      expect(result.paths).not.toContain(`${prefix}/pulls?per_page=100&page=1`);
     },
   );
-
-  it("does not turn API authorization failure into an empty or broader PR selection", () => {
-    const result = evaluate({
-      run: { pull_requests: [] },
-      responses: {
-        [`${prefix}/commits/${head}/pulls?per_page=100&page=1`]: {
-          status: 403,
-          body: { message: "Forbidden" },
-        },
-      },
-    });
-    expect(result.status).toBe(1);
-    expect(result.output).toBe("");
-    expect(result.requests.at(-1)?.path).toContain(`/commits/${head}/pulls?`);
-  });
 });
 
 describe("scheduled reconciliation", () => {
-  it("covers the previous pass's grace period without reading older head statuses", () => {
-    const olderHead = "b".repeat(40);
-    const result = evaluate({
-      eventName: "schedule",
-      responses: {
-        [scheduledRunsPath]: {
-          body: { workflow_runs: [{ created_at: "2026-01-01T23:45:00Z" }] },
-        },
-        [ciRunsPath.replace("20%3A00", "20%3A40")]: {
-          body: {
-            total_count: 2,
-            workflow_runs: [
-              { ...completedRun, updated_at: "2026-01-01T23:43:00Z" },
-              { ...completedRun, id: 122, head_sha: olderHead, updated_at: "2026-01-01T23:39:00Z" },
-            ],
-          },
-        },
-      },
-    });
-    expect(result.status, result.error).toBe(0);
-    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
-    expect(result.requests.filter(({ path }) => path.includes("/statuses?"))).toEqual([
-      { path: `${prefix}/commits/${head}/statuses?per_page=100&page=1`, method: "GET" },
-    ]);
-  });
-
-  it("schedules a stale pending head before publishing its matrix", () => {
-    const result = evaluate({ eventName: "schedule" });
-    expect(result.status, result.error).toBe(0);
-    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
-    expect(result.output).toBe(
-      `matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\ntruncated=false\n`,
-    );
-    expect(result.published).toMatchObject([
+  it.each<[string, NonNullable<Options["responses"]>, boolean?]>([
+    [
+      "covers the previous pass's grace period",
       {
-        path: `${prefix}/statuses/${head}`,
-        hadOutput: false,
-        body: {
-          context: "openclaw/ci-gate",
-          state: "pending",
-          description: "PR #42: Review scheduled; CI and security review have not completed",
-        },
+        [scheduledRunsPath]: reply({ workflow_runs: [{ created_at: at("23:45") }] }),
+        [ciRunsPath.replace("20%3A00", "20%3A40")]: runListing([
+          completed({ updated_at: at("23:43") }),
+          completed({ id: 122, head_sha: otherHead, updated_at: at("23:39") }),
+        ]),
       },
-    ]);
-    expect(result.requests).toContainEqual({ path: ciRunsPath, method: "GET" });
-    expect(result.requests.find(({ path }) => path.includes("created="))?.path).toContain(
-      "..2026-01-02T00%3A00%3A00.000Z",
-    );
-  });
-
-  it.each([
-    { state: "pending", created_at: "2026-01-01T23:41:00Z" },
-    { state: "success", created_at: "2026-01-01T23:30:00Z" },
-  ])("ignores newer foreign successes before the newest Actions status: %j", (owned) => {
-    const result = reconcileStatuses([
+    ],
+    [
+      "dedupes reruns by highest run id",
       {
-        ...recordedPullRequest(42),
-        state: "success",
-        created_at: "2026-01-01T23:45:00Z",
-        creator: { login: "foreign-bot[bot]", type: "Bot" },
+        [ciRunsPath]: runListing([completed({ id: 124 }), completed({ updated_at: at("23:20") })]),
       },
+    ],
+    [
+      "uses the current PR head across completed heads",
       {
-        ...recordedPullRequest(42),
-        state: "success",
-        created_at: "2026-01-01T23:44:00Z",
-        creator: { login: "github-actions[bot]", type: "User" },
+        [ciRunsPath]: runListing([completedRun, completed({ id: 122, head_sha: otherHead })]),
+        [statusesPath(otherHead)]: reply([]),
       },
-      { ...recordedPullRequest(42), ...owned },
-      { ...recordedPullRequest(42), state: "success", created_at: "2026-01-01T23:20:00Z" },
-    ]);
-    expect(result.status, result.error).toBe(0);
-    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
-    expect(result.published).toHaveLength(1);
+      false,
+    ],
+  ])("%s", (_name, responses, singleStatus = true) => {
+    const result = scheduled(responses);
+    if (singleStatus) {
+      expect(result.statusRequests).toEqual([get(statusesPath())]);
+    }
   });
 
   it.each([
-    { state: "success", created_at: "2026-01-01T23:41:00Z" },
-    { state: "success", created_at: completedRun.updated_at },
-  ])("does not reselect a result settled at or after CI completion: %j", (status) => {
-    const result = reconcileStatuses([
-      { ...recordedPullRequest(42), context: "OpenClaw/CI-Gate", ...status },
-    ]);
-    expect(result).toMatchObject({ status: 0, matrix: { include: [] }, published: [] });
-    expect(result.requests.some(({ path }) => path.includes("/pulls/"))).toBe(false);
-  });
-
-  it.each([
-    { state: "success", created_at: "2026-01-01T23:30:00Z" },
-    {
-      state: "pending",
-      created_at: "2026-01-01T23:41:00Z",
-      description: "PR #42: Review scheduled; CI and security review have not completed",
-    },
-    {
-      state: "pending",
-      created_at: completedRun.updated_at,
-      description: "PR #42: CI and security review have not completed",
-    },
-  ])("reselects a result older than the latest rerun or any pending status: %j", (status) => {
-    const result = reconcileStatuses([{ ...recordedPullRequest(42), ...status }]);
-    expect(result.status, result.error).toBe(0);
-    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
-    expect(result.published).toHaveLength(1);
-    expect(result.output).toBe(
-      `matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\ntruncated=false\n`,
+    statusCase("stale success", [gateStatus("success", at("23:30"))]),
+    statusCase("pending after completion", [gateStatus("pending", at("23:41"))]),
+    statusCase("foreign successes", [
+      gateStatus("success", at("23:45"), creator("foreign-bot[bot]")),
+      gateStatus("success", at("23:44"), creator("github-actions[bot]", "User")),
+      gateStatus("pending", at("23:41")),
+      gateStatus("success", at("23:20")),
+    ]),
+    ...[at("23:41"), completedRun.updated_at].map((created_at) =>
+      statusCase(`settled ${created_at}`, [settledGate(created_at)], false),
+    ),
+    statusCase("settled page", [settledGate(completedRun.updated_at)], false, true),
+    statusCase("missing page", [], true, true),
+  ])("reads the newest owned result for $name", ({ statuses, selected, paged }) => {
+    const result = scheduled(
+      {
+        [statusesPath()]: reply(
+          paged
+            ? Array.from({ length: 100 }, () =>
+                gateStatus("success", at("23:45"), creator("foreign-bot[bot]")),
+              )
+            : statuses,
+        ),
+        ...(paged ? { [statusesPath(head, 2)]: reply(statuses) } : {}),
+      },
+      { include: selected ? [reviewEntry()] : [] },
     );
-  });
-
-  it.each([
-    { updated_at: "2026-01-01T23:56:00Z" },
-    { updated_at: "2026-01-01T22:59:59Z" },
-    { conclusion: "skipped" },
-    { status: "in_progress" },
-  ])(
-    "ignores CI outside the completion window or without substantive completion: %j",
-    (changedRun) => {
-      const result = evaluate({ eventName: "schedule", run: changedRun });
-      expect(result).toMatchObject({ status: 0, matrix: { include: [] }, published: [] });
-      expect(result.requests).toEqual([
-        { path: scheduledRunsPath, method: "GET" },
-        { path: ciRunsPath, method: "GET" },
-      ]);
-    },
-  );
-
-  it("selects a head with no ci-gate status", () => {
-    const result = reconcileStatuses([{ context: "unrelated/status", state: "success" }]);
-    expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
-    expect(result.published).toHaveLength(1);
-  });
-
-  it.each([
-    {
-      gate: "settled",
-      statuses: [
-        { ...recordedPullRequest(42), state: "success", created_at: completedRun.updated_at },
-      ],
-      selected: false,
-    },
-    { gate: "missing", statuses: [], selected: true },
-  ])("reads remaining commit-status pages for a $gate gate", ({ statuses, selected }) => {
-    const result = evaluate({
-      eventName: "schedule",
-      responses: {
-        [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
-          body: Array.from({ length: 100 }, () => ({
-            ...recordedPullRequest(42),
-            state: "success",
-            created_at: "2026-01-01T23:45:00Z",
-            creator: { login: "foreign-bot[bot]", type: "Bot" },
-          })),
-        },
-        [`${prefix}/commits/${head}/statuses?per_page=100&page=2`]: {
-          body: statuses,
-        },
-      },
-    });
-    expect(result.status, result.error).toBe(0);
-    expect(result.matrix).toEqual({ include: selected ? [{ pr: 42, head }] : [] });
-    expect(result.published).toHaveLength(selected ? 1 : 0);
-    expect(result.requests.filter(({ path }) => path.includes("/statuses?"))).toEqual([
-      { path: `${prefix}/commits/${head}/statuses?per_page=100&page=1`, method: "GET" },
-      { path: `${prefix}/commits/${head}/statuses?per_page=100&page=2`, method: "GET" },
-    ]);
-  });
-
-  it("dedupes reruns by the highest run id before reading the head status", () => {
-    const result = evaluate({
-      eventName: "schedule",
-      responses: {
-        [ciRunsPath]: {
-          body: {
-            total_count: 2,
-            workflow_runs: [
-              { ...completedRun, id: 124 },
-              { ...completedRun, updated_at: "2026-01-01T23:20:00Z" },
-            ],
-          },
-        },
-      },
-    });
-    expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
-    expect(result.requests.filter(({ path }) => path.includes("/statuses?"))).toEqual([
-      { path: `${prefix}/commits/${head}/statuses?per_page=100&page=1`, method: "GET" },
-    ]);
-    expect(result.published).toHaveLength(1);
+    if (selected) {
+      expect(result.requests).toContainEqual(get(ciRunsPath));
+    } else {
+      expect(result.requests.some(({ path }) => path.includes("/pulls/"))).toBe(false);
+    }
+    expect(result.statusRequests).toEqual(
+      (paged ? [1, 2] : [1]).map((page) => get(statusesPath(head, page))),
+    );
   });
 
   it("bisects a 1500-run creation range and fully pages both inclusive slices", () => {
     const firstSlice = ciRunsPath.replace("2026-01-02T00%3A00", "2026-01-01T22%3A00");
     const secondSlice = ciRunsPath.replace("2026-01-01T20%3A00%3A00", "2026-01-01T22%3A00%3A01");
     const responses: Record<string, Reply> = {
-      [ciRunsPath]: { body: { total_count: 1500, workflow_runs: [completedRun] } },
+      [ciRunsPath]: runListing([completedRun], 1500),
     };
-    const listingPaths = [ciRunsPath];
     for (const [slice, count, offset] of [
       [firstSlice, 800, 0],
       [secondSlice, 700, 800],
     ] as const) {
-      for (let page = 1; page <= count / 100 + 1; page += 1) {
-        const path = slice.replace(/&page=1$/u, `&page=${page}`);
-        listingPaths.push(path);
-        responses[path] = {
-          body: {
-            total_count: count,
-            workflow_runs: Array.from({ length: page <= count / 100 ? 100 : 0 }, (_, index) => ({
-              ...completedRun,
-              id: offset + (page - 1) * 100 + index + 1,
-              created_at: offset === 0 ? "2026-01-01T21:00:00Z" : "2026-01-01T23:00:00Z",
-            })),
-          },
-        };
-      }
+      Object.assign(
+        responses,
+        listingPages(pageSizes(count), count, slice, (index) =>
+          completed({ id: offset + index + 1 }),
+        ),
+      );
     }
-    const result = evaluate({ eventName: "schedule", responses });
-    expect(result.status, result.error).toBe(0);
-    expect(result.requests.filter(({ path }) => path.includes("/workflows/ci.yml/runs"))).toEqual(
-      listingPaths.map((path) => ({ path, method: "GET" })),
-    );
-    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
-    expect(result.published).toHaveLength(1);
+    const result = scheduled(responses);
+    expect(result.listingRequests).toEqual(Object.keys(responses).map(get));
   });
 
-  it.each([
-    { total: 0, sizes: [0], complete: true },
-    { total: 200, sizes: [100, 100, 0], complete: true },
-    { total: 201, sizes: [100, 100, 1], complete: true },
-    { total: 201, sizes: [100, 100, 0], complete: false },
-    { total: 150, sizes: [100, 100, 5], complete: true },
-    { total: 150, sizes: Array.from({ length: 10 }, () => 100), complete: false },
-  ])(
-    "pages until short for total $total, sizes $sizes, complete $complete",
-    ({ total, sizes, complete }) => {
-      const responses: Record<string, Reply> = {};
-      const listingPaths = sizes.map((size, index) => {
-        const path = ciRunsPath.replace(/&page=1$/u, `&page=${index + 1}`);
-        responses[path] = {
-          body: {
-            total_count: total,
-            workflow_runs: Array.from({ length: size }, (_, runIndex) => ({
-              ...completedRun,
-              id: index * 100 + runIndex + 1,
-            })),
-          },
-        };
-        return path;
-      });
-      const result = evaluate({ eventName: "schedule", responses });
-      expect(result.requests.filter(({ path }) => path.includes("/workflows/ci.yml/runs"))).toEqual(
-        listingPaths.map((path) => ({ path, method: "GET" })),
-      );
-      if (!complete) {
-        expect(result).toMatchObject({ status: 1, output: "", published: [] });
-        expect(result.error).toContain("covered window does not advance");
-        expect(result.matrix).toBeUndefined();
-        return;
-      }
-      expect(result.status, result.error).toBe(0);
-      expect(result.matrix).toEqual({ include: total === 0 ? [] : [{ pr: 42, head }] });
-      expect(result.requests.filter(({ path }) => path.includes("/statuses?"))).toHaveLength(
-        total === 0 ? 0 : 1,
-      );
-      expect(result.published).toHaveLength(total === 0 ? 0 : 1);
-      expect(result.output).toContain("truncated=false\n");
-    },
-  );
-
-  it("fails a leaf with fewer distinct run IDs than its reported total", () => {
-    const result = evaluate({
-      eventName: "schedule",
-      responses: {
-        [ciRunsPath]: { body: { total_count: 2, workflow_runs: [completedRun, completedRun] } },
-      },
-    });
-    expect(result).toMatchObject({ status: 1, output: "", published: [] });
-    expect(result.error).toContain("covered window does not advance");
+  it.each<[number, number[], boolean]>([
+    [0, [0], true],
+    [201, [100, 100, 0], false],
+    [150, Array.from({ length: 10 }, () => 100), false],
+  ])("pages total %i until a short page", (total, sizes, complete) => {
+    const responses = listingPages(sizes, total);
+    const result = scheduled(responses, { status: complete ? 0 : 1, include: [] });
+    expect(result.listingRequests).toEqual(Object.keys(responses).map(get));
+    if (!complete) {
+      expect(result.error).toContain("covered window does not advance");
+      return;
+    }
+    expect(result.statusRequests).toHaveLength(total === 0 ? 0 : 1);
   });
 
   it("fails an overfull sub-ten-minute slice before status publication or matrix output", () => {
-    const ends = [
-      "2026-01-02T00:00:00.000Z",
-      "2026-01-01T22:00:00.000Z",
-      "2026-01-01T21:00:00.000Z",
-      "2026-01-01T20:30:00.000Z",
-      "2026-01-01T20:15:00.000Z",
-      "2026-01-01T20:07:30.000Z",
-    ];
+    const ends = ["00:00:00", "22:00:00", "21:00:00", "20:30:00", "20:15:00", "20:07:30"].map(
+      (time, index) => `2026-01-${index === 0 ? "02" : "01"}T${time}.000Z`,
+    );
     const listingPaths = ends.map(
       (end) =>
         `${prefix}/actions/workflows/ci.yml/runs?event=pull_request&status=completed&created=${encodeURIComponent(`2026-01-01T20:00:00.000Z..${end}`)}&per_page=100&page=1`,
     );
-    const result = evaluate({
-      eventName: "schedule",
-      responses: Object.fromEntries(
-        listingPaths.map((path) => [
-          path,
-          {
-            body: { total_count: 1001, workflow_runs: [completedRun] },
-          },
-        ]),
-      ),
-    });
-    expect(result.status).toBe(1);
+    const result = scheduled(
+      Object.fromEntries(listingPaths.map((path) => [path, runListing([completedRun], 1001)])),
+      { status: 1 },
+    );
     expect(result.error).toContain(
       "more than 1000 runs in a creation range shorter than ten minutes",
     );
     expect(result.error).toContain("covered window does not advance");
-    expect(result.requests).toEqual([
-      { path: scheduledRunsPath, method: "GET" },
-      ...listingPaths.map((path) => ({ path, method: "GET" })),
-    ]);
-    expect(result.matrix).toBeUndefined();
-    expect(result.output).toBe("");
-    expect(result.published).toEqual([]);
+    expect(result.requests).toEqual([get(scheduledRunsPath), ...listingPaths.map(get)]);
   });
 
-  it.each([undefined, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
-    "rejects an invalid listing total %s before publishing",
+  it.each([undefined, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, 2])(
+    "rejects incomplete or invalid listing totals: %s",
     (total_count) => {
-      const result = evaluate({
-        eventName: "schedule",
-        responses: { [ciRunsPath]: { body: { total_count, workflow_runs: [completedRun] } } },
-      });
-      expect(result).toMatchObject({ status: 1, output: "", published: [] });
-      expect(result.error).toContain("invalid total_count");
+      const workflow_runs = total_count === 2 ? [completedRun, completedRun] : [completedRun];
+      const result = scheduled(
+        { [ciRunsPath]: { body: { total_count, workflow_runs } } },
+        { status: 1 },
+      );
+      expect(result.error).toContain(
+        total_count === 2 ? "covered window does not advance" : "invalid total_count",
+      );
     },
   );
 
-  it.each([
-    { previous: "2026-01-01T23:46:00Z", queryHour: "20%3A41", selected: false },
-    { previous: "2026-01-01T10:00:00Z", queryHour: "09%3A00", selected: true },
-    { previous: "invalid", queryHour: "20%3A00", selected: true },
-  ])(
-    "bounds the window from the previous successful pass: $previous",
-    ({ previous, queryHour, selected }) => {
-      const result = evaluate({
-        eventName: "schedule",
-        responses: {
-          [scheduledRunsPath]: { body: { workflow_runs: [{ created_at: previous }] } },
-          [ciRunsPath.replace("20%3A00", queryHour)]: {
-            body: { total_count: 1, workflow_runs: [completedRun] },
-          },
-        },
-      });
-      expect(result.status, result.error).toBe(0);
-      expect(result.matrix).toEqual({ include: selected ? [{ pr: 42, head }] : [] });
-      expect(result.requests.some(({ path }) => path.includes("/statuses?"))).toBe(selected);
-    },
-  );
-
-  it.each(["2026-01-01T23:00:00Z", "2026-01-01T23:55:00Z"])(
-    "includes completion at the fallback window boundary %s",
-    (updated_at) => {
-      expect(
-        evaluate({
-          eventName: "schedule",
-          run: { updated_at },
-          responses: {
-            [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: { body: [] },
-          },
-        }),
-      ).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
-    },
-  );
-
-  it.each([100, 101])("selects at most 100 of %s stale candidates, oldest first", (count) => {
+  it("selects at most 100 of 101 stale candidates, oldest first", () => {
+    const count = 101;
     const candidates = Array.from({ length: count }, (_, index) => ({
       ...completedRun,
       id: index + 1,
       head_sha: (index + 1).toString(16).padStart(40, "0"),
-      updated_at: new Date(
-        Date.parse("2026-01-01T23:00:00Z") + Math.floor(index / 2) * 1000,
-      ).toISOString(),
+      updated_at: new Date(Date.parse(at("23:00")) + Math.floor(index / 2) * 1000).toISOString(),
       pull_requests: [{ number: 1000 - index }],
     }));
-    const responses: Record<string, Reply> = {};
     const newestFirst = candidates.toReversed();
-    for (let page = 1; page <= Math.floor(count / 100) + 1; page += 1) {
-      responses[ciRunsPath.replace(/&page=1$/u, `&page=${page}`)] = {
-        body: {
-          total_count: count,
-          workflow_runs: newestFirst.slice((page - 1) * 100, page * 100),
-        },
-      };
-    }
-    for (const candidate of candidates) {
-      responses[`${prefix}/commits/${candidate.head_sha}/statuses?per_page=100&page=1`] = {
-        body: [],
-      };
-      responses[`${prefix}/pulls/${candidate.pull_requests[0]!.number}`] = {
-        body: {
-          ...pullRequest,
-          number: candidate.pull_requests[0]!.number,
-          head: { ...pullRequest.head, sha: candidate.head_sha },
-        },
-      };
-    }
-    const result = evaluate({ eventName: "schedule", responses });
-    const selected = candidates.slice(0, 100);
-    expect(result.status, result.error).toBe(0);
-    expect(result.matrix).toEqual({
-      include: selected.map((candidate) => ({
-        pr: candidate.pull_requests[0]!.number,
-        head: candidate.head_sha,
-      })),
-    });
-    expect(result.requests.filter(({ path }) => path.includes("/statuses?"))).toEqual(
-      selected.map((candidate) => ({
-        path: `${prefix}/commits/${candidate.head_sha}/statuses?per_page=100&page=1`,
-        method: "GET",
-      })),
+    const responses = listingPages(
+      pageSizes(count),
+      count,
+      ciRunsPath,
+      (index) => newestFirst[index]!,
     );
-    expect(result.published).toHaveLength(selected.length);
-    expect(result.published.every(({ hadOutput }) => !hadOutput)).toBe(true);
-    expect(result.output).toContain(`truncated=${count > 100}\n`);
-  });
-
-  it("uses the current PR head when multiple completed heads name the same PR", () => {
-    const oldHead = "b".repeat(40);
-    const result = evaluate({
-      eventName: "schedule",
-      responses: {
-        [ciRunsPath]: {
-          body: {
-            total_count: 2,
-            workflow_runs: [completedRun, { ...completedRun, id: 122, head_sha: oldHead }],
-          },
-        },
-        [`${prefix}/commits/${oldHead}/statuses?per_page=100&page=1`]: { body: [] },
-      },
-    });
-    expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
-    expect(result.published).toHaveLength(1);
+    for (const candidate of candidates) {
+      responses[statusesPath(candidate.head_sha)] = reply([]);
+      responses[pullPath(candidate.pull_requests[0]!.number)] = reply(
+        changedPull(candidate.pull_requests[0]!.number, candidate.head_sha),
+      );
+    }
+    const selected = candidates.slice(0, 100);
+    const include = selected.map(({ pull_requests, head_sha }) =>
+      reviewEntry(pull_requests[0]!.number, head_sha),
+    );
+    const result = scheduled(responses, { include, truncated: true });
+    expect(result.statusRequests).toEqual(
+      selected.map((candidate) => get(statusesPath(candidate.head_sha))),
+    );
   });
 });

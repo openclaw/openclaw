@@ -38,6 +38,8 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
   return (overrides: Partial<GatewayCloseParams> = {}): GatewayCloseParams => {
     return {
       resolveGatewayContext: () => undefined,
+      preparePluginRegistryClose: async () => [],
+      drainWorktreeRunEnd: vi.fn(async () => {}),
       closePluginRegistry: async (onRetirement) => {
         let retirement: ReturnType<GatewayCloseParams["pluginMetadata"]["close"]> | undefined;
         const retire = () =>

@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -15,118 +15,41 @@ import {
 import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import { DEFAULT_DEPS } from "./manager.types.js";
 
-it.each(["global", "inline"] as const)(
-  "preserves registered idle ACP resolution for %s metadata without host data SQL",
-  async (metadata) => {
-    await withAcpCancellationFixture(
-      async (f) => {
-        const sql = observeHostDataSql();
-        try {
-          const cancellation = f.manager.cancelSession({
-            ...f.target,
-            expectedOwnerKey: "agent:main:main",
-          });
-          if (metadata === "inline") {
-            await expect(cancellation).rejects.toMatchObject({ code: "ACP_TURN_FAILED" });
-          } else {
-            await cancellation;
-          }
-          sql.restore();
-          if (metadata === "inline") {
-            expect(f.ensureSession).not.toHaveBeenCalled();
-            expect(f.cancel).not.toHaveBeenCalled();
-            expect(readAcpSessionEntry(f.target)?.entry?.acp?.state).toBe("running");
-          } else {
-            expect(f.cancel).toHaveBeenCalledExactlyOnceWith({
-              handle: expect.objectContaining({ runtimeSessionName: "retained-runtime" }),
-              reason: undefined,
-            });
-            expect(readAcpSessionEntry(f.target)?.acp?.state).toBe("idle");
-          }
-          expect(sql.queries).toEqual([]);
-        } finally {
-          sql.restore();
-        }
-      },
-      { metadata },
-    );
-  },
-);
+it("cancels a cold runtime with one resolution and one pre-ensure metadata read", async () => {
+  await withAcpCancellationFixture(async (f) => {
+    const read = vi.spyOn(DEFAULT_DEPS, "loadSessionEntryAsync");
+    try {
+      await f.manager.cancelSession({ ...f.target, expectedOwnerKey: "agent:main:main" });
+      expect(f.ensureSession).toHaveBeenCalledTimes(1);
+      expect(f.cancel).toHaveBeenCalledTimes(1);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(readAcpSessionEntry(f.target)?.acp?.state).toBe("idle");
+    } finally {
+      read.mockRestore();
+    }
+  });
+});
 
-it.each(["acknowledged", "failed"] as const)(
-  "settles %s registered active cancellation without host data SQL",
-  async (outcome) => {
-    await withAcpCancellationFixture(async (f) => {
-      const entered = createDeferred();
-      const stop = new AbortController();
-      if (outcome === "failed") {
-        f.cancel.mockRejectedValueOnce(new Error("Synthetic cancel transport failure."));
-      }
-      f.runTurn.mockImplementationOnce(async function* (input) {
-        entered.resolve();
-        await new Promise<void>((resolve) => {
-          if (input.signal?.aborted) {
-            resolve();
-            return;
-          }
-          input.signal?.addEventListener("abort", () => resolve(), { once: true });
-        });
-        yield { type: "done", stopReason: "cancel" };
-      });
-      const admittedRunContext = createTestAdmittedRunContext("active-worker");
-      const turn = f.manager.runTurn({
-        ...f.target,
-        admittedRunContext,
-        provenance: "system",
-        mode: "prompt",
-        text: "active",
-        requestId: "active-worker",
-        signal: stop.signal,
-      });
-      const turnResult = Promise.allSettled([turn]);
-      await Promise.race([
-        entered.promise,
-        turnResult.then(() => {
-          throw new Error("Run ended before runtime entry.");
-        }),
-      ]);
+it("refuses inline-only idle ACP metadata without host data SQL", async () => {
+  await withAcpCancellationFixture(
+    async (f) => {
       const sql = observeHostDataSql();
       try {
-        const cancellation = f.manager.cancelSession({
-          ...f.target,
-          expectedRunId: "active-worker",
-          expectedInstanceId: admittedRunContext.operationalRunInstance.instanceId,
-          expectedOwnerKey: "agent:main:main",
-        });
-        const result = await Promise.allSettled([cancellation, turn]);
+        await expect(
+          f.manager.cancelSession({ ...f.target, expectedOwnerKey: "agent:main:main" }),
+        ).rejects.toMatchObject({ code: "ACP_TURN_FAILED" });
         sql.restore();
-        expect(result).toMatchObject(
-          outcome === "failed"
-            ? [
-                {
-                  status: "rejected",
-                  reason: {
-                    code: "ACP_TURN_FAILED",
-                    message: "Synthetic cancel transport failure.",
-                  },
-                },
-                { status: "fulfilled" },
-              ]
-            : [{ status: "fulfilled" }, { status: "fulfilled" }],
-        );
-        expect(f.cancel).toHaveBeenCalledOnce();
-        // The producer's cancelled terminal is independent of the cancellation RPC failure.
-        expect(readDurableAcpSignals(f, "active-worker")).toMatchObject([{ kind: "run_failed" }]);
-        expect(readAcpSessionEntry(f.target)?.acp?.state).toBe("idle");
+        expect(f.ensureSession).not.toHaveBeenCalled();
+        expect(f.cancel).not.toHaveBeenCalled();
+        expect(readAcpSessionEntry(f.target)?.entry?.acp?.state).toBe("running");
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
-        stop.abort();
-        await turnResult;
       }
-    });
-  },
-);
+    },
+    { metadata: "inline" },
+  );
+});
 
 it("does not admit durable runtime cancellation from an inherited discovery snapshot", async () => {
   await withAcpCancellationFixture(async (f) => {
@@ -147,12 +70,11 @@ it("does not admit durable runtime cancellation from an inherited discovery snap
     );
     const result = Promise.allSettled([cancellation]);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        result.then(() => {
-          throw new Error("Cancellation ended before runtime preparation.");
-        }),
-      ]);
+        result,
+        "Cancellation ended before runtime preparation.",
+      );
       runOpenClawStateWriteTransaction(
         ({ db }) =>
           applyAcpSessionMutation(db, {
@@ -231,12 +153,11 @@ it("joins a failing accepted sibling while another terminal signal remains activ
       return value;
     });
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         secondEntered.promise,
-        turnResults.then(() => {
-          throw new Error("Sibling signal was never admitted.");
-        }),
-      ]);
+        turnResults,
+        "Sibling signal was never admitted.",
+      );
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -279,12 +200,7 @@ it.each(["metadata", "lifecycle"] as const)(
         expectedOwnerKey: "agent:main:main",
       });
       const result = Promise.allSettled([cancellation]);
-      await Promise.race([
-        entered.promise,
-        result.then(() => {
-          throw new Error("Cancellation ended before setup.");
-        }),
-      ]);
+      await awaitGateBeforeSettlement(entered.promise, result, "Cancellation ended before setup.");
       try {
         if (replacement === "metadata") {
           await upsertAcpSessionMeta({ ...f.target, skipMaintenance: true, mutate: () => null });
@@ -306,101 +222,6 @@ it.each(["metadata", "lifecycle"] as const)(
     });
   },
 );
-
-it("joins only the superseded actor's late handle after post-ensure control read", async () => {
-  await withAcpCancellationFixture(async (f) => {
-    const readEntered = createDeferred();
-    const releaseRead = createDeferred();
-    const closeEntered = createDeferred();
-    const releaseClose = createDeferred();
-    let ensured = false;
-    let gated = false;
-    let settled = false;
-    f.ensureSession.mockImplementationOnce(async () => {
-      ensured = true;
-      return {
-        sessionKey: f.target.sessionKey,
-        backend: "cancellation-proof",
-        runtimeSessionName: "superseded-late-runtime",
-      };
-    });
-    const close = vi.spyOn(f.runtime, "close").mockImplementationOnce(async () => {
-      closeEntered.resolve();
-      await releaseClose.promise;
-    });
-    const load = DEFAULT_DEPS.loadSessionEntryAsync;
-    const read = vi
-      .spyOn(DEFAULT_DEPS, "loadSessionEntryAsync")
-      .mockImplementation(async (params) => {
-        const value = await load(params);
-        if (ensured && !gated) {
-          gated = true;
-          readEntered.resolve();
-          await releaseRead.promise;
-        }
-        return value;
-      });
-    const sql = observeHostDataSql();
-    const cancellation = f.manager.cancelSession({
-      ...f.target,
-      reason: "old-actor",
-      expectedOwnerKey: "agent:main:main",
-    });
-    const result = Promise.allSettled([cancellation]).then((value) => {
-      settled = true;
-      return value;
-    });
-    let successor: Promise<void> | undefined;
-    try {
-      await Promise.race([
-        readEntered.promise,
-        result.then(() => {
-          throw new Error("Cancellation ended before post-ensure read.");
-        }),
-      ]);
-      await getAcpSessionResetControls(f.manager).forceDiscardSessionRuntime({
-        ...f.target,
-        reason: "fixture-actor-replacement",
-      });
-      successor = f.manager.cancelSession({
-        ...f.target,
-        reason: "successor-actor",
-        expectedOwnerKey: "agent:main:main",
-      });
-      await successor;
-      releaseRead.resolve();
-      await Promise.race([
-        closeEntered.promise,
-        result.then(() => {
-          throw new Error("Superseded handle was not closed.");
-        }),
-      ]);
-      expect(settled).toBe(false);
-      expect(close).toHaveBeenCalledExactlyOnceWith({
-        handle: expect.objectContaining({ runtimeSessionName: "superseded-late-runtime" }),
-        reason: "session-actor-superseded",
-        discardPersistentState: true,
-      });
-      releaseClose.resolve();
-      expect(await result).toMatchObject([{ status: "rejected" }]);
-      await f.manager.cancelSession({ ...f.target, reason: "successor-reuse" });
-      sql.restore();
-      expect(f.ensureSession).toHaveBeenCalledTimes(2);
-      expect(f.cancel.mock.calls.map(([input]) => input.reason)).toEqual([
-        "successor-actor",
-        "successor-reuse",
-      ]);
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-      read.mockRestore();
-      releaseRead.resolve();
-      releaseClose.resolve();
-      await Promise.allSettled([result, successor]);
-      close.mockRestore();
-    }
-  });
-});
 
 it("refuses caller revocation while the registered cancellation read is pending", async () => {
   await withAcpCancellationFixture(async (f) => {
@@ -426,12 +247,11 @@ it("refuses caller revocation while the registered cancellation read is pending"
       signal: stop.signal,
     });
     const turnResult = Promise.allSettled([turn]);
-    await Promise.race([
+    await awaitGateBeforeSettlement(
       entered.promise,
-      turnResult.then(() => {
-        throw new Error("Turn ended before runtime entry.");
-      }),
-    ]);
+      turnResult,
+      "Turn ended before runtime entry.",
+    );
     const readEntered = createDeferred();
     const readRelease = createDeferred();
     const prepare = DEFAULT_DEPS.prepareSessionControlRead;
@@ -457,12 +277,11 @@ it("refuses caller revocation while the registered cancellation read is pending"
     });
     const result = Promise.allSettled([cancellation]);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         readEntered.promise,
-        result.then(() => {
-          throw new Error("Cancellation ended before read gate.");
-        }),
-      ]);
+        result,
+        "Cancellation ended before read gate.",
+      );
       callerCurrent = false;
       readRelease.resolve();
       expect(await result).toMatchObject([
@@ -519,12 +338,11 @@ it.each(["acknowledged", "failed"] as const)(
         },
       });
       const turnResult = Promise.allSettled([turn]);
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         ensureEntered.promise,
-        turnResult.then(() => {
-          throw new Error("Turn ended before setup gate.");
-        }),
-      ]);
+        turnResult,
+        "Turn ended before setup gate.",
+      );
       let callerCurrent = true;
       let settled = false;
       const sql = observeHostDataSql();
@@ -556,20 +374,18 @@ it.each(["acknowledged", "failed"] as const)(
         return value;
       });
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           admitted.promise,
-          result.then(() => {
-            throw new Error("Cancellation ended before admission.");
-          }),
-        ]);
+          result,
+          "Cancellation ended before admission.",
+        );
         callerCurrent = false;
         ensureRelease.resolve();
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           cancelEntered.promise,
-          result.then(() => {
-            throw new Error("Cancellation ended before runtime cleanup.");
-          }),
-        ]);
+          result,
+          "Cancellation ended before runtime cleanup.",
+        );
         expect(settled).toBe(false);
         expect(f.runTurn).not.toHaveBeenCalled();
         cancelRelease.resolve();
@@ -634,12 +450,11 @@ it("does not adopt a same-request successor after actor replacement during cance
       requestId: "actor-worker",
     });
     const firstResult = Promise.allSettled([first]);
-    await Promise.race([
+    await awaitGateBeforeSettlement(
       firstEntered.promise,
-      firstResult.then(() => {
-        throw new Error("First actor ended before entry.");
-      }),
-    ]);
+      firstResult,
+      "First actor ended before entry.",
+    );
     const readEntered = createDeferred();
     const readRelease = createDeferred();
     const prepare = DEFAULT_DEPS.prepareSessionControlRead;
@@ -661,12 +476,11 @@ it("does not adopt a same-request successor after actor replacement during cance
     const result = Promise.allSettled([cancellation]);
     let successor: Promise<void> | undefined;
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         readEntered.promise,
-        result.then(() => {
-          throw new Error("Cancellation ended before read gate.");
-        }),
-      ]);
+        result,
+        "Cancellation ended before read gate.",
+      );
       await getAcpSessionResetControls(f.manager).forceDiscardSessionRuntime({
         ...f.target,
         reason: "fixture-actor-replacement",
@@ -680,12 +494,11 @@ it("does not adopt a same-request successor after actor replacement during cance
         requestId: "actor-worker",
       });
       const successorResult = Promise.allSettled([successor]);
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         nextEntered.promise,
-        successorResult.then(() => {
-          throw new Error("Successor ended before entry.");
-        }),
-      ]);
+        successorResult,
+        "Successor ended before entry.",
+      );
       readRelease.resolve();
       expect(await result).toMatchObject([{ status: "rejected" }]);
       expect(nextSignal?.aborted).toBe(false);
@@ -883,12 +696,11 @@ it.each(["metadata-read", "runtime-rpc"] as const)(
           },
         });
         const secondResult = Promise.allSettled([second]);
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           secondAdmission.promise,
-          secondResult.then(() => {
-            throw new Error("Second Stop ended before fresh control admission.");
-          }),
-        ]);
+          secondResult,
+          "Second Stop ended before fresh control admission.",
+        );
         expect(turnSettled).toBe(false);
         releaseTurn.resolve();
         expect(await Promise.allSettled([first, second, turn])).toMatchObject([

@@ -22,6 +22,7 @@ import {
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
+import * as logger from "../logger.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -104,6 +105,9 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt) {
       .fn<NodeWorkerSupervisorControl["retainWorkspaces"]>()
       .mockResolvedValue({ applied: true, deleted: 0, hasMore: false }),
     cancel: vi.fn<NodeWorkerSupervisorControl["cancel"]>().mockResolvedValue(receipt),
+    observeProcesses: vi
+      .fn<NodeWorkerSupervisorControl["observeProcesses"]>()
+      .mockResolvedValue({ sessionId: "session-1", processes: [], truncated: false }),
     stopEnvironment: vi
       .fn<NodeWorkerSupervisorControl["stopEnvironment"]>()
       .mockResolvedValue(undefined),
@@ -838,21 +842,31 @@ setInterval(() => {}, 1000);
     });
   });
 
-  it("returns a bounded generic error without leaking supervisor details", async () => {
-    const leaked = `/private/path/${"secret".repeat(2_000)}`;
+  it("returns a generic error but logs the bounded, redacted supervisor cause", async () => {
+    const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const leaked = `cleanup incomplete at /private/path Bearer sk-abcdefghijklmnopqrstuv ${"x".repeat(12_000)}`;
     const supervisor = supervisorWith(fullReceipt());
     supervisor.status.mockRejectedValueOnce(new Error(leaked));
+    try {
+      const { result } = await invokePrivate({
+        command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+        paramsJSON: JSON.stringify({ launchId: "launch-1" }),
+        supervisor,
+      });
 
-    const { result } = await invokePrivate({
-      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
-      paramsJSON: JSON.stringify({ launchId: "launch-1" }),
-      supervisor,
-    });
-
-    expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-    const message = result?.error?.message ?? "";
-    expect(message).not.toContain("private/path");
-    expect(message.length).toBeLessThan(256);
+      expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+      const message = result?.error?.message ?? "";
+      expect(message).not.toContain("private/path");
+      expect(message.length).toBeLessThan(256);
+      expect(warn).toHaveBeenCalledOnce();
+      const logged = String(warn.mock.calls[0]?.[0]);
+      expect(logged).toContain(`(${NODE_WORKER_SUPERVISOR_STATUS_COMMAND}, UNAVAILABLE)`);
+      expect(logged).toContain("cleanup incomplete");
+      expect(logged).not.toContain("sk-abcdefghijklmnopqrstuv");
+      expect(logged.length).toBeLessThan(leaked.length);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("preserves a terminal capacity result across node invoke", async () => {
@@ -873,6 +887,47 @@ setInterval(() => {}, 1000);
         message: "node worker capacity remained full for 10000 ms",
       },
     });
+  });
+
+  it("returns and logs bounded, redacted workspace failure details", async () => {
+    const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const workspace = new NodeWorkerWorkspaceRuntime({
+      root: tempDirs.make("node-worker-workspace-diagnostic-"),
+    });
+    const exec = vi
+      .spyOn(workspace, "exec")
+      .mockRejectedValueOnce(
+        new Error(
+          `workspace quiescence failed: Authorization: Bearer ${secret}\n${"detail ".repeat(300)}terminal diagnosis`,
+        ),
+      );
+    try {
+      const { result } = await invokePrivate({
+        command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+        paramsJSON: JSON.stringify({
+          gatewayNamespace: "gateway-1",
+          environmentId: "environment-1",
+          sessionId: "session-1",
+          generation: 4,
+          argv: ["node", "-e", "void 0"],
+        }),
+        workspace,
+      });
+      expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+      const message = result?.error?.message ?? "";
+      expect(message).toContain("workspace quiescence failed");
+      expect(message).toContain("terminal diagnosis");
+      expect(message).not.toContain(secret);
+      expect(message).not.toContain("\n");
+      expect(message.length).toBeLessThanOrEqual(500);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        `node workspace command failed (${NODE_WORKER_WORKSPACE_EXEC_COMMAND}, UNAVAILABLE): ${message}`,
+      );
+    } finally {
+      exec.mockRestore();
+      warn.mockRestore();
+    }
   });
 
   it("preserves a typed workspace transfer failure across node invoke", async () => {

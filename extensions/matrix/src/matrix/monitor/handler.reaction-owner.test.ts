@@ -40,7 +40,8 @@ afterEach(() => {
 describe("Matrix reaction ownership", () => {
   it("keeps a reaction on the runtime-bound global owner's queue", async () => {
     const cfg = {
-      agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+      agents: { entries: { main: {}, research: {} } },
+      bindings: [{ agentId: "main", match: { channel: "matrix", accountId: "ops" } }],
       channels: { matrix: { dm: { allowFrom: ["*"] } } },
     };
     setRuntimeConfigSnapshot(cfg);

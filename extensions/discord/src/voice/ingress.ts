@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import * as realtimeBootstrapSdk from "openclaw/plugin-sdk/realtime-bootstrap-context";
-import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
+import { resolveRealtimeVoiceAgentContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import type { RealtimeVoiceSelectionHandle } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -12,59 +11,31 @@ import { buildDiscordGroupSystemPrompt } from "../monitor/inbound-context.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { getDiscordRuntime } from "../runtime.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
-import type { VoiceSessionEntry } from "./session.js";
+import type { VoiceRealtimeSpeakerContext, VoiceSessionEntry } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
 
 const logger = createSubsystemLogger("discord/voice");
 
-// Retire the 2026.9.6 profile path when the supported host floor supplies the shared composer.
-const contextSdk: Partial<
-  Pick<typeof realtimeBootstrapSdk, "resolveRealtimeVoiceAgentContextInstructions">
-> = realtimeBootstrapSdk;
-
-export type DiscordVoiceIngressContext = {
-  extraSystemPrompt?: string;
+export type DiscordVoiceIngressContext = VoiceRealtimeSpeakerContext & {
   isCurrent?: () => boolean;
-  senderIsOwner: boolean;
-  speakerLabel: string;
 };
 
-function summarizeAgentTurnPayloads(payloads: readonly unknown[]): string {
-  let textPayloads = 0;
-  let nonEmptyTextPayloads = 0;
-  let reasoningPayloads = 0;
-  let errorPayloads = 0;
-  let mediaPayloads = 0;
+type DiscordVoiceAgentTurnResult = Awaited<
+  ReturnType<ReturnType<typeof getDiscordRuntime>["agent"]["runCommandFromIngress"]>
+>;
 
-  for (const payload of payloads) {
-    if (!payload || typeof payload !== "object") {
-      continue;
-    }
-    const record = payload as Record<string, unknown>;
-    const text = record.text;
-    if (typeof text === "string") {
-      textPayloads += 1;
-      if (text.trim()) {
-        nonEmptyTextPayloads += 1;
-      }
-    }
-    if (record.isReasoning === true) {
-      reasoningPayloads += 1;
-    }
-    if (record.isError === true) {
-      errorPayloads += 1;
-    }
-    if (
-      typeof record.mediaUrl === "string" ||
-      (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0)
-    ) {
-      mediaPayloads += 1;
-    }
-  }
+function summarizeAgentTurnPayloads(
+  payloads: NonNullable<DiscordVoiceAgentTurnResult["payloads"]>,
+): string {
+  const nonEmptyTextPayloads = payloads.filter((payload) => payload.text.trim()).length;
+  const errorPayloads = payloads.filter((payload) => payload.isError === true).length;
+  const mediaPayloads = payloads.filter(
+    (payload) => payload.mediaUrl != null || payload.mediaUrls?.length,
+  ).length;
 
-  return `payloadCount=${payloads.length} textPayloads=${textPayloads} nonEmptyTextPayloads=${nonEmptyTextPayloads} reasoningPayloads=${reasoningPayloads} errorPayloads=${errorPayloads} mediaPayloads=${mediaPayloads}`;
+  return `payloadCount=${payloads.length} textPayloads=${payloads.length} nonEmptyTextPayloads=${nonEmptyTextPayloads} reasoningPayloads=0 errorPayloads=${errorPayloads} mediaPayloads=${mediaPayloads}`;
 }
 
 export async function resolveDiscordVoiceIngressContext(params: {
@@ -80,8 +51,7 @@ export async function resolveDiscordVoiceIngressContext(params: {
   const { entry, userId } = params;
   if (!entry.guildName) {
     const guild = await params.client.fetchGuild(entry.guildId).catch(() => null);
-    entry.guildName =
-      guild && typeof guild.name === "string" && guild.name.trim() ? guild.name : undefined;
+    entry.guildName = guild?.name.trim() ? guild.name : undefined;
   }
   const speaker = await params.speakerContext.resolveContext(entry.guildId, userId);
   const speakerIdentity = await params.speakerContext.resolveIdentity(entry.guildId, userId);
@@ -151,9 +121,7 @@ export async function runDiscordVoiceAgentTurn(params: {
         },
       })
     : undefined;
-  let result: Awaited<
-    ReturnType<ReturnType<typeof getDiscordRuntime>["agent"]["runCommandFromIngress"]>
-  >;
+  let result: DiscordVoiceAgentTurnResult;
   try {
     result = await getDiscordRuntime().agent.runCommandFromIngress(
       {
@@ -180,7 +148,7 @@ export async function runDiscordVoiceAgentTurn(params: {
   const payloads = result.payloads ?? [];
   const text = payloads
     .map((payload) => payload.text)
-    .filter((entry) => typeof entry === "string" && entry.trim())
+    .filter((entry) => entry?.trim())
     .join("\n")
     .trim();
   if (!text) {
@@ -203,21 +171,5 @@ export async function resolveDiscordVoiceRealtimeAgentContext(params: {
     files: params.discordConfig.voice?.realtime?.bootstrapContextFiles,
     warn: (message: string) => logger.warn(`discord voice: realtime agent context: ${message}`),
   };
-  if (contextSdk.resolveRealtimeVoiceAgentContextInstructions) {
-    return await contextSdk.resolveRealtimeVoiceAgentContextInstructions(contextParams);
-  }
-  if (contextParams.files?.length === 0) {
-    return undefined;
-  }
-  try {
-    return await resolveRealtimeBootstrapContextInstructions({
-      ...contextParams,
-      warn: (message) => logger.warn(`discord voice: realtime bootstrap context: ${message}`),
-    });
-  } catch (error) {
-    logger.warn(
-      `discord voice: realtime bootstrap context unavailable: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return undefined;
-  }
+  return await resolveRealtimeVoiceAgentContextInstructions(contextParams);
 }

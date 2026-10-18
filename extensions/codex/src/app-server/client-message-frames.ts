@@ -1,4 +1,4 @@
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { RpcRequest, RpcResponse } from "./protocol.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
@@ -11,7 +11,6 @@ export function createCodexAppServerMessageWriter(options: {
     message: RpcRequest | RpcResponse,
     onError?: (error: Error) => void,
     beforeWrite?: () => void,
-    onWriteResult?: (error?: Error | null) => void,
   ): void => {
     if (options.isClosed()) {
       return;
@@ -19,7 +18,10 @@ export function createCodexAppServerMessageWriter(options: {
     const child = options.getTransport();
     const id = "id" in message ? message.id : undefined;
     const method = "method" in message ? message.method : undefined;
-    const frame = stringifyCodexAppServerMessage(message);
+    const frame =
+      JSON.stringify(message, (_key, value) =>
+        typeof value === "string" ? value.replace(UNPAIRED_SURROGATE_RE, "") : value,
+      ) ?? "null";
     // Reject locally before declaring a possible write. Images count toward the
     // transport frame limit even though Codex's text-input limit excludes them.
     if (child.maxFrameBytes && Buffer.byteLength(frame) > child.maxFrameBytes) {
@@ -32,7 +34,6 @@ export function createCodexAppServerMessageWriter(options: {
       options.onNativeExecution();
     }
     child.stdin.write(`${frame}\n`, (error?: Error | null) => {
-      onWriteResult?.(error);
       if (error) {
         embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
         onError?.(error);
@@ -50,7 +51,7 @@ export function listenCodexAppServerLines(
   onLine: (line: Buffer) => void | Promise<void>,
   onError: (error: unknown) => void,
 ): () => void {
-  let fragments: Buffer[] = [];
+  const fragments: Buffer[] = [];
   let length = 0;
   let remainder: Buffer | undefined;
   let waiting = false;
@@ -58,7 +59,7 @@ export function listenCodexAppServerLines(
   let closed = false;
   const close = () => {
     closed = true;
-    fragments = [];
+    fragments.length = 0;
     remainder = undefined;
     input.off("data", onData);
     input.off("end", onEnd);
@@ -68,7 +69,7 @@ export function listenCodexAppServerLines(
     const line = fragments.length
       ? Buffer.concat([...fragments, tail], length + tail.length)
       : tail;
-    fragments = [];
+    fragments.length = 0;
     length = 0;
     const completion = onLine(line);
     if (!completion) {
@@ -103,12 +104,11 @@ export function listenCodexAppServerLines(
           if (closed) {
             return;
           }
-          // Retain only this already-delivered transport chunk, never a page queue.
-          remainder = chunk.subarray(end + 1);
           if (!deliver(chunk.subarray(start, end))) {
+            // Retain this chunk only while an asynchronous decode pauses delivery.
+            remainder = closed ? undefined : chunk.subarray(end + 1);
             return;
           }
-          remainder = undefined;
           start = end + 1;
         }
         if (!closed && start < chunk.length) {
@@ -169,8 +169,7 @@ export function readCodexCatalogDecodeRoute(line: Buffer): CodexCatalogDecodeRou
       for (;;) {
         index = line.indexOf(34, index + 1);
         if (index < 0) {
-          // A raw newline may precede the ID in a result-first envelope. Keep
-          // recovery off-main until the decoded ID can select its projection.
+          // Keep malformed-payload parsing and diagnostics off the main thread.
           return "unresolved";
         }
         let slash = index - 1;
@@ -225,12 +224,4 @@ export function readCodexCatalogDecodeRoute(line: Buffer): CodexCatalogDecodeRou
     }
   }
   return response || route ? "unresolved" : undefined;
-}
-
-function stringifyCodexAppServerMessage(message: RpcRequest | RpcResponse): string {
-  return (
-    JSON.stringify(message, (_key, value) =>
-      typeof value === "string" ? value.replace(UNPAIRED_SURROGATE_RE, "") : value,
-    ) ?? "null"
-  );
 }

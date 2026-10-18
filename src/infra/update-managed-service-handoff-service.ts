@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { UpdatePreMutationError } from "../cli/update-cli/shared.js";
@@ -17,7 +18,10 @@ import {
   UPDATE_RUN_ID_ENV,
 } from "./update-control-plane-sentinel.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
-import type { HandoffChild } from "./update-managed-service-handoff-control.js";
+import {
+  createHandoffLineReader,
+  type HandoffChild,
+} from "./update-managed-service-handoff-control.js";
 import type { ActiveManagedServiceUpdateHandoff } from "./update-managed-service-handoff-types.js";
 
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
@@ -70,8 +74,13 @@ export async function admitSystemdUpdate(
     await fs.access(installRoot, fs.constants.W_OK | fs.constants.X_OK);
   } catch (cause) {
     const { uid } = await fs.stat(installRoot);
+    const invocation = resolveOpenClawCliInvocation({
+      entryPath: path.join(installRoot, "openclaw.mjs"),
+      execArgv: [],
+      args: ["update", "--yes", "--no-restart"],
+    });
     const updateCommand = formatInstallationTargetCommand(
-      [process.execPath, path.join(installRoot, "openclaw.mjs"), "update", "--yes", "--no-restart"],
+      [invocation.command, ...invocation.args],
       resolveInstallationTarget(env),
       { env },
     );
@@ -91,19 +100,12 @@ export function observeManagedServiceUpdateHandoffClose(
   owner: ActiveManagedServiceUpdateHandoff,
   child: HandoffChild,
 ): Promise<void> {
-  let buffered = "";
   let cleanupSettled = false;
-  const onData = (chunk: Buffer | string) => {
-    buffered = (buffered + chunk.toString()).slice(-1024);
-    let newline;
-    while ((newline = buffered.indexOf("\n")) >= 0) {
-      const line = buffered.slice(0, newline + 1);
-      buffered = buffered.slice(newline + 1);
-      if (line === SYSTEM_SERVICE_UPDATE_SETTLED_MARKER) {
-        cleanupSettled = true;
-      }
+  const onData = createHandoffLineReader((line) => {
+    if (line === SYSTEM_SERVICE_UPDATE_SETTLED_MARKER) {
+      cleanupSettled = true;
     }
-  };
+  });
   child.stdout.on("data", onData);
   return new Promise((resolve) => {
     child.once("close", () => {
@@ -112,32 +114,6 @@ export function observeManagedServiceUpdateHandoffClose(
       resolve();
     });
   });
-}
-
-/** A detached helper still shares the system unit's cgroup until it settles. */
-export function joinSystemServiceUpdateHandoffs(
-  owners: ReadonlyMap<string, ActiveManagedServiceUpdateHandoff>,
-): Promise<void> | undefined {
-  const pending = () =>
-    [...owners.values()].filter((owner) => owner.operatorRestartWarning && !owner.settled);
-  let updates = pending();
-  if (!updates.length) {
-    return undefined;
-  }
-  return (async () => {
-    while (updates.length) {
-      await Promise.all(
-        updates.map(async (owner) => {
-          await owner.flight;
-          await owner.closed;
-          if (!owner.settled) {
-            throw new Error("System-service updater settlement could not be confirmed.");
-          }
-        }),
-      );
-      updates = pending();
-    }
-  })();
 }
 
 type GatewayServiceRecovery =

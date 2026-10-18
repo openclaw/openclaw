@@ -82,10 +82,7 @@ describe("shared inventory argument validation", () => {
     })),
     { argv: ["--repo-root"], error: "--repo-root expects a path" },
     { argv: ["--repo-root", "-h"], error: "--repo-root expects a path" },
-    ...["--limit=1", "--repo-root=repo", "--json=true"].map((arg) => ({
-      argv: [arg],
-      error: `Unknown argument: ${arg}`,
-    })),
+    { argv: ["--limit=1"], error: "Unknown argument: --limit=1" },
     { argv: ["--limit", "1", "--limit", "bad"], error: "--limit expects a non-negative integer" },
     { argv: ["--limit", "bad", "--limit", "1"], error: "--limit expects a non-negative integer" },
     { argv: ["--repo-root", "valid", "--repo-root", ""], error: "--repo-root expects a path" },

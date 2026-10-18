@@ -20,9 +20,11 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
   cwd?: string;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
   input?: string;
+  prepareInput?: () => void | Promise<void>;
   secretInput?: SpawnSecretInput;
   stderrDestination?: Writable;
   stdoutConsumption?: "awaited";
+  terminateOnHostLoss?: true;
   oomScoreWrapperSelected: boolean;
   onWorkerMessage?: (message: unknown) => void;
   windowsShellCommand?: string;
@@ -49,7 +51,6 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
   const nativeProcessOwner =
     getInheritedNativeProcessOwner() ??
     (process.platform === "linux" &&
-    !process.versions.bun &&
     (typeof WORKER_DEPLOY_BUILD !== "boolean" || !WORKER_DEPLOY_BUILD)
       ? resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor").href
       : undefined);

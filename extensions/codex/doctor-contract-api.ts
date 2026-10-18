@@ -1,6 +1,3 @@
-/**
- * Doctor contract hooks for Codex plugin config and state migrations.
- */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -61,7 +58,6 @@ function hasRetiredTurnIdleTimeout(value: unknown): boolean {
   );
 }
 
-/** Legacy Codex config keys that doctor should report or repair. */
 export const legacyConfigRules: LegacyConfigRule[] = [
   {
     path: ["plugins", "entries", "codex", "config"],
@@ -203,6 +199,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "codex-native-task-assignments",
     label: "Codex native pending assignments",
+    sqliteOnly: { family: "state" },
     collectBackupResources: async (params) =>
       (
         await import("./src/migration/native-task-assignments.js")
@@ -215,6 +212,21 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       (
         await import("./src/migration/native-task-assignments.js")
       ).codexNativeTaskAssignmentMigration.migrateLegacyState(params),
+  },
+  {
+    id: "codex-native-assignment-repair",
+    label: "Codex native pending assignment repair",
+    doctorOnly: true,
+    phase: "after-session-repair",
+    collectBackupResources: () => [],
+    detectLegacyState: async (params) =>
+      (
+        await import("./src/migration/native-assignment-repair.js")
+      ).codexNativeAssignmentRepair.detectLegacyState(params),
+    migrateLegacyState: async (params) =>
+      (
+        await import("./src/migration/native-assignment-repair.js")
+      ).codexNativeAssignmentRepair.migrateLegacyState(params),
   },
   codexOrphanedSessionBindingMigration,
 ];

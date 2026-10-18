@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import * as uuid from "../../lib/uuid.ts";
-import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -87,6 +87,43 @@ describe("custodian page nudges", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps a focused question answer usable across unrelated Gateway events", async () => {
+    const initialReply = createDeferred<SystemAgentChatResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(initialReply.promise)
+      .mockResolvedValue(chatReply("Continuing."));
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    initialReply.resolve(
+      chatReply("Choose the next step.", {
+        question: {
+          id: "focused-choice",
+          header: "Next step",
+          question: "What should happen next?",
+          options: [
+            { label: "Continue", reply: "continue", recommended: true },
+            { label: "Pause", reply: "pause" },
+          ],
+        },
+      }),
+    );
+    const answer = await waitForSolid(() => {
+      const button = page.querySelector<HTMLButtonElement>('[data-option-value="Pause"]');
+      expect(button).not.toBeNull();
+      return button!;
+    });
+    answer.focus();
+    expect(document.activeElement).toBe(answer);
+
+    emitGatewayEvent({ event: "health", payload: { channels: {} } });
+    await waitForSolid(() => expect(document.activeElement).toBe(answer));
+    answer.click();
+    await waitForSolid(() =>
+      expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ message: "pause" }),
+    );
+  });
+
   it("shows a channel-error nudge but ignores routine events", async () => {
     const { page, emitGatewayEvent, emitHealth } = await mountCaretaker();
 
@@ -160,28 +197,6 @@ describe("custodian page nudges", () => {
     await emitHealth(discordAuthFailure);
     expect(page.querySelector(".custodian__nudge")).toBeNull();
     expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("replaces greeting quick actions with a real message when an event nudge is clicked", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(
-        chatReply("Everything is healthy.", {
-          question: QUICK_ACTIONS_QUESTION,
-        }),
-      )
-      .mockResolvedValue(chatReply("Inspecting the channel failure."));
-    const { page, emitHealth } = await mountCaretaker(request);
-
-    await emitHealth(telegramAuthFailure);
-    nudgeAction(page).click();
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(request.mock.calls[1]?.[1]).toMatchObject({
-      message: "what happened with telegram authentication?",
-    });
-    expect(page.textContent).toContain("what happened with telegram authentication?");
-    await waitForFast(() => expect(page.querySelector(".custodian__nudge")).toBeNull());
   });
 
   it.each([

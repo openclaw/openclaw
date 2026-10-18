@@ -54,12 +54,8 @@ function isContainerEnvironment() {
   }
 
   for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
-    try {
-      if (fs.existsSync(sentinelPath)) {
-        return true;
-      }
-    } catch {
-      // ignore
+    if (fs.existsSync(sentinelPath)) {
+      return true;
     }
   }
 
@@ -90,12 +86,9 @@ function resolveSystemMdnsHostname(): string | null {
   } catch {
     return null;
   }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
   const firstLabel =
-    trimmed
+    raw
+      .trim()
       .replace(/\.local$/i, "")
       .split(".")[0]
       ?.trim() ?? "";
@@ -179,13 +172,8 @@ export async function startGatewayBonjourAdvertiser(
   let restoreConsoleLog: () => void = () => {};
   let cleanupUnhandledRejection: (() => void) | undefined;
   let cleanupUncaughtException: (() => void) | undefined;
-  let processHandlersCleaned = false;
 
   function cleanupProcessHandlers() {
-    if (processHandlersCleaned) {
-      return;
-    }
-    processHandlersCleaned = true;
     cleanupUncaughtException?.();
     cleanupUnhandledRejection?.();
   }
@@ -221,10 +209,7 @@ export async function startGatewayBonjourAdvertiser(
     const labelEnd = dotIndex === -1 ? hostnameWithoutLocal.length : dotIndex;
     const hostnameLabel = hostnameWithoutLocal.slice(0, labelEnd).trim() || "openclaw";
     const hostname = truncateToDnsLabel(hostnameLabel, "openclaw");
-    const instanceName =
-      typeof opts.instanceName === "string" && opts.instanceName.trim()
-        ? opts.instanceName.trim()
-        : `${hostname} (OpenClaw)`;
+    const instanceName = opts.instanceName?.trim() || `${hostname} (OpenClaw)`;
     const displayName = prettifyInstanceName(instanceName);
 
     const txtBase: Record<string, string> = {
@@ -242,10 +227,10 @@ export async function startGatewayBonjourAdvertiser(
     if (opts.gatewayDirectReachable) {
       txtBase.gatewayDirectReachable = "1";
     }
-    if (!opts.minimal && typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
+    if (!opts.minimal && opts.tailnetDns?.trim()) {
       txtBase.tailnetDns = opts.tailnetDns.trim();
     }
-    if (!opts.minimal && typeof opts.cliPath === "string" && opts.cliPath.trim()) {
+    if (!opts.minimal && opts.cliPath?.trim()) {
       txtBase.cliPath = opts.cliPath.trim();
     }
 
@@ -280,12 +265,6 @@ export async function startGatewayBonjourAdvertiser(
       );
     }
 
-    logger.debug(
-      `bonjour: starting (hostname=${hostname}, instance=${JSON.stringify(
-        safeServiceName(instanceName),
-      )}, gatewayPort=${opts.gatewayPort}${opts.minimal ? ", minimal=true" : `, sshPort=${opts.sshPort ?? 22}`})`,
-    );
-
     const gateway = responder.createService({
       name: safeServiceName(instanceName),
       type: "openclaw-gw",
@@ -294,18 +273,14 @@ export async function startGatewayBonjourAdvertiser(
       hostname,
       txt: gatewayTxt,
     });
-    try {
-      gateway.on("name-change", (name) => {
-        logger.warn(`bonjour: gateway name conflict resolved; newName=${JSON.stringify(name)}`);
-      });
-      gateway.on("hostname-change", (nextHostname) => {
-        logger.warn(
-          `bonjour: gateway hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
-        );
-      });
-    } catch (err) {
-      logger.debug(`bonjour: failed to attach listeners for gateway: ${String(err)}`);
-    }
+    gateway.on("name-change", (name) => {
+      logger.warn(`bonjour: gateway name conflict resolved; newName=${JSON.stringify(name)}`);
+    });
+    gateway.on("hostname-change", (nextHostname) => {
+      logger.warn(
+        `bonjour: gateway hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
+      );
+    });
     try {
       void gateway
         .advertise()

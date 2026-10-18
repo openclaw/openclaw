@@ -26,15 +26,13 @@ export function renderAvatar(
 }
 
 export function safeExternalUrl(value: string): string | undefined {
-  try {
-    const url = new URL(value);
-    if ((url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password) {
-      return url.href;
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
+  const url = URL.parse(value);
+  return url &&
+    (url.protocol === "https:" || url.protocol === "http:") &&
+    !url.username &&
+    !url.password
+    ? url.href
+    : undefined;
 }
 
 export const ITEM_LABELS: Record<GithubItemKind, string> = {

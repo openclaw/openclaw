@@ -12,7 +12,6 @@ import {
 } from "../../context-engine/registry.js";
 import { disposeContextEngineSources } from "../../context-engine/registry.resources.js";
 import type { ContextEngine, ContextEngineOperation } from "../../context-engine/types.js";
-import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { recordAgentCleanupFailure, runAgentCleanupStep } from "../run-cleanup-timeout.js";
 
 type LogicalTurnSelectionState = "unselected" | "selected" | "started" | "disposed";
@@ -33,6 +32,7 @@ export type ContextEngineLogicalTurnLease = {
   readonly effectiveEnginePluginId?: string;
   readonly degraded: boolean;
   readonly degradedReason?: string;
+  readonly disposed: boolean;
   selectForHost: (params: {
     host: ContextEngineHostSupport;
     operation: ContextEngineOperation;
@@ -40,38 +40,17 @@ export type ContextEngineLogicalTurnLease = {
   }) => EffectiveContextEngineRef;
   degradeBeforeStart: (reason: string) => EffectiveContextEngineRef;
   begin: () => EffectiveContextEngineRef;
+  onDispose: (key: string, settle: () => Promise<void>) => void;
   deferDisposalUntil: (promise: Promise<unknown>) => void;
   dispose: () => Promise<void>;
 };
-
-export function selectContextEngineForTranscriptHost(params: {
-  lease: ContextEngineLogicalTurnLease;
-  host: ContextEngineHostSupport;
-  operation: ContextEngineOperation;
-  recorder: Pick<UserTurnTranscriptRecorder, "getAdmissionReceipt" | "hasPersisted"> | undefined;
-}): EffectiveContextEngineRef {
-  const admission = params.recorder?.getAdmissionReceipt();
-  // Selection runs during turn preparation, before the user turn is written, so an admitted
-  // receipt does not exist yet on the paths that persist during the run. A receipt is only
-  // owed once the turn has actually been persisted: until then there is no admitted entry for
-  // the fence to anchor to, so there is nothing to degrade over.
-  if (params.recorder && !admission && params.recorder.hasPersisted()) {
-    return params.lease.degradeBeforeStart(
-      "current-turn transcript admission receipt is unavailable",
-    );
-  }
-  return params.lease.selectForHost({
-    host: params.host,
-    operation: params.operation,
-    requiresDurableCommit: params.recorder !== undefined,
-  });
-}
 
 export async function createContextEngineLogicalTurnLease(params: {
   identity: { runId: string; sessionId: string };
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  awaitSessionDiffBaseline?: () => Promise<void>;
   warn?: (message: string) => void;
 }): Promise<ContextEngineLogicalTurnLease> {
   const { runId, sessionId } = params.identity;
@@ -79,6 +58,7 @@ export async function createContextEngineLogicalTurnLease(params: {
     initialize: ensureContextEnginesInitialized,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
+    beforeCustomEngine: params.awaitSessionDiffBaseline,
     onCleanupFailure: recordAgentCleanupFailure,
   });
   let state: LogicalTurnSelectionState = "unselected";
@@ -86,16 +66,16 @@ export async function createContextEngineLogicalTurnLease(params: {
   let degradedReason = resolution.configuredFailure;
   let warned = false;
   const disposalHolds = new Set<Promise<unknown>>();
+  const settlements = new Map<string, () => Promise<void>>();
   const isBaselineEngineSelection =
     resolution.configuredFailure === undefined &&
     resolution.configured.registeredId === resolution.fallback.registeredId;
 
-  const asEffective = (): EffectiveContextEngineRef =>
-    Object.freeze({
-      ...effective,
-      mode: degradedReason ? "legacy-degraded" : "configured",
-      ...(degradedReason ? { reason: degradedReason } : {}),
-    });
+  const asEffective = (): EffectiveContextEngineRef => ({
+    ...effective,
+    mode: degradedReason ? "legacy-degraded" : "configured",
+    ...(degradedReason ? { reason: degradedReason } : {}),
+  });
 
   const warnOnce = (reason: string) => {
     if (warned) {
@@ -188,6 +168,9 @@ export async function createContextEngineLogicalTurnLease(params: {
     get degradedReason() {
       return degradedReason;
     },
+    get disposed() {
+      return state === "disposed";
+    },
     selectForHost(selection) {
       if (state === "disposed") {
         throw new Error("context-engine logical turn lease is already disposed");
@@ -217,6 +200,12 @@ export async function createContextEngineLogicalTurnLease(params: {
       state = "started";
       return asEffective();
     },
+    onDispose(key, settle) {
+      if (state === "disposed") {
+        throw new Error("context-engine logical turn lease is already disposed");
+      }
+      settlements.set(key, settle);
+    },
     deferDisposalUntil(promise) {
       if (state === "disposed") {
         throw new Error("context-engine logical turn lease is already disposed");
@@ -229,6 +218,18 @@ export async function createContextEngineLogicalTurnLease(params: {
         return;
       }
       state = "disposed";
+      await Promise.all(
+        [...settlements.values()].map((cleanup) =>
+          runAgentCleanupStep({
+            runId,
+            sessionId,
+            step: "context-engine-turn-settlement",
+            log: { warn: params.warn ?? console.warn },
+            cleanup,
+          }),
+        ),
+      );
+      settlements.clear();
       const engines = [resolution.configured.engine, resolution.fallback.engine];
       const distinctEngines = engines.filter((engine, index) =>
         engines.slice(0, index).every((other) => !hasSameContextEngineInstance(engine, other)),

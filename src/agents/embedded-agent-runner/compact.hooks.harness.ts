@@ -11,6 +11,8 @@ import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
+import type { AgentSession } from "../sessions/agent-session.js";
+import type { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import {
   getMemoryProviderMock,
   getMemorySearchManagerMock,
@@ -23,6 +25,7 @@ import {
   createCompactHooksResolvedModel,
   emptyPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshotMock,
+  mockCompactHooksContextEngine,
   mockCompactHooksPluginMetadata,
   resolveCompactHooksApiKeyMock,
   type CompactHooksQueuedCompaction,
@@ -35,7 +38,6 @@ import {
 import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
 import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
-import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
@@ -180,7 +182,7 @@ function createMockCompactionSession() {
       sessionManualCompactionMock();
       return (await completeCompaction()).result;
     }),
-    [agentSessionAutomaticCompaction]: vi.fn(
+    [agentSessionAutomaticCompaction]: vi.fn<AgentSession[typeof agentSessionAutomaticCompaction]>(
       async (customInstructions, requestState, summaryOutputPolicy) => {
         sessionAutomaticCompactionMock(customInstructions, requestState, summaryOutputPolicy);
         return { status: "completed" as const, ...(await completeCompaction()) };
@@ -201,7 +203,7 @@ function createMockCompactionSession() {
   async function completeCompaction() {
     const result = await sessionCompactImpl();
     session.messages.splice(1);
-    const tokensAfter = session.messages.reduce<number>(
+    const tokensAfter: number = session.messages.reduce<number>(
       (tokens, message) => tokens + estimateTokensMock(message),
       0,
     );
@@ -233,7 +235,9 @@ export const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { sur
       ? ["ACP compact command guidance."]
       : ["Main compact command guidance."],
 );
-export const buildEmbeddedSystemPromptMock = vi.fn<typeof buildEmbeddedSystemPrompt>(() => "");
+export const buildConfiguredAgentSystemPromptMock = vi.fn<typeof buildConfiguredAgentSystemPrompt>(
+  () => "",
+);
 export const resolveSkillsPromptMock = vi.fn<
   typeof import("../../skills/loading/workspace-skill-prompt.js").resolveSkillsPrompt
 >(async () => "");
@@ -352,7 +356,6 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
       resolvePolicy: vi.fn(() => transcriptPolicy),
     },
     delivery: {
-      isSilentPayload: vi.fn(() => false),
       resolveFollowupRoute: vi.fn(() => undefined),
     },
     outcome: {
@@ -381,7 +384,7 @@ export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
   acquireCompactHooksPreparedModelRuntime,
 );
 
-export function resetCompactSessionStateMocks(): void {
+function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
   sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
     return params.messages;
@@ -480,8 +483,8 @@ export function resetCompactSessionStateMocks(): void {
   buildAgentRuntimePlanMock.mockImplementation((params: BuildAgentRuntimePlanParams) =>
     createCompactHooksRuntimePlan(params),
   );
-  buildEmbeddedSystemPromptMock.mockReset();
-  buildEmbeddedSystemPromptMock.mockReturnValue("");
+  buildConfiguredAgentSystemPromptMock.mockReset();
+  buildConfiguredAgentSystemPromptMock.mockReturnValue("");
   resolveSkillsPromptMock.mockReset();
   resolveSkillsPromptMock.mockResolvedValue("");
 }
@@ -530,11 +533,6 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
       _options?: Parameters<typeof resolveModelAsync>[4],
     ) => resolveModelMock(provider, modelId, agentDir, cfg),
   );
-  resolveAgentHarnessPolicyMock.mockReset();
-  resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
-  resolveContextWindowInfoMock.mockReset();
-  resolveContextWindowInfoMock.mockReturnValue({ tokens: 128_000 });
-
   sessionCompactImpl.mockReset();
   sessionCompactImpl.mockResolvedValue({
     summary: "summary",
@@ -678,8 +676,9 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       generateSummary: vi.fn(async () => "summary"),
     }));
 
+    // mock-isolation: Keep durable session state outside the lightweight compaction fixture.
     vi.doMock("../sessions/sdk.js", () => ({
-      createAgentSessionForEmbeddedRunner: createAgentSessionMock,
+      createAgentSession: createAgentSessionMock,
     }));
 
     vi.doMock("../session-tool-result-guard-wrapper.js", () => ({
@@ -709,12 +708,25 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     })),
   }));
 
+  vi.doMock("../auth-profiles/store-runtime.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../auth-profiles/store-runtime.js")>()),
+    ensureAuthProfileStoreWithoutExternalProfilesAsync: async (
+      ...args: Parameters<typeof ensureAuthProfileStoreWithoutExternalProfilesMock>
+    ) => ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
+  }));
+
+  // mock-isolation: Compaction hooks use fixture auth results without host profile or key discovery.
   vi.doMock("../model-auth.js", () => ({
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    ensureAuthProfileStoreAsync: async (...args: Parameters<typeof ensureAuthProfileStoreMock>) =>
+      ensureAuthProfileStoreMock(...args),
     ensureAuthProfileStoreWithoutExternalProfiles:
       ensureAuthProfileStoreWithoutExternalProfilesMock,
+    ensureAuthProfileStoreWithoutExternalProfilesAsync: async (
+      ...args: Parameters<typeof ensureAuthProfileStoreWithoutExternalProfilesMock>
+    ) => ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
     formatMissingAuthError: vi.fn(
       (auth: { mode: string; source: string }, provider: string) =>
         `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
@@ -723,7 +735,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       getApiKeyForModelMock(params),
     hasUsableCustomProviderApiKey: vi.fn(() => false),
     resolveProviderEntryApiKeyProfileReference: resolveProviderEntryApiKeyProfileReferenceMock,
-    resolveModelAuthMode: vi.fn(() => "env"),
+    resolveModelAuthModeAsync: vi.fn(() => "env"),
     shouldPreferExplicitConfigApiKeyAuth: shouldPreferExplicitConfigApiKeyAuthMock,
   }));
 
@@ -731,19 +743,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     resolveSandboxContext: resolveSandboxContextMock,
   }));
 
-  vi.doMock("../../context-engine/init.js", () => ({
-    ensureContextEnginesInitialized: vi.fn(),
-  }));
-
-  vi.doMock("../../context-engine/registry.js", () => ({
-    resolveContextEngine: resolveContextEngineMock,
-    resolveContextEngineOwnerPluginId: vi.fn(() => "lossless-claw"),
-    resolveLogicalTurnContextEngines: async () => {
-      const engine = await resolveContextEngineMock();
-      const ref = { engine, registeredId: "legacy" };
-      return { configured: ref, configuredId: "legacy", fallback: ref };
-    },
-  }));
+  mockCompactHooksContextEngine(resolveContextEngineMock);
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: enqueueCommandInLaneMock,
@@ -792,8 +792,8 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     })),
   }));
 
+  // mock-isolation: Compaction hooks use fixture tools without consulting the active channel registry.
   vi.doMock("../channel-tools.js", () => ({
-    listChannelSupportedActions: vi.fn(() => undefined),
     resolveChannelMessageToolHints: vi.fn(() => undefined),
   }));
 
@@ -840,6 +840,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     })),
   }));
 
+  // mock-isolation: Keep extension state isolated while safeguard tests install their own factories.
   vi.doMock("./extensions.js", () => ({
     buildEmbeddedExtensionFactories: buildEmbeddedExtensionFactoriesMock,
   }));
@@ -874,8 +875,9 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     };
   });
 
+  // mock-isolation: Compaction hook fixtures exercise lifecycle behavior without credential-source admission.
   vi.doMock("../auth-profiles/source-check.js", () => ({
-    hasAnyAuthProfileStoreSource: vi.fn(() => false),
+    hasAnyAuthProfileStoreSourceAsync: vi.fn(() => false),
   }));
 
   vi.doMock("../memory-search.js", () => ({
@@ -941,11 +943,12 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     };
   });
 
-  vi.doMock("../embedded-agent-helpers.js", async () => {
-    const { pickFallbackThinkingLevel } = await import("../embedded-agent-helpers/thinking.js");
+  vi.doMock("../embedded-agent-helpers/turns.js", async () => {
+    const actual = await vi.importActual<typeof import("../embedded-agent-helpers/turns.js")>(
+      "../embedded-agent-helpers/turns.js",
+    );
     return {
-      ensureSessionHeader: vi.fn(async () => {}),
-      pickFallbackThinkingLevel,
+      ...actual,
       validateAnthropicTurns: vi.fn((m: unknown[]) => m),
       validateGeminiTurns: vi.fn((m: unknown[]) => m),
     };
@@ -968,13 +971,9 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     resolveModelAsync: resolveModelAsyncMock,
   }));
 
-  vi.doMock("./system-prompt.js", () => ({
-    applySystemPromptToSession: vi.fn(
-      (session: { setBaseSystemPrompt: (systemPrompt: string) => void }, systemPrompt: string) => {
-        session.setBaseSystemPrompt(systemPrompt);
-      },
-    ),
-    buildEmbeddedSystemPrompt: buildEmbeddedSystemPromptMock,
+  // mock-isolation: Compaction fixtures capture prepared prompt inputs without loading ambient prompt owners.
+  vi.doMock("../system-prompt-config.js", () => ({
+    buildConfiguredAgentSystemPrompt: buildConfiguredAgentSystemPromptMock,
   }));
 
   vi.doMock("./utils.js", async () => {

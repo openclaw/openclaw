@@ -64,12 +64,12 @@ If a macOS node is paired, the Gateway can invoke `system.run` on it - this is r
 - The per-node `system.run` policy is the node's own exec approvals file (`exec.approvals.node.*`), controlled on the Mac via Settings -> Exec approvals (security + ask + allowlist); it can be stricter or looser than the gateway's global command-ID policy.
 - A node running `security="full"` and `ask="off"` follows the default trusted-operator model - expected behavior, not a bug, unless your deployment needs a tighter stance.
 - Approval mode binds exact request context and, when possible, one concrete local script/file operand. If OpenClaw cannot identify exactly one direct local file for an interpreter/runtime command, approval-backed execution is denied rather than promising full semantic coverage.
-- For `host=node`, approval-backed runs also store a canonical prepared `systemRunPlan`; later approved forwards reuse that stored plan, and gateway validation rejects caller edits to command/cwd/session context after the approval request was created.
+- For `host=node`, approval-backed runs also store a prepared `systemRunPlan`; later approved forwards reuse that stored plan, and gateway validation rejects caller edits to command/cwd/session context after the approval request was created.
 - To disable remote execution entirely: set security to `deny` and remove node pairing for that Mac.
 
 ## Dynamic skills (watcher / remote nodes)
 
-OpenClaw can refresh the skills list mid-session: the skills watcher updates the snapshot on the next agent turn when `SKILL.md` changes, and connecting a macOS node can make macOS-only skills eligible (based on bin probing). Treat skill folders as trusted code and restrict who can modify them.
+OpenClaw can refresh the skills list mid-session: the skills watcher updates the snapshot on the next agent turn when `SKILL.md` changes, and connecting a macOS node can make macOS-only skills eligible (based on bin checking). Treat skill folders as trusted code and restrict who can modify them.
 
 ## Plugins
 
@@ -83,7 +83,7 @@ Plugins run in-process with the Gateway - treat them as trusted code.
   - npm and git plugin installs run package-manager dependency convergence only during the explicit install/update flow. Local paths and archives are treated as self-contained packages; OpenClaw copies/references them without running `npm install`.
   - Prefer pinned exact versions (`@scope/pkg@1.2.3`) and inspect the unpacked code before enabling.
   - `security.installPolicy` lets operators run a trusted local command to return `allow`, `warn`, or `block` for skill and plugin installs. It runs after source material is staged but before install continues and applies to ClawHub skills too.
-  - A `warn` result stops before commit. Interactive CLI commands ask the operator to type the plugin or skill name using the same wording as suspicious ClawHub releases, then re-evaluate policy before continuing. An over-4,000-character rendered review fails closed before prompting. Declined and non-interactive direct CLI commands can use `--acknowledge-install-policy-warning` as explicit approval after review for every warning in that command invocation. The Control UI exposes the same invocation-wide approval through **Install anyway** for plugin installs. Other Gateway-backed and automatic installs remain blocked when they have no operator-confirmation flow. Every approved warning is re-evaluated before continuing. `block` and policy failures remain terminal. Neither `--force` nor the deprecated plugin install/update flag `--dangerously-force-unsafe-install` approves policy warnings.
+  - A `warn` result stops before commit. Interactive CLI commands ask the operator to type the plugin or skill name using the same wording as suspicious ClawHub releases, then re-evaluate policy before continuing. An over-4,000-character rendered review blocks installation before prompting. Declined and non-interactive direct CLI commands can use `--acknowledge-install-policy-warning` as explicit approval after review for every warning in that command invocation. The Control UI exposes the same invocation-wide approval through **Install anyway** for plugin installs. Other Gateway-backed and automatic installs remain blocked when they have no operator-confirmation flow. Every approved warning is re-evaluated before continuing. `block` and policy failures remain terminal. Neither `--force` nor the deprecated plugin install/update flag `--dangerously-force-unsafe-install` approves policy warnings.
 
 Details: [Plugins](/tools/plugin)
 
@@ -106,7 +106,7 @@ Agent workspace access inside the sandbox (`agents.defaults.sandbox.workspaceAcc
 - `"ro"`: mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`).
 - `"rw"`: mounts the agent workspace read/write at `/workspace`.
 
-Extra `sandbox.docker.binds` are validated against normalized, canonicalized source paths. A blocked-path denylist covers `/etc`, `/private/etc`, `/proc`, `/sys`, `/dev`, `/root`, `/boot`, and directories that commonly contain or alias the Docker socket (`/run`, `/var/run`, and `docker.sock` under them), plus HOME credential subpaths (`.aws`, `.cargo`, `.config`, `.docker`, `.gnupg`, `.netrc`, `.npm`, `.ssh`). Parent-symlink tricks and canonical home aliases are resolved through existing ancestors and re-checked, so they still fail closed if they resolve into a blocked root.
+Extra `sandbox.docker.binds` are validated against normalized source paths with symlinks resolved. A blocked-path denylist covers `/etc`, `/private/etc`, `/proc`, `/sys`, `/dev`, `/root`, `/boot`, and directories that commonly contain or alias the Docker socket (`/run`, `/var/run`, and `docker.sock` under them), plus HOME credential subpaths (`.aws`, `.cargo`, `.config`, `.docker`, `.gnupg`, `.netrc`, `.npm`, `.ssh`). Parent-symlink tricks and home-directory aliases are resolved through existing ancestors and re-checked, so they are still rejected if they resolve into a blocked root.
 
 <Note>
 `tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and do not enable it for strangers. Further restrict per agent via `agents.entries.*.tools.elevated`. See [Elevated mode](/tools/elevated).
@@ -135,6 +135,13 @@ Each agent can have its own sandbox + tool policy: full access, read-only, or no
 Common patterns: personal agent (full access, no sandbox), family/work agent (sandboxed + read-only tools), public agent (sandboxed + no filesystem/shell tools).
 
 Tool profiles do not narrow session-tool reach, and sandboxing only clamps the sandboxed caller to its spawn tree; an unsandboxed agent can still read a sandboxed agent's sessions. Session visibility is Gateway-wide and agent-to-agent messaging is on by default, so pair persona profiles with `tools.sessions.visibility` and `tools.agentToAgent` when agents on one Gateway should not see or message each other (see the last example below).
+
+To allow requests without cross-agent history access, keep visibility narrow and
+set the requester's `agents.entries.<agentId>.tools.agentToAgent.send` to selected
+target IDs or `*` patterns. This grants only `sessions_send` and the authorized
+turn's reply, not read, status, session-control, or otherwise hidden watch access.
+It does not override global agent-to-agent restrictions or sandbox spawned-only
+clamps. See the [send-only example and trust limits](/gateway/config-tools/sessions-and-subagents#per-agent-send-only-access).
 
 ### Full access (no sandbox)
 

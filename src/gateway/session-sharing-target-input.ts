@@ -1,21 +1,92 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { operatorSessionCap } from "./operator-role-policy.js";
+import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import {
   isApprovalSessionTargetMethod,
   sessionMutationTargetFields,
 } from "./session-method-policy.js";
-import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+import {
+  SessionMutationAuthorizationChangedError,
+  type SessionMutationTarget,
+} from "./session-mutation-authorization-error.js";
+import {
+  resolveChatSendSessionKey,
+  resolveRequestedSessionAgentId,
+} from "./session-request-agent.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 import { resolveUnifiedTalkSessionTarget } from "./talk/session-registry.js";
 
 export type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+
+function resolveChatSendAuthorizationTarget(
+  cfg: OpenClawConfig,
+  target: SessionMutationTarget,
+): Result<SessionMutationTarget, ErrorShape> {
+  const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
+  return agent.ok
+    ? ok({
+        ...target,
+        agentId: agent.agentId,
+        sessionKey: resolveChatSendSessionKey(cfg, target.sessionKey, agent.agentId),
+      })
+    : err(agent.error);
+}
+
+/** Match mutation guards with the normalized identity captured at admission. */
+export function resolveSessionMutationGuardTarget<T extends SessionMutationTarget>(
+  method: string,
+  cfg: OpenClawConfig,
+  targetRef: SessionMutationTarget,
+  targets: readonly T[],
+) {
+  let target: SessionMutationTarget = {
+    sessionKey: normalizeOptionalString(targetRef.sessionKey) ?? targetRef.sessionKey,
+    agentId: normalizeOptionalString(targetRef.agentId),
+  };
+  if (method === "chat.send") {
+    const normalized = resolveChatSendAuthorizationTarget(cfg, target);
+    if (!normalized.ok) {
+      throw new SessionMutationAuthorizationChangedError(normalized.error);
+    }
+    target = normalized.value;
+  }
+  return {
+    target,
+    expected: targets.find(
+      (candidate) =>
+        candidate.sessionKey === target.sessionKey && candidate.agentId === target.agentId,
+    ),
+  };
+}
+
+/** Authorization selects the same chat target without rewriting the raw request's replay aliases. */
+export function resolveChatSendAuthorizationParams(
+  cfg: OpenClawConfig,
+  params: unknown,
+): Result<unknown, ErrorShape> {
+  const record = asOptionalRecord(params);
+  if (typeof record?.sessionKey !== "string") {
+    return ok(params);
+  }
+  const target = resolveChatSendAuthorizationTarget(cfg, {
+    sessionKey: record.sessionKey,
+    agentId: normalizeOptionalString(record.agentId),
+  });
+  return target.ok
+    ? ok({ ...record, sessionKey: target.value.sessionKey, agentId: target.value.agentId })
+    : err(target.error);
+}
 
 export function resolveDirectSessionTargets(
   method: string,
@@ -54,7 +125,30 @@ export function resolveDirectIncognitoTargets(
   );
 }
 
-function readSessionSharingStringParam(params: unknown, key: string): string | undefined {
+/** Share the core's non-disclosing read boundary with worker preparation. */
+export function resolveProtectedSessionTargets(params: {
+  client: GatewayClient | null;
+  method: string;
+  requestParams: unknown;
+  adminBypass: boolean;
+  talkTargets?: SessionMutationTarget[];
+  sessionCap: () => ReturnType<typeof operatorSessionCap>;
+}) {
+  const directTargets =
+    params.talkTargets ?? resolveDirectSessionTargets(params.method, params.requestParams);
+  const hidesForeignSessions =
+    !params.adminBypass &&
+    directTargets.length > 0 &&
+    Boolean(gatewayClientSessionCreator(params.client)) &&
+    params.sessionCap() === "none";
+  const protectedTargets = hidesForeignSessions
+    ? directTargets
+    : (params.talkTargets?.filter((target) => isIncognitoSessionKey(target.sessionKey)) ??
+      resolveDirectIncognitoTargets(params.method, params.requestParams));
+  return { hidesForeignSessions, protectedTargets };
+}
+
+export function readSessionSharingStringParam(params: unknown, key: string): string | undefined {
   return normalizeOptionalString(asOptionalRecord(params)?.[key]);
 }
 

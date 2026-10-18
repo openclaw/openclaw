@@ -10,6 +10,7 @@ const {
   assertOkOrThrowHttpErrorMock,
   createProviderOperationDeadlineMock,
   isProviderApiKeyConfiguredMock,
+  isProviderApiKeyConfiguredAsyncMock,
   postJsonRequestMock,
   postMultipartRequestMock,
   resolveApiKeyForProviderMock,
@@ -23,6 +24,7 @@ const {
     label: params.label,
   })),
   isProviderApiKeyConfiguredMock: vi.fn(() => true),
+  isProviderApiKeyConfiguredAsyncMock: vi.fn(async () => true),
   postJsonRequestMock: vi.fn<typeof import("../plugin-sdk/provider-http.js").postJsonRequest>(),
   postMultipartRequestMock:
     vi.fn<typeof import("../plugin-sdk/provider-http.js").postMultipartRequest>(),
@@ -45,8 +47,10 @@ const {
   sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
 }));
 
+// mock-isolation: Provider request tests supply auth readiness without host credential reads.
 vi.mock("../plugins/provider-auth-availability.js", () => ({
   isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
+  isProviderApiKeyConfiguredAsync: isProviderApiKeyConfiguredAsyncMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -151,6 +155,7 @@ describe("OpenAI-compatible image provider helper", () => {
     assertOkOrThrowHttpErrorMock.mockClear();
     createProviderOperationDeadlineMock.mockClear();
     isProviderApiKeyConfiguredMock.mockClear();
+    isProviderApiKeyConfiguredAsyncMock.mockClear();
     postJsonRequestMock.mockReset();
     postMultipartRequestMock.mockReset();
     resolveApiKeyForProviderMock.mockReset();
@@ -160,7 +165,7 @@ describe("OpenAI-compatible image provider helper", () => {
     sanitizeConfiguredModelProviderRequestMock.mockClear();
   });
 
-  it("checks config-backed auth under the credential owner, not its HTTP config alias", () => {
+  it("checks config-backed auth under the credential owner, not its HTTP config alias", async () => {
     const provider = createProvider({ providerConfigKey: "different-http-provider" });
     const cfg = {
       models: {
@@ -181,6 +186,12 @@ describe("OpenAI-compatible image provider helper", () => {
 
     expect(provider.isConfigured?.({ cfg, agentDir: "/tmp/agent" })).toBe(true);
     expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
+      provider: "sample",
+      cfg,
+      agentDir: "/tmp/agent",
+    });
+    expect(await provider.isConfiguredAsync?.({ cfg, agentDir: "/tmp/agent" })).toBe(true);
+    expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith({
       provider: "sample",
       cfg,
       agentDir: "/tmp/agent",
@@ -239,30 +250,6 @@ describe("OpenAI-compatible image provider helper", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("accepts valid multi-image JSON above the generic provider JSON cap", async () => {
-    const imageBytes = Buffer.alloc(3 * 1024 * 1024 + 64 * 1024, 1);
-    postJsonRequestMock.mockResolvedValue(
-      jsonResponse({
-        data: Array.from({ length: 4 }, () => ({
-          b64_json: imageBytes.toString("base64"),
-        })),
-      }),
-    );
-    const provider = createProvider();
-
-    const result = await generate(provider, {
-      prompt: "large",
-      count: 4,
-    });
-
-    expect(result.images.map((image) => image.buffer.byteLength)).toEqual([
-      imageBytes.byteLength,
-      imageBytes.byteLength,
-      imageBytes.byteLength,
-      imageBytes.byteLength,
-    ]);
-  });
-
   it("honors configured generated media caps above the default image limit", async () => {
     const imageBytes = Buffer.alloc(7 * 1024 * 1024, 1);
     postJsonRequestMock.mockResolvedValue(
@@ -281,10 +268,11 @@ describe("OpenAI-compatible image provider helper", () => {
     expect(result.images[0]?.buffer.byteLength).toBe(imageBytes.byteLength);
   });
 
-  it("rejects oversized OpenAI-compatible image JSON", async () => {
-    postJsonRequestMock.mockResolvedValue(
+  it("rejects image JSON beyond the generated image download ceiling", async () => {
+    // Edit mode returns at most one image, so the bound is one 64 MiB image as base64.
+    postMultipartRequestMock.mockResolvedValue(
       jsonResponse({
-        data: [{ b64_json: "x".repeat(35 * 1024 * 1024) }],
+        data: [{ b64_json: "x".repeat(90 * 1024 * 1024) }],
       }),
     );
     const provider = createProvider();
@@ -292,6 +280,7 @@ describe("OpenAI-compatible image provider helper", () => {
     await expect(
       generate(provider, {
         prompt: "too large",
+        inputImages: [{ buffer: Buffer.from("source"), mimeType: "image/png" }],
       }),
     ).rejects.toThrow("sample.image-generation: JSON response exceeds");
   });

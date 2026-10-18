@@ -2,12 +2,10 @@ import Foundation
 import OpenClawKit
 
 struct VoicePermissions: Sendable {
-    let supported: @Sendable () -> Bool
     let granted: @Sendable () -> Bool
     let ensure: @Sendable (Bool) async -> Bool
 
     static let live = Self(
-        supported: { voiceWakeSupported },
         granted: { PermissionManager.voiceWakePermissionsGranted() },
         ensure: { await PermissionManager.ensureVoiceWakePermissions(interactive: $0) })
 }
@@ -88,17 +86,7 @@ final class AppVoiceRuntime {
             presentation: environment.wakePresentation,
             actions: { [weak state] in
                 guard let state else { return nil }
-                let sessions = state.voiceRuntime.sessions
-                return .init(
-                    send: { sessions.sendNow(token: $0, reason: $1) },
-                    updateEditedText: { sessions.updateEditedText(token: $0, text: $1) },
-                    didPresent: { state.earBoostActive = true },
-                    didDismiss: { token, outcome in
-                        if outcome == .empty { state.blinkOnce() }
-                        if outcome == .sent { state.celebrateSend() }
-                        state.earBoostActive = false
-                        sessions.overlayDidDismiss(token: token)
-                    })
+                return VoiceWakeOverlayController.liveActions(state: state)
             })
         let sessions = VoiceSessionCoordinator(
             overlay: overlay,
@@ -160,7 +148,7 @@ final class AppVoiceRuntime {
         self.talkOverlay = talkOverlay
         self.interruptMonitor = interruptMonitor
         self.talkController = TalkModeController(
-            state: stateProvider, owners: { owners }, publishTalk: environment.publishTalk)
+            state: stateProvider, owners: owners, publishTalk: environment.publishTalk)
     }
 
     func activate() {

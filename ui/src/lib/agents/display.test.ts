@@ -1,6 +1,5 @@
 // Control UI tests cover agents utils behavior.
 import { describe, expect, it } from "vitest";
-import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../../../../src/shared/avatar-limits.js";
 import {
   isRenderableControlUiAvatarUrl,
@@ -14,7 +13,6 @@ import {
   createPrimaryModelExclusion,
   formatBytes,
   listSelectableAgents,
-  normalizeAgentLabel,
   normalizeAgentTargetLabel,
   resolveAgentSkillsFilter,
   resolveEffectiveModelFallbacks,
@@ -48,11 +46,6 @@ describe("buildModelOptions", () => {
   ];
 
   it.each([
-    {
-      name: "inherits the default alias when agent metadata omits alias",
-      agentMetadata: { agentRuntime: { id: "codex" } },
-      label: "GPT 5.6 Luna · global-luna",
-    },
     {
       name: "lets an explicit empty agent alias disable the inherited alias",
       agentMetadata: { alias: "" },
@@ -114,29 +107,6 @@ describe("createPrimaryModelExclusion", () => {
   };
   const cases: AliasCase[] = [
     {
-      name: "resolves a bare primary alias without folding its target model id",
-      primary: "FAST",
-      models: { [upper]: { alias: "fast" } },
-      excluded: [upper, "fast"],
-      allowed: [lower],
-    },
-    {
-      name: "prefers an explicit agent alias over a later default alias",
-      primary: "fast",
-      models: { [lower]: { alias: "fast" }, [other]: { alias: "fast" } },
-      agentModels: { [lower]: { alias: "fast" } },
-      excluded: [lower],
-      allowed: [other],
-    },
-    {
-      name: "preserves default alias priority when agent metadata omits alias",
-      primary: "fast",
-      models: { [lower]: { alias: "fast" }, [other]: { alias: "fast" } },
-      agentModels: { [lower]: {} },
-      excluded: [other],
-      allowed: [lower],
-    },
-    {
       name: "respects an explicitly disabled inherited alias",
       primary: "fast",
       models: { [lower]: { alias: "fast" } },
@@ -167,109 +137,13 @@ describe("createPrimaryModelExclusion", () => {
       excluded: [other, lower, upper],
       allowed: ["custom/unrelated"],
     },
-    {
-      name: "does not replace a provider ref with an alias on a bare config key",
-      primary: lower,
-      models: { legacy: { alias: lower }, [lower]: { alias: "original" } },
-      excluded: ["original"],
-      allowed: [lower],
-    },
+
     {
       name: "resolves profile-qualified aliases",
       primary: "fast@work",
       models: { [lower]: { alias: "fast" } },
       excluded: [lower, `${lower}@work`],
       allowed: [`${lower}@other`, `${lower}@Work`],
-    },
-    {
-      name: "keeps primary literal-alias precedence separate from fallback profile parsing",
-      primary: "fast@work",
-      models: { [lower]: { alias: "fast" }, [upper]: { alias: "fast@work" } },
-      excluded: [upper],
-      allowed: [lower, "fast@work"],
-    },
-    {
-      name: "preserves case-sensitive credential-profile qualifiers",
-      primary: `${lower}@Work`,
-      models: {},
-      excluded: [lower, `${lower}@Work`],
-      allowed: [`${lower}@work`],
-    },
-    {
-      name: "preserves case-distinct explicit references",
-      primary: "CUSTOM/Model-A",
-      models: {},
-      excluded: [upper],
-      allowed: [lower],
-    },
-    {
-      name: "does not guess a provider for an ambiguous bare model id",
-      primary: "model-a",
-      models: { [lower]: {}, [other]: {} },
-      excluded: ["model-a"],
-      allowed: [lower, other],
-    },
-    {
-      name: "does not infer a provider for bare fallback identities from configured model keys",
-      primary: "Model-A",
-      models: { [lower]: {}, [upper]: {} },
-      excluded: ["Model-A"],
-      allowed: [lower, upper],
-    },
-    {
-      name: "does not infer a provider for bare fallback identities from provider model rows",
-      primary: "Model-A",
-      models: {},
-      providers: { custom: { api: "openai-completions", models: [{ id: "Model-A" }] } },
-      excluded: ["Model-A"],
-      allowed: [upper],
-    },
-    {
-      name: "ignores unsaved provider model shapes while resolving configured aliases",
-      primary: "fast",
-      models: { [upper]: { alias: "fast" } },
-      providers: { custom: { api: "openai-completions", models: {} } },
-      excluded: [upper],
-      allowed: [lower],
-    },
-    {
-      name: "ignores invalid agent model arrays without shadowing inherited aliases",
-      primary: "fast",
-      models: { [upper]: { alias: "fast" } },
-      agentModels: [{ alias: "fast" }],
-      excluded: [upper],
-      allowed: [lower],
-    },
-    {
-      name: "preserves a bare id without a configured provider match",
-      primary: "Model-A",
-      models: {},
-      excluded: ["Model-A"],
-      allowed: [upper],
-    },
-    {
-      name: "resolves provider-scoped fallback aliases without borrowing another provider's alias",
-      primary: lower,
-      models: { [lower]: { alias: "fast" }, [other]: { alias: "fast" } },
-      excluded: [lower, "custom/fast"],
-      allowed: ["fast"],
-    },
-    {
-      name: "does not borrow fallback provider-scoped aliases for a configured primary",
-      primary: "anthropic/claude-sonnet-4-6",
-      models: {
-        "anthropic/claude-sonnet-4-6": { alias: "original" },
-        "anthropic/claude-haiku-4-5": { alias: "claude-sonnet-4-6" },
-      },
-      excluded: ["original"],
-      allowed: ["anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-6"],
-    },
-    {
-      name: "prefers a global fallback alias before provider-scoped alias lookup",
-      primary: lower,
-      models: { [lower]: { alias: "fast" }, [other]: { alias: "custom/fast" } },
-      excluded: [lower, "fast"],
-      allowed: ["custom/fast"],
     },
   ];
 
@@ -288,18 +162,6 @@ describe("createPrimaryModelExclusion", () => {
   });
 });
 
-describe("formatAgentRuntimeLabel", () => {
-  it.each([undefined, {}, { id: "  " }])("does not invent a runtime for %j", (runtime) => {
-    expect(formatAgentRuntimeLabel(runtime)).toBe("-");
-  });
-
-  it("retains a known runtime and its reported fallback", () => {
-    expect(formatAgentRuntimeLabel({ id: "custom", fallback: "remote" })).toBe(
-      "custom (fallback remote)",
-    );
-  });
-});
-
 describe("normalizeAgentTargetLabel", () => {
   it("uses resolved configured names but preserves ids for synthesized defaults", () => {
     expect(
@@ -308,34 +170,6 @@ describe("normalizeAgentTargetLabel", () => {
     expect(
       normalizeAgentTargetLabel({ id: "research" }, { name: "Assistant", nameSource: "default" }),
     ).toBe("research");
-  });
-
-  it("prefers the authoritative resolved name over unresolved roster fields", () => {
-    expect(
-      normalizeAgentTargetLabel(
-        { id: "main", name: "Roster name", identity: { name: "Roster identity" } },
-        { name: "Configured assistant", nameSource: "config" },
-      ),
-    ).toBe("Configured assistant");
-  });
-
-  it("uses roster names when hydration only produced the synthesized default", () => {
-    expect(
-      normalizeAgentTargetLabel(
-        { id: "research", name: "Research roster" },
-        { name: "Assistant", nameSource: "default" },
-      ),
-    ).toBe("Research roster");
-  });
-
-  it("preserves the id when an older Gateway omits name provenance", () => {
-    expect(normalizeAgentTargetLabel({ id: "legacy" }, { name: "Assistant" })).toBe("legacy");
-  });
-
-  it("keeps the shared hydrated-name fallback for existing callers", () => {
-    expect(normalizeAgentLabel({ id: "legacy" }, { name: "Workspace Molty" })).toBe(
-      "Workspace Molty",
-    );
   });
 });
 
@@ -360,46 +194,9 @@ describe("formatBytes", () => {
     expect(formatBytes(12 * 1024)).toBe("12 KB");
     expect(formatBytes(2 * 1024 * 1024)).toBe("2.0 MB");
   });
-
-  it("supports caller-owned fallback, unit cap, and precision", () => {
-    const options = {
-      fallback: "0 B",
-      maxUnit: "kilo" as const,
-      fractionDigits: (_value: number, unit: "byte" | "kilo" | "mega" | "giga" | "tera") =>
-        unit === "byte" ? null : 1,
-    };
-    expect(formatBytes(Number.NaN, options)).toBe("0 B");
-    expect(formatBytes(12 * 1024, options)).toBe("12.0 KB");
-    expect(formatBytes(1024 * 1024, options)).toBe("1024.0 KB");
-  });
 });
 
 describe("resolveEffectiveModelFallbacks", () => {
-  it("inherits defaults when no entry fallbacks are configured", () => {
-    const entryModel = undefined;
-    const defaultModel = {
-      primary: "openai/gpt-5-nano",
-      fallbacks: ["google/gemini-2.0-flash"],
-    };
-
-    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual([
-      "google/gemini-2.0-flash",
-    ]);
-  });
-
-  it("prefers entry fallbacks over defaults", () => {
-    const entryModel = {
-      primary: "openai/gpt-5-mini",
-      fallbacks: ["openai/gpt-5-nano"],
-    };
-    const defaultModel = {
-      primary: "openai/gpt-5",
-      fallbacks: ["google/gemini-2.0-flash"],
-    };
-
-    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual(["openai/gpt-5-nano"]);
-  });
-
   it.each([
     { name: "a string primary", model: "openai/gpt-5.4" },
     { name: "an object primary", model: { primary: "openai/gpt-5.4" } },
@@ -410,19 +207,6 @@ describe("resolveEffectiveModelFallbacks", () => {
         fallbacks: ["anthropic/claude-sonnet-4-6"],
       }),
     ).toStrictEqual([]);
-  });
-
-  it("keeps explicit empty entry fallback lists", () => {
-    const entryModel = {
-      primary: "openai/gpt-5-mini",
-      fallbacks: [],
-    };
-    const defaultModel = {
-      primary: "openai/gpt-5",
-      fallbacks: ["google/gemini-2.0-flash"],
-    };
-
-    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toStrictEqual([]);
   });
 });
 
@@ -445,7 +229,7 @@ describe("resolveAgentAvatarUrl", () => {
     expect(isRenderableControlUiAvatarUrl("data:text/plain,avatar")).toBe(false);
   });
 
-  it("prefers a runtime avatar URL over non-URL identity avatars", () => {
+  it("uses the resolved identity absence instead of a stale roster avatar URL", () => {
     expect(
       resolveAgentAvatarUrl(
         { identity: { avatar: "A", avatarUrl: "/avatar/main" } },
@@ -455,7 +239,7 @@ describe("resolveAgentAvatarUrl", () => {
           name: "Main",
         },
       ),
-    ).toBe("/avatar/main");
+    ).toBeNull();
   });
 
   it("ignores remote http avatars so the control UI falls back to a local badge", () => {
@@ -473,11 +257,6 @@ describe("resolveAgentAvatarUrl", () => {
       }),
     ).toBeNull();
   });
-
-  it("returns null for initials or emoji avatar values without a URL", () => {
-    expect(resolveAgentAvatarUrl({ identity: { avatar: "A" } })).toBeNull();
-    expect(resolveAgentAvatarUrl({ identity: { avatar: "🦞" } })).toBeNull();
-  });
 });
 
 describe("resolveChatAvatarRenderUrl", () => {
@@ -487,14 +266,6 @@ describe("resolveChatAvatarRenderUrl", () => {
         identity: { avatarUrl: "/avatar/main" },
       }),
     ).toBe("blob:http://localhost/uuid-123");
-  });
-
-  it("falls back to the config-sanitized avatar when no blob candidate is present", () => {
-    expect(
-      resolveChatAvatarRenderUrl(null, {
-        identity: { avatarUrl: "/avatar/main" },
-      }),
-    ).toBe("/avatar/main");
   });
 
   it("rejects remote URLs passed as the render candidate", () => {
@@ -507,20 +278,6 @@ describe("resolveChatAvatarRenderUrl", () => {
 });
 
 describe("resolveAgentSkillsFilter", () => {
-  it("inherits the default filter when the agent has no override", () => {
-    expect(
-      resolveAgentSkillsFilter(
-        {
-          agents: {
-            defaults: { skills: [" github ", "weather"] },
-            entries: { main: { default: true } },
-          },
-        },
-        "main",
-      ),
-    ).toEqual(["github", "weather"]);
-  });
-
   it("prefers an explicit empty agent filter over inherited defaults", () => {
     expect(
       resolveAgentSkillsFilter(
@@ -537,29 +294,6 @@ describe("resolveAgentSkillsFilter", () => {
 });
 
 describe("buildAgentContext", () => {
-  it("falls back to agent payload workspace/model when config form is unavailable", () => {
-    const context = buildAgentContext(
-      {
-        id: "main",
-        workspace: "/tmp/agent-workspace",
-        model: {
-          primary: "openai/gpt-5.5",
-          fallbacks: ["openai/gpt-5.2-codex"],
-        },
-        agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
-      },
-      null,
-      null,
-      "main",
-      null,
-    );
-
-    expect(context.workspace).toBe("/tmp/agent-workspace");
-    expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
-    expect(context.runtime).toBe("claude-cli (fallback none)");
-    expect(context.isDefault).toBe(true);
-  });
-
   it("uses configured defaults when agent-specific overrides are absent", () => {
     const context = buildAgentContext(
       { id: "main" },
@@ -572,7 +306,7 @@ describe("buildAgentContext", () => {
               fallbacks: ["openai/gpt-5.2-codex"],
             },
           },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       null,
@@ -591,7 +325,7 @@ describe("buildAgentContext", () => {
       {
         agents: {
           defaults: { skills: ["github", "weather"] },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       null,

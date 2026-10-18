@@ -6,7 +6,10 @@ import {
 } from "../../agents/internal-runtime-context.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
+import {
+  classifyHeartbeatPendingFinalDelivery,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery-state.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
@@ -56,6 +59,16 @@ describe("resolvePendingFinalDeliveryCompletion", () => {
   });
 });
 
+it.each(["no_r", "NO_R", "NO_REPLY"])(
+  "keeps pending ordinary reply %s during heartbeat admission",
+  (text) => {
+    expect(classifyHeartbeatPendingFinalDelivery(text, 300)).toEqual({
+      shouldClear: false,
+      replayText: text,
+    });
+  },
+);
+
 describe("sanitizePendingFinalDeliveryText", () => {
   it("preserves indented code in pending final text", () => {
     const text = "    const value = 1;\n    use(value);";
@@ -78,44 +91,22 @@ describe("sanitizePendingFinalDeliveryText", () => {
     expect(sanitizePendingFinalDeliveryText(text)).toBe("Visible reply");
   });
 
-  it("drops silent reply sentinel payloads", () => {
-    expect(sanitizePendingFinalDeliveryText(" NO_REPLY ")).toBe("");
-    expect(sanitizePendingFinalDeliveryText('"NO_REPLY"')).toBe("");
-    expect(sanitizePendingFinalDeliveryText('{"action":"NO_REPLY"}')).toBe("");
-  });
+  it.each(["NO_REPLY", '"NO_REPLY"', '{"action":"NO_REPLY"}', "NO_REPLY."])(
+    "preserves prepared text without reinterpreting it: %s",
+    (text) => expect(sanitizePendingFinalDeliveryText(text)).toBe(text),
+  );
 
-  it("strips mixed silent reply sentinels like normal delivery", () => {
-    expect(sanitizePendingFinalDeliveryText("NO_REPLYThe user is saying hello")).toBe(
-      "The user is saying hello",
-    );
-    expect(sanitizePendingFinalDeliveryText("HEARTBEAT_OK NO_REPLY")).toBe("HEARTBEAT_OK");
-  });
-
-  it.each([
-    ["NO_REPLY\n\nThe user is saying hello", "The user is saying hello"],
-    ["NO_REPLY NO_REPLY\nThe user is saying hello", "The user is saying hello"],
-  ])("strips newline-separated leading silent tokens from recovery text: %j", (text, expected) => {
-    expect(sanitizePendingFinalDeliveryText(text)).toBe(expected);
-  });
-
-  it("preserves punctuation-attached silent-token literals in recovery", () => {
-    const text = "Done as requested!NO_REPLY";
-    expect(sanitizePendingFinalDeliveryText(text)).toBe(text);
-  });
-
-  it("strips repeated trailing silent tokens from recovery text", () => {
-    expect(sanitizePendingFinalDeliveryText("Done. NO_REPLY NO_REPLY")).toBe("Done.");
-  });
-
-  it.each(["interject.NO_REPLY", "NO_REPLY\nNO_REPLY: explanation"])(
-    "preserves substantive dotted and punctuation-start recovery literals: %j",
+  it.each(["NO_REPLYThe user is saying hello", "HEARTBEAT_OK NO_REPLY"])(
+    "preserves mixed silent tokens in recovery text: %s",
     (text) => {
       expect(sanitizePendingFinalDeliveryText(text)).toBe(text);
     },
   );
 
-  it("preserves heartbeat ack text for ack-aware classification", () => {
-    expect(sanitizePendingFinalDeliveryText("HEARTBEAT_OK short")).toBe("HEARTBEAT_OK short");
+  it("preserves a prepared leading control-looking line", () => {
+    expect(sanitizePendingFinalDeliveryText("NO_REPLY\nAnswer.\n    Code.")).toBe(
+      "NO_REPLY\nAnswer.\n    Code.",
+    );
   });
 });
 
@@ -130,15 +121,6 @@ describe("normalizePendingFinalRecoveryPayloads", () => {
 
     const deliveryPayloads = normalizePendingFinalDeliveryPayloads(rawPayloads);
     expect(deliveryPayloads.map((payload) => payload.text)).toEqual(["Rendered chart"]);
-  });
-
-  it("keeps media-only directives as durable recovery text", () => {
-    const recoveryPayloads = normalizePendingFinalRecoveryPayloads([
-      { text: "MEDIA:/tmp/chart.png" },
-    ]);
-
-    expect(recoveryPayloads.map((payload) => payload.text)).toEqual(["MEDIA:/tmp/chart.png"]);
-    expect(normalizePendingFinalDeliveryPayloads(recoveryPayloads)).toHaveLength(1);
   });
 
   it("encodes structured media URLs as durable media directives", () => {
@@ -201,15 +183,15 @@ describe("normalizePendingFinalRecoveryPayloads", () => {
     ).toBeUndefined();
   });
 
-  it("omits payloads that normal delivery suppresses", () => {
+  it("preserves ordinary prose previously treated as silence", () => {
     expect(
       buildRecoverablePendingFinalDeliveryText([
         { text: "No channel reply." },
         { text: "visible final" },
       ]),
-    ).toBe("visible final");
-    expect(
-      buildRecoverablePendingFinalDeliveryText([{ text: "No channel reply." }]),
-    ).toBeUndefined();
+    ).toBe("No channel reply.\n\nvisible final");
+    expect(buildRecoverablePendingFinalDeliveryText([{ text: "No channel reply." }])).toBe(
+      "No channel reply.",
+    );
   });
 });

@@ -60,6 +60,7 @@ export type {
   PluginDoctorChannelIngressQueueAccess,
   PluginDoctorMigrationBackupResource,
   PluginDoctorMigrationBackupWarning,
+  PluginDoctorProviderRename,
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
@@ -205,34 +206,25 @@ export function defineKeyMoveMigration(params: {
     changes: string[];
   }) => CompatMutationResult;
 } {
-  const visitScopes = (
-    entry: Record<string, unknown>,
-    scope: readonly string[],
-    visit: (scopeEntry: Record<string, unknown>, scopePath: readonly string[]) => boolean,
-    scopePath: readonly string[] = [],
-  ): boolean => {
+  const visitScopes = (entry: Record<string, unknown>, scope: readonly string[]): boolean => {
     const [segment, ...rest] = scope;
     if (!segment) {
-      return visit(entry, scopePath);
+      const source = readKeyMovePath(entry, params.from, params.sourceOwn);
+      return Boolean(source && (params.match?.(source.value) ?? true));
     }
     if (segment === "*") {
-      return Object.entries(entry).some(([key, value]) => {
+      return Object.values(entry).some((value) => {
         const child = asObjectRecord(value);
-        return child ? visitScopes(child, rest, visit, [...scopePath, key]) : false;
+        return child ? visitScopes(child, rest) : false;
       });
     }
     const child = asObjectRecord(entry[segment]);
-    return child ? visitScopes(child, rest, visit, [...scopePath, segment]) : false;
+    return child ? visitScopes(child, rest) : false;
   };
 
   const hasLegacy = (value: unknown): boolean => {
     const entry = asObjectRecord(value);
-    return entry
-      ? visitScopes(entry, params.scope ?? [], (scopeEntry) => {
-          const source = readKeyMovePath(scopeEntry, params.from, params.sourceOwn);
-          return Boolean(source && (params.match?.(source.value) ?? true));
-        })
-      : false;
+    return entry ? visitScopes(entry, params.scope ?? []) : false;
   };
 
   const normalizeScope = (

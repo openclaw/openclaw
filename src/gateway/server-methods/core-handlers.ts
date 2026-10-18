@@ -16,10 +16,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "agent-identity": () =>
     import("./agent-identity.js").then((module) => module.agentIdentityHandlers),
   agents: () => import("./agents.js").then((module) => module.agentsHandlers),
-  "claws-monitors": () =>
-    import("./claws-monitors.js").then((module) => module.clawsMonitorHandlers),
-  "claws-packages": () =>
-    import("./claws-packages.js").then((module) => module.clawsPackageHandlers),
+  claws: () => import("./claws.js").then((module) => module.clawsHandlers),
+  "claws-add": () => import("./claws-add.js").then((module) => module.clawsAddHandlers),
   "agents-workspace": () =>
     import("./agents-workspace.js").then((module) => module.agentsWorkspaceHandlers),
   artifacts: () => import("./artifacts.js").then((module) => module.artifactsHandlers),
@@ -55,6 +53,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "device-pair-setup": () =>
     import("./device-pair-setup.js").then((module) => module.devicePairSetupHandlers),
   diagnostics: () => import("./diagnostics.js").then((module) => module.diagnosticsHandlers),
+  "debug-proxy": () => import("./debug-proxy.js").then((module) => module.debugProxyHandlers),
   doctor: () => import("./doctor.js").then((module) => module.createDoctorHandlers()),
   environments: () => import("./environments.js").then((module) => module.environmentsHandlers),
   worktrees: () => import("./worktrees.js").then((module) => module.worktreesHandlers),
@@ -73,6 +72,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./models-auth-status.js").then((module) => module.modelsAuthStatusHandlers),
   "models-auth-login": () =>
     import("./models-auth-login.js").then((module) => module.modelsAuthLoginHandlers),
+  "mcp-events": () => import("./mcp-events.js").then((module) => module.mcpEventsHandlers),
   "mcp-auth-login": () =>
     import("./mcp-auth-login.js").then((module) => module.mcpAuthLoginHandlers),
   "models-auth-order": () =>
@@ -102,6 +102,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   send: () => import("./send.js").then((module) => module.sendHandlers),
   "sessions-files": () =>
     import("./sessions-files.js").then((module) => module.sessionsFilesHandlers),
+  "factory-github-proof": () =>
+    import("./factory-github-proof.js").then((module) => module.factoryGitHubProofHandlers),
   "sessions-github": () =>
     import("./sessions-github.js").then((module) => module.sessionsGitHubHandlers),
   "sessions-diff": () => import("./sessions-diff.js").then((module) => module.sessionsDiffHandlers),
@@ -128,6 +130,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-messaging.js").then((module) => module.sessionMessagingHandlers),
   "sessions-mutations": () =>
     import("./sessions-mutations.js").then((module) => module.sessionMutationHandlers),
+  "session-processes": () =>
+    import("./session-processes.js").then((module) => module.sessionProcessHandlers),
   "sessions-read": () => import("./sessions-read.js").then((module) => module.sessionReadHandlers),
   "sessions-rewind": () =>
     import("./sessions-rewind.js").then((module) => module.sessionRewindHandlers),
@@ -171,6 +175,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   canvas: () => import("./canvas.js").then((module) => module.canvasHandlers),
   tts: () => import("./tts.js").then((module) => module.ttsHandlers),
   update: () => import("./update.js").then((module) => module.updateHandlers),
+  "update-handoff-sentinel": () =>
+    import("./update-handoff-sentinel.js").then((module) => module.updateHandoffSentinelHandlers),
   usage: () => import("./usage.js").then((module) => module.usageHandlers),
   "voicewake-routing": () =>
     import("./voicewake-routing.js").then((module) => module.voicewakeRoutingHandlers),

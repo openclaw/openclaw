@@ -121,6 +121,7 @@ function parseArgs(argv) {
     output: "",
     chat: "",
     dm: false,
+    createForum: false,
     // Messages posted as the QA user before the driven turn, so history-scoped
     // scenarios (historyLimit, context visibility) have prior turns to scope.
     preSend: [],
@@ -128,6 +129,7 @@ function parseArgs(argv) {
     scenario: null,
     sourceGateway: false,
     gatewayReadyTimeoutMs: undefined,
+    recorderReadyTimeoutMs: undefined,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -159,6 +161,7 @@ function parseArgs(argv) {
       );
     } else if (arg === "--chat") args.chat = argv[++i] || "";
     else if (arg === "--dm") args.dm = true;
+    else if (arg === "--create-forum") args.createForum = true;
     else if (arg === "--pre-send") args.preSend.push(argv[++i] || "");
     else if (arg === "--scenario") args.scenarioPath = argv[++i] || "";
     else if (arg === "--source-gateway") args.sourceGateway = true;
@@ -168,6 +171,12 @@ function parseArgs(argv) {
         throw new Error("--gateway-ready-timeout-ms takes a positive integer.");
       }
       args.gatewayReadyTimeoutMs = value;
+    } else if (arg === "--recorder-ready-timeout-ms") {
+      const value = Number(argv[++i]);
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new Error("--recorder-ready-timeout-ms takes a positive integer.");
+      }
+      args.recorderReadyTimeoutMs = value;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -203,6 +212,14 @@ function parseArgs(argv) {
       throw new Error("Scenario forwardBurst actions require --dm.");
     }
   }
+  if (args.createForum) {
+    if (!args.scenario || args.dm || args.chat) {
+      throw new Error("--create-forum takes a --scenario and replaces --dm/--chat.");
+    }
+    if (args.scenario.actions.some((action) => action.forumTopicId !== undefined)) {
+      throw new Error("--create-forum sends every scenario message to its created topic.");
+    }
+  }
   if (!args.expectPassed) args.expect.push("OPENCLAW_E2E_OK");
   return args;
 }
@@ -234,10 +251,15 @@ Runtime:
   --gateway-ready-timeout-ms N
                        Gateway startup budget (default 45000 built, 900000 source);
                        raise it on a heavily loaded host
+  --recorder-ready-timeout-ms N
+                       Recorder readiness budget (default 30000);
+                       raise it on a heavily loaded host
 
 Chat selection:
   --dm                direct chat with the leased SUT
   --chat TARGET       TDLib id, username, or supported Telegram link
+  --create-forum      create a run-owned forum and topic for a --scenario, send its
+                      messages to that topic, and delete the forum during cleanup
   Scenario send actions accept forumTopicId for a specific forum topic.
   Scenario forwardBurst actions require --dm and forward bot-authored text and photo in one TDLib call.
 
@@ -977,6 +999,7 @@ async function checkScenarioCredential(credential, { signal, args }) {
     dm: args?.dm,
     chat: args?.chat,
     requireForum: args?.scenario?.actions.some((action) => action.forumTopicId !== undefined),
+    createForum: args?.createForum,
   });
 }
 
@@ -997,6 +1020,12 @@ export async function runTelegramTestScenario({
         scope.observeLease(credential);
         await checkCredential(credential, { signal: scope.signal, args });
         scope.assertActive();
+        const forumTopicId = credential.testForum?.setup.forumTopicId;
+        if (forumTopicId) {
+          for (const action of args.scenario.actions) {
+            if (action.type === "send") action.forumTopicId = forumTopicId;
+          }
+        }
         const result = await driveScenario(args, repoRoot, credential, {
           signal: scope.signal,
         });
@@ -1016,6 +1045,11 @@ export async function runTelegramTestScenario({
       const evidenceDir = dirname(resolve(args.output));
       fs.mkdirSync(evidenceDir, { recursive: true });
       writePrivateJson(path.join(evidenceDir, "test-group.json"), credential.testGroup);
+    }
+    if (args?.output && credential?.testForum) {
+      // Release has run: the evidence holds both the created ids and the deletion result.
+      const summaryPath = resolve(args.output);
+      writePrivateJson(summaryPath, { ...readJson(summaryPath), testForum: credential.testForum });
     }
   }
 }
@@ -1328,7 +1362,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
     currentTelegramRun().preserveEvidence(persistRecorderLogs);
     let recorderReady;
     if (args.scenario) {
-      const readiness = waitForRecorderReady(recorderReadyPath, probe);
+      const readiness = waitForRecorderReady(recorderReadyPath, probe, args.recorderReadyTimeoutMs);
       try {
         recorderReady = await readiness;
         leaseHealth.assertHealthy();

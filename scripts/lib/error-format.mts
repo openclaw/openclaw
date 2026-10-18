@@ -1,4 +1,7 @@
-// Small error formatting helper for scripts that accept unknown thrown values.
+export class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
+
 /** Return a readable message for Error and non-Error thrown values. */
 export function formatErrorMessage(error: unknown): string {
   if (error instanceof Error) {

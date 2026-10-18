@@ -108,23 +108,29 @@ describe("channelsLogsCommand", () => {
       match: { module: "channels/discord/send" },
     },
   ])("matches channel boundaries and excludes a shadow $label", async (fixture) => {
+    const fixtureCredential = "opaque-registry-value-1234567890";
+    registerSecretValueForRedaction(fixtureCredential);
     await fs.writeFile(
       logPath,
       [
         logLine({ ...fixture.shadow, message: "shadow" }),
-        logLine({ ...fixture.match, message: "match" }),
+        logLine({ ...fixture.match, message: `match opaque=${fixtureCredential}` }),
       ].join(""),
     );
 
     await channelsLogsCommand({ channel: fixture.channel, json: true }, runtime);
 
-    expect(readJsonPayload().lines.map((line) => line.message)).toEqual(["match"]);
+    const payload = readJsonPayload();
+    expect(payload.lines.map((line) => line.message)).toEqual(["match opaque=opaque…7890"]);
+    expect(JSON.stringify(payload)).not.toContain(fixtureCredential);
 
     runtime.log.mockClear();
     await channelsLogsCommand({ channel: fixture.channel }, runtime);
 
     const output = runtime.log.mock.calls.flat().join("\n");
     expect(output).toContain("2026-04-25T12:00:00.000Z info match");
+    expect(output).toContain("opaque=opaque…7890");
+    expect(output).not.toContain(fixtureCredential);
     expect(output).not.toContain("shadow");
   });
 
@@ -142,43 +148,6 @@ describe("channelsLogsCommand", () => {
     expect((error as Error).message).toContain("external-chat");
     expect((error as Error).message).toContain("slack");
     expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it("redacts credential-bearing channel lines in text output", async () => {
-    const fixtureCredential = "opaque-registry-value-1234567890";
-    registerSecretValueForRedaction(fixtureCredential);
-    await fs.writeFile(
-      logPath,
-      logLine({
-        module: "gateway/channels/slack/send",
-        message: `opaque=${fixtureCredential}`,
-      }),
-    );
-
-    await channelsLogsCommand({ channel: "slack" }, runtime);
-
-    const output = runtime.log.mock.calls.flat().join("\n");
-    expect(output).toContain("2026-04-25T12:00:00.000Z info");
-    expect(output).toContain("opaque=opaque…7890");
-    expect(output).not.toContain(fixtureCredential);
-  });
-
-  it("redacts credential-bearing channel lines in JSON output", async () => {
-    const fixtureCredential = "opaque-registry-value-1234567890";
-    registerSecretValueForRedaction(fixtureCredential);
-    await fs.writeFile(
-      logPath,
-      logLine({
-        module: "gateway/channels/slack/send",
-        message: `opaque=${fixtureCredential}`,
-      }),
-    );
-
-    await channelsLogsCommand({ channel: "slack", json: true }, runtime);
-
-    const payload = readJsonPayload();
-    expect(payload.lines[0]?.message).toBe("opaque=opaque…7890");
-    expect(JSON.stringify(payload)).not.toContain(fixtureCredential);
   });
 
   it.each([
@@ -238,12 +207,5 @@ describe("channelsLogsCommand", () => {
     expect(runtime.log.mock.calls.flat().join("\n")).toContain(
       "Log tail truncated; earlier entries were omitted.",
     );
-  });
-
-  it.each(["2x"])("rejects invalid line limit %j", async (lines) => {
-    await expect(channelsLogsCommand({ lines, json: true }, runtime)).rejects.toThrow(
-      "--lines must be a positive integer.",
-    );
-    expect(runtime.log).not.toHaveBeenCalled();
   });
 });

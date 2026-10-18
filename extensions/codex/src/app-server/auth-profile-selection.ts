@@ -5,19 +5,27 @@ import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 
 type ProfileAuth = Pick<
   PluginRuntime["modelAuth"],
-  "ensureAuthProfileStore" | "resolveAuthProfileOrder"
+  "ensureAuthProfileStore" | "ensureAuthProfileStoreAsync" | "resolveAuthProfileOrder"
 >;
 type AuthProfileOrderConfig = Parameters<ProfileAuth["resolveAuthProfileOrder"]>[0]["cfg"];
 export const CODEX_APP_SERVER_AUTH_PROVIDER = "openai";
 const CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS = [CODEX_APP_SERVER_AUTH_PROVIDER];
 
+export type CodexAppServerAuthProfileLookup = {
+  authProfileId?: string;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
+  config?: AuthProfileOrderConfig;
+};
+
 export function createCodexAuthProfileSelection({
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
 }: ProfileAuth) {
   function resolveCodexAppServerAuthProfileId(params: {
     authProfileId?: string;
-    store: ReturnType<typeof ensureAuthProfileStore>;
+    store: AuthProfileStore;
     config?: AuthProfileOrderConfig;
   }): string | undefined {
     const requested = params.authProfileId?.trim();
@@ -31,37 +39,53 @@ export function createCodexAuthProfileSelection({
     })[0]?.trim();
   }
 
-  function resolveCodexAppServerAuthProfileIdForAgent(params: {
-    authProfileId?: string;
-    authProfileStore?: AuthProfileStore;
-    agentDir?: string;
-    config?: AuthProfileOrderConfig;
-  }): string | undefined {
+  async function resolveCodexAppServerAuthProfileIdForAgent(
+    params: CodexAppServerAuthProfileLookup,
+  ): Promise<string | undefined> {
+    const requested = params.authProfileId?.trim();
+    if (requested) {
+      return requested;
+    }
     const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
-    const store = resolveCodexAppServerAuthProfileStore({ ...params, agentDir });
+    const store = await resolveCodexAppServerAuthProfileStore({ ...params, agentDir });
     return resolveCodexAppServerAuthProfileId({ ...params, store });
   }
 
-  function resolveCodexAppServerAuthProfileStore(params: {
-    agentDir?: string;
-    authProfileId?: string;
-    authProfileStore?: AuthProfileStore;
-    config?: AuthProfileOrderConfig;
-  }): AuthProfileStore {
-    if (params.authProfileStore) {
-      return params.authProfileStore;
+  /** Current account selection for a synchronous external-effect guard only. */
+  function resolveCodexAppServerAuthProfileIdAtEffect(
+    params: CodexAppServerAuthProfileLookup,
+  ): string | undefined {
+    const requested = params.authProfileId?.trim();
+    if (requested) {
+      return requested;
     }
-    return ensureAuthProfileStore(params.agentDir, {
+    const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
+    const store = params.authProfileStore ?? ensureAuthProfileStore(agentDir, storeOptions(params));
+    return resolveCodexAppServerAuthProfileId({ ...params, store });
+  }
+
+  function storeOptions(params: CodexAppServerAuthProfileLookup) {
+    return {
       profileId: params.authProfileId,
       allowKeychainPrompt: false,
       config: params.config,
       externalCliProviderIds: CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS,
       ...(params.authProfileId ? { externalCliProfileIds: [params.authProfileId] } : {}),
-    });
+    };
+  }
+
+  async function resolveCodexAppServerAuthProfileStore(
+    params: CodexAppServerAuthProfileLookup,
+  ): Promise<AuthProfileStore> {
+    if (params.authProfileStore) {
+      return params.authProfileStore;
+    }
+    return ensureAuthProfileStoreAsync(params.agentDir, storeOptions(params));
   }
   return {
     resolveCodexAppServerAuthProfileId,
     resolveCodexAppServerAuthProfileIdForAgent,
+    resolveCodexAppServerAuthProfileIdAtEffect,
     resolveCodexAppServerAuthProfileStore,
   };
 }

@@ -116,7 +116,7 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
               }),
           }
         : undefined;
-      const placementGrantResolution = resolveNodeInvokePlacementGrant({
+      const placementGrantResolution = await resolveNodeInvokePlacementGrant({
         runtime: params.context.placementStandingGrants,
         requestedDecisions,
         owner: placementGrantOwner,
@@ -126,6 +126,9 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
         risk: params.risk,
         nodeSession: params.nodeSession,
       });
+      if (!params.isCurrent()) {
+        throw new Error("agent runtime approval authority is no longer active");
+      }
       if (placementGrantResolution.kind === "granted") {
         params.standingGrantAuthorization.binding = placementGrantResolution.binding;
         return { id: placementGrantResolution.approvalId, decision: "allow-always" };
@@ -203,17 +206,17 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       }
       decision = manager.projectDecisionIfActive(record.id, decision);
       if (
-        !retainResolvedNodeInvokePlacementGrant({
+        !(await retainResolvedNodeInvokePlacementGrant({
           runtime: params.context.placementStandingGrants,
           decision,
           binding: placementGrant,
           owner: placementGrantOwner,
           authorization: params.standingGrantAuthorization,
-        })
+        }))
       ) {
         return { id: record.id, decision: null };
       }
-      return { id: record.id, decision };
+      return { id: record.id, decision: params.isCurrent() ? decision : null };
     },
   };
 }

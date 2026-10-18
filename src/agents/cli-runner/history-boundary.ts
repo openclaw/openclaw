@@ -1,24 +1,32 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
+  CLI_HISTORY_CHANGED_BEFORE_PREPARATION,
   isKnownCliHistoryBoundary,
   runWithCliHistoryWriter,
   type CliHistoryBoundary,
   type CliHistoryWriter,
 } from "../../config/sessions/cli-history-boundary.js";
 import {
-  loadSessionEntryReadOnly,
   patchSessionEntryCore,
-  readSessionTranscriptWatermark,
   resolveSessionTranscriptDatabasePath,
-  validateSessionTranscriptContextAdmission,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
+import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
-import { assertOwnedTranscriptWriteCommit } from "../../config/sessions/transcript-write-context.js";
+import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
+import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { hasLiveAgentRunContext } from "../../infra/agent-run-registry.js";
 import { bindAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import {
   getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
@@ -38,6 +46,95 @@ export async function prepareCliHistoryBoundary(
   params: PreparedCliRunContext["params"],
   identity: { credential?: AuthProfileCredential },
 ): Promise<CliHistoryWriter | undefined> {
+  try {
+    return await prepareCliHistoryBoundaryOnce(params, identity);
+  } catch (error) {
+    if (
+      params.abortSignal?.aborted ||
+      !(error instanceof Error) ||
+      error.message !== CLI_HISTORY_CHANGED_BEFORE_PREPARATION
+    ) {
+      throw error;
+    }
+  }
+  // Settlement can move the tip after planning. Nothing committed; reread once.
+  return prepareCliHistoryBoundaryOnce(params, identity);
+}
+
+/** Compaction may rewrite a covered transcript, but cannot establish account provenance. */
+export async function prepareCliHistoryCompactionBoundary(
+  target: SessionTranscriptRuntimeTarget,
+  assertActive: () => void,
+): Promise<(() => Promise<void>) | undefined> {
+  const assertCurrent = composeSessionSourceAssertion([
+    assertActive,
+    captureOwnedTranscriptWriteAssertion(target),
+  ]);
+  await waitForSessionTranscriptProjection(target);
+  assertCurrent();
+  const before = (
+    await readSessionTranscriptAnchorsAsync(target, { entryIds: [], contextAuthority: true })
+  ).contextAuthority;
+  assertCurrent();
+  const entry = before?.entry;
+  const boundary = entry?.cliHistoryBoundary;
+  if (
+    !before ||
+    !entry ||
+    entry.sessionId !== target.sessionId ||
+    !isKnownCliHistoryBoundary(boundary) ||
+    boundary.sessionId !== target.sessionId ||
+    boundary.generation !== before.watermark.generation ||
+    boundary.maxSeq !== before.watermark.maxSeq
+  ) {
+    return undefined;
+  }
+  return async () => {
+    assertCurrent();
+    const after = (
+      await readSessionTranscriptAnchorsAsync(target, { entryIds: [], contextAuthority: true })
+    ).contextAuthority;
+    assertCurrent();
+    if (!after) {
+      return;
+    }
+    const guard = sessionEntryCommitGuardOptions(assertCurrent);
+    await patchSessionEntryCore(
+      target,
+      (current) => {
+        const currentBoundary = current.cliHistoryBoundary;
+        if (
+          current.sessionId !== entry.sessionId ||
+          current.lifecycleRevision !== entry.lifecycleRevision ||
+          current.activeWriterRunId !== entry.activeWriterRunId ||
+          !isKnownCliHistoryBoundary(currentBoundary) ||
+          currentBoundary.sessionId !== boundary.sessionId ||
+          currentBoundary.authFingerprint !== boundary.authFingerprint ||
+          currentBoundary.writerRunId !== boundary.writerRunId ||
+          currentBoundary.generation !== boundary.generation ||
+          currentBoundary.maxSeq !== boundary.maxSeq
+        ) {
+          return {};
+        }
+        return { cliHistoryBoundary: { ...boundary, ...after.watermark } };
+      },
+      {
+        preserveActivity: true,
+        skipMaintenance: true,
+        ...guard,
+        workerGuard: {
+          ...guard.workerGuard,
+          cliHistory: { sessionId: target.sessionId, watermark: after.watermark },
+        },
+      },
+    );
+  };
+}
+
+async function prepareCliHistoryBoundaryOnce(
+  params: PreparedCliRunContext["params"],
+  identity: { credential?: AuthProfileCredential },
+): Promise<CliHistoryWriter | undefined> {
   const source = params.sessionTarget;
   if (
     params.sessionManager ||
@@ -48,17 +145,202 @@ export async function prepareCliHistoryBoundary(
   ) {
     return undefined;
   }
-  const target = { ...source, storePath: resolveSessionTranscriptDatabasePath(source) };
-  const assertCurrent = createCliRunCurrentAssertion(params);
-  await waitForSessionTranscriptProjection(target, params.abortSignal);
-  assertCurrent();
-  const snapshot: InternalSessionEntry | undefined = loadSessionEntryReadOnly(target);
-  if (!snapshot || snapshot.sessionId !== target.sessionId) {
+  const requested = { ...source, storePath: resolveSessionTranscriptDatabasePath(source) };
+  const admission = resolveSessionTranscriptReadFence(requested);
+  const capturedAdmission = admission && structuredClone(admission);
+  const assertRunCurrent = createCliRunCurrentAssertion(params);
+  const assertOwned = captureOwnedTranscriptWriteAssertion(requested);
+  const memory = captureSessionActorStorageOwner(requested, {
+    assertCurrent: assertRunCurrent,
+    authorize() {},
+  });
+  let assertPhysicalSource = () => {
+    memory?.owner?.assertCurrent();
+    memory?.binding?.actor.assertReadable();
+  };
+  const plan = memory
+    ? await planCliHistoryBoundary(
+        params,
+        identity,
+        { ...requested, storePath: memory.path },
+        capturedAdmission,
+        assertRunCurrent,
+      )
+    : await withSessionTranscriptReadSource(
+        requested,
+        ({ scope, expectedIdentity, assertCurrent: assertReaderCurrent }) => {
+          const target = { ...requested, storePath: scope.storePath };
+          assertPhysicalSource = () => {
+            if (expectedIdentity) {
+              assertExistingDatabaseIdentity(
+                target.storePath,
+                expectedIdentity.key,
+                expectedIdentity.birthtime,
+              );
+            }
+          };
+          return planCliHistoryBoundary(params, identity, target, capturedAdmission, () => {
+            assertReaderCurrent();
+            assertRunCurrent();
+          });
+        },
+        params.abortSignal,
+      );
+  if (!plan) {
     return undefined;
   }
-  const watermark = readSessionTranscriptWatermark(target);
-  const admission = resolveSessionTranscriptReadFence(target);
-  validateSessionTranscriptContextAdmission(target, admission);
+  const { target, snapshot, watermark, boundary, allowed, writerRunId } = plan;
+  const assertCurrent = composeSessionSourceAssertion([assertRunCurrent], (assertSource) => {
+    assertSource();
+    memory?.authority.assertCurrent();
+    assertPhysicalSource();
+  });
+  assertCurrent();
+  const commitGuard = sessionEntryCommitGuardOptions(
+    composeSessionSourceAssertion([
+      assertCurrent,
+      composeSessionSourceAssertion([assertOwned], (assertSource) => {
+        // Planning may yield. Recheck foreign liveness at commit, then adopt the
+        // CLI claim so a later reuse of the dead run ID remains a visible takeover.
+        if (
+          snapshot.activeWriterRunId !== undefined &&
+          snapshot.activeWriterRunId !== writerRunId &&
+          hasLiveAgentRunContext(snapshot.activeWriterRunId)
+        ) {
+          throw new Error("CLI history owner changed before preparation");
+        }
+        assertSource();
+      }),
+    ]),
+  );
+  const committed = await patchSessionEntryCore(
+    target,
+    (current: InternalSessionEntry) => {
+      if (
+        current.sessionId !== target.sessionId ||
+        current.lifecycleRevision !== snapshot.lifecycleRevision ||
+        current.activeWriterRunId !== snapshot.activeWriterRunId ||
+        (params.expectedLifecycleRevision !== undefined &&
+          current.lifecycleRevision !== params.expectedLifecycleRevision)
+      ) {
+        throw new Error("CLI history owner changed before preparation");
+      }
+      return { activeWriterRunId: writerRunId, cliHistoryBoundary: boundary };
+    },
+    {
+      preserveActivity: true,
+      skipMaintenance: true,
+      onCommitted: (entry) => {
+        // Binding settlement retains this detached row; publish only our committed writer adoption.
+        const callerEntry: InternalSessionEntry | undefined = params.sessionEntry;
+        if (
+          callerEntry?.sessionId === snapshot.sessionId &&
+          callerEntry.lifecycleRevision === snapshot.lifecycleRevision &&
+          callerEntry.activeWriterRunId === snapshot.activeWriterRunId
+        ) {
+          callerEntry.activeWriterRunId = entry.activeWriterRunId;
+        }
+      },
+      ...commitGuard,
+      workerGuard: {
+        ...commitGuard.workerGuard,
+        cliHistory: { sessionId: target.sessionId, admission: capturedAdmission, watermark },
+      },
+    },
+  );
+  if (!committed || !allowed || boundary.state !== "known") {
+    return undefined;
+  }
+  const assertActive = resolveAdmittedRunActiveAssertion(params.admittedRunContext);
+  const assertWriterCurrent = () => {
+    params.assertCurrent?.();
+    if (!assertActive) {
+      throw new Error("CLI history writer is no longer active");
+    }
+    assertActive();
+  };
+  const writer: CliHistoryWriter = {
+    target: { ...target },
+    runId: writerRunId,
+    authFingerprint: boundary.authFingerprint,
+    lifecycleRevision: snapshot.lifecycleRevision,
+    assertCurrent: assertWriterCurrent,
+    assertReadable: async () => {
+      assertWriterCurrent();
+      assertPhysicalSource();
+      const authority = memory
+        ? undefined
+        : (
+            await readSessionTranscriptAnchorsAsync(
+              target,
+              { entryIds: [], contextAuthority: true },
+              params.abortSignal,
+            )
+          ).contextAuthority;
+      assertWriterCurrent();
+      assertPhysicalSource();
+      const facts =
+        memory?.binding?.actor.target.sessionKey === target.sessionKey
+          ? memory.binding.actor.snapshot(memory.authority)
+          : memory?.owner?.readSession(target.sessionKey, memory.authority);
+      const current = memory ? facts?.entry : authority?.entry;
+      const proof = current?.cliHistoryBoundary;
+      const tip = memory ? facts?.transcript.watermark : authority?.watermark;
+      if (
+        !current ||
+        current.sessionId !== target.sessionId ||
+        current.lifecycleRevision !== snapshot.lifecycleRevision ||
+        current.activeWriterRunId !== writerRunId ||
+        !isKnownCliHistoryBoundary(proof) ||
+        proof.sessionId !== target.sessionId ||
+        proof.writerRunId !== writerRunId ||
+        proof.authFingerprint !== boundary.authFingerprint ||
+        !tip ||
+        proof.generation !== tip.generation ||
+        proof.maxSeq !== tip.maxSeq
+      ) {
+        throw new Error("CLI history authority changed before execution");
+      }
+    },
+  };
+  const authority = getAdmittedRunDelegatedAuthority(params.admittedRunContext);
+  if (!authority) {
+    throw new Error("CLI history writer is no longer active");
+  }
+  bindAgentRunTerminalWriteContext(authority, {
+    // Terminal bookkeeping keeps the admitted account/row facts after execution
+    // is cancelled. The transcript writer still checks those facts at commit.
+    run: (write) =>
+      runWithCliHistoryWriter({ ...writer, assertCurrent: assertPhysicalSource }, write),
+  });
+  return writer;
+}
+
+async function planCliHistoryBoundary(
+  params: PreparedCliRunContext["params"],
+  identity: { credential?: AuthProfileCredential },
+  target: SessionTranscriptRuntimeTarget,
+  admission: UserTurnTranscriptAdmissionReceipt | undefined,
+  assertCurrent: () => void,
+) {
+  await waitForSessionTranscriptProjection(target, params.abortSignal);
+  assertCurrent();
+  const facts = await readSessionTranscriptAnchorsAsync(
+    target,
+    {
+      entryIds: [],
+      contextAuthority: true,
+      ...(admission ? { contextValidation: { admission } } : {}),
+    },
+    params.abortSignal,
+  );
+  assertCurrent();
+  const authority = facts.contextAuthority;
+  const snapshot = authority?.entry;
+  if (!authority || !snapshot || snapshot.sessionId !== target.sessionId) {
+    return undefined;
+  }
+  const { watermark } = authority;
   const priorMaxSeq = admission ? admission.rawSeq - 1 : watermark.maxSeq;
   const currentUserIsLast = !admission || watermark.maxSeq === admission.rawSeq;
   const stored = snapshot.cliHistoryBoundary;
@@ -138,98 +420,5 @@ export async function prepareCliHistoryBoundary(
           writerRunId,
         }
       : { version: 1, sessionId: target.sessionId, state: "unknown" };
-  const committed = await patchSessionEntryCore(
-    target,
-    (current: InternalSessionEntry) => {
-      if (
-        current.sessionId !== target.sessionId ||
-        current.lifecycleRevision !== snapshot.lifecycleRevision ||
-        current.activeWriterRunId !== snapshot.activeWriterRunId ||
-        (params.expectedLifecycleRevision !== undefined &&
-          current.lifecycleRevision !== params.expectedLifecycleRevision)
-      ) {
-        throw new Error("CLI history owner changed before preparation");
-      }
-      return { activeWriterRunId: writerRunId, cliHistoryBoundary: boundary };
-    },
-    {
-      preserveActivity: true,
-      skipMaintenance: true,
-      onCommitted: (entry) => {
-        // Binding settlement retains this detached row; publish only our committed writer adoption.
-        const callerEntry: InternalSessionEntry | undefined = params.sessionEntry;
-        if (
-          callerEntry?.sessionId === snapshot.sessionId &&
-          callerEntry.lifecycleRevision === snapshot.lifecycleRevision &&
-          callerEntry.activeWriterRunId === snapshot.activeWriterRunId
-        ) {
-          callerEntry.activeWriterRunId = entry.activeWriterRunId;
-        }
-      },
-      assertCommitAllowed: () => {
-        assertCurrent();
-        // Planning may yield. Recheck foreign liveness at commit, then adopt the
-        // CLI claim so a later reuse of the dead run ID remains a visible takeover.
-        if (
-          snapshot.activeWriterRunId !== undefined &&
-          snapshot.activeWriterRunId !== writerRunId &&
-          hasLiveAgentRunContext(snapshot.activeWriterRunId)
-        ) {
-          throw new Error("CLI history owner changed before preparation");
-        }
-        assertOwnedTranscriptWriteCommit(target);
-        validateSessionTranscriptContextAdmission(target, admission);
-        const fresh = readSessionTranscriptWatermark(target);
-        if (fresh.generation !== watermark.generation || fresh.maxSeq !== watermark.maxSeq) {
-          throw new Error("CLI history changed before preparation");
-        }
-      },
-    },
-  );
-  if (!committed || !allowed || boundary.state !== "known") {
-    return undefined;
-  }
-  const assertActive = resolveAdmittedRunActiveAssertion(params.admittedRunContext);
-  const assertWriterCurrent = () => {
-    params.assertCurrent?.();
-    if (!assertActive) {
-      throw new Error("CLI history writer is no longer active");
-    }
-    assertActive();
-  };
-  const writer: CliHistoryWriter = {
-    target: { ...target },
-    runId: writerRunId,
-    authFingerprint: boundary.authFingerprint,
-    lifecycleRevision: snapshot.lifecycleRevision,
-    assertCurrent: assertWriterCurrent,
-    assertReadable: () => {
-      assertWriterCurrent();
-      const current: InternalSessionEntry | undefined = loadSessionEntryReadOnly(target);
-      const proof = current?.cliHistoryBoundary;
-      const tip = readSessionTranscriptWatermark(target);
-      if (
-        !current ||
-        current.sessionId !== target.sessionId ||
-        current.lifecycleRevision !== snapshot.lifecycleRevision ||
-        current.activeWriterRunId !== writerRunId ||
-        !isKnownCliHistoryBoundary(proof) ||
-        proof.sessionId !== target.sessionId ||
-        proof.writerRunId !== writerRunId ||
-        proof.authFingerprint !== boundary.authFingerprint ||
-        proof.generation !== tip.generation ||
-        proof.maxSeq !== tip.maxSeq
-      ) {
-        throw new Error("CLI history authority changed before execution");
-      }
-    },
-  };
-  const authority = getAdmittedRunDelegatedAuthority(params.admittedRunContext);
-  if (!authority) {
-    throw new Error("CLI history writer is no longer active");
-  }
-  bindAgentRunTerminalWriteContext(authority, {
-    run: (write) => runWithCliHistoryWriter(writer, write),
-  });
-  return writer;
+  return { target, snapshot, watermark, boundary, allowed, writerRunId };
 }

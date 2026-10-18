@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
@@ -12,9 +16,11 @@ import {
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
-import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../registry/subagent-registry-state.fixture.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import {
   records,
   requesterWakeDriver,
@@ -35,6 +41,7 @@ describe("completed requester delivery replay fence", () => {
       "OPENCLAW_STATE_DIR",
       tempDirs.make("openclaw-completion-replay-", resolvePreferredOpenClawTmpDir()),
     );
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {
@@ -53,6 +60,7 @@ describe("completed requester delivery replay fence", () => {
         await closeOpenClawStateDatabaseAsync();
         subagentRuns.clear();
         closeOpenClawStateDatabaseForTest();
+        clearRuntimeConfigSnapshot();
         // Keep failed removals tracked without retaining the retired fixture's environment.
         try {
           tempDirs.cleanup();
@@ -241,9 +249,7 @@ describe("completed requester delivery replay fence", () => {
       );
       driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
       await admitted.promise;
-      expect(
-        driver.controller.startSubagentAnnounceCleanupFlow(input.subagent.runId, input.subagent),
-      ).toBe(true);
+      expect(driver.controller.startSubagentAnnounceCleanupFlow(input.subagent)).toBe(true);
       await reported.promise;
       expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.delivery?.status).toBe(
         "suspended",

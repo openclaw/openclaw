@@ -15,7 +15,7 @@ import {
 import { isStringOption } from "../../utils/string-readers.js";
 import { readFiniteNumberParam, readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import type { ComputerObservationState, ComputerToolAction } from "./computer-tool-shared.js";
-import { COMPUTER_REF_WIDTH, MAX_HOLD_SECONDS } from "./computer-tool-shared.js";
+import { MAX_HOLD_SECONDS } from "./computer-tool-shared.js";
 
 const LOCAL_ACTIONS = new Set<ComputerUseV2ActionName>(["screenshot", "wait"]);
 const INPUT_ACTIONS = new Set<ComputerUseV2ActionName>(
@@ -60,8 +60,8 @@ export function computerActionNeedsFrame(
   input: Record<string, unknown>,
 ): boolean {
   return (
-    !input.windowRef &&
-    !input.elementRef &&
+    !readToolStringParam(input, "windowRef") &&
+    !readToolStringParam(input, "elementRef") &&
     (COORDINATE_REQUIRED_ACTIONS.has(action) ||
       (COORDINATE_OPTIONAL_ACTIONS.has(action) && Array.isArray(input.coordinate)))
   );
@@ -165,33 +165,29 @@ export function buildComputerActParams(params: {
   executionId: string;
   screenIndex: number;
   displayFrameId?: string;
-  refWidth?: number;
+  refWidth: number;
 }): ComputerActParams {
   const { action, input } = params;
   const wire: Record<string, unknown> = { action, executionId: params.executionId };
   if (POINTER_OR_KEYBOARD_ACTIONS.has(action)) {
     wire.screenIndex = params.screenIndex;
-    wire.refWidth = params.refWidth ?? COMPUTER_REF_WIDTH;
+    wire.refWidth = params.refWidth;
   }
   const elementRef = readToolStringParam(input, "elementRef");
-  if (
+  const coordinateRequired =
     COORDINATE_REQUIRED_ACTIONS.has(action) &&
-    !(elementRef && ELEMENT_TARGETABLE_CLICK_ACTIONS.has(action))
-  ) {
+    !(elementRef && ELEMENT_TARGETABLE_CLICK_ACTIONS.has(action));
+  if (coordinateRequired || COORDINATE_OPTIONAL_ACTIONS.has(action)) {
     const coordinate = readCoordinate(input, "coordinate");
-    if (!coordinate) {
+    if (!coordinate && coordinateRequired) {
       throw new Error(`coordinate [x, y] required for ${action}`);
     }
-    wire.x = coordinate[0];
-    wire.y = coordinate[1];
-  } else if (COORDINATE_OPTIONAL_ACTIONS.has(action)) {
-    const coordinate = readCoordinate(input, "coordinate");
     if (coordinate) {
       wire.x = coordinate[0];
       wire.y = coordinate[1];
     }
   }
-  if ((wire.x !== undefined || wire.fromX !== undefined) && params.displayFrameId) {
+  if (wire.x !== undefined && params.displayFrameId) {
     wire.displayFrameId = params.displayFrameId;
   }
   const modifiers =

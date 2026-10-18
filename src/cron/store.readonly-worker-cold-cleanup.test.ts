@@ -37,7 +37,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 });
 
 it.each(["read", "copy"] as const)(
-  "retains cold snapshot cleanup after a worker %s failure",
+  "retains the worker %s failure and cold snapshot cleanup custody",
   async (failureStage) => {
     await withOpenClawTestState(
       { label: "cron-cold-cleanup", env: { XDG_CACHE_HOME: undefined } },
@@ -82,7 +82,13 @@ it.each(["read", "copy"] as const)(
                 state.env,
               ),
             ),
-          ).rejects.toThrow("cleanup failed");
+          ).rejects.toMatchObject({
+            errors: [
+              expect.objectContaining({ message: expect.stringContaining(originalFailure) }),
+              expect.objectContaining({ message: "Cron read-only state snapshot cleanup failed." }),
+            ],
+            cause: expect.objectContaining({ message: expect.stringContaining(originalFailure) }),
+          });
           expect(originalFailureObserved).toBe(true);
           expect(fault.count(failureStage === "read" ? "read-query" : "copy-open")).toBeGreaterThan(
             0,

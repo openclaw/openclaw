@@ -1,5 +1,7 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -42,73 +44,72 @@ vi.mock("./workspace-path-containment.js", () => ({
 
 import { sessionGroupHandlers } from "./sessions-groups.js";
 
-function updateOptions(
+const containment = { path: "/workspace/client", workspaceRoot: "/workspace" };
+const invalidCwd = { code: "INVALID_REQUEST" };
+const missingGroup = { code: "INVALID_REQUEST", message: "unknown session group: Travel" };
+const adminRequired = { message: expect.stringContaining("operator.admin") };
+
+function expectFailure(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+}
+
+function groupRequest(
+  method: keyof typeof sessionGroupHandlers,
   params: Record<string, unknown>,
-  respond: ReturnType<typeof vi.fn>,
   scopes = ["operator.write", "operator.admin"],
 ) {
-  return {
+  const respond = vi.fn();
+  const options = {
     params,
     respond,
-    client: { connect: { scopes } },
+    ...(method === "sessions.groups.rename" ? {} : { client: { connect: { scopes } } }),
     context: {
       getRuntimeConfig: () => ({}),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
     },
   } as unknown as GatewayRequestHandlerOptions;
+  return {
+    options,
+    respond,
+    invoke: () => sessionGroupHandlers[method]!(options),
+  };
 }
 
-function renameOptions(params: Record<string, unknown>, respond: ReturnType<typeof vi.fn>) {
-  return {
-    params,
-    respond,
-    context: {
-      getRuntimeConfig: () => ({}),
-      getSessionEventSubscriberConnIds: () => new Set<string>(),
-    },
-  } as unknown as GatewayRequestHandlerOptions;
-}
+afterEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  groupMocks.put.mockReset();
+  groupMocks.rename.mockReset();
+  groupMocks.update.mockReset();
+  groupMocks.defaults.mockReset().mockReturnValue([]);
+  pathMocks.isCurrent.mockReset().mockReturnValue(true);
+  pathMocks.resolveContainment.mockReset();
+});
 
 describe("sessions.groups.put", () => {
-  beforeEach(() => {
-    groupMocks.put.mockReset();
-  });
-
   it("rejects dropping a non-empty group as an invalid request", async () => {
     const message = "cannot drop Gone; remove it via sessions.groups.delete";
     groupMocks.put.mockImplementation(() => {
       throw new groupMocks.NotEmpty(message);
     });
-    const respond = vi.fn();
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.put"],
-      'sessionGroupHandlers["sessions.groups.put"] test invariant',
-    )(updateOptions({ names: ["Keep"] }, respond));
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST", message }),
-    );
+    const h = groupRequest("sessions.groups.put", { names: ["Keep"] });
+    await h.invoke();
+    expectFailure(h.respond, { code: "INVALID_REQUEST", message });
   });
 
   it("replaces the catalog using the runtime config and authorization guards", async () => {
-    const cfg = { agents: { list: [{ id: "main" }] } };
+    const changes = vi.spyOn(sessionChanges, "emit");
+    const accessRevision = readGatewayAccessRevision();
+    const cfg = { agents: { entries: { main: {} } } };
     const names = ["Keep"];
     const sectionOrder = ["category:Keep", "ungrouped"];
     const groups = [{ name: "Keep", position: 0 }];
     groupMocks.put.mockReturnValue(groups);
-    const respond = vi.fn();
-    const options = updateOptions({ names, sectionOrder }, respond);
-    options.context.getRuntimeConfig = () => cfg;
+    const h = groupRequest("sessions.groups.put", { names, sectionOrder });
+    h.options.context.getRuntimeConfig = () => cfg;
     const assertCurrent = vi.fn();
     const assertTargetCurrent = vi.fn();
-    options.sessionMutationAuthorization = { assertCurrent, assertTargetCurrent };
-
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.put"],
-      'sessionGroupHandlers["sessions.groups.put"] test invariant',
-    )(options);
+    h.options.sessionMutationAuthorization = { assertCurrent, assertTargetCurrent };
+    await h.invoke();
 
     expect(groupMocks.put).toHaveBeenCalledExactlyOnceWith({
       cfg,
@@ -118,7 +119,9 @@ describe("sessions.groups.put", () => {
       assertTargetCurrent,
     });
     expect(groupMocks.put.mock.calls[0]?.[0].cfg).toBe(cfg);
-    expect(respond).toHaveBeenCalledWith(true, { ok: true, groups, sectionOrder: [] }, undefined);
+    expect(h.respond).toHaveBeenCalledWith(true, { ok: true, groups, sectionOrder: [] }, undefined);
+    expect(changes).not.toHaveBeenCalled();
+    expect(readGatewayAccessRevision()).toBe(accessRevision);
   });
 
   it("rethrows changed authorization instead of mapping it to an unavailable response", async () => {
@@ -129,191 +132,109 @@ describe("sessions.groups.put", () => {
     groupMocks.put.mockImplementation(() => {
       throw error;
     });
-    const respond = vi.fn();
-    await expect(
-      expectDefined(
-        sessionGroupHandlers["sessions.groups.put"],
-        'sessionGroupHandlers["sessions.groups.put"] test invariant',
-      )(updateOptions({ names: [] }, respond)),
-    ).rejects.toBe(error);
-    expect(respond).not.toHaveBeenCalled();
+    const h = groupRequest("sessions.groups.put", { names: [] });
+    await expect(h.invoke()).rejects.toBe(error);
+    expect(h.respond).not.toHaveBeenCalled();
   });
 });
 
 describe("sessions.groups.update", () => {
-  beforeEach(() => {
-    groupMocks.update.mockReset();
-    groupMocks.defaults.mockReset().mockReturnValue([]);
-    pathMocks.isCurrent.mockReset();
-    pathMocks.isCurrent.mockReturnValue(true);
-    pathMocks.resolveContainment.mockReset();
-  });
-
-  it("rejects a relative cwd before mutating defaults", async () => {
-    const respond = vi.fn();
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.update"],
-      'sessionGroupHandlers["sessions.groups.update"] test invariant',
-    )(updateOptions({ name: "Travel", cwd: "tmp/travel", worktree: false }, respond));
-
-    expect(groupMocks.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-  });
-
-  it("rejects a stale target without recreating it", async () => {
-    groupMocks.update.mockReturnValue(null);
-    const respond = vi.fn();
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.update"],
-      'sessionGroupHandlers["sessions.groups.update"] test invariant',
-    )(updateOptions({ name: "Travel", cwd: "/tmp/travel", worktree: true }, respond));
-
-    expect(groupMocks.update).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "unknown session group: Travel",
-      }),
-    );
-  });
-
-  it("rejects a non-admin cwd outside configured workspaces", async () => {
-    pathMocks.resolveContainment.mockResolvedValue(null);
-    const respond = vi.fn();
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.update"],
-      'sessionGroupHandlers["sessions.groups.update"] test invariant',
-    )(
-      updateOptions({ name: "Travel", cwd: "/outside/travel", worktree: false }, respond, [
-        "operator.write",
-      ]),
-    );
-
-    expect(groupMocks.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("operator.admin") }),
-    );
-  });
+  it.each([
+    ["relative", "tmp/travel", false, true, 0, invalidCwd],
+    ["stale", "/tmp/travel", true, true, 1, missingGroup],
+    ["outside", "/outside/travel", false, false, 0, adminRequired],
+  ] as const)(
+    "rejects %s without creating defaults",
+    async (_name, cwd, worktree, admin, calls, error) => {
+      if (calls) {
+        groupMocks.update.mockReturnValue(null);
+      }
+      if (!admin) {
+        pathMocks.resolveContainment.mockResolvedValue(null);
+      }
+      const h = groupRequest(
+        "sessions.groups.update",
+        { name: "Travel", cwd, worktree },
+        admin ? ["operator.write", "operator.admin"] : ["operator.write"],
+      );
+      await h.invoke();
+      expect(groupMocks.update).toHaveBeenCalledTimes(calls);
+      expectFailure(h.respond, error);
+    },
+  );
 
   it("persists the canonical workspace-contained cwd for a write caller", async () => {
-    pathMocks.resolveContainment.mockResolvedValue({
-      path: "/workspace/client",
-      workspaceRoot: "/workspace",
-    });
+    const changes = vi.spyOn(sessionChanges, "emit");
+    const accessRevision = readGatewayAccessRevision();
+    pathMocks.resolveContainment.mockResolvedValue(containment);
     groupMocks.update.mockImplementation((_name, _defaults, _env, assertCurrent) => {
       assertCurrent();
       const records = [{ name: "Client", cwd: "/workspace/client", worktree: true }];
       groupMocks.defaults.mockReturnValue(records);
       return records;
     });
-    const respond = vi.fn();
     const assertCurrent = vi.fn();
-    const options = updateOptions(
+    const h = groupRequest(
+      "sessions.groups.update",
       { name: "Client", cwd: "/workspace/link", worktree: true },
-      respond,
       ["operator.write"],
     );
-    options.sessionMutationAuthorization = {
+    h.options.sessionMutationAuthorization = {
       assertCurrent,
       assertTargetCurrent: vi.fn(),
     };
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.update"],
-      'sessionGroupHandlers["sessions.groups.update"] test invariant',
-    )(options);
+    await h.invoke();
 
     expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(changes).not.toHaveBeenCalled();
+    expect(readGatewayAccessRevision()).toBe(accessRevision);
+    const defaults = { cwd: "/workspace/client", worktree: true };
     expect(groupMocks.update).toHaveBeenCalledWith(
       "Client",
-      {
-        cwd: "/workspace/client",
-        worktree: true,
-      },
+      defaults,
       expect.any(Object),
       expect.any(Function),
       {},
     );
-    expect(respond).toHaveBeenCalledWith(
+    expect(h.respond).toHaveBeenCalledWith(
       true,
-      {
-        ok: true,
-        defaults: [{ name: "Client", cwd: "/workspace/client", worktree: true }],
-      },
+      { ok: true, defaults: [{ name: "Client", ...defaults }] },
       undefined,
     );
   });
 
   it("rejects containment retired by a runtime config change before commit", async () => {
-    const containment = {
-      path: "/workspace/client",
-      workspaceRoot: "/workspace",
-    };
-    let finishContainment: ((value: typeof containment) => void) | undefined;
-    pathMocks.resolveContainment.mockImplementation(
-      async () =>
-        await new Promise<typeof containment>((resolve) => {
-          finishContainment = resolve;
-        }),
-    );
+    const pending = createDeferred<typeof containment>();
+    pathMocks.resolveContainment.mockReturnValue(pending.promise);
     const initialConfig = { agents: { defaults: { workspace: "/workspace" } } };
     const retiredConfig = { agents: { defaults: { workspace: "/replacement" } } };
     let runtimeConfig = initialConfig;
     pathMocks.isCurrent.mockImplementation((_containment, cfg) => cfg === initialConfig);
-    const respond = vi.fn();
-    const options = updateOptions(
+    const h = groupRequest(
+      "sessions.groups.update",
       { name: "Client", cwd: "/workspace/client", worktree: true },
-      respond,
       ["operator.write"],
     );
-    options.context.getRuntimeConfig = () => runtimeConfig;
-    const update = expectDefined(
-      sessionGroupHandlers["sessions.groups.update"],
-      'sessionGroupHandlers["sessions.groups.update"] test invariant',
-    )(options);
+    h.options.context.getRuntimeConfig = () => runtimeConfig;
+    const update = h.invoke();
 
     await vi.waitFor(() => expect(pathMocks.resolveContainment).toHaveBeenCalledOnce());
     runtimeConfig = retiredConfig;
-    finishContainment?.(containment);
+    pending.resolve(containment);
     await update;
 
     expect(pathMocks.isCurrent).toHaveBeenCalledWith(containment, retiredConfig);
     expect(groupMocks.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("operator.admin") }),
-    );
+    expectFailure(h.respond, { message: expect.stringContaining("operator.admin") });
   });
 });
 
-describe("sessions.groups.rename", () => {
-  beforeEach(() => {
-    groupMocks.rename.mockReset();
-  });
-
-  it("rejects an unknown source group", async () => {
-    groupMocks.rename.mockRejectedValue(new groupMocks.NotFound("unknown session group: Missing"));
-    const respond = vi.fn();
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.rename"],
-      'sessionGroupHandlers["sessions.groups.rename"] test invariant',
-    )(renameOptions({ name: "Missing", to: "Other" }, respond));
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "unknown session group: Missing",
-      }),
-    );
+it("sessions.groups.rename rejects an unknown source group", async () => {
+  groupMocks.rename.mockRejectedValue(new groupMocks.NotFound("unknown session group: Missing"));
+  const h = groupRequest("sessions.groups.rename", { name: "Missing", to: "Other" });
+  await h.invoke();
+  expectFailure(h.respond, {
+    code: "INVALID_REQUEST",
+    message: "unknown session group: Missing",
   });
 });

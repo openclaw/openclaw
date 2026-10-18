@@ -1,21 +1,26 @@
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { ResolvedCliBackend } from "../cli-backends.js";
+import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import type { RunCliAgentParams } from "./types.js";
 
 /**
  * Translate the caller's runtime tool cap into the CLI run's exact tool availability.
- * A trusted completion handoff inherits the requester's persisted cap: native CLI tools
- * cannot enforce it, so its whole surface goes through the policy projection as mediated
- * MCP tools.
+ * Native CLI tools cannot enforce workspace, channel, or inherited completion caps, so those
+ * runs expose their whole surface through the mediated MCP policy projection.
  */
-export function resolveCliRuntimeToolPolicy(input: {
+export async function resolveCliRuntimeToolPolicy(input: {
   params: RunCliAgentParams;
+  policySessionKey: string | undefined;
+  policyAgentId: string;
   backendId: string;
   bundleMcp: boolean;
   canEnforceExactToolAvailability: boolean;
+  projectNativeToolAuthority?: ResolvedCliBackend["projectNativeToolAuthority"];
+  sideQuestionToolMode?: ResolvedCliBackend["sideQuestionToolMode"];
   isSideQuestion: boolean;
   skipsTurnPreparation: boolean;
-}): { params: RunCliAgentParams; runtimeToolsAllowPolicy: string[] | undefined } {
+}): Promise<{ params: RunCliAgentParams; runtimeToolsAllowPolicy: string[] | undefined }> {
   let { params } = input;
   let runtimeToolsAllowPolicy: string[] | undefined;
   if (params.toolsAllow !== undefined) {
@@ -26,11 +31,7 @@ export function resolveCliRuntimeToolPolicy(input: {
       params = { ...params, toolsAllow: undefined };
     } else {
       runtimeToolsAllowPolicy = [...params.toolsAllow];
-      const fallbackOpenClawTools = uniqueStrings(
-        expandToolGroups(params.toolsAllow)
-          .map((toolName) => normalizeToolPolicyName(toolName))
-          .filter(Boolean),
-      );
+      const fallbackOpenClawTools = expandToolGroups(params.toolsAllow);
       if (
         fallbackOpenClawTools.includes("write") &&
         !fallbackOpenClawTools.includes("apply_patch")
@@ -63,21 +64,65 @@ export function resolveCliRuntimeToolPolicy(input: {
       cliToolAvailability: { native: [], openClaw: [] },
     };
   }
-  if (params.trustedInternalHandoff && params.disableTools !== true) {
+  const requesterSessionKey = params.sessionKey ?? input.policySessionKey;
+  // Completion turns already require mediation. Ordinary resumes must derive the
+  // same restriction from the admitted child's policy, without guessing its sender.
+  const requesterPolicy =
+    params.disableTools === true || params.trustedInternalHandoff
+      ? undefined
+      : (
+          await prepareConversationCapabilityProfile({
+            ...params,
+            agentId: input.policyAgentId,
+            sessionKey: input.policySessionKey,
+            sandboxSessionKey: requesterSessionKey,
+            preparedSessionEntry:
+              params.sessionEntry && requesterSessionKey
+                ? { sessionKey: requesterSessionKey, entry: params.sessionEntry }
+                : undefined,
+            modelProvider: params.modelProvider ?? params.provider,
+            modelId: params.model,
+          })
+        ).policy;
+  const senderRestricted = requesterPolicy?.inheritedToolPolicySource === "sender";
+  const delegatedExecution = Boolean(requesterPolicy?.delegatedToolPolicy);
+  // Internal controls and backend-enforced tool-free questions have no file authority.
+  const workspaceOnly =
+    params.controlOperation === undefined &&
+    !(input.isSideQuestion && input.sideQuestionToolMode === "disabled") &&
+    resolveEffectiveToolFsWorkspaceOnly({ cfg: params.config, agentId: input.policyAgentId });
+  if (
+    (params.trustedInternalHandoff || senderRestricted || delegatedExecution || workspaceOnly) &&
+    params.disableTools !== true
+  ) {
     if (
       !input.canEnforceExactToolAvailability ||
       !input.bundleMcp ||
       input.skipsTurnPreparation ||
       params.sessionEntry?.execHost === "node" ||
-      params.trustedInternalHandoff.settleBatch !== undefined
+      params.trustedInternalHandoff?.settleBatch !== undefined
     ) {
-      throw new Error(`CLI backend ${input.backendId} cannot enforce completion tool policy`);
+      throw new Error(
+        `CLI backend ${input.backendId} cannot enforce ${senderRestricted ? "conversation" : delegatedExecution ? "delegated execution" : params.trustedInternalHandoff ? "completion" : "workspace-only"} tool policy`,
+      );
     }
-    runtimeToolsAllowPolicy ??= ["*"];
+    const exactWorkspaceTools =
+      workspaceOnly && params.cliToolAvailability && runtimeToolsAllowPolicy === undefined
+        ? [
+            ...params.cliToolAvailability.openClaw,
+            ...(input.projectNativeToolAuthority?.(params.cliToolAvailability.native) ?? []),
+          ]
+        : undefined;
+    // Exact selections must bypass policy expansion (for example, write -> apply_patch).
+    if (exactWorkspaceTools === undefined) {
+      runtimeToolsAllowPolicy ??= senderRestricted
+        ? (params.cliToolAvailability?.openClaw ?? ["*"])
+        : ["*"];
+    }
     params = {
       ...params,
       toolsAllow: undefined,
-      cliToolAvailability: { native: [], openClaw: [] },
+      cliToolAvailability: { native: [], openClaw: exactWorkspaceTools ?? [] },
     };
   }
   return { params, runtimeToolsAllowPolicy };

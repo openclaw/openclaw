@@ -17,8 +17,8 @@ import { createForkTestRuntime, forkResponse } from "./upstream-session-fork.tes
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   ...(await importOriginal()),
-  deleteSessionUpstreamLink: vi.fn(),
-  upsertSessionUpstreamLink: vi.fn(() => true),
+  deleteSessionUpstreamLinkAsync: vi.fn(),
+  upsertSessionUpstreamLinkAsync: vi.fn(() => true),
 }));
 
 const roots: string[] = [];

@@ -46,7 +46,6 @@ try {
     const native = new BaseSequencer(ctx);
     const original = index ? await native.shard(specifications) : specifications;
     const selected = {};
-    const receipts = [];
     for (const [policy, partition] of Object.entries(selections)) {
       selected[policy] = [];
       for (const selection of partition) {
@@ -54,22 +53,15 @@ try {
           includeFile,
           JSON.stringify(selection.includePatterns ?? paths(specifications)),
         );
-        const requestId = `${index ?? "all"}-${policy}-${selection.runtime}`;
-        const receiptFile = path.join(path.dirname(output), `${requestId}.json`);
-        process.env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT = receiptFile;
-        process.env.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID = requestId;
         const sequencer = new ctx.config.sequence.sequencer(ctx);
         const sharded = index ? await sequencer.shard(specifications) : specifications;
         selected[policy].push({
           runtime: selection.runtime,
           files: paths(await sequencer.sort(sharded)),
         });
-        delete process.env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT;
-        delete process.env.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID;
-        receipts.push({ requestId, value: JSON.parse(fs.readFileSync(receiptFile, "utf8")) });
       }
     }
-    rows.push({ index, original: paths(original), selected, receipts });
+    rows.push({ index, original: paths(original), selected });
   }
 
   // Exercise the registered sequencer with interleaved environment pragmas,

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../config/legacy.roster.js";
 import { AsyncTempCaseFactory } from "../../security/test-temp-cases.js";
 import { collectWorkspaceSkillSymlinkEscapeFindings } from "./workspace-audit.js";
 
@@ -92,7 +93,7 @@ describe("security audit workspace skill path escape findings", () => {
         await fs.mkdir(skillDir, { recursive: true });
         await fs.symlink(outsidePath, path.join(skillDir, "SKILL.md"));
       }
-      const cfg: OpenClawConfig = {
+      const cfg: OpenClawConfigWithLegacyRoster = {
         agents: {
           entries: {
             alpha: { default: true, workspace: workspaceA },

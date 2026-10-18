@@ -1,16 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  listAgentEntries,
-  toAgentEntriesRecord,
-  tryResolveSoleAgentId,
-} from "../agents/agent-scope-config.js";
+import { tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 
 export function gatewayTransportError(
   kind: "closed" | "timeout",
@@ -42,24 +37,7 @@ export function createAgentsDeleteFixture(setConfig: (cfg: OpenClawConfig) => vo
     sessions: Record<string, { sessionId: string; updatedAt: number }>;
   }) => {
     const deletedAgentId = params.deletedAgentId ?? "ops";
-    const authored = structuredClone(params.cfg);
-    const roster = listAgentEntries(authored);
-    if (
-      authored.agents?.ownership !== "explicit" &&
-      !roster.some((entry) => entry.default === true)
-    ) {
-      const existingDefault = roster.find((entry) => entry.id !== deletedAgentId);
-      if (existingDefault) {
-        existingDefault.default = true;
-      } else {
-        roster.unshift({ id: "main", default: true });
-      }
-    }
-    const { list: _legacyList, ...agents } = authored.agents ?? {};
-    const { config: cfg } = createCanonicalAgentConfigFixture({
-      ...authored,
-      agents: { ...agents, entries: toAgentEntriesRecord(roster) },
-    });
+    const cfg = structuredClone(params.cfg);
     const storeAgentId = resolveFixtureStoreAgentId(cfg, deletedAgentId);
     for (const [sessionKey, entry] of Object.entries(params.sessions)) {
       const entryAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? storeAgentId;

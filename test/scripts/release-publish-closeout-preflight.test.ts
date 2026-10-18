@@ -11,6 +11,30 @@ const moduleUrl = new URL(
   import.meta.url,
 ).href;
 
+function evaluate(dir: string, source: string, bin?: string) {
+  return JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        new URL("../../scripts/tsx.mjs", import.meta.url).href,
+        "--input-type=module",
+        "-e",
+        source,
+      ],
+      {
+        cwd: dir,
+        env: {
+          ...createNestedGitEnv(),
+          ...(bin ? { PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` } : {}),
+        },
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    ),
+  );
+}
+
 function sourceFixture(changelog?: string, version = "2026.9.4") {
   const dir = tempDirs.make("release-closeout-readiness-");
   const git = (...args: string[]) =>
@@ -94,15 +118,9 @@ if (args[0] === 'api') {
 `,
       { mode: 0o755 },
     );
-    const result = JSON.parse(
-      execFileSync(
-        process.execPath,
-        [
-          "--import",
-          new URL("../../scripts/tsx.mjs", import.meta.url).href,
-          "--input-type=module",
-          "-e",
-          `
+    const result = evaluate(
+      dir,
+      `
 import { inspectPublishReleasePage, inspectStableCloseoutPreflight } from ${JSON.stringify(moduleUrl)};
 import { createPublishPreflightGh } from ${JSON.stringify(new URL("../../scripts/lib/release-publish-preflight-evidence.mts", import.meta.url).href)};
 import { observeReleaseGitHubState } from ${JSON.stringify(new URL("../../scripts/lib/release-publish-state.mts", import.meta.url).href)};
@@ -114,14 +132,7 @@ const observation = observeReleaseGitHubState({...input, repository: input.repo,
 const closeout = inspectStableCloseoutPreflight({...input, attempt: '1', runId: '123'});
 console.log(JSON.stringify({admission, observation, closeout}));
 `,
-        ],
-        {
-          cwd: dir,
-          env: { ...createNestedGitEnv(), PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` },
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      ),
+      bin,
     );
     expect(result.admission.admitted).toBe(admitted);
     expect(result.observation.gates).toContainEqual(
@@ -163,13 +174,9 @@ console.log(JSON.stringify({admission, observation, closeout}));
 
   it("reports pending main reconciliation without making it a publication prerequisite", () => {
     const { dir, sha } = sourceFixture();
-    const result = JSON.parse(
-      execFileSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          `
+    const result = evaluate(
+      dir,
+      `
         import { inspectStableCloseoutPreflight } from ${JSON.stringify(moduleUrl)};
         const sha=${JSON.stringify(sha)};
         const rows=inspectStableCloseoutPreflight({repo:'openclaw/openclaw',tag:'v2026.9.5',sourceSha:sha,attempt:'1',runId:'123',runGh(args){
@@ -180,9 +187,6 @@ console.log(JSON.stringify({admission, observation, closeout}));
         }});
         console.log(JSON.stringify(rows));
       `,
-        ],
-        { cwd: dir, encoding: "utf8" },
-      ),
     );
     expect(result).toContainEqual(
       expect.objectContaining({ id: "stable-closeout.main-source", status: "WARN" }),
@@ -197,13 +201,9 @@ console.log(JSON.stringify({admission, observation, closeout}));
         `## 2026.9.5\n\n${"oversized release notes ".repeat(6_000)}`,
       );
       const inspect = () =>
-        JSON.parse(
-          execFileSync(
-            process.execPath,
-            [
-              "--input-type=module",
-              "-e",
-              `
+        evaluate(
+          dir,
+          `
                 import { inspectPublishReleasePage } from ${JSON.stringify(moduleUrl)};
                 try {
                   inspectPublishReleasePage({
@@ -218,9 +218,6 @@ console.log(JSON.stringify({admission, observation, closeout}));
                   console.log(JSON.stringify({ admitted: false, message: error.message }));
                 }
               `,
-            ],
-            { cwd: dir, env: createNestedGitEnv(), encoding: "utf8" },
-          ),
         );
       expect(inspect()).toMatchObject({
         admitted: false,

@@ -56,7 +56,7 @@ export function senderIdentityKey(sender: SenderIdentity | null | undefined): st
     return null;
   }
   if (sender.identity) {
-    return JSON.stringify(sender.identity, Object.keys(sender.identity).toSorted());
+    return sessionParticipantIdentityKey(sender.identity);
   }
   return [
     sender.id ?? "",
@@ -68,31 +68,7 @@ export function senderIdentityKey(sender: SenderIdentity | null | undefined): st
 
 /** Keys a participant identity by its fields, so key order never splits one person. */
 export function sessionParticipantIdentityKey(identity: SessionParticipantIdentity): string {
-  switch (identity.type) {
-    case "profile":
-    case "agent":
-      return JSON.stringify([identity.type, identity.id]);
-    case "remote":
-      return JSON.stringify([
-        identity.type,
-        identity.pluginId,
-        identity.domain,
-        identity.idKind,
-        identity.id,
-      ]);
-    case "observation":
-      return JSON.stringify([
-        identity.type,
-        identity.pluginId,
-        identity.accountId,
-        identity.senderKind,
-        identity.id,
-      ]);
-    case "legacy":
-      return JSON.stringify([identity.type, identity.actorType, identity.source, identity.id]);
-    default:
-      return identity satisfies never;
-  }
+  return JSON.stringify(identity, Object.keys(identity).toSorted());
 }
 
 /**

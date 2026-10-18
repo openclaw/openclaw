@@ -18,6 +18,8 @@ import {
   listWorkspaceMemoryFiles,
   readWorkspaceText,
 } from "../memory-workspace-files.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
+import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -104,61 +106,11 @@ describe("Gateway index over Harness workspace files", () => {
     };
   }
 
-  it("keeps local Memory with a stopped document-only bridge", async () => {
-    await fs.writeFile(path.join(fixture.paths.workspace, "MEMORY.md"), "alpha local Memory.");
-    release = registerAgentWorkspaceAccess(fixture.paths.workspace, {
-      bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-    });
-    release();
-    const cfg = createConfig();
-    const manager = await fixture.getFreshManager(cfg, "cli");
-    await manager.sync({ reason: "document-only", force: true });
-    expect((await manager.search("alpha", { minScore: 0 }))[0]?.snippet).toContain("local Memory");
-    expect((await manager.readFile({ relPath: "MEMORY.md" })).text).toContain("local Memory");
-    expect(
-      (await readAgentMemoryFile({ cfg, agentId: "main", relPath: "MEMORY.md" })).text,
-    ).toContain("local Memory");
-    expect(await listWorkspaceMemoryFiles(fixture.paths.workspace)).toContain(
-      path.join(fixture.paths.workspace, "MEMORY.md"),
-    );
-    expect(
-      await readWorkspaceText(
-        fixture.paths.workspace,
-        path.join(fixture.paths.workspace, "MEMORY.md"),
-      ),
-    ).toContain("local Memory");
-  });
-
   it("still rejects maintenance absent from an opted-in Memory host", async () => {
     await registerHarness();
     expect(() => getMemoryWorkspaceMaintenance(fixture.paths.workspace)).toThrow(
       "Remote Memory maintenance is unavailable",
     );
-  });
-
-  it("ranks remote extra paths by indexed host mtime despite absent or stale Gateway files", async () => {
-    const { harness } = await registerHarness();
-    await fs.mkdir(path.join(harness, "imports"));
-    const old = path.join(harness, "imports/old.md");
-    await fs.writeFile(old, "alpha imported knowledge.");
-    await fs.writeFile(path.join(harness, "imports/new.md"), "alpha imported knowledge.");
-    const oldTime = new Date(Date.now() - 90 * 86_400_000);
-    await fs.utimes(old, oldTime, oldTime);
-    const cfg = createConfig({ extraPaths: ["imports"] });
-    // Native search applies a 30-day half-life; the Gateway has no copy of these files.
-    const manager = await fixture.getFreshManager(cfg, "cli");
-    await manager.sync({ reason: "remote-mtime", force: true });
-    const before = await manager.search("alpha", { minScore: 0, maxResults: 10 });
-    const oldScore = before.find((hit) => hit.path === "imports/old.md")?.score;
-    const newScore = before.find((hit) => hit.path === "imports/new.md")?.score;
-    if (oldScore === undefined || newScore === undefined) {
-      throw new Error("Both host files must be indexed");
-    }
-    expect(oldScore).toBeLessThan(newScore / 4);
-    await fs.mkdir(path.join(fixture.paths.workspace, "imports"));
-    await fs.writeFile(path.join(fixture.paths.workspace, "imports/old.md"), "Gateway decoy.");
-    const after = await manager.search("alpha", { minScore: 0, maxResults: 10 });
-    expect(after.find((hit) => hit.path === "imports/old.md")?.score).toBeCloseTo(oldScore, 5);
   });
 
   it("indexes Harness bytes beside Gateway sessions and never indexes the local decoy", async () => {
@@ -206,74 +158,40 @@ describe("Gateway index over Harness workspace files", () => {
     });
   });
 
-  it.each(["missing", "stopped"] as const)(
-    "keeps session-only search on Gateway when Harness file access is %s",
-    async (state) => {
-      if (state === "missing") {
-        release = registerAgentWorkspaceAccess(fixture.paths.workspace, {
-          bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-        });
-      } else {
-        await registerHarness();
-      }
-      await fs.writeFile(path.join(fixture.paths.memory, "notes.md"), "Gateway decoy.");
-      await fixture.seedSessionTranscript({
-        sessionId: "gateway-only",
-        messages: [
-          {
-            role: "user",
-            content: "alpha Gateway session.",
-            senderIsOwner: true,
-            timestamp: Date.now(),
-          },
-        ],
-      });
-      const cfg = createConfig({
-        sources: ["sessions"],
-        sessionMemory: true,
-      });
-      const manager = await fixture.getFreshManager(cfg, "cli");
-      await manager.sync({ reason: "session-only", force: true });
-      if (state === "stopped") {
-        release?.();
-      }
-      expect((await manager.search("alpha", { minScore: 0 }))[0]?.source).toBe("sessions");
-      if (state === "stopped") {
-        await expect(manager.readFile({ relPath: "memory/notes.md" })).rejects.toMatchObject({
-          code: "WORKSPACE_ACCESS_UNAVAILABLE",
-        });
-      } else {
-        expect((await manager.readFile({ relPath: "memory/notes.md" })).text).toContain(
-          "Gateway decoy",
-        );
-      }
-      expect((await getMemorySearchManager({ cfg, agentId: "main" })).manager).not.toBeNull();
-    },
-  );
-
-  it("rechecks Harness content before publishing and does not adopt a Gateway decoy", async () => {
-    const { harness, files } = await registerHarness();
-    const note = path.join(harness, "memory/notes.md");
-    await fs.writeFile(note, "alpha first remote version.");
-    await fs.writeFile(path.join(fixture.paths.memory, "notes.md"), "alpha Gateway decoy.");
-    const read = files.readForIndexing;
-    let changed = false;
-    files.readForIndexing = async (file) => {
-      const result = await read(file);
-      if (!changed) {
-        changed = true;
-        await fs.writeFile(note, "beta newer remote version.");
-      }
-      return result;
-    };
-    const cfg = createConfig();
+  it("keeps session-only search on Gateway after Harness file access stops", async () => {
+    await registerHarness();
+    await fs.writeFile(path.join(fixture.paths.memory, "notes.md"), "Gateway decoy.");
+    await fixture.seedSessionTranscript({
+      sessionId: "gateway-only",
+      messages: [
+        {
+          role: "user",
+          content: "alpha Gateway session.",
+          senderIsOwner: true,
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    const cfg = createConfig({
+      sources: ["sessions"],
+      sessionMemory: true,
+    });
     const manager = await fixture.getFreshManager(cfg, "cli");
-    await manager.sync({ reason: "changed-source", force: true });
-    await manager.sync({ reason: "retry-current-source" });
-    expect(await manager.search("alpha", { minScore: 0 })).toEqual([]);
-    expect((await manager.search("beta", { minScore: 0 }))[0]?.snippet).toContain(
-      "newer remote version",
-    );
+    await manager.sync({ reason: "session-only", force: true });
+    release?.();
+    expect((await manager.search("alpha", { minScore: 0 }))[0]?.source).toBe("sessions");
+    await expect(manager.readFile({ relPath: "memory/notes.md" })).rejects.toMatchObject({
+      code: "WORKSPACE_ACCESS_UNAVAILABLE",
+    });
+    expect(
+      (
+        await getMemorySearchManager({
+          runInBackgroundContext: runInMemoryTestBackgroundContext,
+          cfg,
+          agentId: "main",
+        })
+      ).manager,
+    ).not.toBeNull();
   });
 
   it("drains host edits arriving during indexing into the next watch generation", async () => {
@@ -331,18 +249,12 @@ describe("Gateway index over Harness workspace files", () => {
       const manager = await fixture.getPersistentManager(createConfig());
       await manager.sync({ reason: "initial", force: true });
       if (outcome === "newer-index") {
-        const db = new DatabaseSync(manager.status().dbPath!);
-        try {
-          const row = db
-            .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
-            .get();
-          const meta = JSON.parse(String(row?.value)) as { chunkingVersion: number };
-          db.prepare(
-            "UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'",
-          ).run(JSON.stringify({ ...meta, chunkingVersion: meta.chunkingVersion + 1 }));
-        } finally {
-          db.close();
+        const database = Reflect.get(manager, "publishedDatabase") as MemoryIndexDatabase;
+        const meta = database.facts.meta;
+        if (!meta || meta.chunkingVersion === undefined) {
+          throw new Error("Expected the published index chunking version");
         }
+        await database.writeMetadata({ ...meta, chunkingVersion: meta.chunkingVersion + 1 });
       } else {
         vi.spyOn(files, "listFiles").mockRejectedValueOnce(new Error("discovery unavailable"));
       }
@@ -435,5 +347,79 @@ describe("Gateway index over Harness workspace files", () => {
       retired.resolve();
       await manager.close();
     }
+  });
+  it("keeps local Memory with a stopped document-only bridge", async () => {
+    await fs.writeFile(path.join(fixture.paths.workspace, "MEMORY.md"), "alpha local Memory.");
+    release = registerAgentWorkspaceAccess(fixture.paths.workspace, {
+      bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+    });
+    release();
+    const cfg = createConfig();
+    const manager = await fixture.getFreshManager(cfg, "cli");
+    await manager.sync({ reason: "document-only", force: true });
+    expect((await manager.search("alpha", { minScore: 0 }))[0]?.snippet).toContain("local Memory");
+    expect((await manager.readFile({ relPath: "MEMORY.md" })).text).toContain("local Memory");
+    expect(
+      (await readAgentMemoryFile({ cfg, agentId: "main", relPath: "MEMORY.md" })).text,
+    ).toContain("local Memory");
+    expect(await listWorkspaceMemoryFiles(fixture.paths.workspace)).toContain(
+      path.join(fixture.paths.workspace, "MEMORY.md"),
+    );
+    expect(
+      await readWorkspaceText(
+        fixture.paths.workspace,
+        path.join(fixture.paths.workspace, "MEMORY.md"),
+      ),
+    ).toContain("local Memory");
+  });
+
+  it("ranks remote extra paths by indexed host mtime despite absent or stale Gateway files", async () => {
+    const { harness } = await registerHarness();
+    await fs.mkdir(path.join(harness, "imports"));
+    const old = path.join(harness, "imports/old.md");
+    await fs.writeFile(old, "alpha imported knowledge.");
+    await fs.writeFile(path.join(harness, "imports/new.md"), "alpha imported knowledge.");
+    const oldTime = new Date(Date.now() - 90 * 86_400_000);
+    await fs.utimes(old, oldTime, oldTime);
+    const cfg = createConfig({ extraPaths: ["imports"] });
+    // Native search applies a 30-day half-life; the Gateway has no copy of these files.
+    const manager = await fixture.getFreshManager(cfg, "cli");
+    await manager.sync({ reason: "remote-mtime", force: true });
+    const before = await manager.search("alpha", { minScore: 0, maxResults: 10 });
+    const oldScore = before.find((hit) => hit.path === "imports/old.md")?.score;
+    const newScore = before.find((hit) => hit.path === "imports/new.md")?.score;
+    if (oldScore === undefined || newScore === undefined) {
+      throw new Error("Both host files must be indexed");
+    }
+    expect(oldScore).toBeLessThan(newScore / 4);
+    await fs.mkdir(path.join(fixture.paths.workspace, "imports"));
+    await fs.writeFile(path.join(fixture.paths.workspace, "imports/old.md"), "Gateway decoy.");
+    const after = await manager.search("alpha", { minScore: 0, maxResults: 10 });
+    expect(after.find((hit) => hit.path === "imports/old.md")?.score).toBeCloseTo(oldScore, 5);
+  });
+
+  it("rechecks Harness content before publishing and does not adopt a Gateway decoy", async () => {
+    const { harness, files } = await registerHarness();
+    const note = path.join(harness, "memory/notes.md");
+    await fs.writeFile(note, "alpha first remote version.");
+    await fs.writeFile(path.join(fixture.paths.memory, "notes.md"), "alpha Gateway decoy.");
+    const read = files.readForIndexing;
+    let changed = false;
+    files.readForIndexing = async (file) => {
+      const result = await read(file);
+      if (!changed) {
+        changed = true;
+        await fs.writeFile(note, "beta newer remote version.");
+      }
+      return result;
+    };
+    const cfg = createConfig();
+    const manager = await fixture.getFreshManager(cfg, "cli");
+    await manager.sync({ reason: "changed-source", force: true });
+    await manager.sync({ reason: "retry-current-source" });
+    expect(await manager.search("alpha", { minScore: 0 })).toEqual([]);
+    expect((await manager.search("beta", { minScore: 0 }))[0]?.snippet).toContain(
+      "newer remote version",
+    );
   });
 });

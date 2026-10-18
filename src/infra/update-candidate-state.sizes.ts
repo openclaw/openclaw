@@ -21,7 +21,15 @@ const inventorySource = `
   process.stdin.on("data", chunk => { input += chunk; });
   process.stdin.on("end", () => {
     const result = [];
-    const progress = path => fs.writeSync(2, ${JSON.stringify(UPDATE_STATE_INSPECTION_PROGRESS_PREFIX)} + JSON.stringify({ phase: "metadata inventory", path }) + "\\n");
+    const progress = path => {
+      try {
+        fs.writeSync(2, ${JSON.stringify(UPDATE_STATE_INSPECTION_PROGRESS_PREFIX)} + JSON.stringify({ phase: "metadata inventory", path }) + "\\n");
+      } catch (error) {
+        // Advisory progress must not abort inventory when its nonblocking pipe is full.
+        // Drop this write without queueing bytes or delaying the metadata reads.
+        if (error.code !== "EAGAIN" && error.code !== "EWOULDBLOCK") throw error;
+      }
+    };
     for (const file of JSON.parse(input).files) {
       let size;
       progress(file);
@@ -45,6 +53,18 @@ const inventorySource = `
 const inventorySchema = z.array(
   z.object({ path: z.string(), sizeBytes: z.string().regex(/^\d+$/).optional() }),
 );
+
+export async function updateStateDatabaseExists(file: string): Promise<boolean> {
+  try {
+    await fs.access(file);
+    return true;
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return false;
+    }
+    throw error;
+  }
+}
 
 /** Maintenance custody permits metadata reads without an isolated inventory process. */
 export async function readUpdateStateDatabaseSizesInProcess(
@@ -123,18 +143,16 @@ export async function readUpdateStateDatabaseSizes(
       options.signal,
     );
   } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
-      throw inspection.failure(error);
+    if (!hasCommandProcessCleanupError(error)) {
+      options.signal?.throwIfAborted();
     }
-    options.signal?.throwIfAborted();
     throw inspection.failure(error);
   }
   options.signal?.throwIfAborted();
   if (result.code !== 0 || result.termination !== "exit" || result.outputLimitExceeded) {
     throw inspection.failure(
-      inspection.stderr() ||
-        (result.outputLimitExceeded ? "Worker output exceeded its capture limit" : ""),
-      result.termination,
+      inspection.stderr(),
+      result.outputLimitExceeded ? "output-limit" : result.termination,
     );
   }
   try {

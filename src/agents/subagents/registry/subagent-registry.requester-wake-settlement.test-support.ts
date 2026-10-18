@@ -1,15 +1,12 @@
 import { expect, it, vi } from "vitest";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
-import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
-import {
-  mutateRequesterSettleWakeBatch,
-  settleRequesterCompletionBatch,
-} from "../completion/subagent-completion-admission.store.js";
+import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { countActiveDescendantRunsFromRuns } from "./subagent-registry-queries.js";
+import { buildScopedSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
+import { createRequesterYieldTool } from "./subagent-registry.requester-wake-receipts.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
 export function registerRequesterWakeSettlementBoundaryTests({
@@ -73,16 +70,10 @@ export function registerRequesterWakeSettlementBoundaryTests({
       expectsCompletionMessage: true,
     };
     await spawnVisibleChild({ ...child, requesterTurnRunId });
-    await createSessionsYieldTool({
-      sessionId: "sess-main",
-      claimYield: async () =>
-        (await registry.markRequesterTurnYielded({
-          requesterSessionKey,
-          requesterAgentId: "main",
-          requesterTurnRunId,
-        })) > 0,
-      onYield: () => {},
-    }).execute("yield-current-result", {});
+    await createRequesterYieldTool(requesterSessionKey, requesterTurnRunId).execute(
+      "yield-current-result",
+      {},
+    );
     const { withLocalSessionPlacementTurnSettlement } =
       await import("../../session-placement-admission.js");
     await withLocalSessionPlacementTurnSettlement(
@@ -115,7 +106,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     expect(registry.getSubagentRunByRunId("old-grandchild")?.cleanupCompletedAt).toBeUndefined();
   });
 
-  it("caps a stale requester batch despite foreign active work in a global session", async () => {
+  it("delivers a stale requester batch despite foreign active work in a global session", async () => {
     vi.setSystemTime(100_000);
     useGlobalSessionScope();
     await registry.addSubagentRunForTests({
@@ -141,7 +132,6 @@ export function registerRequesterWakeSettlementBoundaryTests({
         batchRunIds: ["run-main-batch"],
         requesterYieldBatch: true,
         rearmGeneration: 1,
-        deferralCount: 8,
       },
     });
     await registry.addSubagentRunForTests({
@@ -174,7 +164,8 @@ export function registerRequesterWakeSettlementBoundaryTests({
       execution: { status: "running", startedAt: 3_100 },
     });
 
-    const transitions: Array<{ deferralCount?: number; nextAttemptAt?: number }> = [];
+    const transitions: Array<{ nextAttemptAt?: number }> = [];
+    const waits: Array<number | undefined> = [];
     const completions: Array<{ delivered: boolean; error?: string }> = [];
     const runWake = () => {
       const batch = registry.getSubagentRunByRunId("run-main-batch");
@@ -185,8 +176,9 @@ export function registerRequesterWakeSettlementBoundaryTests({
         isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry: batch,
+        onDescendantsPending: (deadline) => waits.push(deadline),
         transitionBatch: async (entries, state, onPublished) => {
-          const publication = await mutateRequesterSettleWakeBatch({
+          const publication = await mutateRequesterCompletionBatch({
             entries,
             operation: { kind: "transition", state },
             context: captureOpenClawStateWorkerContext(),
@@ -197,18 +189,17 @@ export function registerRequesterWakeSettlementBoundaryTests({
           });
           expect(publication).toEqual({ applied: true, publication: "published" });
           transitions.push({
-            deferralCount: state.deferralCount,
             nextAttemptAt: state.nextAttemptAt,
           });
         },
         completeBatch: async (entries, _rearmGeneration, outcome) => {
           if (!outcome) {
-            throw new Error("Expected the exhausted requester deferral outcome");
+            throw new Error("Expected a requester delivery outcome");
           }
-          const publication = await settleRequesterCompletionBatch({
-            entries: entries.map((subagent) => ({ subagent })),
-            outcome,
-            isCurrent: () => true,
+          const publication = await mutateRequesterCompletionBatch({
+            entries,
+            operation: { kind: "settle", outcome },
+            assertCurrent: () => {},
           });
           expect(publication).toEqual({ applied: true, publication: "published" });
           completions.push({ delivered: outcome.delivered, error: outcome.error });
@@ -217,22 +208,35 @@ export function registerRequesterWakeSettlementBoundaryTests({
     };
 
     await expect(runWake()).resolves.toBe(false);
-    expect(transitions).toEqual([{ deferralCount: 9, nextAttemptAt: 130_000 }]);
+    expect(transitions).toEqual([]);
+    expect(waits).toEqual([302_200]);
     expect(completions).toEqual([]);
 
     await expect(runWake()).resolves.toBe(false);
-    expect(transitions).toHaveLength(1);
+    expect(transitions).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(30_000);
-    await expect(runWake()).resolves.toBe(false);
-    expect(completions).toEqual([
-      {
-        delivered: false,
-        error: "requester settle wake deferred too many times",
-      },
-    ]);
+    await vi.advanceTimersByTimeAsync(202_200);
+    // The spent stale-blocker wait delivers the completed batch instead of
+    // terminalizing it as undelivered.
+    await expect(runWake()).resolves.toBe(true);
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()[0]?.params?.message).toContain(
+      "a descendant result below it was still undelivered",
+    );
+    expect(completions).toEqual([{ delivered: true, error: undefined }]);
     expect(registry.getSubagentRunByRunId("run-main-batch")?.requesterSettleWake).toBeUndefined();
-    expect(countActiveDescendantRunsFromRuns(subagentRuns, requesterSessionKey)).toBe(1);
-    expect(countActiveDescendantRunsFromRuns(subagentRuns, requesterSessionKey, "main")).toBe(0);
+    expect(
+      buildScopedSubagentRunReadIndexFromRuns(
+        subagentRuns,
+        requesterSessionKey,
+      ).countActiveDescendantRuns(requesterSessionKey),
+    ).toBe(1);
+    expect(
+      buildScopedSubagentRunReadIndexFromRuns(
+        subagentRuns,
+        requesterSessionKey,
+        "main",
+      ).countActiveDescendantRuns(requesterSessionKey),
+    ).toBe(0);
   });
 }

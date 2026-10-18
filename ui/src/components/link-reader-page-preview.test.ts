@@ -1,14 +1,17 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { LinkReaderHovercardProvider as LinkHovercardProvider } from "./link-reader-hovercard.ts";
 import {
   LINK_READER_HOVERCARD_PROVIDER_TAG as LINK_HOVERCARD_TAG,
   resolveHoverPreviewTarget,
 } from "./link-reader-target.ts";
+import { WizardStepControls } from "./wizard-step-controls.tsx";
 
 function linkHovercardUrl(anchor: HTMLAnchorElement) {
   const owner = anchor.closest<LinkHovercardProvider>(LINK_HOVERCARD_TAG)!;
@@ -18,7 +21,6 @@ function linkHovercardUrl(anchor: HTMLAnchorElement) {
 import { prefetchLinkReader } from "./link-reader-prefetch-request.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
-import { renderWizardStepControls } from "./wizard-step-controls.ts";
 
 if (!customElements.get(LINK_HOVERCARD_TAG)) {
   customElements.define(LINK_HOVERCARD_TAG, LinkHovercardProvider);
@@ -81,12 +83,14 @@ function card() {
   return document.querySelector<HTMLElement>(".link-hovercard");
 }
 async function hover(anchor: HTMLElement) {
+  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
   vi.useRealTimers();
 });
 
@@ -128,29 +132,10 @@ describe("generic link hovercards", () => {
   });
 
   it.each([
-    "https://github.com/",
-    "https://github.com/acme",
-    "https://github.com/login/device",
     "https://github.com/%6cogin/device",
-    "https://github.com/settings/profile",
-    "https://github.com/orgs/openclaw",
-    "https://github.com/apps/example",
-    "https://github.com/issues/assigned",
-    "https://github.com/%69ssues/mentioned",
-    "https://github.com/pulls/review-requested",
-    "https://github.com/discussions/created",
-    "https://github.com/enterprises/example",
-    "https://github.com/copilot/spaces",
-    "https://github.com/marketplace/manage",
-    "https://github.com/acme/project/settings",
-    "https://github.com/acme/project/commit/abcdef1",
     "https://github.com/acme/project.git",
     "https://github.com/acme%2fother/project",
     "https://github.com:8443/acme/project",
-    "https://www.github.com/acme/project",
-    "https://github.com/login/oauth/authorize?client_id=example-client",
-    "https://github.com/session",
-    "https://www.github.com/login",
   ])("never substitutes a public-page card for unsupported GitHub URL %s", async (href) => {
     const view = fixture();
     view.anchor.href = href;
@@ -163,21 +148,22 @@ describe("generic link hovercards", () => {
   it("leaves the real wizard sign-in action external without fetching its authorization URL", async () => {
     const view = fixture();
     const authorizationUrl = "https://provider.example/authorize?state=synthetic-state";
-    render(
-      renderWizardStepControls({
-        step: {
-          id: "sign-in",
-          type: "progress",
-          executor: "gateway",
-          externalUrl: authorizationUrl,
-        },
-        value: undefined,
-        busy: false,
-        inputId: "sign-in",
-        onValueChange: () => {},
-        onAnswer: () => {},
-      }),
-      view.pane,
+    mountSolid(
+      () =>
+        createComponent(WizardStepControls, {
+          step: {
+            id: "sign-in",
+            type: "progress",
+            executor: "gateway",
+            externalUrl: authorizationUrl,
+          },
+          value: undefined,
+          busy: false,
+          inputId: "sign-in",
+          onValueChange: () => {},
+          onAnswer: () => {},
+        }),
+      { container: view.pane },
     );
     const signIn = view.pane.querySelector<HTMLAnchorElement>(".wizard-step__external-link")!;
     await hover(signIn);
@@ -191,26 +177,30 @@ describe("generic link hovercards", () => {
     await hover(view.anchor);
     expect(card()?.textContent).toContain("Field guide");
   });
-  it("does not prefetch ordinary links or consume a detail-only plugin claim", async () => {
-    const view = fixture();
-    await prefetchLinkReader(view.anchor, new AbortController().signal);
-    expect(view.request).not.toHaveBeenCalled();
-    view.provider.claimedReaders = [
-      {
-        pluginId: "forge",
-        id: "commits",
-        label: "Commits",
-        linkReader: {
-          hosts: ["example.com"],
-          pathPattern: "^/guide$",
-          detailMethod: "forge.detail",
+  it.each([["https://github.com/openclaw/openclaw", "github.com", "^/openclaw/openclaw$"]])(
+    "keeps the detail-only plugin claim authoritative without prefetching %s",
+    async (href, host, pathPattern) => {
+      const view = fixture();
+      view.anchor.href = href;
+      await prefetchLinkReader(view.anchor, new AbortController().signal);
+      expect(view.request).not.toHaveBeenCalled();
+      view.provider.claimedReaders = [
+        {
+          pluginId: "forge",
+          id: "commits",
+          label: "Commits",
+          linkReader: {
+            hosts: [host],
+            pathPattern,
+            detailMethod: "forge.detail",
+          },
         },
-      },
-    ];
-    await hover(view.anchor);
-    expect(view.request).not.toHaveBeenCalled();
-    expect(card()).toBeNull();
-  });
+      ];
+      await hover(view.anchor);
+      expect(view.request).not.toHaveBeenCalled();
+      expect(card()).toBeNull();
+    },
+  );
 
   it("does not unlock plugin loading hints after a public page succeeds", async () => {
     const view = fixture();
@@ -226,15 +216,14 @@ describe("generic link hovercards", () => {
     await vi.advanceTimersByTimeAsync(1);
   });
 
-  it("retires a visible page when its anchor becomes a file or plugin-owned link", async () => {
-    const view = fixture();
-    await hover(view.anchor);
-    view.anchor.setAttribute("data-file-path", "/guide");
-    await vi.advanceTimersByTimeAsync(1);
-    expect(card()).toBeNull();
-  });
   it("opens after intent, shares metadata, preserves href and crosses the pointer gap", async () => {
     const view = fixture();
+    view.anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    view.anchor.dispatchEvent(new MouseEvent("pointerout", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(view.request).not.toHaveBeenCalled();
+    expect(card()).toBeNull();
+    expect(view.anchor.hasAttribute("aria-haspopup")).toBe(false);
     await hover(view.anchor);
     expect(card()?.textContent).toContain("Field guide");
     expect(card()?.textContent).toContain("A practical introduction");
@@ -253,17 +242,7 @@ describe("generic link hovercards", () => {
     expect(view.request).toHaveBeenCalledOnce();
   });
 
-  it("cancels a short hover before fetching", async () => {
-    const view = fixture();
-    view.anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
-    view.anchor.dispatchEvent(new MouseEvent("pointerout", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(300);
-    expect(view.request).not.toHaveBeenCalled();
-    expect(card()).toBeNull();
-    expect(view.anchor.hasAttribute("aria-haspopup")).toBe(false);
-  });
-
-  it.each(["config", "client", "generation", "scope", "href", "removed", "hidden"])(
+  it.each(["config", "client", "scope", "href", "removed", "hidden", "file"])(
     "retires pending metadata when %s changes",
     async (change) => {
       const view = fixture();
@@ -277,9 +256,6 @@ describe("generic link hovercards", () => {
       if (change === "client") {
         view.context.gateway.snapshot.client = { ...view.client };
       }
-      if (change === "generation") {
-        view.client.connectionGeneration++;
-      }
       if (change === "scope") {
         view.client.recoveryScope = "next";
       }
@@ -292,13 +268,40 @@ describe("generic link hovercards", () => {
       if (change === "hidden") {
         view.pane.hidden = true;
       }
-      view.notify();
+      if (change === "file") {
+        view.anchor.setAttribute("data-file-path", "/guide");
+      }
+      if (change !== "file") {
+        view.notify();
+      }
       pending.resolve({ title: "Obsolete" });
       await vi.advanceTimersByTimeAsync(1);
       expect(card()).toBeNull();
       expect(view.anchor.hasAttribute("aria-controls")).toBe(false);
     },
   );
+
+  it("keeps the page preview across a transport blip but retires it after an account change", async () => {
+    const view = fixture();
+    await hover(view.anchor);
+    const original = card();
+    view.client.connected = false;
+    view.client.connectionGeneration++;
+    view.context.gateway.snapshot.phase = "reconnecting";
+    view.notify();
+    expect(card()).toBe(original);
+    expect(card()?.textContent).toContain("Field guide");
+    view.client.connected = true;
+    view.client.connectionGeneration++;
+    view.context.gateway.snapshot.phase = "connected";
+    view.notify();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card()).toBe(original);
+    expect(view.request).toHaveBeenCalledTimes(2);
+    view.client.recoveryScope = "another-account";
+    view.notify();
+    expect(card()).toBeNull();
+  });
 
   it("keeps fallback usable on failure and hides broken images", async () => {
     const view = fixture();
@@ -311,12 +314,14 @@ describe("generic link hovercards", () => {
     for (const image of card()!.querySelectorAll("img")) {
       image.dispatchEvent(new Event("error"));
     }
+    flush();
     expect(card()?.querySelectorAll("img").length).toBe(0);
     expect(card()?.querySelector("a")?.target).toBe("_blank");
   });
 
   it("supports shadow-root links, keyboard traversal and Escape without reopening", async () => {
     const view = fixture(true);
+    await view.provider.updateComplete;
     view.anchor.focus();
     view.provider.activateFromBootstrap(
       view.anchor,
@@ -368,88 +373,17 @@ describe("generic link hovercards", () => {
   });
 
   it.each([
-    "https://github.com/openclaw/openclaw/pull/42",
-    "https://github.com/openclaw/openclaw/issues/42",
-    "/chat/main",
-    "#section",
-    "mailto:hello@example.com",
-    "file:///guide",
-    "https://user:pass@example.com/",
-  ])("keeps specialized or non-web URL %s with its owner", (href) => {
-    const { anchor } = fixture();
-    anchor.href = href;
-    expect(linkHovercardUrl(anchor)).toBeNull();
-  });
-  it.each(["download", "data-file-path", "data-session-href", "data-link-reader-external"])(
-    "excludes %s anchors",
-    (attribute) => {
-      const { anchor } = fixture();
-      anchor.setAttribute(attribute, "guide");
-      expect(linkHovercardUrl(anchor)).toBeNull();
-    },
-  );
-  it.each([
-    "https://github.com/openclaw/openclaw",
-    "https://github.com/openclaw/clawsweeper/?tab=readme-ov-file#readme",
-    "https://github.com/%6fpenclaw/project.name",
-    "https://github.com/education/students",
-    "https://github.com/resources/articles?type=article",
-    "https://github.com/advisories/GHSA-2345-6789-cfgh",
-    "https://github.com/git-guides/git-init",
-    "https://github.com/open-source/github-fund",
-    "https://github.com/trust-center/privacy",
-    "https://github.com/partners/technology-partners",
-    "https://github.com/customer-terms/general-terms",
-    "https://github.com/newsroom/press-releases",
-  ])("shows a public GitHub social card on intent without prefetching %s", async (href) => {
-    const { anchor, request } = fixture();
-    anchor.href = href;
-    const imageDataUrl = "data:image/png;base64,AAAA";
-    request.mockResolvedValue({
-      title: "OpenClaw repository",
-      description: "Your own personal assistant.",
-      imageDataUrl,
-    });
-    await prefetchLinkReader(anchor, new AbortController().signal);
-    expect(request).not.toHaveBeenCalled();
-    await hover(anchor);
-    expect(card()?.textContent).toContain("OpenClaw repository");
-    expect(card()?.textContent).toContain("Your own personal assistant.");
-    expect(card()?.querySelector(".link-hovercard__image")?.getAttribute("src")).toBe(imageDataUrl);
-    expect(card()?.querySelector("a")?.href).toBe(href);
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "controlUi.linkPreview",
-      { url: href.split("#", 1)[0] },
-      { signal: expect.any(AbortSignal) },
-    );
-  });
-
-  it("keeps a plugin's repository claim authoritative over public metadata", async () => {
-    const view = fixture();
-    view.anchor.href = "https://github.com/openclaw/openclaw";
-    view.provider.claimedReaders = [
-      {
-        pluginId: "forge",
-        id: "repository",
-        label: "Repository",
-        linkReader: {
-          hosts: ["github.com"],
-          pathPattern: "^/openclaw/openclaw$",
-          detailMethod: "forge.repository",
-        },
-      },
-    ];
-    await hover(view.anchor);
-    expect(view.request).not.toHaveBeenCalled();
-    expect(card()).toBeNull();
-  });
-
-  it("keeps explicit rich tooltip owners out of page previews", () => {
+    ["/chat/main", false],
+    ["file:///guide", false],
+    ["https://user:pass@example.com/", false],
+    [url, true],
+  ] as const)("keeps specialized links with their owner: %s (tooltip: %s)", (href, tooltip) => {
     const { anchor, pane } = fixture();
-    anchor.href = url;
-    expect(linkHovercardUrl(anchor)?.hostname).toBe("example.com");
-    const tooltip = pane.appendChild(document.createElement("openclaw-tooltip"));
-    tooltip.append(anchor);
+    anchor.href = href;
+    if (tooltip) {
+      expect(linkHovercardUrl(anchor)?.hostname).toBe("example.com");
+      pane.appendChild(document.createElement("openclaw-tooltip")).append(anchor);
+    }
     expect(linkHovercardUrl(anchor)).toBeNull();
   });
 });

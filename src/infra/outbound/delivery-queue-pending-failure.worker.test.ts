@@ -52,24 +52,33 @@ describe("pending delivery failure worker", () => {
     return { stateDir, artifact, id, entry };
   }
 
-  it("settles pending custody and releases its media without host data SQL", async () => {
-    const { stateDir, artifact, id, entry } = await fixture();
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const sql = observeHostDataSql();
-    try {
-      openOpenClawStateDatabase({ env }).db.prepare("SELECT 1").get();
-      expect(sql.calls.some((call) => call.mock.calls.length > 0)).toBe(true);
-      sql.calls.forEach((call) => call.mockClear());
-      await expect(failPendingDelivery({ id, entry }, stateDir)).resolves.toEqual({
-        status: "failed",
-      });
-      expect(sql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-    } finally {
-      sql.restore();
-    }
-    expect(await loadPendingDelivery(id, stateDir)).toBeNull();
-    await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+  it.each([false, true])(
+    "settles pending custody without host data SQL (caller cleanup: %s)",
+    async (retainSpoolArtifacts) => {
+      const { stateDir, artifact, id, entry } = await fixture();
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const sql = observeHostDataSql();
+      try {
+        openOpenClawStateDatabase({ env }).db.prepare("SELECT 1").get();
+        expect(sql.calls.some((call) => call.mock.calls.length > 0)).toBe(true);
+        sql.calls.forEach((call) => call.mockClear());
+        await expect(
+          failPendingDelivery({ id, entry, retainSpoolArtifacts }, stateDir),
+        ).resolves.toEqual({
+          status: "failed",
+        });
+        expect(sql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      } finally {
+        sql.restore();
+      }
+      expect(await loadPendingDelivery(id, stateDir)).toBeNull();
+      if (retainSpoolArtifacts) {
+        expect(await fs.readFile(artifact, "utf8")).toBe("synthetic media");
+      } else {
+        await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    },
+  );
 
   it("captures entry, cleanup preference, media, and selected state before admission", async () => {
     const { stateDir, artifact, id, entry } = await fixture();
@@ -128,15 +137,6 @@ describe("pending delivery failure worker", () => {
       ),
     ).rejects.toThrow("Delivery queue entry id mismatch");
     await expect(fs.stat(unopened)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("retains media after a confirmed failure when its caller owns cleanup", async () => {
-    const { stateDir, artifact, id, entry } = await fixture();
-    await expect(
-      failPendingDelivery({ id, entry, retainSpoolArtifacts: true }, stateDir),
-    ).resolves.toEqual({ status: "failed" });
-    expect(await loadPendingDelivery(id, stateDir)).toBeNull();
-    expect(await fs.readFile(artifact, "utf8")).toBe("synthetic media");
   });
 
   it("does not replay or unlink when the committed worker reply is lost", async () => {

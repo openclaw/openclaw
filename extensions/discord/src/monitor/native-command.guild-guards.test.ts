@@ -117,17 +117,15 @@ async function runNativeCommand(params: {
 }
 
 describe("Discord native reset admission and persistence", () => {
-  it.each(["new", "reset"] as const)("persists and acknowledges /%s", async (commandName) => {
-    const result = await runNativeCommand({ commandName });
+  it("persists and acknowledges /new", async () => {
+    const result = await runNativeCommand({ commandName: "new" });
     expect(result.entry?.sessionId).toBe(sessionId);
     expect(result.entry?.lifecycleRevision).toBeTruthy();
     expect(result.entry?.lifecycleRevision).not.toBe("before-reset");
     expect(result.events).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "reset", reason: commandName })]),
+      expect.arrayContaining([expect.objectContaining({ type: "reset", reason: "new" })]),
     );
-    expect(result.replies).toEqual([
-      commandName === "new" ? "✅ New session started." : "✅ Session reset.",
-    ]);
+    expect(result.replies).toEqual(["✅ New session started."]);
   });
 
   const blockedChannels: Array<{

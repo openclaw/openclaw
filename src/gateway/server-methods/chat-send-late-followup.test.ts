@@ -2,15 +2,31 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createChatSendLateFollowupDisposition } from "./chat-send-late-followup.js";
 
+function createFixture(originatingChannel = "webchat") {
+  const info = vi.fn();
+  const deliver = vi.fn(async () => ({ kind: "delivered" as const }));
+  const disposition = createChatSendLateFollowupDisposition({
+    runId: "original-run",
+    originatingChannel,
+    logGateway: { info } as never,
+    deliver,
+  });
+  return { info, deliver, disposition };
+}
+
+function batch(runId: string, originatingChannel = "webchat") {
+  return {
+    kind: "queued-followup" as const,
+    completion: { kind: "completed" as const },
+    runId,
+    originatingChannel,
+    payloads: [{ text: runId }],
+  };
+}
+
 describe("chat.send late queued follow-up disposition", () => {
   it("keeps progress open and includes its payloads in terminal delivery", async () => {
-    const deliver = vi.fn(async () => ({ kind: "delivered" as const }));
-    const disposition = createChatSendLateFollowupDisposition({
-      runId: "original-run",
-      originatingChannel: "webchat",
-      logGateway: { info: vi.fn() } as never,
-      deliver,
-    });
+    const { deliver, disposition } = createFixture();
     expect(disposition.deliver.ownsCompletion("webchat")).toBe(false);
     disposition.recordQueued();
     expect(disposition.deliver.ownsCompletion("discord")).toBe(false);
@@ -32,6 +48,8 @@ describe("chat.send late queued follow-up disposition", () => {
     expect(deliver).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
+        runId: "followup-run",
+        clientRunId: "original-run",
         completion: { kind: "completed" },
         payloads: [...progress.payloads, { text: "done" }],
       }),
@@ -43,22 +61,9 @@ describe("chat.send late queued follow-up disposition", () => {
     ["discord", "discord", "non-webchat-origin"],
     ["webchat", "discord", "origin-mismatch"],
   ])("records an explicit drop for %s -> %s", async (originatingChannel, batchChannel, reason) => {
-    const info = vi.fn();
-    const deliver = vi.fn(async () => ({ kind: "delivered" as const }));
-    const disposition = createChatSendLateFollowupDisposition({
-      runId: "original-run",
-      originatingChannel,
-      logGateway: { info } as never,
-      deliver,
-    });
+    const { info, deliver, disposition } = createFixture(originatingChannel);
     disposition.recordQueued();
-    await disposition.deliver({
-      kind: "queued-followup",
-      completion: { kind: "completed" },
-      runId: "followup-run",
-      originatingChannel: batchChannel,
-      payloads: [{ text: "must not leak" }],
-    });
+    await disposition.deliver(batch("must not leak", batchChannel));
     expect(deliver).not.toHaveBeenCalled();
     expect(info).toHaveBeenCalledWith(
       "webchat late reply disposition",
@@ -67,56 +72,25 @@ describe("chat.send late queued follow-up disposition", () => {
   });
 
   it("gives a pending source's only delivery to the retry it hands off to", async () => {
-    const deliver = vi.fn(async () => ({ kind: "delivered" as const }));
-    const source = createChatSendLateFollowupDisposition({
-      runId: "stalled-run",
-      originatingChannel: "webchat",
-      logGateway: { info: vi.fn() } as never,
-      deliver,
-    });
+    const { deliver, disposition: source } = createFixture();
     const retry = source.deliver.createSourceRetry();
-    const batch = (runId: string) => ({
-      kind: "queued-followup" as const,
-      completion: { kind: "completed" as const },
-      runId,
-      originatingChannel: "webchat",
-      payloads: [{ text: runId }],
-    });
     // A late deferral of the original source cannot reopen its delivery.
     source.recordQueued();
     await source.deliver(batch("source-run"));
     await retry(batch("recovery-run"));
     expect(deliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ runId: "recovery-run" }),
+      expect.objectContaining({ runId: "recovery-run", clientRunId: "recovery-run" }),
     );
     expect(() => source.deliver.createSourceRetry()).toThrow();
   });
 
   it("claims delivery before awaiting and records a concurrent duplicate", async () => {
-    const info = vi.fn();
+    const { info, deliver, disposition } = createFixture();
     const delivery = createDeferred<{ kind: "delivered" }>();
-    const deliver = vi.fn(() => delivery.promise);
-    const disposition = createChatSendLateFollowupDisposition({
-      runId: "original-run",
-      originatingChannel: "webchat",
-      logGateway: { info } as never,
-      deliver,
-    });
+    deliver.mockImplementation(() => delivery.promise);
     disposition.recordQueued();
-    const first = disposition.deliver({
-      kind: "queued-followup",
-      completion: { kind: "completed" },
-      runId: "first-followup",
-      originatingChannel: "webchat",
-      payloads: [{ text: "first" }],
-    });
-    await disposition.deliver({
-      kind: "queued-followup",
-      completion: { kind: "completed" },
-      runId: "duplicate-followup",
-      originatingChannel: "webchat",
-      payloads: [{ text: "duplicate" }],
-    });
+    const first = disposition.deliver(batch("first-followup"));
+    await disposition.deliver(batch("duplicate-followup"));
     expect(deliver).toHaveBeenCalledOnce();
     expect(info).toHaveBeenCalledWith(
       "webchat late reply disposition",
@@ -127,26 +101,11 @@ describe("chat.send late queued follow-up disposition", () => {
   });
 
   it("settles a failed delivery and rejects every subsequent attempt", async () => {
-    const info = vi.fn();
-    const deliver = vi.fn(async () => {
-      throw new Error("broadcast failed");
-    });
-    const disposition = createChatSendLateFollowupDisposition({
-      runId: "original-run",
-      originatingChannel: "webchat",
-      logGateway: { info } as never,
-      deliver,
-    });
+    const { info, deliver, disposition } = createFixture();
+    deliver.mockRejectedValue(new Error("broadcast failed"));
     disposition.recordQueued();
-    const batch = {
-      kind: "queued-followup" as const,
-      completion: { kind: "completed" as const },
-      runId: "failed-followup",
-      originatingChannel: "webchat",
-      payloads: [{ text: "reply" }],
-    };
-    await expect(disposition.deliver(batch)).rejects.toThrow("broadcast failed");
-    await disposition.deliver({ ...batch, runId: "retry" });
+    await expect(disposition.deliver(batch("failed-followup"))).rejects.toThrow("broadcast failed");
+    await disposition.deliver(batch("retry"));
     expect(info).toHaveBeenCalledWith(
       "webchat late reply disposition",
       expect.objectContaining({ reason: "delivery-failed" }),

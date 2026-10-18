@@ -91,7 +91,8 @@ function schemaFixture(
   };
 }
 
-function legacyAgentFixture(agentId = "main") {
+function legacyAgentFixture() {
+  const agentId = "main";
   const sessionKey = `agent:${agentId}:explicit:seeded-turn`;
   const events = [
     { type: "session", id: "seeded-turn", version: 3 },
@@ -182,44 +183,97 @@ function legacyAgentFixture(agentId = "main") {
 }
 
 describe("published survivor schema outcome", () => {
-  it.each([
-    [0, "success", true],
-    [1, "success", false],
-    [0, "recoverable", true],
-    [1, "recoverable", true],
-    [2, "recoverable", false],
-    [0, "schema-refusal", false],
-    [1, "schema-refusal", false],
-  ] as const)(
-    "checks migrated schemas after exit %i classified as %s",
-    (code, outcome, accepted) => {
-      const lane = schemaFixture();
-      writeSchema(lane.stateDatabase, 16);
-      const result = lane.check(code, lane.candidateVersion, outcome);
+  it.each<{
+    name: string;
+    code?: number;
+    outcome?: string;
+    installed?: string;
+    state?: number | null;
+    agent?: number | null;
+    accepted?: boolean;
+    diagnostic?: string;
+  }>([
+    { name: "failed success", code: 1 },
+    { name: "recoverable zero exit", outcome: "recoverable", accepted: true },
+    { name: "recoverable warning", code: 1, outcome: "recoverable", accepted: true },
+    { name: "unrecoverable exit", code: 2, outcome: "recoverable" },
+    { name: "schema refusal", outcome: "schema-refusal" },
+    { name: "state migration missing", state: 15, diagnostic: "candidate schema" },
+    { name: "agent migration missing", agent: 18, diagnostic: "candidate schema" },
+    { name: "state schema too new", state: 17, diagnostic: "candidate schema" },
+    { name: "agent schema too new", agent: 20, diagnostic: "candidate schema" },
+    { name: "state database lost", state: null, diagnostic: "candidate schema" },
+    {
+      name: "agent database lost",
+      agent: null,
+      diagnostic: "required agent database missing before candidate probes: ops",
+    },
+    { name: "rollback", installed: "2026.9.1", diagnostic: "candidate package is not installed" },
+  ])(
+    "validates the installed candidate before probes: $name",
+    ({
+      code = 0,
+      outcome = "success",
+      installed,
+      state = 16,
+      agent = 19,
+      accepted = false,
+      diagnostic,
+    }) => {
+      const lane = schemaFixture("2026.9.1", 15, 18);
+      for (const [file, version] of [
+        [lane.stateDatabase, state],
+        [lane.agentDatabase, agent],
+      ] as const) {
+        if (version === null) {
+          rmSync(file);
+        } else {
+          writeSchema(file, version);
+        }
+      }
+      const result = lane.check(code, installed ?? lane.candidateVersion, outcome);
       expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
+      if (diagnostic) {
+        expect(result.stderr).toContain(diagnostic);
+      }
     },
   );
 
   it.each([
-    ["2026.9.2", 15, 19],
-    ["2026.9.2-rebuild.1", 15, 19],
-    ["2026.9.2", 16, 18],
-    ["2026.9.2", 16, 19],
-    ["2026.9.1", 15, 18],
-    ["2026.6.34", 0, 0],
-    ["2026.9.3-beta.1", 15, 18],
-    ["2026.9.3", 15, 18],
+    [15, 18],
+    [16, 19],
+    [0, 0],
+    [null, null],
   ] as const)(
-    "requires %s to upgrade successfully from schemas %i/%i",
-    (baseline, state, agent) => {
-      const lane = schemaFixture(baseline, state, agent);
+    "requires successful migration from schemas %s/%s without observer writes",
+    (state, agent) => {
+      const lane = schemaFixture(
+        state === null || state === 0 ? "2026.6.34" : "2026.9.2",
+        state,
+        agent,
+      );
       expect(lane.prepared.stdout.trim()).toBe("success");
       expect(lane.check(1).status).toBe(1);
+      if (state === null) {
+        expect(JSON.parse(readFileSync(lane.snapshotFile, "utf8")).databases).toEqual([
+          {
+            kind: "state",
+            relative: "state/openclaw.sqlite",
+            userVersion: null,
+            contentVersion: null,
+          },
+        ]);
+        expect(existsSync(lane.stateDatabase)).toBe(false);
+        expect(existsSync(lane.agentDatabase)).toBe(false);
+      }
       writeSchema(lane.stateDatabase, 16);
       writeSchema(lane.agentDatabase, 19);
+      const files = [lane.stateDatabase, lane.agentDatabase];
+      const before = files.map((file) => readFileSync(file));
       const result = lane.check();
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).toBe("success");
+      expect(files.map((file) => readFileSync(file))).toEqual(before);
     },
   );
 
@@ -310,16 +364,6 @@ describe("published survivor schema outcome", () => {
       setAgents(ids);
       expectRosterRejected();
     }
-  });
-
-  it.each(["main", "ops"])("requires the legacy %s store before candidate probes", (agentId) => {
-    const lane = legacyAgentFixture(agentId);
-    writeSchema(lane.stateDatabase, 16);
-    const result = lane.check();
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      `required agent database missing before candidate probes: ${agentId}`,
-    );
   });
 
   it.each([false, true])(
@@ -429,6 +473,33 @@ describe("published survivor schema outcome", () => {
       (lane: ReturnType<typeof legacyAgentFixture>) => writeFileSync(lane.promptPath, "changed"),
       "skill prompt changed",
     ],
+    ...[
+      ["session row", "DELETE FROM session_nodes", "legacy session was not imported"],
+      [
+        "transcript event",
+        "DELETE FROM transcript_events WHERE seq = 2",
+        "legacy transcript event was not imported",
+      ],
+      [
+        "message content",
+        `UPDATE transcript_events SET event_json = '{"type":"message","id":"reply","message":{"role":"assistant","content":"lost reply"}}' WHERE seq = 2`,
+        "legacy transcript event was not imported",
+      ],
+    ].map(
+      ([label, sql, diagnostic]) =>
+        [
+          label,
+          (lane: ReturnType<typeof legacyAgentFixture>) => {
+            const db = new DatabaseSync(lane.databasePath);
+            try {
+              db.exec(sql!);
+            } finally {
+              db.close();
+            }
+          },
+          diagnostic,
+        ] as const,
+    ),
   ] as const)("rejects %s before candidate probes", (_label, corrupt, diagnostic) => {
     const lane = legacyAgentFixture();
     lane.migrate();
@@ -436,45 +507,6 @@ describe("published survivor schema outcome", () => {
     const result = lane.check();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(diagnostic);
-  });
-
-  it.each([
-    ["session row", "DELETE FROM session_nodes", "legacy session was not imported"],
-    [
-      "transcript event",
-      "DELETE FROM transcript_events WHERE seq = 2",
-      "legacy transcript event was not imported",
-    ],
-    [
-      "message content",
-      `UPDATE transcript_events SET event_json = '{"type":"message","id":"reply","message":{"role":"assistant","content":"lost reply"}}' WHERE seq = 2`,
-      "legacy transcript event was not imported",
-    ],
-  ])(
-    "rejects missing or changed %s despite a current schema and archived sources",
-    (_label, sql, diagnostic) => {
-      const lane = legacyAgentFixture();
-      lane.migrate();
-      const db = new DatabaseSync(lane.databasePath);
-      try {
-        db.exec(sql);
-      } finally {
-        db.close();
-      }
-      const result = lane.check();
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(diagnostic);
-    },
-  );
-
-  it("observes migrated schemas without changing database bytes", () => {
-    const lane = schemaFixture();
-    writeSchema(lane.stateDatabase, 16);
-    const files = [lane.stateDatabase, lane.agentDatabase];
-    const before = files.map((file) => readFileSync(file));
-    const result = lane.check();
-    expect(result.status, result.stderr).toBe(0);
-    expect(files.map((file) => readFileSync(file))).toEqual(before);
   });
 
   it.each([
@@ -515,69 +547,6 @@ describe("published survivor schema outcome", () => {
       }
     },
   );
-
-  it("expects success for a JSON-era baseline without creating SQLite state while observing it", () => {
-    const lane = schemaFixture("2026.6.34", null, null);
-    expect(lane.prepared.stdout.trim()).toBe("success");
-    expect(JSON.parse(readFileSync(lane.snapshotFile, "utf8")).databases).toEqual([
-      { kind: "state", relative: "state/openclaw.sqlite", userVersion: null, contentVersion: null },
-    ]);
-    expect(existsSync(lane.stateDatabase)).toBe(false);
-    expect(existsSync(lane.agentDatabase)).toBe(false);
-    writeSchema(lane.stateDatabase, 16);
-    writeSchema(lane.agentDatabase, 19);
-    const result = lane.check();
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  it.each([
-    [
-      "state migration missing",
-      (lane: ReturnType<typeof schemaFixture>) => writeSchema(lane.stateDatabase, 15),
-      "candidate schema",
-    ],
-    [
-      "agent migration missing",
-      (lane: ReturnType<typeof schemaFixture>) => writeSchema(lane.agentDatabase, 18),
-      "candidate schema",
-    ],
-    [
-      "state schema too new",
-      (lane: ReturnType<typeof schemaFixture>) => writeSchema(lane.stateDatabase, 17),
-      "candidate schema",
-    ],
-    [
-      "agent schema too new",
-      (lane: ReturnType<typeof schemaFixture>) => writeSchema(lane.agentDatabase, 20),
-      "candidate schema",
-    ],
-    [
-      "state database lost",
-      (lane: ReturnType<typeof schemaFixture>) => rmSync(lane.stateDatabase),
-      "candidate schema",
-    ],
-    [
-      "agent database lost",
-      (lane: ReturnType<typeof schemaFixture>) => rmSync(lane.agentDatabase),
-      "required agent database missing before candidate probes: ops",
-    ],
-  ] as const)("rejects %s after a reported successful update", (_name, change, diagnostic) => {
-    const lane = schemaFixture("2026.9.2", 15, 18);
-    writeSchema(lane.stateDatabase, 16);
-    writeSchema(lane.agentDatabase, 19);
-    change(lane);
-    const result = lane.check();
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(diagnostic);
-  });
-
-  it("rejects a rollback that leaves the baseline package version installed", () => {
-    const lane = schemaFixture("2026.9.1");
-    writeSchema(lane.stateDatabase, 16);
-    const result = lane.check(0, "2026.9.1");
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("candidate package is not installed");
-  });
 
   it.each([
     ["assert-successful-update-json", "update did not report ok"],

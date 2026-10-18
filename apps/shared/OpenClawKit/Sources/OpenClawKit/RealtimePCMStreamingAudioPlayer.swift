@@ -2,16 +2,9 @@
 import AVFAudio
 import Foundation
 
-/// Synchronous registration lets the relay retire a generation before any delayed task runs.
-protocol RealtimePCMPlayback: Sendable {
-    func beginPlayback(stream: AsyncThrowingStream<Data, Error>, sampleRate: Double)
-        -> Task<StreamingPlaybackResult, Never>
-    func stop() -> Double?
-}
-
 /// The lock guards playback/generation state; backend closures run on backendQueue without it.
 /// Completion callbacks are queued, including callbacks invoked synchronously by node.stop.
-public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying, RealtimePCMPlayback,
+public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying,
     @unchecked Sendable
 {
     private let lock = NSLock()
@@ -42,17 +35,34 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
     private var inputFinished = false
 
     public convenience init() {
-        let engine = AVAudioEngine()
+        self.init(engine: AVAudioEngine(), ownsEngine: true)
+    }
+
+    /// Plays through an engine whose I/O another owner runs, such as a voice-processing capture
+    /// engine: echo cancellation only removes output rendered by its own I/O unit. That owner
+    /// starts and restarts the engine; playback only connects and stops its own node.
+    public convenience init(sharedEngine engine: AVAudioEngine) {
+        self.init(engine: engine, ownsEngine: false)
+    }
+
+    private convenience init(engine: AVAudioEngine, ownsEngine: Bool) {
         let node = AVAudioPlayerNode()
         engine.attach(node)
+        // Relay audio arrives as PCM16, but connecting an Int16 player node raises on iOS (on owned
+        // and shared voice-processing engines alike), so those render Float32 and convert frames.
+        #if os(iOS)
+        let commonFormat = AVAudioCommonFormat.pcmFormatFloat32
+        #else
+        let commonFormat: AVAudioCommonFormat = ownsEngine ? .pcmFormatInt16 : .pcmFormatFloat32
+        #endif
         var format: AVAudioFormat?
         self.init(
             preparePlayback: { sampleRate in
                 node.stop()
-                engine.stop()
+                if ownsEngine { engine.stop() }
                 engine.disconnectNodeOutput(node)
                 guard let nextFormat = AVAudioFormat(
-                    commonFormat: .pcmFormatInt16,
+                    commonFormat: commonFormat,
                     sampleRate: sampleRate,
                     channels: 1,
                     interleaved: false)
@@ -61,13 +71,18 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
                 }
                 format = nextFormat
                 engine.connect(node, to: engine.mainMixerNode, format: nextFormat)
-                engine.prepare()
-                try engine.start()
+                // A shared engine may be mid-reconfiguration here; its owner restarts it and then
+                // resumes this node through resumePlaybackAfterEngineRestart().
+                if ownsEngine {
+                    engine.prepare()
+                    try engine.start()
+                }
                 // Preserve the device-startup cushion before the first audible frames.
                 let padFrames = AVAudioFrameCount(sampleRate * 0.3)
                 if let pad = AVAudioPCMBuffer(pcmFormat: nextFormat, frameCapacity: padFrames) {
                     pad.frameLength = padFrames
                     pad.int16ChannelData?[0].update(repeating: 0, count: Int(padFrames))
+                    pad.floatChannelData?[0].update(repeating: 0, count: Int(padFrames))
                     node.scheduleBuffer(pad)
                 }
             },
@@ -76,25 +91,38 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
                     throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 2)
                 }
                 let frames = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
-                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
-                      let channel = buffer.int16ChannelData?[0]
-                else {
+                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
                     throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 3)
                 }
                 buffer.frameLength = frames
-                data.copyBytes(
-                    to: UnsafeMutableRawBufferPointer(
-                        start: channel,
-                        count: data.count))
+                if let channel = buffer.int16ChannelData?[0] {
+                    data.copyBytes(
+                        to: UnsafeMutableRawBufferPointer(
+                            start: channel,
+                            count: data.count))
+                } else if let channel = buffer.floatChannelData?[0] {
+                    data.withUnsafeBytes { raw in
+                        for index in 0..<Int(frames) {
+                            let sample = Int16(littleEndian: raw.loadUnaligned(
+                                fromByteOffset: index * MemoryLayout<Int16>.size,
+                                as: Int16.self))
+                            channel[index] = Float(sample) / 32768
+                        }
+                    }
+                } else {
+                    throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 3)
+                }
                 node.scheduleBuffer(
                     buffer,
                     completionCallbackType: .dataPlayedBack)
                 { _ in completion() }
             },
-            startPlayback: { node.play() },
+            // A shared engine can be stopped by its owner for a reconfiguration; starting a node
+            // on a stopped engine raises, so resumePlaybackAfterEngineRestart() starts it later.
+            startPlayback: { if engine.isRunning { node.play() } },
             stopPlayback: {
                 node.stop()
-                engine.stop()
+                if ownsEngine { engine.stop() }
             },
             playbackTime: {
                 guard let renderTime = node.lastRenderTime,
@@ -125,6 +153,7 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
         await self.beginPlayback(stream: stream, sampleRate: sampleRate).value
     }
 
+    /// Register synchronously so relay controls can retire playback before its task runs.
     func beginPlayback(
         stream: AsyncThrowingStream<Data, Error>,
         sampleRate: Double) -> Task<StreamingPlaybackResult, Never>
@@ -172,6 +201,15 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
             self.finish(StreamingPlaybackResult(finished: false, interruptedAt: interruptedAt), cancelInput: true)
         }
         return interruptedAt
+    }
+
+    /// Called by a shared engine's owner after it restarts the engine, which stops attached nodes.
+    public func resumePlaybackAfterEngineRestart() {
+        self.backendQueue.async { [weak self] in
+            guard let self else { return }
+            let resume = self.lock.withLock { self.playbackStarted && self.playbackContinuation != nil }
+            if resume { self.startPlayback() }
+        }
     }
 
     private func isCurrent(_ generation: UInt64) -> Bool {

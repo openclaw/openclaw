@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -41,7 +41,7 @@ function setup(mode: "all" | "non-main" = "all") {
   const cfg = {
     session: { store: databasePath },
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: {
         workspace: workspaceDir,
         sandbox: { mode, scope: "session", workspaceAccess: "ro", workspaceRoot },
@@ -85,35 +85,13 @@ function setup(mode: "all" | "non-main" = "all") {
   };
 }
 
-function observeColdSessionReads() {
+function observeMainThreadSessionReads() {
   const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  const iterate = vi.spyOn(StatementSync.prototype, "iterate");
-  return {
-    get handles() {
-      return new Set(
-        prepare.mock.calls.flatMap(([sql], index) =>
-          /from\s+"session_nodes"/i.test(sql) ? [prepare.mock.contexts[index]] : [],
-        ),
-      );
-    },
-    scans: () =>
-      prepare.mock.calls.reduce((count, [sql], index) => {
-        if (!sql.includes('"retained_window"')) {
-          return count;
-        }
-        const result = prepare.mock.results[index];
-        return (
-          count +
-          iterate.mock.contexts.filter(
-            (statement) => result?.type === "return" && statement === result.value,
-          ).length
-        );
-      }, 0),
-  };
+  return () => prepare.mock.calls.filter(([sql]) => /from\s+"session_nodes"/i.test(sql));
 }
 
 describe("Gateway configured workspace readiness", () => {
-  it("validates one cold session store once and reports all blocked workspaces", async () => {
+  it("reports all blocked workspaces without reading sessions on the main thread", async () => {
     const state = setup();
     const workspaces = Array.from({ length: 32 }, (_, index) => {
       const sessionKey = `agent:main:readiness-${index}`;
@@ -121,14 +99,13 @@ describe("Gateway configured workspace readiness", () => {
       return state.addLegacyWorkspace(sessionKey);
     });
     closeOpenClawAgentDatabasesForTest();
-    const reads = observeColdSessionReads();
+    const reads = observeMainThreadSessionReads();
     const readiness = assertConfiguredWorkspaceStateReady(state);
     await expect(readiness).rejects.toThrow("Legacy workspace setup state requires migration");
     for (const workspace of workspaces) {
       await expect(readiness).rejects.toThrow(workspace);
     }
-    expect(reads.scans()).toBe(1);
-    expect(reads.handles.size).toBe(1);
+    expect(reads()).toEqual([]);
   });
 
   it.each([false, true])(
@@ -152,25 +129,5 @@ describe("Gateway configured workspace readiness", () => {
     const state = setup();
     await expect(assertConfiguredWorkspaceStateReady(state)).resolves.toBeUndefined();
     expect(fs.existsSync(state.databasePath)).toBe(false);
-  });
-
-  it("revalidates persisted rows after an earlier readiness check", async () => {
-    const state = setup();
-    const sessionKey = "agent:main:readiness";
-    state.seed(sessionKey);
-    closeOpenClawAgentDatabasesForTest();
-    await expect(assertConfiguredWorkspaceStateReady(state)).resolves.toBeUndefined();
-
-    const database = new DatabaseSync(state.databasePath);
-    try {
-      database
-        .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
-        .run(sessionKey);
-    } finally {
-      database.close();
-    }
-    await expect(assertConfiguredWorkspaceStateReady(state)).rejects.toThrow(
-      "invalid persisted session row",
-    );
   });
 });

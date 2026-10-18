@@ -17,7 +17,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Setup offers optional notifications, microphone, camera, and location access; other permissions are under **Additional features**. **Request all** asks for the available runtime permissions without enabling the camera or location features; Android handles consent through its system prompts. Notification access stays separate under **Special access**. Continue without granting access, or enable phone capabilities individually or later in Settings. Blocked individual setup requests offer Android Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
 - SMS is available only in third-party builds on supported telephony devices. Setup distinguishes partial read/send access. Android Settings can recover user denial, but installer or device-policy restrictions may leave SMS unavailable; OpenClaw cannot override them. Returning from Settings rereads the actual grants without restarting Gateway setup.
 - View the phone's memory and disk meters on the Control UI Devices page. Connected Android nodes report host resource stats immediately and every 60 seconds; disk meters require an available storage sample and a Gateway that supports host stats.
-- Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
+- Manage installed skills and Gateway-verified ClawHub releases, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
 
 ## Open in Android Studio
@@ -27,6 +27,14 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 Gradle sync generates the native localization lookup and resources before IDE
 indexing. Use the repository's supported Node.js version on your PATH, as for
 the build commands below; no separate localization generation step is required.
+
+## Tool icons
+
+Chat tool activity uses the shared tool display icons with native Android glyphs.
+Command, read, edit, write, search, and fetch rows take precedence over the tool's
+configured icon; unknown tools use a puzzle piece. Tool Search calls use the
+called tool's icon. Failed rows retain their error mark, and progress cards keep
+their receipt presentation.
 
 ## Session colors
 
@@ -219,7 +227,7 @@ translations remain in `apps/.i18n/native-source.json` and
 `apps/.i18n/native/<locale>.json`; the existing `pnpm native:i18n:baseline` and
 `pnpm native:i18n:sync` workflow owns updates. Never edit or commit the generated
 lookup or `native_` resources. `pnpm android:i18n:check` validates the catalog
-against those canonical inputs.
+against those source inputs.
 
 ```bash
 pnpm install
@@ -413,7 +421,7 @@ Reports are written under:
 
 ## Perf CLI (low-noise)
 
-Deterministic startup measurement + hotspot extraction with compact CLI output:
+Repeatable startup measurement + hotspot extraction with compact CLI output:
 
 ```bash
 cd apps/android
@@ -570,6 +578,76 @@ Reference links:
 - [AccessibilityService policy](https://support.google.com/googleplay/android-developer/answer/10964491?hl=en-GB)
 - [Photo and Video Permissions policy](https://support.google.com/googleplay/android-developer/answer/14594990)
 
+## Release validation
+
+Run from a clean checkout with the Android SDK, Java, and emulator acceleration
+available:
+
+```bash
+pnpm android:release:validate -- \
+  --target-sha "$(git rev-parse HEAD)" \
+  --output /tmp/android-release-e2e-proof.json
+```
+
+The harness builds the Play Debug phone app, Debug Wear app, and their
+instrumentation APKs once, then uses fresh
+API 36 phone and API 34 round Wear emulators. It owns their temporary state,
+processes, and cleanup.
+
+The **Android Release E2E** workflow runs this command directly, during eligible
+full manual CI at the workflow's exact source SHA, and before a manual Android
+Store Release accesses signing credentials. Scheduled and manual internal
+distributions retain their existing path. Gateway APK publication in
+`android-release.yml` remains separate.
+
+The phone completes setup-code onboarding against a pinned published stable
+Gateway and a local deterministic model fixture, sends messages, relaunches with
+its saved connection, and opens Overview. Native keyboard and transcript checks
+verify that replies remain visible above the real keyboard, dismissing the
+keyboard preserves a multiline draft, and the beginning and end of a long reply
+remain reachable. Wear checks exercise native input, chat, reply history, relaunch,
+phone restart, and the round-screen reply reader. A local raw-message transport
+replaces the Google Data Layer boundary through the existing transport
+interfaces. Requests still pass through the production wire codec, phone bridge
+and controller, authenticated Gateway, and deterministic model fixture; responses
+and streaming events return through the same application owners. The phone
+executes the requests; the transport does not supply canned successful replies.
+
+**This CI gate does not qualify Google's live Wear Data Layer, device pairing,
+or companion provisioning.** CI starts fresh standard SDK emulators and uses no
+Google account, companion APK, or saved paired-device image. In particular, it
+excludes real Google capability discovery, `WearableListenerService` delivery,
+and Play services package-name/signature enforcement. The APK checks still
+verify the built debug artifacts' hashes, signatures, matching package names and
+certificates, version codes, and declared listener services. They do not exercise
+Google's enforcement or delivery path. Release/R8 behavior, store signing, and
+upload remain owned by the existing archive/release lane; this native gate tests
+instrumented Debug APKs. Physical radios, voice, microphone permissions,
+notifications, Tiles, and battery behavior also remain outside its coverage.
+
+Each run freezes its stable Gateway version and dependency lock in an artifact;
+reruns reuse that selection. Missing or invalid saved selections fail instead of
+silently choosing a newer Gateway. Qualification retains sanitized proof and
+synthetic UI screenshots, with no raw Gateway or instrumentation logs or setup
+credentials. Failed proof records bounded SDK operation/exit facts and native
+test source locations, excluding command arguments and assertion text. Skipped
+selected tests, crashes, timeouts, and incomplete cleanup fail qualification.
+
+Keep a small physical-device smoke separate, using matching Play-signed phone
+and Wear apps:
+
+1. Pair the real devices normally, connect the phone to a Gateway, and confirm
+   the watch discovers the phone and loads session history.
+2. Enter a unique text turn through the watch's native input and confirm its
+   reply on the watch. Repeat with the phone app in the background to exercise
+   real listener-service delivery.
+3. Disconnect and reconnect the pair, restart both apps, then reload history
+   and send another turn. Confirm history and replies remain usable.
+
+Record app/package/signing identities, device/Wear OS versions, connection type,
+and observed results. This smoke supplies real Data Layer discovery, delivery,
+and reconnect evidence separately; CI has no Google provisioning prerequisite.
+
 ## Integration Capability Test (Preconditioned)
 
 This suite assumes setup is already done manually. It does **not** install/run/pair automatically.
@@ -609,7 +687,7 @@ What it does:
 - Skips `screen.record` and `talk.ptt.*` in this suite because they require
   interactive capture. Use `apps/android/scripts/voice-e2e.sh` for microphone
   and voice-path proof.
-- Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send` and `notifications.actions`).
+- Asserts command contracts (success or the expected error for safe-invalid calls like `sms.send` and `notifications.actions`).
 
 Common failure quick-fixes:
 

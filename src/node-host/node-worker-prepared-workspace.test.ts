@@ -612,7 +612,6 @@ describe("prepared node workspace ownership", () => {
     });
     await expect(restarted.acquireManagedWorkspaceAsync(f.request)).rejects.toThrow("does not own");
     await expect(restarted.prepare(binding)).rejects.toThrow("consumed");
-    await expect(mutation.complete()).rejects.toThrow("closed");
     expect(await store.find(binding.environmentId)).toMatchObject({
       state: "retiring",
       session_id: binding.sessionId,

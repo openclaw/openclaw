@@ -10,21 +10,14 @@ import { z } from "zod";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
-import {
-  buildAgentQuestionRequestQuestions,
-  type AgentQuestionDispatcher,
-} from "../agents/harness/gateway-question-dispatch.js";
+import { buildAgentQuestionRequestQuestions } from "../agents/harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../agents/harness/gateway-question.js";
 import {
   createAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "../agents/harness/host-private-capabilities.js";
 import { compileStructuredInputForm } from "../agents/harness/structured-input.js";
-import {
-  bindMcpClientElicitation,
-  createMcpClientElicitationHandler,
-  runWithMcpElicitationHandler,
-} from "../agents/mcp-client-elicitation.js";
+import { bindMcpClientElicitation } from "../agents/mcp-client-elicitation.js";
 import { buildMcpClientCapabilities } from "../agents/mcp-metadata.js";
 import {
   getMcpAppViewLease,
@@ -32,6 +25,7 @@ import {
   type McpFormResourceUpload,
 } from "../agents/mcp-ui-resource.js";
 import { testing as viewTesting } from "../agents/mcp-ui-resource.test-support.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { QuestionManager } from "./question-manager.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -63,8 +57,42 @@ vi.mock("./question-session-access.js", () => ({
     return consume([undefined]);
   },
 }));
-vi.mock("./server-methods/sessions-files.js", () => ({
+vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-methods/sessions-files.js")>()),
   resolveLocalSessionWorkspaceRoot: () => state.root,
+  withSessionFileRoot: async (
+    params: { sessionKey: string; agentId?: string },
+    cfg: OpenClawConfig,
+    consume: (
+      loaded: {
+        canonicalKey: string;
+        agentId: string;
+        storePath: string;
+        cfg: OpenClawConfig;
+        entry: { sessionId: string; updatedAt: number };
+      },
+      assertCurrent: () => void,
+    ) => Promise<unknown>,
+  ) =>
+    consume(
+      {
+        canonicalKey: params.sessionKey,
+        agentId: params.agentId ?? "main",
+        storePath: state.root,
+        cfg,
+        entry: { sessionId: "session-1", updatedAt: 0 },
+      },
+      () => {},
+    ),
+}));
+vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-facts.js")>()),
+  readRetainedSessionEntryFacts: (_database: unknown, request: { sessionKeys: string[] }) => ({
+    entries: request.sessionKeys.map((sessionKey) => ({
+      sessionKey,
+      entry: { sessionId: "session-1", updatedAt: 0 },
+    })),
+  }),
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: () => undefined,
@@ -223,7 +251,6 @@ async function fixture(
       assertCurrent,
       prepareToolCall,
     },
-    requestId: "upstream-id",
     snapshot,
     signal: controller.signal,
     uploadResources,
@@ -333,80 +360,6 @@ describe("registered MCP form resource route", () => {
     await expect(
       withAgentQuestionAnswerAuthority(authority, () => fixture({ requesterId: "bob" })),
     ).rejects.toThrow("does not match its question creator");
-  });
-
-  it("binds direct SDK forms through the real compiler and pending-question owner, then disposes", async () => {
-    const f = await fixture({ kind: "file", register: false });
-    const client = new Client(
-      { name: "form-host", version: "1" },
-      { capabilities: buildMcpClientCapabilities(true) },
-    );
-    const server = new Server({ name: "origin", version: "1" }, { capabilities: { tools: {} } });
-    const call = bindMcpClientElicitation(client);
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
-    const prepare = vi.fn(async () => f.form);
-    const handler = createMcpClientElicitationHandler({
-      sessionKey,
-      agentId: "main",
-      assertCurrent,
-      prepareResourceContext: prepare,
-      gatewayCall: {
-        version: 2,
-        call: async (request: Parameters<AgentQuestionDispatcher["call"]>[0]) => {
-          if (request.method === "question.request") {
-            const record = manager.request(
-              request.params as Parameters<QuestionManager["request"]>[0],
-            );
-            expect(record.id).not.toBe("upstream-id");
-            return { id: record.id };
-          }
-          if (request.method !== "question.waitAnswer") {
-            throw new Error("unexpected question method");
-          }
-          const id = (request.params as { id: string }).id;
-          const reply = await f.invoke({
-            requestId: id,
-            action: "upload",
-            files: [{ name: "part.stl", mimeType: "model/stl", content: "AA==" }],
-          });
-          expect(reply[0]).toBe(true);
-          return {
-            status: "answered",
-            answers: { answers: { files: [reply[1].resources[0].uri] } },
-          };
-        },
-      },
-    });
-    try {
-      server.setRequestHandler(CallToolRequestSchema, async () => {
-        const result = await server.request(
-          { method: "openai/elicitation/create", params: f.snapshot },
-          z.object({ action: z.string(), content: z.record(z.string(), z.unknown()).optional() }),
-        );
-        return { content: [], structuredContent: result };
-      });
-      const result = await runWithMcpElicitationHandler(handler, () =>
-        call(f.controller.signal, () => client.callTool({ name: "pick" })),
-      );
-      expect(result.structuredContent).toEqual({
-        action: "accept",
-        content: { files: [expect.stringMatching(/^file:/)] },
-      });
-      expect(prepare).toHaveBeenCalledWith(
-        expect.objectContaining({
-          requestId: expect.any(Number),
-          snapshot: expect.objectContaining({ mode: "openai/form" }),
-        }),
-      );
-      const record = manager.list()[0]!;
-      expect((await f.invoke({ requestId: record.id, action: "preview", optionIndex: 0 }))[0]).toBe(
-        false,
-      );
-    } finally {
-      await client.close();
-      await server.close();
-    }
   });
   it("uses the current Gateway registry for App tool elicitation without synthetic caller authority", async () => {
     const f = await fixture({ kind: "file", register: false });

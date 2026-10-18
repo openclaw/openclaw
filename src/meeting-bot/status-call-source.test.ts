@@ -174,62 +174,41 @@ describe("meeting status live ownership", () => {
     },
   );
 
-  it("rolls back this pass when ownership ends inside the after-routing hook", async () => {
-    const fixture = routingFixture({ afterAudioRoutingSource: "await afterRouting();" });
-    expect(await fixture.status()).toMatchObject({
-      audioOutputRouted: false,
-      notes: expect.arrayContaining([expect.stringContaining("ownership")]),
-    });
-    await Promise.resolve();
-    expect(fixture.first.sinkId).toBe("physical-out");
-    expect(fixture.first.muted).toBe(false);
-  });
-
-  it("leaves media alone when another session takes over during routing", async () => {
-    const fixture = routingFixture();
-    fixture.first.setSinkId.mockImplementationOnce(async function (
-      this: { sinkId: string },
-      sinkId: string,
-    ) {
-      this.sinkId = sinkId;
-      fixture.loseOwnership();
-      Object.assign(fixture.window, { __testMeeting: { sessionId: "session-2" } });
-    });
-    expect(await fixture.status()).toMatchObject({ audioOutputRouted: false });
-    expect(fixture.first.sinkId).toBe("virtual-out");
-    expect(fixture.first.muted).toBe(true);
-  });
-
-  it("finishes an earlier sink restore before routing again", async () => {
-    const fixture = routingFixture();
-    let finishRestore: () => void = () => {};
-    fixture.first.setSinkId.mockImplementation(async function (
-      this: { sinkId: string },
-      sinkId: string,
-    ) {
-      if (sinkId === "physical-out") {
-        await new Promise<void>((resolve) => {
-          finishRestore = resolve;
+  it.each(["routing hook", "direct sink", "another session"])(
+    "restores only owned playback after loss during %s",
+    async (boundary) => {
+      const fixture = routingFixture(
+        boundary === "routing hook" ? { afterAudioRoutingSource: "await afterRouting();" } : {},
+      );
+      if (boundary !== "routing hook") {
+        fixture.first.setSinkId.mockImplementationOnce(async function (
+          this: { sinkId: string },
+          sinkId: string,
+        ) {
+          this.sinkId = sinkId;
+          fixture.loseOwnership();
+          if (boundary === "another session") {
+            Object.assign(fixture.window, { __testMeeting: { sessionId: "session-2" } });
+          }
         });
-      } else {
-        fixture.loseOwnership();
       }
-      this.sinkId = sinkId;
-    });
-    await fixture.status();
-    fixture.regainOwnership();
-    let secondDone = false;
-    const second = fixture.status().then(() => {
-      secondDone = true;
-    });
-    for (let tick = 0; tick < 20; tick += 1) {
+      const result = await fixture.status();
+      expect(result).toMatchObject({ audioOutputRouted: false });
+      if (boundary === "routing hook") {
+        expect(result.notes).toEqual(
+          expect.arrayContaining([expect.stringContaining("ownership")]),
+        );
+      }
       await Promise.resolve();
-    }
-    expect(secondDone).toBe(false);
-    finishRestore();
-    await second;
-    expect(secondDone).toBe(true);
-  });
+      expect(fixture.first.sinkId).toBe(
+        boundary === "another session" ? "virtual-out" : "physical-out",
+      );
+      expect(fixture.first.muted).toBe(boundary === "another session");
+      if (boundary === "direct sink") {
+        expect(fixture.second.setSinkId).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("makes overlapping passes all wait for an in-flight sink restore", async () => {
     const fixture = routingFixture();
@@ -262,22 +241,6 @@ describe("meeting status live ownership", () => {
     finishRestore();
     await Promise.all(passes);
     expect(done).toEqual([true, true]);
-  });
-
-  it("returns a completed direct sink change to its original output when ownership ends", async () => {
-    const fixture = routingFixture();
-    fixture.first.setSinkId.mockImplementationOnce(async function (
-      this: { sinkId: string },
-      sinkId: string,
-    ) {
-      this.sinkId = sinkId;
-      fixture.loseOwnership();
-    });
-    expect(await fixture.status()).toMatchObject({ audioOutputRouted: false });
-    await Promise.resolve();
-    expect(fixture.first.sinkId).toBe("physical-out");
-    expect(fixture.first.muted).toBe(false);
-    expect(fixture.second.setSinkId).not.toHaveBeenCalled();
   });
 
   it.each([

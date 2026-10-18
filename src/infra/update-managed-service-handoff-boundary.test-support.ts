@@ -14,6 +14,7 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { writeRestartSentinel } from "./restart-sentinel.js";
 import { writeTriageUpdateFailure } from "./update-failure-report-artifact.js";
+import * as handoffArtifacts from "./update-managed-service-handoff-artifacts.test-support.js";
 import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import {
   awaitEmulatedRecoveryHandoffExit,
@@ -24,7 +25,6 @@ import {
 import {
   createManagedServiceCancellationPreload,
   createManagedServiceLaunchdClockPreload,
-  prepareManagedServiceTriageClockPreload,
   createManagedServiceUpdaterFixtureScript,
   createManagedServiceManagerFixtureScript,
   isManagedServiceInspectionCommand,
@@ -63,7 +63,7 @@ export function createManagedServiceManagerBoundary({
   cleanups,
 }: {
   spawnMock: Mock;
-  tempDirs: Set<string>;
+  tempDirs: handoffArtifacts.ManagedHandoffTempDirTracker;
   cleanups: Set<() => Promise<void>>;
 }) {
   let receipts: FixtureReceiptChannel;
@@ -152,13 +152,14 @@ export function createManagedServiceManagerBoundary({
       ledger: Boolean(run),
       options,
     });
+    await options?.prepareState?.({ env, recoveryModulePath, sourceRuntimeImport });
     let helper: import("node:child_process").ChildProcess | undefined;
     let helperCompletion: Promise<number | null> | undefined;
     let helperLogPath: string | undefined;
     const cleanup = createManagedServiceBoundaryCleanup(() => [helper, parent]);
     cleanups.add(cleanup);
     try {
-      await startManagedServiceUpdateHandoff({
+      const started = await startManagedServiceUpdateHandoff({
         ...(options?.systemScope ? { supervisor: "systemd" as const } : {}),
         runId: run?.runId,
         ...(options?.beforeParkNotice ? { beforePark: async () => {} } : {}),
@@ -180,10 +181,9 @@ export function createManagedServiceManagerBoundary({
         string[],
         { env: NodeJS.ProcessEnv },
       ];
-      const [scriptPath, generatedParamsPath] = generatedArgs;
-      if (!scriptPath || !generatedParamsPath) {
-        throw new Error("expected generated managed handoff script and parameters");
-      }
+      tempDirs.add(path.dirname(started.logPath));
+      const { scriptPath, paramsPath: generatedParamsPath } =
+        handoffArtifacts.readManagedHandoffArtifacts(generatedArgs);
       const generated = JSON.parse(await fs.readFile(generatedParamsPath, "utf8")) as Record<
         string,
         unknown
@@ -192,7 +192,6 @@ export function createManagedServiceManagerBoundary({
       const mockedChild = spawnMock.mock.results.at(-1)
         ?.value as import("node:child_process").ChildProcess;
       mockedChild.emit("exit", 0, null);
-      tempDirs.add(path.dirname(scriptPath));
       const paramsPath = path.join(root, "manager-helper.json");
       const commandFixture = createManagedServiceCommandFixture({
         kind,
@@ -226,7 +225,7 @@ export function createManagedServiceManagerBoundary({
           ${updaterScript}
         })().catch((error) => { console.error(error); process.exit(18); });`;
       }
-      if (run) {
+      if (run && options?.validationResult !== "child-result") {
         updaterScript = `void (async () => {
           ${ledgerRuntimeImport}
           ledger.recordUpdateRunPhase(${JSON.stringify(run.runId)}, "staging");
@@ -255,14 +254,17 @@ export function createManagedServiceManagerBoundary({
           receiptClientPath,
           `${fixtureReceiptClientSource(receipts.endpoint)}\nexport { sendReceipt };\n`,
         );
-        const continuation = options.validationResult
-          ? `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:${JSON.stringify(options.validationResult === "failed" ? "error" : "skipped")},mode:"npm",reason:${JSON.stringify(options.validationResult === "failed" ? "candidate-validation-failed" : "already-current")}}));`
-          : createManagedServiceActivationScript({
-              ...options,
-              sourceRuntimeImport,
-              statePath,
-              updaterScript,
-            });
+        const continuation =
+          options.validationResult === "child-result"
+            ? updaterScript
+            : options.validationResult
+              ? `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:${JSON.stringify(options.validationResult === "failed" ? "error" : "skipped")},mode:"npm",reason:${JSON.stringify(options.validationResult === "failed" ? "candidate-validation-failed" : "already-current")}}));`
+              : createManagedServiceActivationScript({
+                  ...options,
+                  sourceRuntimeImport,
+                  statePath,
+                  updaterScript,
+                });
         updaterScript = `
         void import(${JSON.stringify(pathToFileURL(receiptClientPath).href)}).then(({sendReceipt}) => {
         const validationFs = require("node:fs");
@@ -306,8 +308,6 @@ export function createManagedServiceManagerBoundary({
             : { parentExitDeadlineAt: Date.now() + options.systemdHandoffDeadlineMs }),
           ...commandFixture,
           ...(options?.systemScope ? { serviceRecovery: undefined } : {}),
-          // Triage hangs must reach the diagnostic cap without timing out healthy recovery.
-          ...(options?.recoveryHang ? { recoveryTimeoutMs: 1000 } : {}),
           recovery: options?.originalRecovery ?? { serviceRestartSafe: true, version: "1.0.0" },
           recoveryModulePath,
           ...(selectedDriverPath
@@ -332,17 +332,13 @@ export function createManagedServiceManagerBoundary({
           outputPath: String(generated.triageContextPath),
         });
       }
-      const spawnFixture = await prepareManagedServiceSpawn(root, scriptPath, childEnv, options);
+      const spawnFixture = await prepareManagedServiceSpawn(root, scriptPath, childEnv, options, {
+        recoveryCommandArgv: commandFixture.recoveryCommandArgv,
+        recoveryTimeoutMs: Number(generated.recoveryTimeoutMs),
+        triageCommandArgv: commandFixture.triageCommandArgv,
+        triageInputPath: String(generated.triageInputPath),
+      });
       let helperEnv = spawnFixture.env;
-      const triageDeadlinePath = path.join(root, "triage-deadline.json");
-      if (options?.triageHang) {
-        helperEnv = await prepareManagedServiceTriageClockPreload(
-          { root, scriptPath, statePath },
-          commandFixture.triageCommandArgv,
-          String(generated.triageInputPath),
-          helperEnv,
-        );
-      }
       if (options?.launchdTeardown?.clockEachCommandMs || options?.recoveryClockAdvanceMs) {
         const preloadPath = path.join(root, "launchd-clock-preload.cjs");
         await fs.writeFile(
@@ -582,7 +578,8 @@ export function createManagedServiceManagerBoundary({
         const helperLog = await fs.readFile(String(generated.logPath), "utf8").catch(() => "");
         expect(code, `${stderr}\n${helperLog}`).toBe(options.helperExitCode ?? 0);
         await expect(pathExists(updaterPath)).resolves.toBe(
-          activated && !options.expireParentWhileStopPending,
+          (activated && !options.expireParentWhileStopPending) ||
+            options.validationResult === "child-result",
         );
       } else if (options?.parentExitTimeoutMs !== undefined) {
         const timeout = options.parentExitTimeoutMs + (options.launchdTeardown ? 8_000 : 3_000);
@@ -666,11 +663,11 @@ export function createManagedServiceManagerBoundary({
         parentSignal: parent.signalCode,
         parkAdmitted: stdout.includes("park-admitted\n"),
         state: JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}")),
-        sentinel: readRestartSentinelPayload({ OPENCLAW_STATE_DIR: root }),
+        sentinel: options?.readSentinel
+          ? await options.readSentinel(env)
+          : readRestartSentinelPayload({ OPENCLAW_STATE_DIR: root }),
         log: await fs.readFile(String(generated.logPath), "utf8"),
-        ...(options?.triageHang
-          ? { triageDeadline: JSON.parse(await fs.readFile(triageDeadlinePath, "utf8")) }
-          : {}),
+        ...(await spawnFixture.readCommandDeadlines()),
         savedFailure: await readSavedFailure(String(generated.triageContextPath)),
         sensitiveFilesRemoved: (
           await Promise.all((generated.sensitivePaths as string[]).map(pathExists))

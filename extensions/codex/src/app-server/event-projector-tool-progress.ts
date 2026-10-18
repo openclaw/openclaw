@@ -60,8 +60,8 @@ const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
   "typing",
 ]);
 
-export function shouldEmitTranscriptToolProgress(toolName: unknown): boolean {
-  const normalized = typeof toolName === "string" ? toolName.trim().toLowerCase() : "";
+export function shouldEmitTranscriptToolProgress(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
   return Boolean(normalized && !TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES.has(normalized));
 }
 
@@ -103,7 +103,7 @@ export class CodexToolProgressProjection {
   private readonly output = new NativeToolOutputAccumulator("Codex");
   private readonly metas = new Map<string, EmbeddedRunAttemptResult["toolMetas"][number]>();
   private readonly sideEffectingNativeIds = new Set<string>();
-  private readonly sideEffectingDynamicIds = new Set<string>();
+  private hasDynamicSideEffects = false;
   private readonly transcriptProgressCallIds = new Set<string>();
   readonly approvalTimeoutKinds = new Map<string, CodexApprovalKind>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
@@ -131,7 +131,7 @@ export class CodexToolProgressProjection {
   }
 
   get hasPotentialSideEffects(): boolean {
-    return this.sideEffectingNativeIds.size > 0 || this.sideEffectingDynamicIds.size > 0;
+    return this.sideEffectingNativeIds.size > 0 || this.hasDynamicSideEffects;
   }
 
   approvalTimeoutExplanation(itemId: string, status: NativeToolStatus): string | undefined {
@@ -201,9 +201,7 @@ export class CodexToolProgressProjection {
     } else if (this.lastNativeToolError?.mutatingAction !== true) {
       this.lastNativeToolError = undefined;
     }
-    if (params.sideEffectEvidence === true) {
-      this.sideEffectingDynamicIds.add(params.callId);
-    }
+    this.hasDynamicSideEffects ||= params.sideEffectEvidence === true;
   }
 
   handleOutputDelta(params: JsonObject, toolName: string): void {
@@ -380,13 +378,12 @@ export class CodexToolProgressProjection {
     const existing = this.metas.get(item.id);
     const terminalStatus = auditNativeToolTerminalStatus(item);
     const isError =
-      typeof existing?.isError === "boolean"
-        ? existing.isError
-        : terminalStatus === "completed"
-          ? false
-          : terminalStatus === "failed" || terminalStatus === "blocked"
-            ? true
-            : undefined;
+      existing?.isError ??
+      (terminalStatus === "completed"
+        ? false
+        : terminalStatus === "failed" || terminalStatus === "blocked"
+          ? true
+          : undefined);
     this.metas.set(item.id, {
       toolName,
       ...(meta ? { meta } : {}),
@@ -463,7 +460,9 @@ export class CodexToolProgressProjection {
           }),
           ...(params.isError === true ? { isError: true } : {}),
         }),
-      ).catch(() => {});
+      ).catch(() => {
+        // Optional progress delivery must not fail an otherwise successful turn.
+      });
     } catch {
       // Tool progress delivery is best-effort and should not affect the turn.
     }

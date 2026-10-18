@@ -146,19 +146,16 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
     },
   );
 
-  it("keeps tool failures fatal even when their partial report contains only limits", () => {
-    const result = run([violation("file_length")], { exit: 1 });
+  it.each([
+    { report: JSON.stringify([violation("file_length")]), exit: 1 },
+    ...["not JSON", JSON.stringify([{ rule_id: "line_length" }])].map((report) => ({
+      report,
+      exit: 0,
+    })),
+  ])("rejects tool failures and malformed reports: $report", ({ report, exit }) => {
+    const result = run(report, { exit, raw: true });
     expect(result.status).toBe(1);
     expect(result.output).not.toContain("::warning");
     expect(result.summary).toBe("");
   });
-
-  it.each(["not JSON", JSON.stringify([{ rule_id: "line_length" }])])(
-    "rejects malformed successful reports: %s",
-    (report) => {
-      const result = run(report, { exit: 0, raw: true });
-      expect(result.status).toBe(1);
-      expect(result.output).not.toContain("::warning");
-    },
-  );
 });

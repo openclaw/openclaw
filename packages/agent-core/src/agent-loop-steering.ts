@@ -1,12 +1,6 @@
 import { getInternalSyncSteeringGetter } from "./internal-hooks.js";
 import type { AgentLoopConfig, AgentMessage } from "./types.js";
 
-export type ToolPlanState = { executionStarted: boolean };
-
-export function createToolPlanState(): ToolPlanState {
-  return { executionStarted: false };
-}
-
 export function getSteeringAtCheckpoint(
   config: AgentLoopConfig,
 ): AgentMessage[] | Promise<AgentMessage[]> {

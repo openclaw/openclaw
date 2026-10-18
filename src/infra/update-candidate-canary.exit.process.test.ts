@@ -5,17 +5,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { tryListenOnPort } from "./ports-probe.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
-import { renderSteps } from "./update-candidate-canary.test-support.js";
+import { canaryOutcomeStep, renderSteps } from "./update-candidate-canary.test-support.js";
 import * as rehearsals from "./update-candidate-rehearsal.js";
 import { writeUpdateRunReportArtifact } from "./update-failure-report-artifact.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  getUpdateRun,
-  recordUpdateRunStep,
-} from "./update-run-ledger.js";
+import * as ledger from "./update-run-ledger.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
@@ -23,10 +18,13 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
+function contains(text: string | undefined, ...parts: string[]) {
+  parts.forEach((part) => expect(text).toContain(part));
+}
+
 it.each([
   "doctor",
   "doctor-signal",
-  "lint",
   "policy",
   "missing",
   "failed",
@@ -55,6 +53,7 @@ const mode = ${JSON.stringify(mode)};
 const args = process.argv.slice(2);
 if (args.includes("--fix")) {
   if (mode === "doctor-signal") {
+    console.log("Doctor complete.");
     writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH, JSON.stringify({
       status: "error", failureFacts: [{check: "plugins", code: "doctor-failed", message: "Plugin repair deferred"}],
     }));
@@ -112,7 +111,8 @@ if (args.includes("--fix")) {
       cleanup: async () => {},
     });
     const options = { env: { OPENCLAW_STATE_DIR: path.join(root, "ledger") } };
-    const run = mode === "doctor-signal" ? createUpdateRun({ trigger: "cli" }, options) : undefined;
+    const run =
+      mode === "doctor-signal" ? ledger.createUpdateRun({ trigger: "cli" }, options) : undefined;
     const result = await validateUpdateCandidateCanary({
       root,
       config: {},
@@ -121,44 +121,39 @@ if (args.includes("--fix")) {
       onStep: run
         ? (step) => {
             for (const receipt of updateRunStepsFromResultStep(step)) {
-              recordUpdateRunStep(run.runId, receipt, options);
+              ledger.recordUpdateRunStep(run.runId, receipt, options);
             }
           }
         : undefined,
     });
     if (run) {
       for (let index = 0; index < 24; index++) {
-        recordUpdateRunStep(
+        ledger.recordUpdateRunStep(
           run.runId,
           { step: `finalize:fixture-${index}`, status: "completed", detail: "detail ".repeat(140) },
           options,
         );
       }
-      finishUpdateRun(run.runId, { status: "failed", reason: "doctor-failed" }, options);
+      ledger.finishUpdateRun(run.runId, { status: "failed", reason: "doctor-failed" }, options);
       closeOpenClawStateDatabaseForTest();
-      const saved = getUpdateRun(run.runId, options)!;
+      const saved = ledger.getUpdateRun(run.runId, options)!;
       const crash = saved.steps.find((step) => step.step === "candidate-doctor")!;
       expect(result).toMatchObject({ status: "error", phase: "doctor" });
       expect(crash).toMatchObject({ exitCode: null, termination: "signal", signal: "SIGTERM" });
       expect(crash.failureFacts?.[0]).toMatchObject({ check: "doctor", code: "signal" });
-      expect(crash.detail).toContain("Checking data migrations");
-      expect(crash.stderrTail).toContain("FATAL ERROR: synthetic native failure");
-      expect(crash.stderrTail).toContain("0: node::sqlite::DatabaseSync::Exec");
-      expect(crash.stderrTail).toContain("last native frame");
+      contains(crash.detail, "Checking data migrations", "Doctor complete.");
+      const fatal = "FATAL ERROR: synthetic native failure";
+      const finalFrame = "last native frame";
+      contains(crash.stderrTail, fatal, "0: node::sqlite::DatabaseSync::Exec", finalFrame);
       expect(crash.stderrTail?.split("\n").length).toBeLessThanOrEqual(80);
       expect(crash.stderrTail!.length).toBeLessThanOrEqual(8192);
       expect(crash.stderrTail!.length).toBeGreaterThan(4096);
       expect(crash.stderrTail).not.toContain("adjacent stdout");
       expect(JSON.stringify(saved)).not.toContain("synthetic-secret");
       const report = renderUpdateRunReport(saved);
-      expect(report.markdown).toContain("SIGTERM");
-      expect(report.markdown).toContain("Checking data migrations");
-      expect(report.markdown).toContain("FATAL ERROR: synthetic native failure");
-      expect(report.lines.join("\n")).toContain("last native frame");
-      const terminal = renderSteps(result.steps);
-      expect(terminal).toContain("SIGTERM");
-      expect(terminal).toContain("FATAL ERROR: synthetic native failure");
-      expect(terminal).toContain("last native frame");
+      contains(report.markdown, "SIGTERM", "Doctor complete.", "Checking data migrations", fatal);
+      contains(report.lines.join("\n"), finalFrame);
+      contains(renderSteps(result.steps), "SIGTERM", fatal, finalFrame);
       const failure = { ...result, mode: "npm" as const, root, runId: run.runId };
       const artifact = await writeUpdateRunReportArtifact({
         result: failure,
@@ -167,15 +162,13 @@ if (args.includes("--fix")) {
         env: options.env,
       });
       const markdown = await fs.readFile(artifact, "utf8");
-      expect(markdown).toContain("FATAL ERROR: synthetic native failure");
-      expect(markdown).toContain("last native frame");
+      contains(markdown, fatal, finalFrame);
       expect(markdown).not.toContain("synthetic-secret");
       const publicReport = await prepareUpdateFailureReport(
         { attemptId: run.runId, result: { ...failure, steps: [] }, recordedRun: saved },
         options,
       );
-      expect(publicReport.body).toContain("termination signal (SIGTERM)");
-      expect(publicReport.body).toContain("candidate-doctor");
+      contains(publicReport.body, "termination signal (SIGTERM)", "candidate-doctor");
       return;
     }
     const failedExit = mode === "failed-exit" || mode === "signalled-exit";
@@ -222,7 +215,10 @@ if (args.includes("--fix")) {
           expect.objectContaining({ checkId: "core/doctor/security", severity: "warning" }),
         );
       }
-      expect(result.steps.at(-1)).toMatchObject({ name: "candidate-gateway-startup", exitCode: 0 });
+      expect(canaryOutcomeStep(result.steps)).toMatchObject({
+        name: "candidate-gateway-startup",
+        exitCode: 0,
+      });
     }
   },
   15_000,

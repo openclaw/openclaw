@@ -6,10 +6,12 @@ import {
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord as asRecord,
+  normalizeNullableString as nonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTlonRuntime } from "../runtime.js";
 import { UrbitAuthError, UrbitHttpError } from "../urbit/errors.js";
 
@@ -46,32 +48,32 @@ const TlonIngressPermanentError = createChannelIngressError<"invalid-event" | "t
 );
 
 function inspectChannelsEvent(event: unknown): { eventId: string; laneKey: string } | null {
-  const envelope = isRecord(event) ? event : null;
+  const envelope = asRecord(event);
   const nest = nonEmptyString(envelope?.nest);
-  const response = isRecord(envelope?.response) ? envelope.response : null;
-  const post = isRecord(response?.post) ? response.post : null;
-  const rPost = isRecord(post?.["r-post"]) ? post["r-post"] : null;
-  const set = isRecord(rPost?.set) ? rPost.set : null;
-  const reply = isRecord(rPost?.reply) ? rPost.reply : null;
-  const rReply = isRecord(reply?.["r-reply"]) ? reply["r-reply"] : null;
-  const replySet = isRecord(rReply?.set) ? rReply.set : null;
-  if (!nest || (!isRecord(set?.essay) && !isRecord(replySet?.memo))) {
+  const response = asRecord(envelope?.response);
+  const post = asRecord(response?.post);
+  const rPost = asRecord(post?.["r-post"]);
+  const set = asRecord(rPost?.set);
+  const reply = asRecord(rPost?.reply);
+  const rReply = asRecord(reply?.["r-reply"]);
+  const replySet = asRecord(rReply?.set);
+  if (!nest || (!asRecord(set?.essay) && !asRecord(replySet?.memo))) {
     return null;
   }
-  const eventId = nonEmptyString(isRecord(replySet?.memo) ? reply?.id : post?.id);
+  const eventId = nonEmptyString(asRecord(replySet?.memo) ? reply?.id : post?.id);
   return eventId ? { eventId, laneKey: `group:${nest}` } : null;
 }
 
 function inspectChatEvent(event: unknown): { eventId: string; laneKey: string } | null {
-  const envelope = isRecord(event) ? event : null;
-  const response = isRecord(envelope?.response) ? envelope.response : null;
-  const add = isRecord(response?.add) ? response.add : null;
-  const essay = isRecord(add?.essay) ? add.essay : null;
+  const envelope = asRecord(event);
+  const response = asRecord(envelope?.response);
+  const add = asRecord(response?.add);
+  const essay = asRecord(add?.essay);
   const eventId = nonEmptyString(envelope?.id);
   if (!essay || !eventId) {
     return null;
   }
-  const whom = isRecord(envelope?.whom) ? nonEmptyString(envelope.whom.ship) : null;
+  const whom = nonEmptyString(asRecord(envelope?.whom)?.ship);
   const peer = nonEmptyString(envelope?.whom) ?? whom ?? nonEmptyString(essay.author);
   return { eventId, laneKey: peer ? `direct:${peer}` : `event:${eventId}` };
 }
@@ -138,16 +140,6 @@ function resolveTlonIngressNonRetryableFailure(error: unknown) {
   return null;
 }
 
-type TlonIngressMonitor = {
-  receive: (params: {
-    source: TlonIngressSource;
-    event: unknown;
-  }) => Promise<{ kind: "accepted" } | { kind: "ignored" }>;
-  start: () => void;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
-
 export function createTlonIngressMonitor(options: {
   accountId: string;
   queue?: ChannelIngressQueue<TlonIngressPayload>;
@@ -156,7 +148,7 @@ export function createTlonIngressMonitor(options: {
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
-}): TlonIngressMonitor {
+}) {
   const monitor = createChannelIngressMonitor<TlonIngressRaw, TlonIngressBody, TlonIngressPayload>({
     queue:
       options.queue ??
@@ -207,7 +199,10 @@ export function createTlonIngressMonitor(options: {
   });
 
   return {
-    receive: async ({ source, event }) => {
+    receive: async ({
+      source,
+      event,
+    }: TlonIngressRaw): Promise<{ kind: "accepted" | "ignored" }> => {
       const result = await monitor.admit({ source, event });
       return { kind: result.kind === "durable" ? "accepted" : "ignored" };
     },

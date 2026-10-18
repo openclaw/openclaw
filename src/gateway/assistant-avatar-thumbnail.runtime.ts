@@ -1,10 +1,8 @@
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { fileTypeFromBuffer } from "file-type";
-import { LruCache } from "../infra/lru-cache.js";
 import { createImageProcessor, isAnimatedWebpBuffer } from "../media/image-ops.js";
 import { isAvatarImageMimeType, isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { GatewayAvatarImageSource } from "./assistant-avatar-cache.js";
 import {
   createHttpImageRepresentation,
@@ -12,12 +10,14 @@ import {
 } from "./http-image-response.js";
 
 const AVATAR_THUMBNAIL_SIDE = 128;
-const thumbnailCache = new LruCache<HttpImageRepresentation>(4);
-// Pending jobs retain their own custody until settlement, independently of the LRU.
-const pendingThumbnails = new Map<string, Promise<HttpImageRepresentation>>();
+// The admitted source owns both pending and completed work until its revision is replaced.
+const thumbnails = new WeakMap<GatewayAvatarImageSource, Promise<HttpImageRepresentation>>();
+const notificationIcons = new WeakMap<GatewayAvatarImageSource, Promise<string | undefined>>();
 
 async function createAvatarThumbnail(
   source: GatewayAvatarImageSource,
+  maxSide = AVATAR_THUMBNAIL_SIDE,
+  signal?: AbortSignal,
 ): Promise<HttpImageRepresentation> {
   let body: Buffer;
   let contentType: string;
@@ -53,7 +53,8 @@ async function createAvatarThumbnail(
     body = (
       await createImageProcessor().encode(body, {
         format: "png",
-        resize: { maxSide: AVATAR_THUMBNAIL_SIDE, enlarge: false },
+        resize: { maxSide, enlarge: false },
+        signal,
       })
     ).data;
     contentType = "image/png";
@@ -64,19 +65,41 @@ async function createAvatarThumbnail(
 export async function readGatewayAvatarThumbnail(
   source: GatewayAvatarImageSource,
 ): Promise<HttpImageRepresentation> {
-  const { revision } = source;
-  const cached = thumbnailCache.get(revision);
-  if (cached) {
-    return cached;
+  let pending = thumbnails.get(source);
+  if (!pending) {
+    pending = createAvatarThumbnail(source).catch((error: unknown) => {
+      thumbnails.delete(source);
+      throw error;
+    });
+    thumbnails.set(source, pending);
   }
-  return getOrCreatePromise(
-    pendingThumbnails,
-    revision,
-    async () => {
-      const image = await createAvatarThumbnail(source);
-      thumbnailCache.set(revision, image);
-      return image;
-    },
-    { evictOnSettled: true },
-  );
+  return pending;
+}
+
+/** Inline push icons work while the browser is offline from Gateway image authentication. */
+export function readGatewayAvatarNotificationIcon(
+  source: GatewayAvatarImageSource,
+): Promise<string | undefined> {
+  let pending = notificationIcons.get(source);
+  if (!pending) {
+    pending = (async () => {
+      const signal = AbortSignal.timeout(5_000);
+      for (const maxSide of [32, 24]) {
+        const image = await createAvatarThumbnail(source, maxSide, signal);
+        if (image.contentType !== "image/png") {
+          return undefined;
+        }
+        const icon = `data:image/png;base64,${image.body.toString("base64")}`;
+        if (icon.length <= 2_400) {
+          return icon;
+        }
+      }
+      return undefined;
+    })().catch(() => {
+      notificationIcons.delete(source);
+      return undefined;
+    });
+    notificationIcons.set(source, pending);
+  }
+  return pending;
 }

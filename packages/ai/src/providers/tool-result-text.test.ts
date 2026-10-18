@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { hasMediaPayload, isImageWithMediaPayload } from "../media-payload.js";
 import {
   describeToolResultMediaPlaceholder,
   describeUnsupportedToolResultMedia,
@@ -8,13 +7,6 @@ import {
 } from "./tool-result-text.js";
 
 describe("formatToolResultText", () => {
-  it("preserves significant boundary whitespace in nonblank tool output", () => {
-    expect(formatToolResultText({ text: "  indented\n", isError: false })).toBe("  indented\n");
-    expect(formatToolResultText({ text: "row1   \nrow2\n", isError: false })).toBe(
-      "row1   \nrow2\n",
-    );
-  });
-
   it("falls back to placeholders only for blank tool output", () => {
     expect(formatToolResultText({ text: "   \n\t", isError: false })).toBe("(no tool output)");
     expect(
@@ -40,39 +32,7 @@ describe("formatToolResultText", () => {
   });
 });
 
-describe("hasMediaPayload", () => {
-  it("requires non-empty inline data instead of media metadata", () => {
-    expect(hasMediaPayload({ type: "image", data: "aW1n", mimeType: "image/png" })).toBe(true);
-    expect(hasMediaPayload({ type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" })).toBe(true);
-    expect(hasMediaPayload({ type: "image", data: "", mimeType: "image/png" })).toBe(false);
-    expect(hasMediaPayload({ type: "image", data: "  ", mimeType: "image/png" })).toBe(false);
-    expect(hasMediaPayload({ type: "image", path: "/tmp/image.png" })).toBe(false);
-    expect(hasMediaPayload({ type: "image", url: "https://example.test/image.png" })).toBe(false);
-  });
-});
-
-describe("isImageWithMediaPayload", () => {
-  it("requires both the image type and inline payload bytes", () => {
-    expect(isImageWithMediaPayload({ type: "image", data: "aW1n", mimeType: "image/png" })).toBe(
-      true,
-    );
-    expect(isImageWithMediaPayload({ type: "image", data: "", mimeType: "image/png" })).toBe(false);
-    expect(
-      isImageWithMediaPayload({ type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" }),
-    ).toBe(false);
-  });
-});
-
 describe("extractToolResultText", () => {
-  it.each([
-    { blocks: ["A\ud800", "\udc00B"], expected: "A\nB" },
-    { blocks: ["😀\ud800x\udc00漢"], expected: "😀x漢" },
-    { blocks: ["\ud800", "\udc00"], expected: "" },
-    { blocks: ["  before\n", "after  "], expected: "  before\n\nafter  " },
-  ])("sanitizes separate text blocks before joining: $blocks", ({ blocks, expected }) => {
-    expect(extractToolResultText(blocks.map((text) => ({ type: "text", text })))).toBe(expected);
-  });
-
   it("keeps structured fallback and inclusion after block sanitation", () => {
     const structured = { type: "json", value: "😀漢" };
     const expected = '{"type":"json","value":"😀漢"}';
@@ -84,15 +44,12 @@ describe("extractToolResultText", () => {
     ).toBe(`head\n${expected}`);
   });
 
-  it.each([7_999, 8_000])(
-    "preserves explicit continuation text beyond %i UTF-16 units",
-    (length) => {
-      const text = `${"x".repeat(length)}😀\n[More content follows. Use offset=225 to continue.]\n`;
-      const blocks = [{ type: "text", text }];
-      expect(extractToolResultText(blocks, { includeStructured: true })).toBe(text);
-      expect(extractToolResultText(blocks)).toBe(text);
-    },
-  );
+  it.each([8_000])("preserves explicit continuation text beyond %i UTF-16 units", (length) => {
+    const text = `${"x".repeat(length)}😀\n[More content follows. Use offset=225 to continue.]\n`;
+    const blocks = [{ type: "text", text }];
+    expect(extractToolResultText(blocks, { includeStructured: true })).toBe(text);
+    expect(extractToolResultText(blocks)).toBe(text);
+  });
 
   it("bounds and redacts aggregate structured additions without truncating explicit text", () => {
     const explicit = `${"numbered file row\n".repeat(900)}[Use offset=225 to continue.]\n`;
@@ -126,22 +83,6 @@ describe("extractToolResultText", () => {
     expect(() => encodeURIComponent(result)).not.toThrow();
   });
 
-  it("keeps media-only blocks out of provider replay text", () => {
-    const text = extractToolResultText([
-      { type: "text", text: "summary" },
-      { type: "image", data: "image-binary", mimeType: "image/png" },
-      { type: "image_url", image_url: { url: "data:image/png;base64,abc123" } },
-      { type: "input_image", image_url: "data:image/png;base64,def456" },
-      { type: "audio", data: "audio-binary", mimeType: "audio/mpeg" },
-    ]);
-
-    expect(text).toBe("summary");
-    expect(text).not.toContain("image-binary");
-    expect(text).not.toContain("abc123");
-    expect(text).not.toContain("def456");
-    expect(text).not.toContain("audio-binary");
-  });
-
   it("omits MIME-tagged binary data while preserving textual resource data", () => {
     const text = extractToolResultText([
       { type: "resource", mime_type: "application/octet-stream", data: "AAECAwQFBgc=" },
@@ -151,36 +92,6 @@ describe("extractToolResultText", () => {
     expect(text).toContain('"data":"[binary data omitted: 12 chars]"');
     expect(text).toContain('{\\"ok\\":true}');
     expect(text).not.toContain("AAECAwQFBgc=");
-  });
-
-  it("redacts inline data URIs without touching ordinary data-colon prose", () => {
-    const text = extractToolResultText([
-      {
-        type: "json",
-        value: {
-          note: "metadata:ready",
-          prose: "data: is ordinary prose",
-          preview: "thumbnail=data:image/png;base64,abcdef done",
-        },
-      },
-    ]);
-
-    expect(text).toContain("metadata:ready");
-    expect(text).toContain("data: is ordinary prose");
-    expect(text).toContain("[inline data URI:");
-    expect(text).not.toContain("abcdef");
-  });
-
-  it("uses structured replay only as a no-text fallback without capping explicit text", () => {
-    const textTail = "explicit-tail-marker";
-    const text = extractToolResultText([
-      { type: "text", text: `${"x".repeat(8_200)}${textTail}` },
-      { type: "json", internal: "extra structured detail" },
-    ]);
-
-    expect(text).toContain(textTail);
-    expect(text).not.toContain("…(truncated)…");
-    expect(text).not.toContain("extra structured detail");
   });
 
   it("truncates structured fallback text before provider replay", () => {

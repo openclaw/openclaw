@@ -35,6 +35,15 @@ scenario:
         qaImpact: P2
         action: execute native file-read behavior separately from OpenClaw dynamic tool parity
         reason: Codex has no dedicated read tool; its native command contract owns file reads without requiring OpenClaw dynamic read exposure.
+      happyPrompt: >-
+        tool search qa check target=read. Use the read tool exactly once with
+        path="QA_KICKOFF_TASK.md", then summarize its contents. If discovery is
+        needed, discover read and then call it; discovery alone does not
+        complete this task. Do not use a shell command to read the file.
+      failurePrompt: >-
+        tool search qa failure target=read. Use the read tool exactly once with
+        path="runtime-tool-fixture-missing.txt", then report the missing-file
+        error. Do not create the file, use another tool, or retry.
       promptSnippet: "target=read"
       failurePromptSnippet: "failure target=read"
 

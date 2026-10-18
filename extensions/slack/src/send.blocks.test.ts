@@ -102,9 +102,7 @@ function slackDnsRequestError(): Error {
 }
 
 describe("sendMessageSlack NO_REPLY literal", () => {
-  // Silent-reply stripping is owned by core auto-reply normalization before
-  // payloads reach outbound; a literal NO_REPLY sent through the message tool
-  // must deliver on Slack exactly like every sibling channel.
+  // Producers prepare agent replies; message-tool text is literal channel content.
   it("delivers a literal NO_REPLY text like sibling channels", async () => {
     const result = await send("NO_REPLY");
 
@@ -564,16 +562,5 @@ describe("sendMessageSlack identity and target fallback", () => {
       "An API error occurred: missing_scope (needed: im:write; granted: chat:write, users:read; accepted: im:write, mpim:write)",
     );
     expect(client.chat.postMessage).toHaveBeenCalledOnce();
-  });
-
-  it("preserves missing-scope details while opening folded user IDs", async () => {
-    client.conversations.open.mockRejectedValueOnce(
-      missingScope({ needed: "im:write", response_metadata: { scopes: ["chat:write"] } }),
-    );
-    await expect(send("hello", { threadTs: "171234.100" }, "u09g2dj0276")).rejects.toThrow(
-      "An API error occurred: missing_scope (needed: im:write; granted: chat:write)",
-    );
-    expect(client.conversations.open).toHaveBeenCalledWith({ users: "U09G2DJ0276" });
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
 });

@@ -1,10 +1,7 @@
-// Defines shared legacy config rule contracts for detection and migration.
-import {
-  asNullableRecord as getRecord,
-  isRecord,
-} from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord as getRecord } from "@openclaw/normalization-core/record-coerce";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 
+export { ensureRecord } from "@openclaw/normalization-core/record-coerce";
 export { getRecord };
 export type LegacyConfigRule = {
   path: string[];
@@ -15,6 +12,16 @@ export type LegacyConfigRule = {
   requireSourceLiteral?: boolean;
 };
 
+export const createLegacyConfigRule = (
+  path: string[],
+  message: string,
+  match?: LegacyConfigRule["match"],
+): LegacyConfigRule => ({
+  path,
+  message: `${message} Run "openclaw doctor --fix".`,
+  ...(match ? { match } : {}),
+});
+
 export type LegacyConfigMigrationContext = {
   /** Parsed configuration exactly as authored in the root config file. */
   authoredRaw: unknown;
@@ -24,31 +31,14 @@ export type LegacyConfigMigrationContext = {
   homedir?: () => string;
 };
 
-type LegacyConfigMigration = {
+export type LegacyConfigMigrationSpec = {
   id: string;
-  describe: string;
+  legacyRules?: LegacyConfigRule[];
   apply: (
     raw: Record<string, unknown>,
     changes: string[],
     context?: LegacyConfigMigrationContext,
   ) => void;
-};
-
-export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
-  legacyRules?: LegacyConfigRule[];
-};
-
-export const ensureRecord = (
-  root: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> => {
-  const existing = root[key];
-  if (isRecord(existing)) {
-    return existing;
-  }
-  const next: Record<string, unknown> = {};
-  root[key] = next;
-  return next;
 };
 
 export const mapLegacyAudioTranscription = (value: unknown): Record<string, unknown> | null => {
@@ -81,7 +71,3 @@ export const mapLegacyAudioTranscription = (value: unknown): Record<string, unkn
   }
   return result;
 };
-
-export const defineLegacyConfigMigration = (
-  migration: LegacyConfigMigrationSpec,
-): LegacyConfigMigrationSpec => migration;

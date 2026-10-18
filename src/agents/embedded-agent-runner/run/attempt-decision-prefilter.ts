@@ -5,7 +5,6 @@ import { getPluginRegistryForContext } from "../../../plugins/runtime/gateway-re
 import { isDecisionAssistanceEligible } from "../../decision-assistance.js";
 import { resolveDecisionModelSetting } from "../../decision-model-setting.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { log } from "../logger.js";
 import { prepareDecisionContext, type DecisionContextFacts } from "./attempt-decision-context.js";
 
 // UTF-16 code units of conversation text plus verbatim ordinary hook fields.
@@ -36,17 +35,21 @@ type EvaluateAttemptDecisionToolPrefilterParams = {
 export type DecisionPrefilterResult = {
   shouldPruneTools: boolean;
   restrictionApplied?: boolean;
-  isCurrent?: () => boolean;
   status: "proposed" | "retained" | "skipped" | "unavailable";
   reason: string;
   context?: DecisionContextFacts;
-  latencyMs?: number;
 };
 
 /** Ordinary unavailability preserves tools; cancellation and contract errors remain terminal. */
 export async function evaluateAttemptDecisionToolPrefilter(
   params: EvaluateAttemptDecisionToolPrefilterParams,
 ): Promise<DecisionPrefilterResult> {
+  const skip = (reason: string, context?: DecisionContextFacts): DecisionPrefilterResult => ({
+    shouldPruneTools: false,
+    status: "skipped",
+    reason,
+    ...(context ? { context } : {}),
+  });
   params.signal.throwIfAborted();
   params.assertActive();
   const readConfig = createRuntimeConfigReader(params.config);
@@ -56,16 +59,12 @@ export async function evaluateAttemptDecisionToolPrefilter(
     params.supportsTurnScopedToolRestrictions !== true ||
     !isDecisionAssistanceEligible(config, params.agentId)
   ) {
-    return { shouldPruneTools: false, status: "skipped", reason: "ineligible" };
+    return skip("ineligible");
   }
   const userMessage = params.userMessage?.trim();
   // A named explicit evaluation is an action even if its supplied evidence is a greeting.
   if (!userMessage || /\bdecision_evaluate\b/i.test(userMessage)) {
-    return {
-      shouldPruneTools: false,
-      status: "skipped",
-      reason: userMessage ? "explicit-evaluation" : "empty-request",
-    };
+    return skip(userMessage ? "explicit-evaluation" : "empty-request");
   }
   const context = prepareDecisionContext({
     latestRequest: userMessage,
@@ -73,12 +72,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
     currentInputExcluded: params.currentInputExcluded,
   });
   if (context.status === "skipped") {
-    return {
-      shouldPruneTools: false,
-      status: "skipped",
-      reason: context.reason,
-      context: context.facts,
-    };
+    return skip(context.reason, context.facts);
   }
   const promptBuildFields = params.promptBuildFields;
   const promptBuildChars = promptBuildFields
@@ -88,14 +82,8 @@ export async function evaluateAttemptDecisionToolPrefilter(
       )
     : 0;
   if (context.facts.contextChars + promptBuildChars > MAX_DECISION_TEXT_CHARS) {
-    return {
-      shouldPruneTools: false,
-      status: "skipped",
-      reason: "prompt-build-context-too-large",
-      context: context.facts,
-    };
+    return skip("prompt-build-context-too-large", context.facts);
   }
-  const started = log.isEnabled("debug") ? performance.now() : undefined;
   const selection = resolveDecisionModelSetting(config, params.agentId);
   const isCurrent = () => {
     params.signal.throwIfAborted();
@@ -144,6 +132,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
     {
       agentId: params.agentId,
       purpose: "tool-prefilter.semantic-gate",
+      priority: "optional",
       rubricVersion: "9",
       timeoutMs: 500,
       signal: params.signal,
@@ -154,13 +143,11 @@ export async function evaluateAttemptDecisionToolPrefilter(
     isCurrent,
     () => isDecisionAssistanceEligible(readConfig(), params.agentId),
   );
+  params.signal.throwIfAborted();
+  params.assertActive();
   const facts = {
     context: context.facts,
-    ...(started === undefined ? {} : { latencyMs: Math.max(0, performance.now() - started) }),
   };
-  if (!isCurrent()) {
-    return { shouldPruneTools: false, status: "retained", reason: "selection-changed", ...facts };
-  }
   if (outcome.status === "unavailable") {
     return { shouldPruneTools: false, status: "unavailable", reason: outcome.reason, ...facts };
   }
@@ -178,6 +165,6 @@ export async function evaluateAttemptDecisionToolPrefilter(
     };
   }
   return needsTools?.type === "boolean" && needsTools.probabilityTrue < 0.35
-    ? { shouldPruneTools: true, isCurrent, status: "proposed", reason: "conversational", ...facts }
+    ? { shouldPruneTools: true, status: "proposed", reason: "conversational", ...facts }
     : { shouldPruneTools: false, status: "retained", reason: "action-or-uncertain", ...facts };
 }

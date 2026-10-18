@@ -16,10 +16,8 @@ export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
 
   const candidate = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
 
-  let parsed: URL;
-  try {
-    parsed = new URL(candidate);
-  } catch {
+  const parsed = URL.parse(candidate);
+  if (!parsed) {
     return { ok: false, error: "Invalid URL" };
   }
 

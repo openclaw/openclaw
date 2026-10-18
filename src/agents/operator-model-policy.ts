@@ -1,6 +1,7 @@
 import { parseOperatorModelPolicyWildcardRef } from "../config/model-policy-ref.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { resolveConfiguredAgentId, resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
@@ -12,13 +13,54 @@ import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.
 
 export type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
-const modelPolicyMembership = new WeakMap<PreparedOperatorModelPolicy, string>();
+export type OperatorModelPolicySnapshot = {
+  models: ModelRef[];
+  allowed: { exact: string[]; wildcards: string[] };
+  denied: { exact: string[]; wildcards: string[] };
+};
+const modelPolicySnapshots = new WeakMap<
+  PreparedOperatorModelPolicy,
+  { snapshot: OperatorModelPolicySnapshot; membership: string }
+>();
+
+/** Preserve resolved identities and wildcard predicates, not only discovered default choices. */
+export function captureOperatorModelPolicySnapshot(
+  policy: PreparedOperatorModelPolicy | undefined,
+) {
+  return policy ? modelPolicySnapshots.get(policy)?.snapshot : undefined;
+}
+
+export function restoreOperatorModelPolicySnapshot(
+  snapshot: OperatorModelPolicySnapshot,
+): PreparedOperatorModelPolicy {
+  const prepare = (refs: OperatorModelPolicySnapshot["allowed"]) => ({
+    exact: new Set(refs.exact),
+    patterns: compileGlobPatterns({ raw: refs.wildcards, normalize: (raw) => raw }),
+  });
+  const captured = freezeJsonSnapshot(structuredClone(snapshot));
+  const allowed = prepare(captured.allowed);
+  const denied = prepare(captured.denied);
+  const policy = Object.freeze({
+    models: captured.models,
+    allows: (ref: ModelRef) => matches(allowed, ref) && !matches(denied, ref),
+  });
+  modelPolicySnapshots.set(policy, {
+    snapshot: captured,
+    membership: JSON.stringify([
+      captured.allowed.exact,
+      captured.allowed.wildcards,
+      captured.denied.exact,
+      captured.denied.wildcards,
+    ]),
+  });
+  return policy;
+}
 
 /** Comparison uses the original predicate, including models outside concrete discovery choices. */
 export function readOperatorModelPolicyMembership(
   policy: PreparedOperatorModelPolicy | undefined,
 ): string | undefined {
-  return policy ? modelPolicyMembership.get(policy) : "unrestricted";
+  return policy ? modelPolicySnapshots.get(policy)?.membership : "unrestricted";
 }
 
 /** Preserve the already-selected default when allowed, otherwise use the first compatible source choice. */
@@ -87,7 +129,13 @@ function prepareRefs(refs: readonly string[], resolve: (raw: string) => ModelRef
   };
 }
 
-function matches(prepared: ReturnType<typeof prepareRefs>, ref: ModelRef) {
+function matches(
+  prepared: {
+    exact: ReadonlySet<string> | ReadonlyMap<string, ModelRef>;
+    patterns: ReturnType<typeof compileGlobPatterns>;
+  },
+  ref: ModelRef,
+) {
   return (
     prepared.exact.has(identity(ref)) ||
     matchesAnyGlobPattern(`${normalizeProviderId(ref.provider)}/${ref.model}`, prepared.patterns)
@@ -128,21 +176,10 @@ export function prepareOperatorModelPolicy(
     ...new Map(
       [...sourceModels, ...allowed.exact.values()].map((ref) => [identity(ref), ref]),
     ).values(),
-  ]
-    .filter(allows)
-    .map((ref) => Object.freeze({ ...ref }));
-  const prepared = Object.freeze({
-    models: Object.freeze(models),
-    allows,
+  ].filter(allows);
+  return restoreOperatorModelPolicySnapshot({
+    models,
+    allowed: { exact: [...allowed.exact.keys()].toSorted(), wildcards: allowed.wildcards },
+    denied: { exact: [...denied.exact.keys()].toSorted(), wildcards: denied.wildcards },
   });
-  modelPolicyMembership.set(
-    prepared,
-    JSON.stringify([
-      [...allowed.exact.keys()].toSorted(),
-      allowed.wildcards,
-      [...denied.exact.keys()].toSorted(),
-      denied.wildcards,
-    ]),
-  );
-  return prepared;
 }

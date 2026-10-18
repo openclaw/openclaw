@@ -105,9 +105,7 @@ async function sendZaloDelivery(ctx: {
 }): Promise<{ messageId: string; receipt: MessageReceipt }> {
   const result = await (
     await loadZaloChannelRuntime()
-  ).sendZaloText({
-    to: ctx.to,
-    text: ctx.text,
+  ).sendMessageZalo(ctx.to, ctx.text, {
     accountId: ctx.accountId ?? undefined,
     mediaUrl: ctx.mediaUrl,
     cfg: ctx.cfg,

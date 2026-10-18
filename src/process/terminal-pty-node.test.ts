@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
@@ -28,28 +29,14 @@ afterEach(() => {
   }
 });
 
-// Worker exit joins the shell's onExit, but session signaling does not join foreign descendants.
-async function waitForPidsToExit(pids: number[], signal: AbortSignal): Promise<void> {
-  try {
-    while (pids.some(isPidAlive)) {
-      await delay(10, undefined, { signal });
-    }
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error(`Timed out waiting for PTY processes to exit: ${pids.join(", ")}`, {
-        cause: error,
-      });
-    }
-    throw error;
-  }
-}
-
 describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
-  it.each(["before", "after"] as const)(
-    "checks launch policy %s the PTY start message",
+  it.each(["before", "prepared", "after"] as const)(
+    "checks launch policy at the %s PTY boundary",
     async (timing) => {
       const directory = tempDirs.make("openclaw-pty-policy-");
       const marker = path.join(directory, "started");
+      const nativeAdmission = createDeferredCore();
+      let launchGrants = 0;
       let allowed = true;
       const starting = spawnNodeTerminalPty(
         {
@@ -65,15 +52,35 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
             throw new Error("PTY policy revoked");
           }
         },
+        (launch, settlement) => {
+          launchGrants++;
+          if (timing === "prepared") {
+            allowed = false;
+          }
+          if (!allowed) {
+            throw new Error("PTY policy revoked");
+          }
+          if (!settlement) {
+            throw new Error("PTY launch did not retain native admission");
+          }
+          void settlement.then(() => nativeAdmission.resolve(), nativeAdmission.reject);
+          return launch();
+        },
       );
       if (timing === "before") {
         // The Node helper has started, but its boot acknowledgement has not arrived.
         allowed = false;
+      }
+      if (timing !== "after") {
         await expect(starting).rejects.toThrow("PTY policy revoked");
         expect(fs.existsSync(marker)).toBe(false);
+        expect(launchGrants).toBe(timing === "prepared" ? 1 : 0);
       } else {
         const handle = await starting;
         handles.push(handle);
+        await nativeAdmission.promise;
+        expect(launchGrants).toBe(1);
+        expect(isPidAlive(handle.pid)).toBe(true);
         allowed = false;
         const done = createDeferredCore<{ exitCode: number; signal?: number }>();
         let output = "";
@@ -215,7 +222,8 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
       expect(backgroundPid).toBeGreaterThan(0);
       // The worker finishes only after the native shell onExit callback.
       expect(isPidAlive(shellPid!)).toBe(false);
-      await waitForPidsToExit([backgroundPid!], signal);
+      // Worker exit joins the shell's onExit, but session signaling does not join foreign descendants.
+      await waitForDead(backgroundPid!, signal);
       expect(isPidAlive(backgroundPid!)).toBe(false);
     } finally {
       child.kill("SIGKILL");

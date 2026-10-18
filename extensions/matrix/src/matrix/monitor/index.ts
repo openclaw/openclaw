@@ -276,7 +276,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   );
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(accountConfig) === true;
   const startupMs = Date.now();
-  const startupGraceMs = 0;
   const warnedEncryptedRooms = new Set<string>();
   const warnedCryptoMissingRooms = new Set<string>();
   let healthySyncSinceMs: number | undefined;
@@ -415,7 +414,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       mediaMaxBytes,
       historyLimit,
       startupMs,
-      startupGraceMs,
       dropPreStartupMessages,
       inboundDeduper,
       directTracker,
@@ -468,7 +466,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       warnedEncryptedRooms,
       warnedCryptoMissingRooms,
       logger,
-      startupGraceMs,
       getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
       onRoomMessage: handleRoomMessage,
@@ -548,11 +545,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     ]);
     await cleanup();
   } catch (err) {
-    if (monitorSetupClosed) {
-      await cleanup("stop");
-      return;
-    }
-    if (monitorLifecycleSignal?.aborted === true && isMatrixStartupAbortError(err)) {
+    if (monitorSetupClosed || (monitorLifecycleSignal?.aborted && isMatrixStartupAbortError(err))) {
       await cleanup("stop");
       return;
     }

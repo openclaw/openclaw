@@ -4,7 +4,7 @@ import {
   buildControlUiFocusPath,
   type ControlUiFocusBuildTarget,
 } from "@openclaw/session-url-contract";
-import type { Page, Route, Video } from "playwright";
+import type { Page, Video } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -14,10 +14,12 @@ import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
+  pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
   controlUiE2eBuiltModuleRequest,
   controlUiE2eRouteStylesheetRequest,
+  failControlUiModuleForDocuments,
 } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
@@ -39,7 +41,7 @@ beforeEach(() => {
     ? createControlUiE2eArtifactDir("lazy-custom-element-recovery", railProofDirParent)
     : undefined;
 });
-const nativeTitlebarModule = "ui/src/components/macos-titlebar-controls.runtime.ts";
+const nativeTitlebarModule = "ui/src/components/macos-titlebar-controls.runtime-solid.tsx";
 const viewport = { height: 900, width: 1280 };
 const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 
@@ -55,37 +57,33 @@ async function installChunkFailure(
   options: { manualProbe?: Promise<void>; automaticReload?: boolean } = {},
 ) {
   let headCount = 0;
-  let chunkRequestCount = 0;
-  let failedChunkUrl: string | undefined;
+  let recoveryProbeCount = 0;
+  let documentAvailable = options.automaticReload === true;
   await page.route("**/*", async (route) => {
     if (route.request().method() !== "HEAD") {
       await route.fallback();
       return;
     }
     headCount += 1;
-    if (headCount === 1 && !options.automaticReload) {
+    // Automatic recovery keeps probing while offline. Manual-retry cases own
+    // an outage phase, not a single failed request.
+    if (!documentAvailable) {
       await route.fulfill({ status: 503 });
       return;
     }
+    recoveryProbeCount += 1;
     await options.manualProbe;
     await route.fallback();
   });
-  await page.route(chunk, async (route: Route) => {
-    // A shared module can have both a facade and implementation matching the
-    // prefix. Count retries of the injected failure, not its other dependencies.
-    failedChunkUrl ??= route.request().url();
-    if (route.request().url() !== failedChunkUrl) {
-      await route.fallback();
-      return;
-    }
-    chunkRequestCount += 1;
-    if (chunkRequestCount === 1) {
-      await route.abort("internetdisconnected");
-      return;
-    }
-    await route.fallback();
-  });
-  return { chunkRequestCount: () => chunkRequestCount, headCount: () => headCount };
+  const failure = await failControlUiModuleForDocuments(page, chunk);
+  return {
+    chunkDocumentCount: failure.documentCount,
+    headCount: () => headCount,
+    recoveryProbeCount: () => recoveryProbeCount,
+    restoreDocument: () => {
+      documentAvailable = true;
+    },
+  };
 }
 
 function focusPath(target: ControlUiFocusBuildTarget): string {
@@ -107,9 +105,17 @@ async function expectRealChunkFailure(page: Page, label: string) {
   return error;
 }
 
-async function retryThroughReload(page: Page, error: ReturnType<Page["locator"]>): Promise<void> {
+async function retryThroughReload(
+  page: Page,
+  error: ReturnType<Page["locator"]>,
+  failure: Awaited<ReturnType<typeof installChunkFailure>>,
+  action = "Retry",
+): Promise<void> {
   const reloaded = page.waitForEvent("domcontentloaded");
-  await error.getByRole("button", { name: "Retry", exact: true }).click();
+  await error.getByRole("button", { name: action, exact: true }).click();
+  // Admit recovery only after the user action: restoring before click lets
+  // the automatic probe navigate away before Playwright dispatches it.
+  failure.restoreDocument();
   await reloaded;
 }
 
@@ -138,7 +144,7 @@ const focusedCases = [
     name: "terminal",
     label: "terminal panel",
     path: focusPath({ kind: "terminal" }),
-    modulePath: "ui/src/components/terminal/terminal-panel-registration.ts",
+    modulePath: "ui/src/components/terminal/terminal-panel-registration.tsx",
     gateway: {
       featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
       methodResponses: {
@@ -159,7 +165,7 @@ const focusedCases = [
     name: "desktop",
     label: "desktop panel",
     path: focusPath({ kind: "desktop", control: false }),
-    modulePath: "ui/src/components/desktop/desktop-panel.ts",
+    modulePath: "ui/src/components/desktop/desktop-panel-solid.tsx",
     gateway: {
       featureMethods: [...defaultControlUiFeatureMethods, "desktop.observe", "environments.list"],
       methodResponses: {
@@ -174,7 +180,7 @@ const focusedCases = [
     name: "dashboard",
     label: "dashboard document",
     path: focusPath({ kind: "dashboard", path: "/dashboard/main/12345678" }),
-    modulePath: "ui/src/components/board/board-document.ts",
+    modulePath: "ui/src/components/board/board-document.tsx",
     gateway: {
       sessionKey,
       featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
@@ -214,9 +220,7 @@ const systemBusyness = {
     page.locator(".debug-overlay__header").getByRole("button", { name: "Close", exact: true }),
   open: async (page: Page) => {
     await page.locator(".sidebar-identity-card").click();
-    await page
-      .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:debug-overlay"]')
-      .click();
+    await page.locator('.sidebar-identity-menu [data-value="command:debug-overlay"]').click();
   },
   ready: (page: Page) =>
     page
@@ -246,7 +250,7 @@ const dockedCases = [
     ...systemBusyness,
     name: "System busyness frame",
     tag: "openclaw-debug-overlay",
-    modulePath: "ui/src/pages/debug/debug-overlay.ts",
+    modulePath: "ui/src/pages/debug/debug-overlay.tsx",
     proofName: "system-busyness-frame",
   },
 ];
@@ -330,20 +334,17 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl);
         await gateway.waitForRequest("connect");
         await page.locator(".connect-splash").waitFor();
-        expect(failure.chunkRequestCount()).toBe(0);
+        expect(failure.chunkDocumentCount()).toBe(0);
         await rejectLogin();
         const error = page.locator(".lazy-view-error");
         await error.waitFor();
         expect(await error.textContent()).toContain("Failed to fetch dynamically imported module");
-        expect(failure.chunkRequestCount()).toBe(1);
-        await expect.poll(failure.headCount).toBe(1);
-        await Promise.all([
-          page.waitForEvent("domcontentloaded"),
-          error.getByRole("button", { name: "Reload", exact: true }).click(),
-        ]);
+        expect(failure.chunkDocumentCount()).toBe(1);
+        await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+        await retryThroughReload(page, error, failure, "Reload");
         await rejectLogin();
         await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
-        expect(failure.chunkRequestCount()).toBe(2);
+        expect(failure.chunkDocumentCount()).toBe(2);
         expect(await error.count()).toBe(0);
         const connectCount = (await gateway.getRequests("connect")).length;
         await gateway.deferNext("connect");
@@ -367,14 +368,15 @@ suite.define(() => {
         async ({ page }) => {
           await page.clock.install();
           await page.addInitScript(() => {
-            const observed = window as Window & { completedHeadFrames?: number };
+            const observed = window as Window & { completedSuccessfulHeadFrames?: number };
             const originalFetch = window.fetch;
             window.fetch = async (...args) => {
               const response = await originalFetch(...args);
-              if (args[1]?.method === "HEAD") {
+              if (args[1]?.method === "HEAD" && response.ok) {
                 // Observe the frame after the real fetch and its reload promise chain settle.
                 requestAnimationFrame(() => {
-                  observed.completedHeadFrames = (observed.completedHeadFrames ?? 0) + 1;
+                  observed.completedSuccessfulHeadFrames =
+                    (observed.completedSuccessfulHeadFrames ?? 0) + 1;
                 });
               }
               return response;
@@ -382,7 +384,7 @@ suite.define(() => {
           });
           const failure = await installChunkFailure(
             page,
-            controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
+            controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
             { manualProbe },
           );
           await installMockGateway(page);
@@ -396,7 +398,7 @@ suite.define(() => {
           await waitForControlUiGatewayReady(page);
           await page.keyboard.press("ControlOrMeta+k");
           const error = await expectRealChunkFailure(page, "command palette");
-          await expect.poll(failure.headCount).toBe(1);
+          await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
           if (captureUiProof) {
             await page.screenshot({ path: path.join(artifactDir, "dismissed-retry-before.png") });
           }
@@ -405,7 +407,8 @@ suite.define(() => {
             page.once("domcontentloaded", () => resolve());
           });
           await error.getByRole("button", { name: "Retry", exact: true }).click();
-          await expect.poll(failure.headCount).toBe(2);
+          failure.restoreDocument();
+          await expect.poll(failure.recoveryProbeCount).toBeGreaterThanOrEqual(1);
           await page.keyboard.press("Escape");
           const paletteModal = page.locator('openclaw-modal-dialog[label="command palette"]');
           await expect.poll(() => paletteModal.count()).toBe(0);
@@ -416,8 +419,9 @@ suite.define(() => {
                 documentRequests > 1 ||
                 (await page.evaluate(
                   () =>
-                    (window as Window & { completedHeadFrames?: number }).completedHeadFrames ?? 0,
-                )) >= 2,
+                    (window as Window & { completedSuccessfulHeadFrames?: number })
+                      .completedSuccessfulHeadFrames ?? 0,
+                )) >= 1,
             )
             .toBe(true);
           // A generic automatic retry used to wake one second after this
@@ -468,14 +472,14 @@ suite.define(() => {
           ).toBe(200);
           const error = await expectRealChunkFailure(page, testCase.label);
           const failedPathname = new URL(page.url()).pathname;
-          expect(failure.chunkRequestCount()).toBe(1);
-          await expect.poll(failure.headCount).toBe(1);
+          expect(failure.chunkDocumentCount()).toBe(1);
+          await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
           expect(documentRequests).toBe(1);
 
-          await retryThroughReload(page, error);
+          await retryThroughReload(page, error, failure);
           await testCase.ready(page);
 
-          await expect.poll(failure.chunkRequestCount).toBe(2);
+          await expect.poll(failure.chunkDocumentCount).toBe(2);
           expect(new URL(page.url()).pathname).toBe(failedPathname);
           expect(documentRequests).toBe(2);
         },
@@ -498,7 +502,7 @@ suite.define(() => {
       }
       const failure = await installChunkFailure(
         page,
-        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
       );
       await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -508,8 +512,8 @@ suite.define(() => {
         window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
       });
       const error = await expectRealChunkFailure(page, "command palette");
-      await expect.poll(failure.headCount).toBe(1);
-      expect(failure.chunkRequestCount()).toBe(1);
+      await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+      expect(failure.chunkDocumentCount()).toBe(1);
       if (captureUiProof) {
         await writeFile(
           path.join(artifactDir, "failure.png"),
@@ -519,13 +523,13 @@ suite.define(() => {
         );
       }
 
-      await retryThroughReload(page, error);
+      await retryThroughReload(page, error, failure);
       await page
         .locator("openclaw-command-palette")
         .getByRole("textbox", { name: "Search or start a task…" })
         .waitFor();
 
-      await expect.poll(failure.chunkRequestCount).toBe(2);
+      await expect.poll(failure.chunkDocumentCount).toBe(2);
       expect(await page.locator("openclaw-command-palette").count()).toBe(1);
       if (captureUiProof) {
         await writeFile(
@@ -553,7 +557,7 @@ suite.define(() => {
         async ({ page }) => {
           const held = await holdModuleResponse(
             page,
-            controlUiE2eBuiltModuleRequest("ui/src/pages/debug/debug-overlay.ts"),
+            controlUiE2eBuiltModuleRequest("ui/src/pages/debug/debug-overlay.tsx"),
           );
           try {
             const composer = await installDockedScenario(page, undefined, route);
@@ -804,12 +808,12 @@ suite.define(() => {
           expect(await testCase.close(page).isVisible()).toBe(true);
           await composer.click({ position: { x: 8, y: 8 } });
           expect(await composer.inputValue()).toBe("Keep working");
-          await expect.poll(failure.headCount).toBe(1);
+          await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
 
-          await retryThroughReload(page, error);
+          await retryThroughReload(page, error, failure);
         }
         await testCase.ready(page).waitFor();
-        expect(failure.chunkRequestCount()).toBe(2);
+        expect(failure.chunkDocumentCount()).toBe(2);
         expect(await page.locator(".lazy-view-error, openclaw-modal-dialog").count()).toBe(0);
         expect(await composer.inputValue()).toBe("Keep working");
         if (captureUiProof) {
@@ -850,7 +854,7 @@ suite.define(() => {
         try {
           const response = await page.goto(suite.server.baseUrl, { waitUntil: "domcontentloaded" });
           expect(response?.status()).toBe(200);
-          await page.locator(".sidebar-brand").waitFor({ state: "attached" });
+          await page.locator(".sidebar-rail").waitFor({ state: "attached" });
           await held.request;
           const element = page.locator("openclaw-macos-titlebar-controls");
           expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
@@ -878,7 +882,7 @@ suite.define(() => {
           await expect
             .poll(() => toolbar.getByRole("button", { name: "Forward" }).isDisabled())
             .toBe(true);
-          await toolbar.getByRole("button", { name: "New session", exact: true }).click();
+          await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
           await page.locator(".new-session-page__message").waitFor({ state: "visible" });
           expect(held.requests()).toBe(1);
@@ -902,6 +906,20 @@ suite.define(() => {
         ...(railProofDir ? { recordVideo: { dir: railProofDir, size: viewport } } : {}),
       },
       async ({ page }) => {
+        await page.clock.install();
+        await page.addInitScript(() => {
+          const observed = window as Window & { completedFailedHeadFrames?: number };
+          const originalFetch = window.fetch;
+          window.fetch = async (...args) => {
+            const response = await originalFetch(...args);
+            if (args[1]?.method === "HEAD" && response.status === 503) {
+              requestAnimationFrame(() => {
+                observed.completedFailedHeadFrames = (observed.completedFailedHeadFrames ?? 0) + 1;
+              });
+            }
+            return response;
+          };
+        });
         await installNativeWebChrome(page);
         const failure = await installChunkFailure(
           page,
@@ -910,29 +928,57 @@ suite.define(() => {
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
         });
+        let documentRequests = 0;
+        page.on("request", (request) => {
+          if (request.resourceType() === "document") {
+            documentRequests += 1;
+          }
+        });
         const response = await page.goto(suite.server.baseUrl, {
           waitUntil: "domcontentloaded",
         });
         expect(response?.status()).toBe(200);
-        await page.locator(".sidebar-brand").waitFor({ state: "attached" });
+        await page.locator(".sidebar-rail").waitFor({ state: "attached" });
         const error = await expectRealChunkFailure(page, "openclaw-macos-titlebar-controls");
-        await expect.poll(failure.headCount).toBe(1);
-        expect(failure.chunkRequestCount()).toBe(1);
+        await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+        expect(failure.chunkDocumentCount()).toBe(1);
+        const completedFailedHeadFrames = () =>
+          page.evaluate(
+            () =>
+              (window as Window & { completedFailedHeadFrames?: number })
+                .completedFailedHeadFrames ?? 0,
+          );
+        await expect.poll(completedFailedHeadFrames).toBeGreaterThanOrEqual(1);
+        await pauseVirtualClock(page);
+        const failedProbes = await completedFailedHeadFrames();
+        // Cross the recovery owner's maximum backoff so another real HEAD
+        // fails while the error and its dismissal action remain available.
+        await page.clock.runFor(15_001);
+        await expect
+          .poll(async () => {
+            await page.clock.runFor(17);
+            return completedFailedHeadFrames();
+          })
+          .toBeGreaterThan(failedProbes);
+        expect(documentRequests).toBe(1);
+        await error.getByRole("button", { name: "Close", exact: true }).waitFor();
         if (railProofDir) {
           await page.screenshot({
             path: path.join(railProofDir, "native-titlebar-failed.png"),
           });
         }
 
-        await retryThroughReload(page, error);
+        await page.clock.resume();
+        await retryThroughReload(page, error, failure);
         const toolbar = page.locator(".macos-titlebar-controls");
         await toolbar.waitFor({ state: "visible" });
-        await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
-        await toolbar.getByRole("button", { name: "New session", exact: true }).click();
+        await page.locator(".sidebar-session-toolbar__collapse").click();
+        await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
         await page.locator(".new-session-page__message").waitFor({ state: "visible" });
         expect(await error.count()).toBe(0);
-        expect(failure.chunkRequestCount()).toBe(2);
+        expect(failure.chunkDocumentCount()).toBe(2);
+        expect(documentRequests).toBe(2);
         if (railProofDir) {
           await page.screenshot({
             path: path.join(railProofDir, "native-titlebar-recovered.png"),

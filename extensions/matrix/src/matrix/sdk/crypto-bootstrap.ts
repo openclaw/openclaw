@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
+import type { VerificationRequest } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { LogService } from "./logger.js";
@@ -11,10 +12,7 @@ import type {
   MatrixRawEvent,
   MatrixUiAuthCallback,
 } from "./types.js";
-import type {
-  MatrixVerificationManager,
-  MatrixVerificationRequestLike,
-} from "./verification-manager.js";
+import type { MatrixVerificationManager } from "./verification-manager.js";
 import { isMatrixDeviceOwnerVerified, trustMatrixOwnIdentity } from "./verification-status.js";
 
 type MatrixCryptoBootstrapperDeps<TRawEvent extends MatrixRawEvent> = {
@@ -145,26 +143,9 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
       userId,
       password: this.deps.getPassword?.(),
     });
-    const hasPublishedCrossSigningKeys = async (): Promise<boolean> => {
-      if (typeof crypto.userHasCrossSigningKeys !== "function") {
-        return true;
-      }
-      try {
-        return await crypto.userHasCrossSigningKeys(userId, true);
-      } catch {
-        return false;
-      }
-    };
-    const isCrossSigningReady = async (): Promise<boolean> => {
-      if (typeof crypto.isCrossSigningReady !== "function") {
-        return true;
-      }
-      try {
-        return await crypto.isCrossSigningReady();
-      } catch {
-        return false;
-      }
-    };
+    const hasPublishedCrossSigningKeys = () =>
+      crypto.userHasCrossSigningKeys(userId, true).catch(() => false);
+    const isCrossSigningReady = () => crypto.isCrossSigningReady().catch(() => false);
 
     const finalize = async (): Promise<{ ready: boolean; published: boolean }> => {
       const ready = await isCrossSigningReady();
@@ -331,7 +312,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     // client must explicitly choose "Verify by emoji" so we do not race a
     // second SAS start from the bot side and end up with mismatched keys.
     crypto.on(CryptoEvent.VerificationRequestReceived, (request) => {
-      const verificationRequest = request as MatrixVerificationRequestLike;
+      const verificationRequest = request as VerificationRequest;
       try {
         this.deps.verificationManager.trackVerificationRequest(verificationRequest);
       } catch (err) {
@@ -359,34 +340,23 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     }
     const userId = await this.deps.getUserId();
 
-    const deviceStatus =
-      typeof crypto.getDeviceVerificationStatus === "function"
-        ? await crypto.getDeviceVerificationStatus(userId, deviceId).catch(() => null)
-        : null;
+    const deviceStatus = await crypto
+      .getDeviceVerificationStatus(userId, deviceId)
+      .catch(() => null);
     const alreadyVerified = isMatrixDeviceOwnerVerified(deviceStatus);
 
     if (alreadyVerified) {
       return true;
     }
 
-    if (typeof crypto.setDeviceVerified === "function") {
-      await crypto.setDeviceVerified(userId, deviceId, true);
+    await crypto.setDeviceVerified(userId, deviceId, true);
+    if (await crypto.isCrossSigningReady()) {
+      await crypto.crossSignDevice(deviceId);
     }
 
-    if (typeof crypto.crossSignDevice === "function") {
-      const crossSigningReady =
-        typeof crypto.isCrossSigningReady === "function"
-          ? await crypto.isCrossSigningReady()
-          : true;
-      if (crossSigningReady) {
-        await crypto.crossSignDevice(deviceId);
-      }
-    }
-
-    const refreshedStatus =
-      typeof crypto.getDeviceVerificationStatus === "function"
-        ? await crypto.getDeviceVerificationStatus(userId, deviceId).catch(() => null)
-        : null;
+    const refreshedStatus = await crypto
+      .getDeviceVerificationStatus(userId, deviceId)
+      .catch(() => null);
     const verified = isMatrixDeviceOwnerVerified(refreshedStatus);
     if (!verified && options.strict) {
       throw new Error(

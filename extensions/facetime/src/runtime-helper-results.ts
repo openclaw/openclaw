@@ -11,30 +11,7 @@ export const OUTBOUND_DIAL_HELPER_BUNDLES = new Set([
 ]);
 
 function readHelperPeers(result: HelperActionResult): FaceTimeHelperPeer[] {
-  const peers: FaceTimeHelperPeer[] = [];
-  for (const entry of readHelperResults(result)) {
-    const peer = entry.helperPeer;
-    if (
-      peer &&
-      typeof peer === "object" &&
-      "processId" in peer &&
-      "bundleIdentifier" in peer &&
-      "connectionGeneration" in peer &&
-      "processStartedAtMs" in peer &&
-      typeof peer.processId === "number" &&
-      typeof peer.bundleIdentifier === "string" &&
-      typeof peer.connectionGeneration === "number" &&
-      typeof peer.processStartedAtMs === "number"
-    ) {
-      peers.push({
-        bundleIdentifier: peer.bundleIdentifier,
-        processId: peer.processId,
-        processStartedAtMs: peer.processStartedAtMs,
-        connectionGeneration: peer.connectionGeneration,
-      });
-    }
-  }
-  return peers;
+  return readHelperResults(result).flatMap((entry) => (entry.helperPeer ? [entry.helperPeer] : []));
 }
 
 export function retainHelperResultPeers(
@@ -80,10 +57,8 @@ export function readOutboundProxyIdentifier(result: HelperActionResult): string 
 }
 
 export function hasDialHelperConfirmation(results: HelperActionResult[]): boolean {
-  return results.some(
-    (entry) =>
-      typeof entry.helperBundleIdentifier === "string" &&
-      OUTBOUND_DIAL_HELPER_BUNDLES.has(entry.helperBundleIdentifier),
+  return results.some((entry) =>
+    OUTBOUND_DIAL_HELPER_BUNDLES.has(entry.helperBundleIdentifier ?? ""),
   );
 }
 
@@ -164,8 +139,7 @@ export async function reconcilePendingFaceTimeCarrier(params: {
     ) {
       return;
     }
-    const topologyGeneration =
-      typeof result.topologyGeneration === "number" ? result.topologyGeneration : undefined;
+    const topologyGeneration = result.topologyGeneration;
     const completeAbsence = hasDefinitiveDialHelperAbsence(result, params.peers.keys());
     if (
       completeAbsence &&

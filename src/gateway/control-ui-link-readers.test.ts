@@ -12,10 +12,7 @@ import {
   listControlUiLinkReaders,
   listControlUiPluginDescriptors,
 } from "./control-ui-plugin-tabs.js";
-import {
-  createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptors,
-} from "./methods/registry.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
 
 function setup() {
   const { config, registry } = createPluginRegistryFixture();
@@ -56,44 +53,60 @@ function setup() {
   };
   setActivePluginRegistry(registry.registry);
   const methods = () =>
-    createGatewayMethodRegistry(
-      createPluginGatewayMethodDescriptors(registry.registry),
-      registry.registry,
-    );
+    createGatewayMethodRegistry(registry.registry.gatewayMethodDescriptors, registry.registry);
   const readers = (scopes: readonly string[]) => listControlUiLinkReaders(scopes, methods());
   return { registry, register, readers, methods };
 }
 
 describe("plugin link-reader discovery", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
-  it("projects registered third-party readers without service-specific core dispatch", () => {
-    const { register, readers, methods } = setup();
-    register("notes");
-    register("forge", "operator.read", "forge.read", "forge.image");
-    expect(readers(["operator.read"]).map((reader) => reader.pluginId)).toEqual(["forge", "notes"]);
-    expect(readers(["operator.read"])[0]?.linkReader.imageMethod).toBe("forge.image");
-    expect(readers([])).toEqual([]);
-    expect(readers(["operator.admin"])).toHaveLength(2);
-    expect(
-      Value.Check(PluginsUiDescriptorsResultSchema, {
-        ok: true,
-        descriptors: listControlUiPluginDescriptors(["operator.read"]),
-        methods: methods().listAdvertisedMethods(),
-        controlUiLinkReaders: readers(["operator.read"]),
-      }),
-    ).toBe(true);
-  });
-  it("requires a live same-plugin read method, not a different owner or stronger method", () => {
-    const { registry, register, readers } = setup();
-    register("notes");
-    register("forge", "operator.read", "notes.read");
-    register("writer", "operator.write");
-    expect(readers(["operator.admin"]).map((reader) => reader.pluginId)).toEqual(["notes"]);
-    const method = registry.registry.gatewayMethodDescriptors.find(
-      (entry) => entry.name === "notes.read",
-    )!;
-    method.advertise = false;
-    expect(readers(["operator.admin"])).toEqual([]);
+  it.each([
+    "valid",
+    "foreign or stronger detail method",
+    "missing image method",
+    "writing image method",
+  ])("advertises only live same-plugin read methods: %s", (kind) => {
+    const { registry, register, readers, methods } = setup();
+    const image = kind.endsWith("image method");
+    register("notes", "operator.read", "notes.read", image ? "notes.image" : undefined);
+    if (kind === "valid") {
+      register("forge", "operator.read", "forge.read", "forge.image");
+      expect(readers(["operator.read"]).map((reader) => reader.pluginId)).toEqual([
+        "forge",
+        "notes",
+      ]);
+      expect(readers(["operator.read"])[0]?.linkReader.imageMethod).toBe("forge.image");
+      expect(readers([])).toEqual([]);
+      expect(readers(["operator.admin"])).toHaveLength(2);
+      expect(
+        Value.Check(PluginsUiDescriptorsResultSchema, {
+          ok: true,
+          descriptors: listControlUiPluginDescriptors(["operator.read"]),
+          methods: methods().listAdvertisedMethods(),
+          controlUiLinkReaders: readers(["operator.read"]),
+        }),
+      ).toBe(true);
+    } else {
+      if (!image) {
+        register("forge", "operator.read", "notes.read");
+        register("writer", "operator.write");
+        expect(readers(["operator.admin"]).map((reader) => reader.pluginId)).toEqual(["notes"]);
+      }
+      const method = registry.registry.gatewayMethodDescriptors.find(
+        (entry) => entry.name === (image ? "notes.image" : "notes.read"),
+      )!;
+      if (kind === "missing image method") {
+        registry.registry.gatewayMethodDescriptors.splice(
+          registry.registry.gatewayMethodDescriptors.indexOf(method),
+          1,
+        );
+      } else if (image) {
+        method.controlPlaneWrite = true;
+      } else {
+        method.advertise = false;
+      }
+      expect(readers(["operator.admin"])).toEqual([]);
+    }
   });
   it("does not retain a reader across owner disablement, rollback, or registry replacement", () => {
     const { registry, register, readers } = setup();
@@ -108,25 +121,6 @@ describe("plugin link-reader discovery", () => {
     setActivePluginRegistry(replacement.registry.registry);
     expect(readers(["operator.read"])).toEqual([]);
   });
-  it.each(["missing", "control-plane-write"])(
-    "does not advertise a reader with a %s image method",
-    (kind) => {
-      const { registry, register, readers } = setup();
-      register("notes", "operator.read", "notes.read", "notes.image");
-      const method = registry.registry.gatewayMethodDescriptors.find(
-        (entry) => entry.name === "notes.image",
-      )!;
-      if (kind === "missing") {
-        registry.registry.gatewayMethodDescriptors.splice(
-          registry.registry.gatewayMethodDescriptors.indexOf(method),
-          1,
-        );
-      } else {
-        method.controlPlaneWrite = true;
-      }
-      expect(readers(["operator.admin"])).toEqual([]);
-    },
-  );
   it("copies valid declaration data and rejects malformed or misplaced routing metadata", () => {
     const { config, registry } = createPluginRegistryFixture();
     const metadata = {

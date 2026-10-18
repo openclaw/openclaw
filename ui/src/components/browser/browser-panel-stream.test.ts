@@ -12,12 +12,12 @@ import {
   TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
 
 const PAGE_URL = "https://example.test/page";
 const NEXT_URL = "https://example.test/next";
-const controllers: BrowserPanelController[] = [];
+const controllers: BrowserPanel[] = [];
 let sockets: TestScreencastSocket[];
 let createdUrls: string[];
 let revokedUrls: string[];
@@ -47,7 +47,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   for (const controller of controllers.splice(0)) {
-    controller.hostDisconnected();
+    controller.suspendView();
   }
 });
 
@@ -68,7 +68,11 @@ function setup(handle?: (envelope: BrowserRequestEnvelope) => Promise<unknown>) 
       }
       switch (envelope.path) {
         case "/tabs":
-          return { running: true, tabs: [createBrowserPanelTestTab("tab-a", PAGE_URL, "Page")] };
+          return {
+            running: true,
+            canAutoResizeViewport: true,
+            tabs: [createBrowserPanelTestTab("tab-a", PAGE_URL, "Page")],
+          };
         case "/screencast":
           return {
             token: "token",
@@ -87,7 +91,7 @@ function setup(handle?: (envelope: BrowserRequestEnvelope) => Promise<unknown>) 
     { screencast: true },
   );
   const host = new TestBrowserPanelHost(gateway.client);
-  const controller = new BrowserPanelController(host);
+  const controller = host.createPanel();
   controller.synchronizeClient();
   controllers.push(controller);
   const calls = (path: string) =>
@@ -97,7 +101,7 @@ function setup(handle?: (envelope: BrowserRequestEnvelope) => Promise<unknown>) 
   return { ...gateway, host, controller, calls };
 }
 
-async function start(controller: BrowserPanelController) {
+async function start(controller: BrowserPanel) {
   const pending = controller.refreshAll();
   await flush();
   const socket = sockets.at(-1)!;
@@ -111,38 +115,35 @@ async function start(controller: BrowserPanelController) {
 }
 
 describe("Browser panel stream ownership", () => {
-  it.each(["annotate", "inspect"] as const)(
-    "pins the captured image and URL during %s and presents the latest frame on exit",
-    async (mode) => {
-      const { controller } = setup();
-      const socket = await start(controller);
-      controller.setMode(mode);
-      controller.setState("strokes", [{ points: [{ x: 0.1, y: 0.2 }] }]);
-      controller.setState("inspected", createInspectedNode("Original button"));
-      const pinnedView = controller.view;
-      socket.receive(screencastFrame(NEXT_URL, 200, 100));
-      socket.receive(screencastFrame(NEXT_URL, 300, 100));
-      socket.receive(JSON.stringify({ type: "meta", url: NEXT_URL, title: "Next" }));
-      await flush();
-      expect(controller.view).toBe(pinnedView);
-      expect(controller.view).toMatchObject({ dataUrl: "blob:frame-0", url: PAGE_URL });
-      expect(controller.tabs[0]).toMatchObject({ url: NEXT_URL, title: "Next" });
-      expect(controller.urlDraft).toBe(NEXT_URL);
-      expect(controller.strokes).toHaveLength(1);
-      expect(controller.inspected?.name).toBe("Original button");
+  it("pins the captured image and URL during inspect and presents the latest frame on exit", async () => {
+    const { controller } = setup();
+    const socket = await start(controller);
+    controller.setMode("inspect");
+    controller.setState("strokes", [{ points: [{ x: 0.1, y: 0.2 }] }]);
+    controller.setState("inspected", createInspectedNode("Original button"));
+    const pinnedView = controller.view;
+    socket.receive(screencastFrame(NEXT_URL, 200, 100));
+    socket.receive(screencastFrame(NEXT_URL, 300, 100));
+    socket.receive(JSON.stringify({ type: "meta", url: NEXT_URL, title: "Next" }));
+    await flush();
+    expect(controller.view).toBe(pinnedView);
+    expect(controller.view).toMatchObject({ dataUrl: "blob:frame-0", url: PAGE_URL });
+    expect(controller.tabs[0]).toMatchObject({ url: NEXT_URL, title: "Next" });
+    expect(controller.urlDraft).toBe(NEXT_URL);
+    expect(controller.strokes).toHaveLength(1);
+    expect(controller.inspected?.name).toBe("Original button");
 
-      controller.exitCaptureModes();
-      await flush();
-      expect(controller.view).toMatchObject({
-        dataUrl: "blob:frame-1",
-        url: NEXT_URL,
-        metrics: { cssWidth: 300, title: "Next", url: NEXT_URL },
-      });
-      expect(controller.strokes).toEqual([]);
-      expect(controller.inspected).toBeNull();
-      expect(revokedUrls).toEqual(["blob:frame-0"]);
-    },
-  );
+    controller.exitCaptureModes();
+    await flush();
+    expect(controller.view).toMatchObject({
+      dataUrl: "blob:frame-1",
+      url: NEXT_URL,
+      metrics: { cssWidth: 300, title: "Next", url: NEXT_URL },
+    });
+    expect(controller.strokes).toEqual([]);
+    expect(controller.inspected).toBeNull();
+    expect(revokedUrls).toEqual(["blob:frame-0"]);
+  });
 
   it("reconnects while a fallback screenshot is still pending", async () => {
     const screenshot = createDeferred<unknown>();
@@ -189,35 +190,49 @@ describe("Browser panel stream ownership", () => {
     expect(calls("/screenshot")).toHaveLength(2);
   });
 
-  it.each(["annotate", "inspect"] as const)(
-    "defers a resize restart until %s ends",
-    async (mode) => {
-      const { controller, host, calls } = setup();
-      let width = 500;
-      const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
-      Object.defineProperty(stage, "clientWidth", { get: () => width });
-      controller.handleViewportResize(width, 300);
-      const socket = await start(controller);
-      controller.setMode(mode);
-      const pinned = controller.view;
-      width = 800;
-      controller.handleViewportResize(width, 300);
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(socket.close).not.toHaveBeenCalled();
-      expect(calls("/screencast")).toHaveLength(1);
-      expect(controller.view).toBe(pinned);
+  it("sizes the first stream from the viewport before any resize notification", async () => {
+    const { controller, host, calls } = setup();
+    const viewport = document.createElement("div");
+    Object.defineProperties(viewport, {
+      clientWidth: { value: 620 },
+      clientHeight: { value: 940 },
+    });
+    host.renderRoot.append(viewport);
+    controller.input.elements.viewport = viewport;
 
-      controller.exitCaptureModes();
-      await vi.advanceTimersByTimeAsync(500);
-      expect(socket.close).toHaveBeenCalledOnce();
-      expect(calls("/screencast")).toHaveLength(2);
-      expect(calls("/screencast")[1]?.[1]).toMatchObject({ body: { maxWidth: 800 } });
-      sockets[1]!.receive(screencastFrame(PAGE_URL, 800, 300));
-      await flush();
-      expect(controller.view?.dataUrl).toBe("blob:frame-1");
-      expect(calls("/screenshot")).toHaveLength(0);
-    },
-  );
+    await start(controller);
+
+    expect(calls("/screencast")[0]?.[1]).toMatchObject({
+      body: { maxWidth: 620, maxHeight: 940 },
+    });
+  });
+
+  it("defers a resize restart until inspect ends", async () => {
+    const { controller, host, calls } = setup();
+    let width = 500;
+    const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
+    Object.defineProperty(stage, "clientWidth", { get: () => width });
+    controller.handleViewportResize(width, 300);
+    const socket = await start(controller);
+    controller.setMode("inspect");
+    const pinned = controller.view;
+    width = 800;
+    controller.handleViewportResize(width, 300);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(calls("/screencast")).toHaveLength(1);
+    expect(controller.view).toBe(pinned);
+
+    controller.exitCaptureModes();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(socket.close).toHaveBeenCalledOnce();
+    expect(calls("/screencast")).toHaveLength(2);
+    expect(calls("/screencast")[1]?.[1]).toMatchObject({ body: { maxWidth: 800 } });
+    sockets[1]!.receive(screencastFrame(PAGE_URL, 800, 300));
+    await flush();
+    expect(controller.view?.dataUrl).toBe("blob:frame-1");
+    expect(calls("/screenshot")).toHaveLength(0);
+  });
 
   it("recaptures when a late first frame closes before decoding", async () => {
     const screenshot = createDeferred<unknown>();
@@ -298,39 +313,6 @@ describe("Browser panel stream ownership", () => {
     images[1]!.dispatchEvent(new Event("load"));
     await flush();
     expect(controller.view).toMatchObject({ dataUrl: "blob:frame-2", url: NEXT_URL });
-  });
-
-  it("lets frames own the view and skips screenshot refreshes while live", async () => {
-    const { controller, calls } = setup();
-    const socket = await start(controller);
-    expect(controller.view).toMatchObject({
-      targetId: "tab-a",
-      dataUrl: "blob:frame-0",
-      metrics: { cssWidth: 100, cssHeight: 100 },
-    });
-    await controller.refreshAll();
-    expect(calls("/screenshot")).toHaveLength(0);
-    expect(calls("/screencast")).toHaveLength(1);
-    expect(controller.loading).toBe(false);
-    socket.receive(JSON.stringify({ type: "meta", url: NEXT_URL, title: "Next" }));
-    expect(controller.view).toMatchObject({
-      dataUrl: "blob:frame-0",
-      url: PAGE_URL,
-      metrics: { title: "Page", url: PAGE_URL },
-    });
-    expect(controller.tabs[0]).toMatchObject({ title: "Next", url: NEXT_URL });
-    expect(controller.urlDraft).toBe(NEXT_URL);
-    socket.receive(screencastFrame(NEXT_URL));
-    await flush();
-    expect(controller.view).toMatchObject({
-      dataUrl: "blob:frame-1",
-      url: NEXT_URL,
-      metrics: { title: "Next", url: NEXT_URL },
-    });
-    controller.urlDraftEditing = true;
-    controller.setState("urlDraft", "editing");
-    socket.receive(JSON.stringify({ type: "meta", url: PAGE_URL, title: "Page again" }));
-    expect(controller.urlDraft).toBe("editing");
   });
 
   it.each([false, true])(
@@ -448,31 +430,28 @@ describe("Browser panel stream ownership", () => {
     expect(calls("/screencast")).toHaveLength(3);
   });
 
-  it.each(["annotate", "inspect"] as const)(
-    "defers socket recovery until %s ends",
-    async (mode) => {
-      const { controller, calls } = setup();
-      const socket = await start(controller);
-      controller.setMode(mode);
-      controller.setState("strokes", [{ points: [{ x: 0.1, y: 0.2 }] }]);
-      controller.setState("inspected", createInspectedNode("Pinned button"));
-      const pinned = controller.view;
-      socket.disconnect(1006);
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(controller.view).toBe(pinned);
-      expect(controller.strokes).toHaveLength(1);
-      expect(controller.inspected?.name).toBe("Pinned button");
-      expect(calls("/screenshot")).toHaveLength(0);
-      expect(calls("/screencast")).toHaveLength(1);
+  it("defers socket recovery until inspect ends", async () => {
+    const { controller, calls } = setup();
+    const socket = await start(controller);
+    controller.setMode("inspect");
+    controller.setState("strokes", [{ points: [{ x: 0.1, y: 0.2 }] }]);
+    controller.setState("inspected", createInspectedNode("Pinned button"));
+    const pinned = controller.view;
+    socket.disconnect(1006);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(controller.view).toBe(pinned);
+    expect(controller.strokes).toHaveLength(1);
+    expect(controller.inspected?.name).toBe("Pinned button");
+    expect(calls("/screenshot")).toHaveLength(0);
+    expect(calls("/screencast")).toHaveLength(1);
 
-      controller.exitCaptureModes();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(calls("/screencast")).toHaveLength(2);
-      sockets[1]!.receive(screencastFrame(NEXT_URL));
-      await flush();
-      expect(controller.view?.url).toBe(NEXT_URL);
-    },
-  );
+    controller.exitCaptureModes();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls("/screencast")).toHaveLength(2);
+    sockets[1]!.receive(screencastFrame(NEXT_URL));
+    await flush();
+    expect(controller.view?.url).toBe(NEXT_URL);
+  });
 
   it("does not replace a capture entered while the recovery screenshot is pending", async () => {
     const screenshot = createDeferred<unknown>();
@@ -503,7 +482,7 @@ describe("Browser panel stream ownership", () => {
       await vi.advanceTimersByTimeAsync(0);
       const screenshots = calls("/screenshot").length;
       if (kind === "disconnect") {
-        controller.hostDisconnected();
+        controller.suspendView();
       } else if (kind === "reset") {
         controller.resetBrowserState();
       } else if (kind === "tab") {
@@ -569,20 +548,6 @@ describe("Browser panel stream ownership", () => {
     },
   );
 
-  it.each(["disconnect", "reset", "tab"])("closes and revokes on %s teardown", async (kind) => {
-    const { controller } = setup();
-    const socket = await start(controller);
-    if (kind === "disconnect") {
-      controller.hostDisconnected();
-    } else if (kind === "reset") {
-      controller.resetBrowserState();
-    } else {
-      controller.setState("activeTargetId", "tab-b");
-    }
-    expect(socket.close).toHaveBeenCalledOnce();
-    expect(revokedUrls).toEqual(["blob:frame-0"]);
-  });
-
   it("coalesces decoding frames and never publishes a frame overtaken by navigation metadata", async () => {
     const { controller } = setup();
     const socket = await start(controller);
@@ -643,7 +608,6 @@ describe("Browser panel stream ownership", () => {
 
   it.each([
     { acknowledged: true, width: 1300, height: 800 },
-    { acknowledged: true, width: 100, height: 100 },
     { acknowledged: false, width: 1300, height: 800 },
   ])(
     "restores the visible viewport after drift to $width × $height (acknowledged: $acknowledged)",

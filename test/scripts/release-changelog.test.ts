@@ -2,398 +2,283 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, test } from "vitest";
-import {
-  checkChangelogLayout,
-  findChangelogSection,
-  findReleaseChangelog,
-  isReleaseChangelogPath,
-  loadChangelogCollection,
-  loadReleaseChangelog,
-  splitChangelog,
-  writeReleaseChangelog,
-} from "../../scripts/lib/release-changelog.mjs";
-import {
-  checkReleaseDocsMirrors,
-  flattenReleaseDocs,
-  parseReleaseDocsMirror,
-  releaseDocsNavigation,
-  renderReleaseDocsMirror,
-} from "../../scripts/lib/release-docs-mirror.mjs";
+import * as changelog from "../../scripts/lib/release-changelog.mjs";
+import * as docs from "../../scripts/lib/release-docs-mirror.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const cli = fileURLToPath(new URL("../../scripts/release-changelog.mjs", import.meta.url));
 const current =
   "## 2026.9.4\n\n### Highlights\n\nText.\n\n```md\n## 2099.1.1\n```\n\n### Complete contribution record\n\nAudited range abc..def.\n- **PR #12** Thanks @human.\n\n";
 const old = "## 2026.8.1\n\nOld notes without a contribution record.\n";
-function fixture(content = `# Changelog\n\n${current}${old}`) {
+const entry = "CHANGELOG/2026.9.4.md";
+const recordFile = "CHANGELOG/records/2026.9.4.md";
+function fixture(content: string | null = `# Changelog\n\n${current}${old}`, split = false) {
   const rootDir = tempDirs.make("release-changelog-test-");
-  fs.writeFileSync(path.join(rootDir, "CHANGELOG.md"), content);
-  return rootDir;
+  const file = (name: string) => path.join(rootDir, name);
+  const f = {
+    rootDir,
+    file,
+    read: (name: string) => fs.readFileSync(file(name), "utf8"),
+    write: (name: string, text: string) => fs.writeFileSync(file(name), text),
+    load: (version = "2026.9.4", ref?: string) =>
+      changelog.loadReleaseChangelog({ rootDir, version, ref }),
+    save: (section: string, version = "2026.9.4") =>
+      changelog.writeReleaseChangelog({ rootDir, version, section }),
+  };
+  if (content !== null) {
+    f.write("CHANGELOG.md", content);
+  }
+  if (split) {
+    changelog.splitChangelog(f);
+  }
+  return f;
 }
-function git(rootDir: string, ...args: string[]) {
-  return execFileSync("git", ["-C", rootDir, ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
-}
-
 test("mechanical split preserves every section and authentic record, including CRLF", () => {
+  const counts = { sections: 2, releases: 2, records: 1, duplicates: 0 };
   for (const section of [current, current.replaceAll("\n", "\r\n")]) {
-    const rootDir = fixture(`# Changelog\n\n${section}${old}`);
-    const before = fs.readFileSync(path.join(rootDir, "CHANGELOG.md"), "utf8");
-    assert.deepEqual(splitChangelog({ rootDir, check: true }), {
-      sections: 2,
-      releases: 2,
-      records: 1,
-      duplicates: 0,
-    });
-    assert.equal(fs.readFileSync(path.join(rootDir, "CHANGELOG.md"), "utf8"), before);
-    splitChangelog({ rootDir });
-    const release = loadReleaseChangelog({ rootDir, version: "v2026.9.4" });
+    const f = fixture(`# Changelog\n\n${section}${old}`);
+    const before = f.read("CHANGELOG.md");
+    assert.deepEqual(changelog.splitChangelog({ ...f, check: true }), counts);
+    assert.equal(f.read("CHANGELOG.md"), before);
+    changelog.splitChangelog(f);
+    const release = f.load("v2026.9.4");
     assert.equal(release.section, section);
     assert.equal(
       release.record?.slice(release.record.indexOf("### Complete")),
       section.slice(section.indexOf("### Complete")),
     );
-    assert.equal(loadReleaseChangelog({ rootDir, version: "2026.8.1" }).record, null);
-    assert.deepEqual(checkChangelogLayout({ rootDir }), { releases: 2, records: 1 });
+    assert.equal(f.load("2026.8.1").record, null);
+    assert.deepEqual(changelog.checkChangelogLayout(f), { releases: 2, records: 1 });
   }
 });
 
 test("legacy and split immutable Git reads are independent of working-tree changes", () => {
-  const rootDir = fixture();
-  git(rootDir, "init", "-q");
-  git(rootDir, "add", "CHANGELOG.md");
-  git(
-    rootDir,
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.invalid",
-    "commit",
-    "-qm",
-    "legacy",
-  );
-  const legacy = git(rootDir, "rev-parse", "HEAD");
-  splitChangelog({ rootDir });
-  git(rootDir, "add", "CHANGELOG.md", "CHANGELOG");
-  git(
-    rootDir,
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.invalid",
-    "commit",
-    "-qm",
-    "split",
-  );
-  const split = git(rootDir, "rev-parse", "HEAD");
-  fs.writeFileSync(path.join(rootDir, "CHANGELOG/2026.9.4.md"), "broken");
-  assert.equal(
-    loadReleaseChangelog({ rootDir, ref: legacy, version: "2026.9.4" }).layout,
-    "legacy",
-  );
-  assert.equal(loadReleaseChangelog({ rootDir, ref: split, version: "2026.9.4" }).section, current);
-  assert.throws(() => loadReleaseChangelog({ rootDir, version: "2026.9.4" }), /mismatched/u);
+  const f = fixture();
+  const identity = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"];
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", f.rootDir, ...identity, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  git("init", "-q");
+  git("add", "CHANGELOG.md");
+  git("commit", "-qm", "legacy");
+  const legacy = git("rev-parse", "HEAD");
+  changelog.splitChangelog(f);
+  git("add", "CHANGELOG.md", "CHANGELOG");
+  git("commit", "-qm", "split");
+  const split = git("rev-parse", "HEAD");
+  f.write(entry, "broken");
+  assert.equal(f.load("2026.9.4", legacy).layout, "legacy");
+  assert.equal(f.load("2026.9.4", split).section, current);
+  assert.throws(() => f.load(), /mismatched/u);
 });
 
 test("duplicate historical sections are retained together but never silently selected", () => {
-  const rootDir = fixture(`# Changelog\n\n${old}${old}`);
-  assert.throws(() => loadReleaseChangelog({ rootDir, version: "2026.8.1" }), /Ambiguous/u);
-  assert.equal(splitChangelog({ rootDir }).duplicates, 1);
-  assert.equal(fs.readFileSync(path.join(rootDir, "CHANGELOG/2026.8.1.md"), "utf8"), old + old);
-  assert.equal((loadChangelogCollection({ rootDir }).match(/^## /gmu) ?? []).length, 2);
-  assert.throws(() => findReleaseChangelog({ rootDir, version: "2026.8.1" }), /Ambiguous/u);
-  assert.throws(
-    () => writeReleaseChangelog({ rootDir, version: "2026.8.1", section: old }),
-    /Ambiguous/u,
-  );
-  checkChangelogLayout({ rootDir });
+  const f = fixture(`# Changelog\n\n${old}${old}`);
+  assert.throws(() => f.load("2026.8.1"), /Ambiguous/u);
+  assert.equal(changelog.splitChangelog(f).duplicates, 1);
+  assert.equal(f.read("CHANGELOG/2026.8.1.md"), old + old);
+  assert.equal((changelog.loadChangelogCollection(f).match(/^## /gmu) ?? []).length, 2);
+  assert.throws(() => changelog.findReleaseChangelog({ ...f, version: "2026.8.1" }), /Ambiguous/u);
+  assert.throws(() => f.save(old, "2026.8.1"), /Ambiguous/u);
+  changelog.checkChangelogLayout(f);
 });
 
 test("initial generation updates its record, protects mirrors and refuses legacy writes", () => {
-  const rootDir = fixture();
-  assert.throws(
-    () => writeReleaseChangelog({ rootDir, version: "2026.9.4", section: current }),
-    /require split/u,
-  );
-  splitChangelog({ rootDir });
-  const updated = current.replace("PR #12", "PR #13");
-  writeReleaseChangelog({ rootDir, version: "2026.9.4", section: updated });
-  assert.match(loadReleaseChangelog({ rootDir, version: "2026.9.4" }).record ?? "", /PR #13/u);
-  assert.equal(fs.readFileSync(path.join(rootDir, "CHANGELOG/2026.8.1.md"), "utf8"), old);
-  const frozenRecord = fs.readFileSync(path.join(rootDir, "CHANGELOG/records/2026.9.4.md"), "utf8");
-  fs.writeFileSync(
-    path.join(rootDir, "CHANGELOG/2026.9.4.md"),
+  const f = fixture();
+  assert.throws(() => f.save(current), /require split/u);
+  changelog.splitChangelog(f);
+  f.save(current.replace("PR #12", "PR #13"));
+  assert.match(f.load().record ?? "", /PR #13/u);
+  assert.equal(f.read("CHANGELOG/2026.8.1.md"), old);
+  const frozenRecord = f.read(recordFile);
+  f.write(
+    entry,
     '<!-- openclaw-docs-mirror-v1 {"version":"2026.9.4"} -->\n## 2026.9.4\n\nDocs prose.\n',
   );
-  assert.equal(loadReleaseChangelog({ rootDir, version: "2026.9.4" }).format, "docs-mirror");
-  checkChangelogLayout({ rootDir });
-  assert.throws(
-    () => writeReleaseChangelog({ rootDir, version: "2026.9.4", section: current }),
-    /cannot overwrite/u,
-  );
-  assert.equal(
-    fs.readFileSync(path.join(rootDir, "CHANGELOG/records/2026.9.4.md"), "utf8"),
-    frozenRecord,
-  );
+  assert.equal(f.load().format, "docs-mirror");
+  changelog.checkChangelogLayout(f);
+  assert.throws(() => f.save(current), /cannot overwrite/u);
+  assert.equal(f.read(recordFile), frozenRecord);
 });
 
 test("missing entries, conflicts, path traversal and symlinks fail at the owner", () => {
-  for (const damage of ["missing", "changed", "mislabeled", "orphan", "mirror-missing"]) {
-    const damagedRoot = fixture();
-    splitChangelog({ rootDir: damagedRoot });
-    const recordPath = path.join(damagedRoot, "CHANGELOG/records/2026.9.4.md");
-    const record = fs.readFileSync(recordPath, "utf8");
-    if (damage === "missing" || damage === "mirror-missing") {
-      fs.unlinkSync(recordPath);
-      if (damage === "mirror-missing") {
-        fs.writeFileSync(
-          path.join(damagedRoot, "CHANGELOG/2026.9.4.md"),
-          "<!-- openclaw-docs-mirror-v1 {} -->\n## 2026.9.4\n\nDocs prose.\n",
-        );
-      }
-    } else if (damage === "orphan") {
-      fs.writeFileSync(
-        path.join(damagedRoot, "CHANGELOG/records/2026.1.1.md"),
-        record.replace("2026.9.4", "2026.1.1"),
-      );
-    } else {
-      fs.writeFileSync(
-        recordPath,
-        damage === "changed"
-          ? record.replace("PR #12", "PR #99")
-          : record.replace("2026.9.4", "2026.1.1"),
-      );
-    }
+  const damageCases: ((f: ReturnType<typeof fixture>, record: string) => void)[] = [
+    (f) => fs.unlinkSync(f.file(recordFile)),
+    (f, record) => f.write(recordFile, record.replace("PR #12", "PR #99")),
+    (f, record) => f.write(recordFile, record.replace("2026.9.4", "2026.1.1")),
+    (f, record) => f.write("CHANGELOG/records/2026.1.1.md", record.replace("2026.9.4", "2026.1.1")),
+    (f) => {
+      fs.unlinkSync(f.file(recordFile));
+      f.write(entry, "<!-- openclaw-docs-mirror-v1 {} -->\n## 2026.9.4\n\nDocs prose.\n");
+    },
+  ];
+  for (const damage of damageCases) {
+    const damaged = fixture(undefined, true);
+    damage(damaged, damaged.read(recordFile));
     assert.throws(
-      () => loadChangelogCollection({ rootDir: damagedRoot, recordsOnly: true }),
+      () => changelog.loadChangelogCollection({ ...damaged, recordsOnly: true }),
       /contribution record|Contribution record|mismatched/u,
     );
   }
-  const rootDir = fixture();
-  splitChangelog({ rootDir });
-  assert.equal(findReleaseChangelog({ rootDir, version: "2026.1.1" }), null);
-  assert.throws(() => loadReleaseChangelog({ rootDir, version: "2026.1.1" }), /Missing/u);
-  assert.throws(() => loadReleaseChangelog({ rootDir, version: "../2026.9.4" }), /Invalid/u);
-  fs.writeFileSync(path.join(rootDir, "CHANGELOG.md"), current);
-  assert.throws(() => loadReleaseChangelog({ rootDir, version: "2026.9.4" }), /Conflicting/u);
-  fs.writeFileSync(path.join(rootDir, "CHANGELOG.md"), "# Changelog\n");
-  fs.symlinkSync(path.join(rootDir, "CHANGELOG.md"), path.join(rootDir, "CHANGELOG/2026.1.1.md"));
-  assert.throws(() => findReleaseChangelog({ rootDir, version: "2026.9.4" }), /symlink/u);
+  const f = fixture(undefined, true);
+  assert.equal(changelog.findReleaseChangelog({ ...f, version: "2026.1.1" }), null);
+  assert.throws(() => f.load("2026.1.1"), /Missing/u);
+  assert.throws(() => f.load("../2026.9.4"), /Invalid/u);
+  f.write("CHANGELOG.md", current);
+  assert.throws(() => f.load(), /Conflicting/u);
+  f.write("CHANGELOG.md", "# Changelog\n");
+  fs.symlinkSync(f.file("CHANGELOG.md"), f.file("CHANGELOG/2026.1.1.md"));
+  assert.throws(() => changelog.findReleaseChangelog({ ...f, version: "2026.9.4" }), /symlink/u);
 });
 
 test("Unreleased fallback and path classification preserve candidate boundaries", () => {
   const section = "## 2026.9.5 (Unreleased)\n\nUpcoming notes.\n";
-  const rootDir = fixture(`# Changelog\n\n${section}${old}`);
-  assert.equal(findChangelogSection(section, "Unreleased"), section);
-  splitChangelog({ rootDir });
-  assert.equal(loadReleaseChangelog({ rootDir, version: "Unreleased" }).version, "2026.9.5");
+  const f = fixture(`# Changelog\n\n${section}${old}`);
+  assert.equal(changelog.findChangelogSection(section, "Unreleased"), section);
+  changelog.splitChangelog(f);
+  assert.equal(f.load("Unreleased").version, "2026.9.5");
+  assert.equal(changelog.isReleaseChangelogPath(recordFile, { version: "v2026.9.4" }), true);
   assert.equal(
-    isReleaseChangelogPath("CHANGELOG/records/2026.9.4.md", { version: "v2026.9.4" }),
-    true,
+    changelog.isReleaseChangelogPath("CHANGELOG/2026.9.3.md", { version: "2026.9.4" }),
+    false,
   );
-  assert.equal(isReleaseChangelogPath("CHANGELOG/2026.9.3.md", { version: "2026.9.4" }), false);
-  assert.equal(isReleaseChangelogPath("CHANGELOG/arbitrary.md"), false);
-});
-
-test("CLI reads and checks the same owner without runtime dependencies", () => {
-  const rootDir = fixture();
-  execFileSync(process.execPath, [cli, "split", "--root", rootDir]);
-  const output = execFileSync(
-    process.execPath,
-    [cli, "read", "--root", rootDir, "--version", "2026.9.4"],
-    { encoding: "utf8" },
-  );
-  assert.equal(output, current);
-  const records = execFileSync(
-    process.execPath,
-    [cli, "collection", "--root", rootDir, "--records-only"],
-    { encoding: "utf8" },
-  );
-  assert.match(records, /PR #12/u);
-  assert.doesNotMatch(records, /2026\.8\.1/u);
-  execFileSync(process.execPath, [cli, "check", "--root", rootDir]);
+  assert.equal(changelog.isReleaseChangelogPath("CHANGELOG/arbitrary.md"), false);
 });
 
 describe("release docs mirrors", () => {
-  const mirrorCli = fileURLToPath(
-    new URL("../../scripts/render-release-changelog.mjs", import.meta.url),
-  );
+  const mirrorCli = path.join(import.meta.dirname, "../../scripts/render-release-changelog.mjs");
   const version = "2026.9.4";
   const source = `docs/releases/${version}.md`;
 
   function mirrorFixture() {
-    const rootDir = tempDirs.make("release-docs-mirror-");
-    fs.mkdirSync(path.join(rootDir, "docs/releases"), { recursive: true });
-    fs.mkdirSync(path.join(rootDir, "CHANGELOG/records"), { recursive: true });
-    fs.writeFileSync(
-      path.join(rootDir, source),
-      `---\ntitle: "Release title"\n---\n\n# Release title\n\n${releaseDocsNavigation(version).docs}\n\nExact prose.\n`,
+    const f = fixture(null);
+    for (const dir of ["docs/releases", "CHANGELOG/records"]) {
+      fs.mkdirSync(f.file(dir), { recursive: true });
+    }
+    f.write(
+      source,
+      `---\ntitle: "Release title"\n---\n\n# Release title\n\n${docs.releaseDocsNavigation(version).docs}\n\nExact prose.\n`,
     );
-    return { rootDir, version, sources: [source] };
+    const options = { ...f, version, sources: [source] };
+    const command = [mirrorCli, "--root", f.rootDir];
+    return {
+      ...options,
+      render: (sources = options.sources) => docs.renderReleaseDocsMirror({ ...options, sources }),
+      check: () => docs.checkReleaseDocsMirrors(options),
+      cli: (...args: string[]) =>
+        spawnSync(process.execPath, [...command, ...args], { encoding: "utf8" }),
+    };
   }
 
   it("retains prose, credits, tables, images and code while flattening wrappers and links", () => {
-    const code = '```md\n<Accordion title="example">\n[local](/do-not-change)\n```';
+    const preserved = [
+      "- Exact credit [#42](https://github.com/openclaw/openclaw/pull/42). Thanks @alice, @steipete.",
+      "| A | B |\n| --- | --- |\n| exact | cells |",
+      '```md\n<Accordion title="example">\n[local](/do-not-change)\n```',
+      "`<Widget> [inline](/unchanged)` and `<Note>\n[split](/unchanged) </Note>`.",
+    ];
     const input = [
-      "# A release",
-      "",
-      "## Messaging",
-      "",
-      "<AccordionGroup>",
-      '<Accordion title="Keep **this** wording">',
-      "",
-      "Exact prose: [install](/install/node#help), [relative](../guide.md), [section](#source).",
-      "",
-      '<details class="release-source-toggle">',
-      "<summary>Sources and complete change list</summary>",
-      "",
-      "- Exact credit [#42](https://github.com/openclaw/openclaw/pull/42). Thanks @alice, @steipete.",
-      "",
-      "| A | B |",
-      "| --- | --- |",
-      "| exact | cells |",
-      "",
-      "![original alt](/images/example.png)",
-      "",
-      code,
-      "",
-      "`<Widget> [inline](/unchanged)` and `<Note>\n[split](/unchanged) </Note>`.",
-      "",
-      "</details>",
-      "</Accordion>",
-      "</AccordionGroup>",
-      "<Warning>",
-      "Keep the warning.",
-      "</Warning>",
-      "",
+      '# A release\n\n## Messaging\n\n<AccordionGroup>\n<Accordion title="Keep **this** wording">\n',
+      "Exact prose: [install](/install/node#help), [relative](../guide.md), [section](#source).\n",
+      '<details class="release-source-toggle">\n<summary>Sources and complete change list</summary>\n',
+      preserved[0] + "\n",
+      preserved[1] + "\n",
+      "![original alt](/images/example.png)\n",
+      preserved[2] + "\n",
+      preserved[3] + "\n",
+      "</details>\n</Accordion>\n</AccordionGroup>\n<Warning>\nKeep the warning.\n</Warning>\n",
       '[ref]: /install/node "Keep title"',
-    ].join("\n");
-    const result = flattenReleaseDocs(input, source);
-    expect(result).toContain("##### Keep **this** wording");
-    expect(result).toContain("###### Sources and complete change list");
-    expect(result).toContain(
-      "- Exact credit [#42](https://github.com/openclaw/openclaw/pull/42). Thanks @alice, @steipete.",
-    );
-    expect(result).toContain("| A | B |\n| --- | --- |\n| exact | cells |");
-    expect(result).toContain("![original alt](https://docs.openclaw.ai/images/example.png)");
-    expect(result).toContain(code);
-    expect(result).toContain(
-      "`<Widget> [inline](/unchanged)` and `<Note>\n[split](/unchanged) </Note>`.",
-    );
-    expect(result).toContain("[install](https://docs.openclaw.ai/install/node#help)");
-    expect(result).toContain("[relative](https://docs.openclaw.ai/guide)");
-    expect(result).toContain("[section](https://docs.openclaw.ai/releases/2026.9.4#source)");
-    expect(result).toContain("> **Warning**\n> \n> Keep the warning.");
-    expect(result).toContain('[ref]: https://docs.openclaw.ai/install/node "Keep title"');
+    ];
+    const result = docs.flattenReleaseDocs(input.join("\n"), source);
+    for (const text of [
+      ...preserved,
+      "##### Keep **this** wording",
+      "###### Sources and complete change list",
+      "![original alt](https://docs.openclaw.ai/images/example.png)",
+      "[install](https://docs.openclaw.ai/install/node#help)",
+      "[relative](https://docs.openclaw.ai/guide)",
+      "[section](https://docs.openclaw.ai/releases/2026.9.4#source)",
+      "> **Warning**\n> \n> Keep the warning.",
+      '[ref]: https://docs.openclaw.ai/install/node "Keep title"',
+    ]) {
+      expect(result).toContain(text);
+    }
   });
 
   it("binds source bytes and explicit multi-page order, preserving landing navigation", () => {
-    const options = mirrorFixture();
+    const f = mirrorFixture();
     const other = "docs/releases/part.md";
-    fs.writeFileSync(
-      path.join(options.rootDir, source),
-      "---\ntitle: Landing\n---\n\n[Part](./part.md) - Exact navigation.\n",
-    );
-    fs.writeFileSync(
-      path.join(options.rootDir, other),
-      "---\ntitle: Part\n---\n\nFinal complete list.\n",
-    );
-    const result = renderReleaseDocsMirror({ ...options, sources: [source, other] });
+    f.write(source, "---\ntitle: Landing\n---\n\n[Part](./part.md) - Exact navigation.\n");
+    f.write(other, "---\ntitle: Part\n---\n\nFinal complete list.\n");
+    const result = f.render([source, other]);
     expect(result).toContain("[Part](https://docs.openclaw.ai/releases/part) - Exact navigation.");
     expect(result.indexOf("### Landing")).toBeLessThan(result.indexOf("### Part"));
     expect(result).toContain("Final complete list.");
-    const metadata = parseReleaseDocsMirror(result);
+    const metadata = docs.parseReleaseDocsMirror(result);
+    const digest = metadata?.sourceDigest;
     expect(metadata?.sources).toEqual([source, other]);
-    const reversed = renderReleaseDocsMirror({ ...options, sources: [other, source] });
-    expect(parseReleaseDocsMirror(reversed)?.sourceDigest).not.toEqual(metadata?.sourceDigest);
-    fs.appendFileSync(path.join(options.rootDir, source), "\n");
-    expect(
-      parseReleaseDocsMirror(renderReleaseDocsMirror({ ...options, sources: [source, other] }))
-        ?.sourceDigest,
-    ).not.toEqual(metadata?.sourceDigest);
+    const reversed = f.render([other, source]);
+    expect(docs.parseReleaseDocsMirror(reversed)?.sourceDigest).not.toEqual(digest);
+    fs.appendFileSync(f.file(source), "\n");
+    const changed = f.render([source, other]);
+    expect(docs.parseReleaseDocsMirror(changed)?.sourceDigest).not.toEqual(digest);
   });
 
   it("checks only marked entries and rejects byte drift, invalid markers and missing sources", () => {
-    const options = mirrorFixture();
-    const output = path.join(options.rootDir, `CHANGELOG/${version}.md`);
-    fs.writeFileSync(output, renderReleaseDocsMirror(options));
-    fs.writeFileSync(
-      path.join(options.rootDir, "CHANGELOG/2026.8.1.md"),
-      "## 2026.8.1\n\nHistorical prose.\n",
-    );
-    expect(checkReleaseDocsMirrors(options)).toEqual([version]);
+    const f = mirrorFixture();
+    const output = f.file(`CHANGELOG/${version}.md`);
+    fs.writeFileSync(output, f.render());
+    f.write("CHANGELOG/2026.8.1.md", "## 2026.8.1\n\nHistorical prose.\n");
+    expect(f.check()).toEqual([version]);
     fs.appendFileSync(output, "Edited independently.\n");
-    expect(() => checkReleaseDocsMirrors(options)).toThrow(/stale or differs/);
-    fs.writeFileSync(output, renderReleaseDocsMirror(options).replace("mirror-v1", "mirror-v2"));
-    expect(() => checkReleaseDocsMirrors(options)).toThrow(/Unknown or invalid/);
-    fs.writeFileSync(output, renderReleaseDocsMirror(options));
-    fs.unlinkSync(path.join(options.rootDir, source));
-    expect(() => checkReleaseDocsMirrors(options)).toThrow(/ENOENT/);
+    expect(() => f.check()).toThrow(/stale or differs/);
+    fs.writeFileSync(output, f.render().replace("mirror-v1", "mirror-v2"));
+    expect(() => f.check()).toThrow(/Unknown or invalid/);
+    fs.writeFileSync(output, f.render());
+    fs.unlinkSync(f.file(source));
+    expect(() => f.check()).toThrow(/ENOENT/);
   });
 
   it("rejects unsafe paths, duplicate sources, malformed wrappers and unsupported constructs", () => {
-    const options = mirrorFixture();
-    expect(() => renderReleaseDocsMirror({ ...options, sources: ["docs/../private.md"] })).toThrow(
-      /Invalid docs source/,
-    );
-    expect(() => renderReleaseDocsMirror({ ...options, sources: [source, source] })).toThrow(
-      /without duplicates/,
-    );
+    const f = mirrorFixture();
+    expect(() => f.render(["docs/../private.md"])).toThrow(/Invalid docs source/);
+    expect(() => f.render([source, source])).toThrow(/without duplicates/);
     for (const body of [
       '<Widget title="do not lose me" />',
       '<Accordion title="Open">',
       "</details>",
       '<Note title="custom text">\nBody\n</Note>',
     ]) {
-      expect(() => flattenReleaseDocs(`# Title\n\n${body}`, source)).toThrow();
+      expect(() => docs.flattenReleaseDocs(`# Title\n\n${body}`, source)).toThrow();
     }
-    fs.symlinkSync(
-      path.join(options.rootDir, "../outside.md"),
-      path.join(options.rootDir, "docs/escape.md"),
-    );
-    expect(() => renderReleaseDocsMirror({ ...options, sources: ["docs/escape.md"] })).toThrow();
+    fs.symlinkSync(f.file("../outside.md"), f.file("docs/escape.md"));
+    expect(() => f.render(["docs/escape.md"])).toThrow();
   });
 
   it("runs the rendering and checking CLI without touching frozen records or docs", () => {
-    const options = mirrorFixture();
-    const record = path.join(options.rootDir, `CHANGELOG/records/${version}.md`);
+    const f = mirrorFixture();
+    const record = f.file(`CHANGELOG/records/${version}.md`);
     fs.writeFileSync(record, "Frozen original record.\n");
-    const original = fs.readFileSync(path.join(options.rootDir, source));
-    const output = path.join(options.rootDir, `CHANGELOG/${version}.md`);
-    const args = [
-      mirrorCli,
-      "--root",
-      options.rootDir,
-      "--version",
-      version,
-      "--source",
-      source,
-      "--output",
-    ];
-    expect(spawnSync(process.execPath, [...args, output], { encoding: "utf8" }).status).toBe(0);
+    const original = f.read(source);
+    const output = f.file(`CHANGELOG/${version}.md`);
+    const render = (destination: string) =>
+      f.cli("--version", version, "--source", source, "--output", destination);
+    expect(render(output).status).toBe(0);
     const rendered = fs.readFileSync(output, "utf8");
     expect(rendered.slice(rendered.indexOf("\n\n") + 2)).toBe(
       `## ${version}\n\n\n### Release title\n\nFor formatted release notes, [read this release on the docs site](https://docs.openclaw.ai/releases/${version}).\n\nExact prose.\n\n`,
     );
     expect(rendered).not.toContain("raw.githubusercontent.com");
-    const check = spawnSync(process.execPath, [mirrorCli, "--root", options.rootDir, "--check"], {
-      encoding: "utf8",
-    });
+    const check = f.cli("--check");
     expect(check.status, check.stderr).toBe(0);
     expect(check.stdout).toContain("Checked 1 docs mirror(s)");
-    expect(spawnSync(process.execPath, [...args, record], { encoding: "utf8" }).status).toBe(1);
+    expect(render(record).status).toBe(1);
     expect(fs.readFileSync(record, "utf8")).toBe("Frozen original record.\n");
-    expect(fs.readFileSync(path.join(options.rootDir, source))).toEqual(original);
-    fs.appendFileSync(path.join(options.rootDir, source), "Approved docs revision.\n");
-    expect(
-      spawnSync(process.execPath, [mirrorCli, "--root", options.rootDir, "--check"], {
-        encoding: "utf8",
-      }).status,
-    ).toBe(1);
+    expect(f.read(source)).toEqual(original);
+    fs.appendFileSync(f.file(source), "Approved docs revision.\n");
+    expect(f.cli("--check").status).toBe(1);
   });
 });

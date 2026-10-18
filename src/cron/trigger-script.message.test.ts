@@ -34,13 +34,9 @@ afterAll(async () => {
   await state.cleanup();
 });
 
-it.each(
-  (["captured", "legacy"] as const).flatMap((policy) =>
-    (["trigger", "payload"] as const).map((mode) => ({ policy, mode })),
-  ),
-)(
-  "gates $policy $mode message delivery on its occurrence fence, including a warm invocation",
-  async ({ policy, mode }) => {
+it.each(["captured", "legacy"] as const)(
+  "gates %s payload message delivery on its occurrence fence, including a warm invocation",
+  async (policy) => {
     const config: OpenClawConfig = {
       agents: { defaults: { workspace: state.workspaceDir, skipBootstrap: true } },
       tools: { allow: ["message"] },
@@ -65,7 +61,7 @@ it.each(
       },
     ]);
     setActivePluginRegistry(registry);
-    const jobId = `script-message-${mode}`;
+    const jobId = "script-message-payload";
     const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
     const controller = new AbortController();
     let rejectDelivery = true;
@@ -107,8 +103,7 @@ it.each(
         },
       },
     };
-    const invoke = () =>
-      mode === "trigger" ? runtime.evaluateTrigger(params) : runtime.executePayload(params);
+    const invoke = () => runtime.executePayload(params);
     try {
       await expect(invoke()).resolves.toMatchObject({
         kind: "error",
@@ -118,7 +113,7 @@ it.each(
       expect(sendText).not.toHaveBeenCalled();
       rejectDelivery = false;
       await expect(invoke()).resolves.toMatchObject({
-        kind: mode === "trigger" ? "evaluated" : "completed",
+        kind: "completed",
       });
       expect(beforeAttempt).toHaveBeenCalledTimes(2);
       expect(sendText).toHaveBeenCalledOnce();

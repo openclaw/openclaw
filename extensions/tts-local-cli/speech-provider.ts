@@ -1,11 +1,11 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/speech-provider";
 import { asOptionalRecord, filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const VALID_OUTPUT_FORMATS = ["mp3", "opus", "wav"] as const;
@@ -13,22 +13,9 @@ const AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".opus", ".ogg", ".m4a"]);
 type OutputFormat = (typeof VALID_OUTPUT_FORMATS)[number];
 type SourceFormat = OutputFormat | "ogg" | "m4a";
 
-type CliConfig = {
-  command: string;
-  args: string[];
-  outputFormat: OutputFormat;
-  timeoutMs: number;
-  cwd?: string;
-  env?: Record<string, string>;
-};
-
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_AUDIO_OUTPUT_BYTES = 50 * 1024 * 1024;
 const MAX_CLI_STDERR_BYTES = 1024 * 1024;
-
-function asStringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every((v) => typeof v === "string") ? value : undefined;
-}
 
 function normalizeOutputFormat(value: unknown): OutputFormat {
   if (typeof value !== "string") {
@@ -43,17 +30,14 @@ function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechPro
   return asOptionalRecord(providers?.["tts-local-cli"]) ?? asOptionalRecord(providers?.cli) ?? {};
 }
 
-function getConfig(
-  cfg: SpeechProviderConfig,
-  timeoutMs: number = DEFAULT_TIMEOUT_MS,
-): CliConfig | null {
+function getConfig(cfg: SpeechProviderConfig, timeoutMs: number = DEFAULT_TIMEOUT_MS) {
   const command = typeof cfg.command === "string" ? cfg.command.trim() : "";
   if (!command) {
     return null;
   }
   return {
     command,
-    args: asStringArray(cfg.args) ?? [],
+    args: isStringArray(cfg.args) ? cfg.args : [],
     outputFormat: normalizeOutputFormat(cfg.outputFormat),
     timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : timeoutMs,
     cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,
@@ -178,7 +162,7 @@ async function readAudioFile(filePath: string): Promise<Buffer> {
 }
 
 async function runCli(params: {
-  config: CliConfig;
+  config: NonNullable<ReturnType<typeof getConfig>>;
   text: string;
   outputDir: string;
   filePrefix: string;
@@ -308,9 +292,7 @@ async function synthesizeCli(
     throw new Error("CLI TTS not configured");
   }
   const telephony = target === "telephony";
-  log.debug(
-    `${telephony ? "synthesizeTelephony" : "synthesize"}: text=${truncateUtf16Safe(req.text, 50)}...`,
-  );
+  log.debug(`synthesize: target=${target}`);
 
   return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-cli-tts-" },
@@ -340,6 +322,8 @@ async function synthesizeCli(
 }
 
 export function buildCliSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = (ctx) =>
+    getConfig(ctx.providerConfig) !== null;
   return {
     id: "tts-local-cli",
     aliases: ["cli"],
@@ -351,9 +335,9 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
       return resolveCliProviderConfig(ctx.rawConfig);
     },
 
-    isConfigured(ctx): boolean {
-      return getConfig(ctx.providerConfig) !== null;
-    },
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
 
     async synthesize(req) {
       const result = await synthesizeCli(

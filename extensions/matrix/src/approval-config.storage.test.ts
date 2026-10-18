@@ -139,16 +139,16 @@ describe("Matrix approval config boundaries", () => {
       const cfg: CoreConfig = { channels: { matrix } };
       installMatrixTestRuntime({ stateDir, cfg });
       const capability = matrixPlugin.approvalCapability;
-      if (!capability?.authorizeActorAction || !capability.getActionAvailabilityState) {
+      if (!capability?.authorizeActorActionAsync || !capability.getActionAvailabilityState) {
         throw new Error("Matrix approval capability is not registered");
       }
-      await expectNoHostSql(stateDir, () => {
+      await expectNoHostSql(stateDir, async () => {
         const context = { cfg, accountId, action: "approve" as const, approvalKind };
         expect(capability.getActionAvailabilityState?.(context)).toEqual({ kind: "enabled" });
         const expectedRole = approvalKind === "plugin" ? "owner" : "exec";
         const excludedRole = approvalKind === "plugin" ? "exec" : "owner";
         expect(
-          capability.authorizeActorAction?.({
+          await capability.authorizeActorActionAsync?.({
             ...context,
             senderId: `@${role}-${expectedRole}:example.org`,
           }),
@@ -158,12 +158,14 @@ describe("Matrix approval config boundaries", () => {
           "@intruder:example.org",
           "@k:example.org",
         ]) {
-          expect(capability.authorizeActorAction?.({ ...context, senderId })).toMatchObject({
+          expect(
+            await capability.authorizeActorActionAsync?.({ ...context, senderId }),
+          ).toMatchObject({
             authorized: false,
           });
         }
         expect(
-          capability.authorizeActorAction?.({ ...context, senderId: "@K:example.org" }),
+          await capability.authorizeActorActionAsync?.({ ...context, senderId: "@K:example.org" }),
         ).toEqual({ authorized: true });
       });
     },
@@ -182,10 +184,10 @@ describe("Matrix approval config boundaries", () => {
         },
       };
       installMatrixTestRuntime({ stateDir, cfg });
-      await expectNoHostSql(stateDir, () => {
+      await expectNoHostSql(stateDir, async () => {
         for (const approvalKind of ["plugin", "exec", "system-agent"] as const) {
           expect(
-            matrixPlugin.approvalCapability?.authorizeActorAction?.({
+            await matrixPlugin.approvalCapability?.authorizeActorActionAsync?.({
               cfg,
               senderId: "@intruder:example.org",
               action: "approve",

@@ -1,7 +1,9 @@
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
+import { withAcpSessionEntryRead } from "../../acp/runtime/session-meta-read.js";
 import { logVerbose } from "../../globals.js";
+import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
   copyReplyPayloadMetadata,
@@ -10,13 +12,14 @@ import {
 } from "../reply-payload.js";
 import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events.js";
 import type { GatherDispatchRequestReadyState } from "./dispatch-from-config.gather.js";
-import { hasAskUserPayload } from "./dispatch-from-config.payloads.js";
+import { maybeApplyTtsToReplyPayload, hasAskUserPayload } from "./dispatch-from-config.payloads.js";
 import {
   loadReplyMediaPathsRuntime,
   loadRouteReplyRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
 import { resolveReplyPolicyConversationType } from "./get-reply-conversation-type.js";
 import type { ReplyDispatchKind, ReplyDispatchOperation } from "./reply-dispatcher.types.js";
+import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
   createReplyDeliveryContext,
   resolveReplyDeliveryAccountId,
@@ -39,37 +42,47 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     state.getPreDispatchAbortSignal()?.throwIfAborted();
     state.params.replyOptions?.operatorAuthority?.assertCurrent();
   };
-  // Gather awaits runtime preparation after its first row read. Reread ACP
-  // metadata with the same owner to preserve current lifecycle fences and
-  // recovery from an earlier store-read failure.
-  const currentAcpSession = sessionStoreEntry.sessionKey
-    ? await readAcpSessionEntryAsync({
-        cfg,
-        agentId: sessionStoreEntry.agentId,
-        sessionKey: sessionStoreEntry.sessionKey,
-        assertCurrent: assertPreparationCurrent,
-      })
-    : undefined;
+  // Delivery uses the current parent fields after gather's runtime preparation.
+  // A session without a parent cannot need the ACP child-delivery restriction.
+  const suppressAcpChildUserDelivery = sessionStoreEntry.sessionKey
+    ? await withAcpSessionEntryRead(
+        {
+          cfg,
+          agentId: sessionStoreEntry.agentId,
+          sessionKey: sessionStoreEntry.sessionKey,
+          assertCurrent: assertPreparationCurrent,
+        },
+        (session) =>
+          isParentOwnedBackgroundAcpSession(
+            session?.entry ? { ...session.entry, acp: session.acp } : undefined,
+          ),
+        {
+          includeMetadata: (entry) =>
+            Boolean(
+              normalizeOptionalString(entry?.spawnedBy) ||
+              normalizeOptionalString(entry?.parentSessionKey),
+            ),
+        },
+      )
+    : false;
   assertPreparationCurrent();
-  const sessionEntryWithAcp = currentAcpSession?.entry
-    ? { ...currentAcpSession.entry, acp: currentAcpSession.acp }
-    : undefined;
-  const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionEntryWithAcp);
   const effectiveExplicitDeliverRoute =
     ctx.ExplicitDeliverRoute === true || replyRoute.inheritedExternalRoute === true;
+  const resolveRouting = (isRoutableChannel: (channel: string | undefined) => boolean) =>
+    resolveReplyRoutingDecision({
+      provider: ctx.Provider,
+      surface: ctx.Surface,
+      explicitDeliverRoute: effectiveExplicitDeliverRoute,
+      originatingChannel: replyRoute.channel,
+      originatingTo: replyRoute.to,
+      suppressDirectUserDelivery: suppressAcpChildUserDelivery,
+      isRoutableChannel,
+    });
   const {
     currentSurface: normalizedCurrentSurface,
     isInternalWebchatTurn,
     shouldRouteToOriginating: hasRouteReplyCandidate,
-  } = resolveReplyRoutingDecision({
-    provider: ctx.Provider,
-    surface: ctx.Surface,
-    explicitDeliverRoute: effectiveExplicitDeliverRoute,
-    originatingChannel: replyRoute.channel,
-    originatingTo: replyRoute.to,
-    suppressDirectUserDelivery: suppressAcpChildUserDelivery,
-    isRoutableChannel: Boolean,
-  });
+  } = resolveRouting(Boolean);
   const routeReplyRuntime =
     hasRouteReplyCandidate && !state.replyOperationRunState.heartbeat
       ? await loadRouteReplyRuntime()
@@ -79,15 +92,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     currentSurface,
     shouldRouteToOriginating,
     shouldSuppressTyping,
-  } = resolveReplyRoutingDecision({
-    provider: ctx.Provider,
-    surface: ctx.Surface,
-    explicitDeliverRoute: effectiveExplicitDeliverRoute,
-    originatingChannel: replyRoute.channel,
-    originatingTo: replyRoute.to,
-    suppressDirectUserDelivery: suppressAcpChildUserDelivery,
-    isRoutableChannel: routeReplyRuntime?.isRoutableChannel ?? (() => false),
-  });
+  } = resolveRouting(routeReplyRuntime?.isRoutableChannel ?? (() => false));
   const routeReplyTo = replyRoute.to;
   // Durable intent identifies an outbound write; it never authorizes a new
   // destination or bypasses private-webchat and parent-owned-session fences.
@@ -98,43 +103,73 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     routeReplyTo &&
     routeReplyChannel === normalizedCurrentSurface,
   );
-  const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
+  // Heartbeat's custom dispatcher routes the reply, but synthesis still needs its destination.
+  const deliveryChannel =
+    shouldRouteToOriginating || state.replyOperationRunState.heartbeat
+      ? (routeReplyChannel ?? currentSurface)
+      : currentSurface;
+  const { preparedTtsPreferences, getDispatchReplyOperation } = state;
+  const maybeApplyTtsWithFinalizationLease = async (
+    payload: ReplyPayload,
+    kind: ReplyDispatchKind,
+  ) => {
+    const ttsContext = {
+      cfg,
+      channel: deliveryChannel,
+      ttsAuto: state.sessionTtsAuto,
+      agentId: state.sessionAgentId,
+      accountId: replyRoute.accountId,
+    };
+    const replyOperation = getDispatchReplyOperation();
+    // Provider fallbacks can outlive the default lease, but remain bounded by
+    // the same hard no-progress ceiling used for stale run takeover.
+    const finishFinalizationWork = replyOperation
+      ? beginReplyOperationFinalizationWork(replyOperation, RUN_STALE_TAKEOVER_MS)
+      : undefined;
+    try {
+      return await maybeApplyTtsToReplyPayload({
+        ...ttsContext,
+        payload,
+        kind,
+        preparedTtsPreferences,
+        inboundAudio:
+          state.inboundAudio ||
+          state.getDispatchReplyOperation()?.acceptedSteeredInboundAudio === true,
+      });
+    } finally {
+      finishFinalizationWork?.();
+      replyOperation?.recordActivity();
+    }
+  };
   const replyContextAccountId = routeReplyChannel
     ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
     : undefined;
   let normalizeReplyMediaPaths:
-    | ReturnType<
-        (typeof import("./reply-media-paths.runtime.js"))["createReplyMediaPathNormalizer"]
-      >
+    | ReturnType<(typeof import("./reply-media-paths.js"))["createReplyMediaPathNormalizer"]>
     | undefined;
-  const getNormalizeReplyMediaPaths = async () => {
-    if (normalizeReplyMediaPaths) {
-      return normalizeReplyMediaPaths;
-    }
-    const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
-    normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
-      cfg,
-      agentId: state.sessionAgentId,
-      sessionKey: state.acpDispatchSessionKey,
-      workspaceDir: state.workspaceDir,
-      messageProvider: deliveryChannel,
-      accountId: replyContextAccountId,
-      groupId,
-      groupChannel: ctx.GroupChannel,
-      groupSpace: ctx.GroupSpace,
-      requesterSenderId: ctx.SenderId,
-      requesterSenderName: ctx.SenderName,
-      requesterSenderUsername: ctx.SenderUsername,
-      requesterSenderE164: ctx.SenderE164,
-    });
-    return normalizeReplyMediaPaths;
-  };
   const normalizeReplyMediaPayload = async (payload: ReplyPayload): Promise<ReplyPayload> => {
     if (isInternalWebchatTurn || !resolveSendableOutboundReplyParts(payload).hasMedia) {
       return payload;
     }
-    const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();
-    return await normalizeReplyMediaPayloadPaths(payload);
+    if (!normalizeReplyMediaPaths) {
+      const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
+      normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+        cfg,
+        agentId: state.sessionAgentId,
+        sessionKey: state.acpDispatchSessionKey,
+        workspaceDir: state.workspaceDir,
+        messageProvider: deliveryChannel,
+        accountId: replyContextAccountId,
+        groupId,
+        groupChannel: ctx.GroupChannel,
+        groupSpace: ctx.GroupSpace,
+        requesterSenderId: ctx.SenderId,
+        requesterSenderName: ctx.SenderName,
+        requesterSenderUsername: ctx.SenderUsername,
+        requesterSenderE164: ctx.SenderE164,
+      });
+    }
+    return await normalizeReplyMediaPaths(payload);
   };
 
   const routeReplyOperationToOriginating = async (
@@ -222,8 +257,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   const sendReplyOperationAsync = async (
     operation: ReplyDispatchOperation,
     abortSignal?: AbortSignal,
-    mirror?: boolean,
-    kind: ReplyDispatchKind = "tool",
+    kind: "tool" | "block" = "tool",
     deliveryIntentId?: string,
   ) => {
     const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
@@ -236,7 +270,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     }
     const result = await routeReplyOperationToOriginating(operation, {
       abortSignal: effectiveAbortSignal,
-      mirror,
+      mirror: false,
       kind,
       deliveryIntentId,
     });
@@ -254,14 +288,8 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     return result;
   };
 
-  const sendPayloadAsync = (
-    payload: ReplyPayload,
-    abortSignal?: AbortSignal,
-    mirror?: boolean,
-    kind: ReplyDispatchKind = "tool",
-    deliveryIntentId?: string,
-  ) =>
-    sendReplyOperationAsync({ kind: "raw", payload }, abortSignal, mirror, kind, deliveryIntentId);
+  const sendPayloadAsync = (payload: ReplyPayload) =>
+    sendReplyOperationAsync({ kind: "raw", payload });
 
   const deliverBindingPayload = async (
     payload: ReplyPayload,
@@ -300,7 +328,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     markInboundDedupeReplayUnsafe();
     return turnLedger.sendQueued(mode === "additive" ? "tool" : "final", bindingPayload).queued;
   };
-  const nextState = Object.assign(state, {
+  return Object.assign(state, {
     suppressAcpChildUserDelivery,
     normalizedCurrentSurface,
     isInternalWebchatTurn,
@@ -310,6 +338,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     shouldSuppressTyping,
     routeReplyTo,
     deliveryChannel,
+    maybeApplyTtsWithFinalizationLease,
     replyContextAccountId,
     normalizeReplyMediaPayload,
     routeReplyToOriginating,
@@ -318,9 +347,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     sendReplyOperationAsync,
     deliverBindingPayload,
   });
-  return { status: "ready" as const, state: nextState };
 }
 
-export type PrepareDispatchDeliveryReadyState = Awaited<
-  ReturnType<typeof prepareDispatchDelivery>
->["state"];
+export type PrepareDispatchDeliveryReadyState = Awaited<ReturnType<typeof prepareDispatchDelivery>>;

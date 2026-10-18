@@ -10,12 +10,12 @@ export function handleManagedImageThumbnailResponse(
   params: { thumbnail: Buffer; filename: string | null; cacheControl: string },
 ): true {
   const sourceName = path.parse(params.filename ?? "generated-image").name;
-  const image = createHttpImageRepresentation(params.thumbnail, "image/png");
+  const image = createHttpImageRepresentation(params.thumbnail, "image/webp");
   res.setHeader("etag", image.etag);
   res.setHeader("cache-control", params.cacheControl);
   res.setHeader(
     "content-disposition",
-    buildManagedMediaContentDisposition(`${sourceName}-thumbnail.png`, "image/png"),
+    buildManagedMediaContentDisposition(`${sourceName}-thumbnail.webp`, "image/webp"),
   );
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");

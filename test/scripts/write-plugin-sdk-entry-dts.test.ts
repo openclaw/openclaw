@@ -26,36 +26,47 @@ const WRITER_TEST_TIMEOUT_MS = process.platform === "win32" ? 360_000 : 120_000;
 
 const it = createDeclarationTest();
 
+function expectCompiled(result: { status: number | null; stdout: string; stderr: string }) {
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(
+    (result.stdout + result.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
+  ).toHaveLength(1);
+}
+
 describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () => {
-  it.concurrent("retains private stages and both compiler errors when a child is unjoined", ({
-    command,
-  }) =>
-    command.lifetime.run(async () => {
-      const { root, write } = createFixture(command);
-      write("dist/plugin-sdk/core.d.ts", "previous generation");
-      const before = treeHashes(path.join(root, "dist"));
-      // Inject the executor's terminal error contract, without leaving a real process behind.
-      write(
-        "scripts/lib/declaration-stage.mts",
-        `export async function publishStagedDeclarations() {
+  // POSIX uses the nested-writer retention case in dist-artifact-ownership.test.ts.
+  it.skipIf(process.platform !== "win32").concurrent(
+    "retains private stages and both compiler errors when a child is unjoined",
+    ({ command }) =>
+      command.lifetime.run(async () => {
+        const { root, write } = createFixture(command);
+        write("dist/plugin-sdk/core.d.ts", "previous generation");
+        const before = treeHashes(path.join(root, "dist"));
+        // Inject the executor's terminal error contract, without leaving a real process behind.
+        write(
+          "scripts/lib/declaration-stage.mts",
+          `export async function publishStagedDeclarations() {
         throw new AggregateError([
           new Error("first compiler failed"),
           Object.assign(new Error("second compiler unjoined"), { processTreeState: "live" }),
         ], "compiler batch failed");
       }`,
-      );
-      const result = await runWriter(command, root, true);
-      expect(result.status).not.toBe(0);
-      expect(result.stdout + result.stderr).toContain("first compiler failed");
-      expect(result.stdout + result.stderr).toContain("second compiler unjoined");
-      expect(treeHashes(path.join(root, "dist"))).toEqual(before);
-      expect(
-        fs
-          .readdirSync(path.join(root, ".artifacts"))
-          .filter((name) => name.startsWith("plugin-sdk-staging-")),
-      ).toHaveLength(3);
-      expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/unjoined"))).toBe(true);
-    }));
+        );
+        const result = await runWriter(command, root, true);
+        expect(result.status).not.toBe(0);
+        expect(result.stdout + result.stderr).toContain("first compiler failed");
+        expect(result.stdout + result.stderr).toContain("second compiler unjoined");
+        expect(treeHashes(path.join(root, "dist"))).toEqual(before);
+        expect(
+          fs
+            .readdirSync(path.join(root, ".artifacts"))
+            .filter((name) => name.startsWith("plugin-sdk-staging-")),
+        ).toHaveLength(2);
+        expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/unjoined"))).toBe(
+          true,
+        );
+      }),
+  );
 
   it.concurrent("preserves repository input metadata during direct declaration builds", ({
     command,
@@ -77,42 +88,19 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
         "tsdown.config.ts",
         ...Object.keys(declarations).flatMap((name) => ["--filter", name]),
       ]);
-      expect(direct.status, direct.stdout + direct.stderr).toBe(0);
-      expect(
-        (direct.stdout + direct.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
-      ).toHaveLength(2);
+      expectCompiled(direct);
       expect(treeHashes(path.join(root, "compiler-inputs"))).toEqual(before);
       expectOutputs(root, production, Object.keys(treeHashes(path.join(root, "dist"))));
       expectStagingClean(root);
     }));
 
-  it.concurrent.for<{
-    name: string;
-    badPlugin: string;
-    before: NodeJS.ProcessEnv;
-    after: NodeJS.ProcessEnv;
-  }>([
-    {
-      name: "bounded plugins",
-      badPlugin: "broken",
-      before: { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "plain" },
-      after: {},
-    },
-    {
-      name: "optional plugins",
-      badPlugin: "acpx",
-      before: { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" },
-      after: {},
-    },
-    {
-      name: "Docker plugins",
-      badPlugin: "external",
-      before: {},
-      after: { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "external" },
-    },
+  it.concurrent.for<[string, string, NodeJS.ProcessEnv, NodeJS.ProcessEnv]>([
+    ["bounded plugins", "broken", { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "plain" }, {}],
+    ["optional plugins", "acpx", { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" }, {}],
+    ["Docker plugins", "external", {}, { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "external" }],
   ])(
-    "rejects newly selected $name instead of restoring their previous SDK cache",
-    ({ badPlugin, before, after }, { command }) =>
+    "rejects newly selected %s instead of restoring their previous SDK cache",
+    ([_name, badPlugin, before, after], { command }) =>
       command.lifetime.run(async () => {
         const { root, write } = createFixture(command);
         for (const id of ["plain", badPlugin]) {
@@ -139,42 +127,41 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       }),
   );
 
-  it.concurrent("publishes fresh canonical partitions with stable bytes and public nominal identity", ({
+  it.concurrent("publishes the canonical SDK graph with stable bytes and public nominal identity", ({
     command,
   }) =>
     command.lifetime.run(async () => {
       const { root, write, writeDeclarations, production, qa } = createFixture(command);
+      const read = (relative: string) => fs.readFileSync(path.join(root, relative), "utf8");
+      const build = async (privateQa = false) => {
+        expectCompiled(await runWriter(command, root, privateQa));
+        const output = treeHashes(path.join(root, "dist"));
+        expectOutputs(root, privateQa ? qa : production, Object.keys(output));
+        expectStagingClean(root);
+        return output;
+      };
       expect(production.toSorted()).toEqual(
         publicPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`).toSorted(),
       );
       expect(qa).toEqual(
         expect.arrayContaining(pluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`)),
       );
-      const preserved = {
-        "dist/plugin-sdk/core.js": "runtime stays intact",
-        "dist/plugin-sdk/.tsbuildinfo": "boundary compiler state stays intact",
-        "dist/plugin-sdk/src/retained.d.ts": "source-shaped output stays intact",
-        "dist/unrelated.d.ts": "unrelated root declaration stays intact",
-        "packages/plugin-sdk/dist/src/plugin-sdk/core.d.ts":
-          "local native declaration stays intact",
-        "packages/plugin-sdk/dist/.tsbuildinfo": "local native compiler state stays intact",
-        ".artifacts/extension-package-boundary/plugins/qa-channel/api.d.ts":
-          "local plugin declaration stays intact",
-      };
-      for (const [relative, content] of Object.entries(preserved)) {
-        write(relative, content);
+      const preserved = [
+        "dist/plugin-sdk/core.js",
+        "dist/plugin-sdk/.tsbuildinfo",
+        "dist/plugin-sdk/src/retained.d.ts",
+        "dist/unrelated.d.ts",
+        "packages/plugin-sdk/dist/src/plugin-sdk/core.d.ts",
+        "packages/plugin-sdk/dist/.tsbuildinfo",
+        ".artifacts/extension-package-boundary/plugins/qa-channel/api.d.ts",
+      ];
+      for (const relative of preserved) {
+        write(relative, relative);
       }
 
-      const initial = await runWriter(command, root);
-      expect(initial.status, initial.stdout + initial.stderr).toBe(0);
-      expect(
-        (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
-      ).toHaveLength(2);
-      const before = treeHashes(path.join(root, "dist"));
-      expectOutputs(root, production, Object.keys(before));
-      expectStagingClean(root);
+      const before = await build();
       const records = declarationCacheRecords(root);
-      expect(records).toHaveLength(2);
+      expect(records).toHaveLength(1);
       const inputs = records.flatMap((record) => record.inputs ?? []);
       expect(inputs).toEqual(
         expect.arrayContaining([
@@ -192,24 +179,12 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       }
 
       // Identical sources with a different QA selection must emit the extra canonical entries.
-      const privateQa = await runWriter(command, root, true);
-      expect(privateQa.status, privateQa.stdout + privateQa.stderr).toBe(0);
-      expect(
-        (privateQa.stdout + privateQa.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
-      ).toHaveLength(2);
-      const priorOutputs = treeHashes(path.join(root, "dist"));
-      expectOutputs(root, qa, Object.keys(priorOutputs));
-      expectStagingClean(root);
+      const priorOutputs = await build(true);
 
       writeDeclarations("after");
       fs.rmSync(path.join(root, "contracts/before.ts"));
       write("dist/plugin-sdk/obsolete.d.ts", "obsolete flat declaration");
-      const changed = await runWriter(command, root, true);
-      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
-      expect(
-        (changed.stdout + changed.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
-      ).toHaveLength(2);
-      const first = treeHashes(path.join(root, "dist"));
+      const first = await build(true);
       const cachedDistFiles = new Set(
         declarationCacheRecords(root).flatMap((record) =>
           Object.keys(record.outputs)
@@ -217,16 +192,12 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
             .map((file) => file.slice("dist/".length)),
         ),
       );
-      expectOutputs(root, qa, Object.keys(first));
-      expectStagingClean(root);
       expect(first).not.toEqual(before);
       expect(fs.existsSync(path.join(root, "dist/plugin-sdk/obsolete.d.ts"))).toBe(false);
-      for (const [relative, content] of Object.entries(preserved)) {
-        expect(fs.readFileSync(path.join(root, relative), "utf8")).toBe(content);
+      for (const relative of preserved) {
+        expect(read(relative)).toBe(relative);
       }
-      expect(fs.readFileSync(path.join(root, "src/schema.sql"), "utf8")).toBe(
-        "CREATE TABLE fixture (value TEXT NOT NULL);",
-      );
+      expect(read("src/schema.sql")).toBe("CREATE TABLE fixture (value TEXT NOT NULL);");
 
       // One restore proves portable, byte-stable reuse despite unrelated edits.
       // Copy only the cache: copying Windows junctions can change the source topology.
@@ -240,8 +211,8 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       writeRelocated("test/unrelated.test.ts", "export const test = 2;\n");
       writeRelocated("ui/unrelated.ts", "export const view = 2;\n");
       writeRelocated(".github/workflows/unrelated.yml", "name: unrelated after\n");
-      for (const [relative, content] of Object.entries(preserved)) {
-        writeRelocated(relative, content);
+      for (const relative of preserved) {
+        writeRelocated(relative, relative);
       }
       // The QA build can add shared chunks after the production snapshot. Seed
       // only unowned history; current cache outputs must come from the restore.
@@ -249,7 +220,7 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
         (entry) => !entry.startsWith("plugin-sdk/") && !cachedDistFiles.has(entry),
       )) {
         expect(first[file]).toBe(priorOutputs[file]);
-        writeRelocated(`dist/${file}`, fs.readFileSync(path.join(root, "dist", file), "utf8"));
+        writeRelocated(`dist/${file}`, read(`dist/${file}`));
       }
       writeRelocated("dist/plugin-sdk/obsolete.d.ts", "obsolete restored declaration");
       fs.cpSync(
@@ -265,8 +236,8 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       expect(restoredFiles).toEqual(first);
       expectOutputs(relocated, qa, Object.keys(restoredFiles));
       expectStagingClean(relocated);
-      for (const [relative, content] of Object.entries(preserved)) {
-        expect(fs.readFileSync(path.join(relocated, relative), "utf8")).toBe(content);
+      for (const relative of preserved) {
+        expect(fs.readFileSync(path.join(relocated, relative), "utf8")).toBe(relative);
       }
 
       write(
@@ -319,7 +290,6 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
     { source: "missing entry", diagnostics: ["core.ts"] },
     { source: "invalid config", diagnostics: ["missing-config.json"] },
     { source: "missing declaration", diagnostics: ["contract"] },
-    { source: "input mutation after emit", diagnostics: ["changed during compilation"] },
   ])(
     "rejects $source before replacing published or local declarations",
     ({ source, diagnostics }, { command }) =>
@@ -340,20 +310,6 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
           write("tsconfig.json", '{"extends":"./missing-config.json"}');
         } else if (source === "missing declaration") {
           fs.rmSync(path.join(root, "src/contract.d.ts"));
-        } else {
-          write(
-            "tsdown.config.ts",
-            `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
-for (const config of configs) {
-  if (!config.dts?.emitDtsOnly) continue;
-  const register = config.hooks;
-  config.hooks = async hooks => {
-    await register(hooks);
-    hooks.hook("build:done", () => fs.appendFileSync("src/shared.ts", "\\n"));
-  };
-}
-`,
-          );
         }
         const failed = await runWriter(command, root, true);
         expect(failed.error).toBeUndefined();

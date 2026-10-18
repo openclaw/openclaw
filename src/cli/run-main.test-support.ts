@@ -2,9 +2,11 @@ import process from "node:process";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ConfigSnapshotReadOptions } from "../config/io.types.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
+import type { RuntimeEnv } from "../runtime.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
@@ -17,6 +19,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type RunMainModule = typeof import("./run-main.js");
 
 let runCli: RunMainModule["runCli"];
+let startupConfig: typeof import("../commands/config-preflight-snapshot.js");
 
 export type ConfigSnapshotStub = {
   exists: boolean;
@@ -103,8 +106,8 @@ const readLocalOnboardingStateMock = vi.hoisted(() =>
     (
       configPath: string,
       config: { wizard?: { securityAcknowledgedAt?: string } },
-    ) => LocalOnboardingState | undefined
-  >(() => undefined),
+    ) => Promise<LocalOnboardingState | undefined>
+  >(async () => undefined),
 );
 const setupWizardCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runRemoteGatewayInferenceOnboardingMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -199,7 +202,10 @@ vi.mock("commander", () => {
 
 vi.mock("./route.js", () => ({ tryRouteCli: tryRouteCliMock }));
 
-vi.mock("./gateway-cli/run-command.js", () => ({ addGatewayRunCommand: addGatewayRunCommandMock }));
+vi.mock("./gateway-cli/run-command.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-cli/run-command.js")>()),
+  addGatewayRunCommand: addGatewayRunCommandMock,
+}));
 
 vi.mock("../daemon/launchd.js", () => ({
   parkCurrentLaunchAgentForMaintenance: parkCurrentLaunchAgentForMaintenanceMock,
@@ -333,7 +339,8 @@ vi.mock("./setup-onboard-configure-help-fast-path.js", () => ({
   tryOutputSetupOnboardConfigureHelp: tryOutputSetupOnboardConfigureHelpMock,
 }));
 
-vi.mock("./program.js", () => ({ buildProgram: buildProgramMock }));
+// mock-isolation: Exercise dispatch without constructing the real Commander program.
+vi.mock("./program/build-program.js", () => ({ buildProgram: buildProgramMock }));
 
 vi.mock("./program/program-context.js", () => ({ getProgramContext: getProgramContextMock }));
 
@@ -369,7 +376,8 @@ vi.mock("../runtime.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../infra/net/proxy-env.js", () => ({
+vi.mock("../infra/net/proxy-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/proxy-env.js")>()),
   hasEnvHttpProxyAgentConfigured: hasEnvHttpProxyAgentConfiguredMock,
 }));
 
@@ -379,8 +387,27 @@ vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: readConfigFileSnapshotMock }));
 
+// mock-isolation: Dispatcher fixtures replace storage startup; real CLI tests cover selection.
+vi.mock("./database-engine-selection.js", () => ({ prepareCliDatabaseEngine: async () => false }));
+
+// mock-isolation: Gateway admission must read synthetic snapshots without real config I/O.
+vi.mock("../config/io.factory.js", () => ({
+  createConfigIO: (
+    options: Parameters<typeof import("../config/io.factory.js").createConfigIO>[0] = {},
+  ) => ({
+    readConfigFileSnapshot: () =>
+      readConfigFileSnapshotMock({
+        isolateEnv: options.env !== undefined && options.env !== process.env,
+        observe: options.observe,
+        pluginValidation: options.pluginValidation,
+      }),
+    prepareConfigRecovery: async () => null,
+  }),
+}));
+
+// mock-isolation: Bare-root routing uses fixture receipts rather than operator onboarding state.
 vi.mock("../state/local-onboarding-state.js", () => ({
-  readLocalOnboardingStateForConfig: readLocalOnboardingStateMock,
+  readLocalOnboardingStateForConfigAsync: readLocalOnboardingStateMock,
 }));
 
 vi.mock("../commands/onboard.js", () => ({ setupWizardCommand: setupWizardCommandMock }));
@@ -415,13 +442,12 @@ vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
 async function withCliExitSpies(
   run: (
     errorSpy: MockInstance<typeof console.error>,
-    exitSpy: MockInstance<typeof process.exit>,
+    exitSpy: MockInstance<RuntimeEnv["exit"]>,
   ) => Promise<void>,
 ): Promise<void> {
   const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-  const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
-    throw new Error(`exit:${String(code)}`);
-  });
+  const { defaultRuntime } = await import("../runtime.js");
+  const exitSpy = vi.spyOn(defaultRuntime, "exit");
   try {
     await run(errorSpy, exitSpy);
   } finally {
@@ -467,7 +493,6 @@ export {
   outputRootHelpMock,
   outputPrecomputedRootHelpTextMock,
   outputPrecomputedNodesHelpTextMock,
-  outputPrecomputedSubcommandHelpTextMock,
   loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
   tryOutputSetupOnboardConfigureHelpMock,
   buildProgramMock,
@@ -491,7 +516,6 @@ export {
   runTuiMock,
   runTuiCliActionMock,
   probeGatewayConfiguredModelMock,
-  readActiveGatewayLockPortMock,
   inspectGatewayTlsCertificateMock,
   resolveControlUiLinksMock,
   commanderParseAsyncMock,
@@ -520,6 +544,7 @@ export function installRunMainTestHooks(): void {
     const runMainModule = await import("./run-main.js");
     expect(dotenvModuleImportState.count).toBe(0);
     runCli = runMainModule.runCli;
+    startupConfig = await import("../commands/config-preflight-snapshot.js");
   });
 
   afterAll(() => {
@@ -537,8 +562,11 @@ export function installRunMainTestHooks(): void {
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     existsSyncOverride.value = undefined;
     vi.clearAllMocks();
+    vi.spyOn(startupConfig, "readConfigSnapshotForEngineSelection").mockResolvedValue(
+      createSnapshot({ hash: "fixture", sourceConfig: {} }),
+    );
     readConfigFileSnapshotMock.mockResolvedValue(validConfig({ gateway: { mode: "local" } }));
-    readLocalOnboardingStateMock.mockReset().mockReturnValue(undefined);
+    readLocalOnboardingStateMock.mockReset().mockResolvedValue(undefined);
     probeGatewayConfiguredModelMock.mockResolvedValue({ kind: "configured" });
     readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
     inspectGatewayTlsCertificateMock

@@ -1,4 +1,3 @@
-// Shared Control UI plugin catalog Gateway contracts.
 import type {
   PluginsInstallResult,
   PluginsCatalogGetResult,
@@ -7,7 +6,7 @@ import type {
   PluginsUninstallResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
+import { createConfigMutationRunner } from "../config/config-mutation-runner.ts";
 
 export type {
   PluginCatalogEntry as PluginCatalogItem,
@@ -62,31 +61,6 @@ export function setPluginEnabled(
   });
 }
 
-/** Serialize every plugin config write without discarding structured Gateway failures. */
-export async function runPluginConfigMutation<T>(
-  runtimeConfig: Pick<RuntimeConfigCapability, "runExternalMutation">,
-  expectedClient: GatewayBrowserClient,
-  task: (client: GatewayBrowserClient) => Promise<T>,
-  options: { canDispatch?: () => boolean; dispatchError?: string } = {},
-): Promise<{ value: T; refreshError: string | null }> {
-  let taskError: Error | undefined;
-  const mutation = await runtimeConfig.runExternalMutation(async (client) => {
-    if (client !== expectedClient) {
-      throw new Error("Connection changed before the plugin update started.");
-    }
-    try {
-      return await task(client);
-    } catch (error) {
-      // Preserve structured Gateway failures for the caller.
-      taskError = error instanceof Error ? error : new Error(String(error));
-      throw taskError;
-    }
-  }, options);
-  if (!mutation.ok) {
-    throw taskError ?? new Error(mutation.error);
-  }
-  return {
-    value: mutation.value,
-    refreshError: mutation.refresh.ok ? null : mutation.refresh.error,
-  };
-}
+export const runPluginConfigMutation = createConfigMutationRunner(
+  "Connection changed before the plugin update started.",
+);

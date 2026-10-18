@@ -1,18 +1,23 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-presence.test/"} */
 
-import { expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { PresenceEntry } from "../../api/types.ts";
-import type { PresencePayload } from "../../app/user-profile.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
-import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
   createRenderTestChatPane,
+  connectPaneTestView,
 } from "./chat-pane.test-support.ts";
+import type { createChatState } from "./chat-state-controller.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 const sessionKey = "agent:main:dashboard:presence";
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
 
 function person(id: string, overrides: Partial<PresenceEntry> = {}): PresenceEntry {
   return {
@@ -25,35 +30,47 @@ function person(id: string, overrides: Partial<PresenceEntry> = {}): PresenceEnt
 }
 
 async function createPane(presence: PresenceEntry[]) {
-  const pane = createRenderTestChatPane() as unknown as Omit<
-    ReturnType<typeof createRenderTestChatPane>,
-    "presencePayload"
+  const pane = createRenderTestChatPane() as unknown as ReturnType<
+    typeof createRenderTestChatPane
   > & {
-    presencePayload: PresencePayload | undefined;
     performUpdate: () => void;
+    chatState: ReturnType<typeof createChatState<ChatPageHost>>;
   };
   const context = createInitializationContext(
     createGatewayBrowserClientFixture({ instanceId: "self-tab" }),
   );
+  const gatewayListeners = new Set<Parameters<ApplicationContext["gateway"]["subscribe"]>[0]>();
+  context.gateway.subscribe = (listener) => {
+    gatewayListeners.add(listener);
+    return () => gatewayListeners.delete(listener);
+  };
+  const publishGateway = () => {
+    for (const listener of gatewayListeners) {
+      listener(context.gateway.snapshot);
+    }
+  };
   const state = pane.initialize(context);
   pane.sessionKey = sessionKey;
   state.sessionKey = sessionKey;
   state.chatMessages = [{ role: "assistant", content: "Retained conversation", timestamp: 1 }];
-  pane.presencePayload = { presence };
-  ChatPaneBase.prototype.connectedCallback.call(pane);
+  pane.presence.update({ presence });
+  connectPaneTestView(pane);
+  state.renderLifecycle = pane.chatState.createRenderLifecycle();
+  pane.chatState.attach(state);
   await settleLitElement(pane);
-  onTestFinished(() => ChatPaneBase.prototype.disconnectedCallback.call(pane));
-  return { pane, context, state, update: vi.spyOn(pane, "performUpdate") };
+  onTestFinished(() => pane.disconnectedCallback());
+  return { pane, context, state, publishGateway, update: vi.spyOn(pane, "render") };
 }
 
-it("keeps an idle pane unchanged for presence heartbeats and unrelated viewers while retaining fresh facts", async () => {
-  const { pane, update } = await createPane([
-    person("self"),
-    person("Riley"),
-    person("Alex", { watchedSessions: ["agent:main:other"] }),
-  ]);
-  const next = {
-    presence: [
+it.each([
+  {
+    name: "heartbeats and unrelated viewers",
+    previous: [
+      person("self"),
+      person("Riley"),
+      person("Alex", { watchedSessions: ["agent:main:other"] }),
+    ],
+    next: [
       person("Alex", {
         ts: 2,
         watchedSessions: ["agent:main:elsewhere"],
@@ -70,17 +87,8 @@ it("keeps an idle pane unchanged for presence heartbeats and unrelated viewers w
       }),
       person("self", { ts: 2, lastInputSeconds: 10 }),
     ],
-  };
-
-  pane.presencePayload = next;
-  await settleLitElement(pane);
-
-  expect(update).not.toHaveBeenCalled();
-  expect(pane.presencePayload).toBe(next);
-  expect(pane.chatProps?.userName).toBe("self");
-});
-
-it.each([
+    updates: 0,
+  },
   {
     name: "viewer leaves",
     previous: [person("self"), person("Riley")],
@@ -114,19 +122,26 @@ it.each([
     previous: [person("self")],
     next: [person("self"), person("Riley", { watchedSessions: [] })],
   },
-])("redraws when $name", async ({ previous, next }) => {
-  const { pane, update } = await createPane(previous);
-
-  pane.presencePayload = { presence: next };
-  await settleLitElement(pane);
-
-  expect(update).toHaveBeenCalledOnce();
-  expect(pane.presencePayload?.presence).toBe(next);
-});
+])(
+  "updates presentation only when visible facts change: $name",
+  async ({ previous, next, updates = 1 }) => {
+    const { pane, update } = await createPane(previous);
+    const payload = { presence: next };
+    pane.presence.update(payload);
+    vi.advanceTimersToNextFrame();
+    await settleLitElement(pane);
+    expect(update).toHaveBeenCalledTimes(updates);
+    expect(pane.presence.snapshot).toBe(payload);
+    expect(pane.presence.snapshot?.presence).toBe(next);
+    expect(pane.chatProps?.userName).toBe("self");
+  },
+);
 
 it("refreshes the fallback self identity and defers to the authoritative profile", async () => {
-  const { pane, context, update } = await createPane([person("self", { watchedSessions: [] })]);
-  pane.presencePayload = {
+  const { pane, context, publishGateway, update } = await createPane([
+    person("self", { watchedSessions: [] }),
+  ]);
+  pane.presence.update({
     presence: [
       person("self", {
         watchedSessions: [],
@@ -138,7 +153,8 @@ it("refreshes the fallback self identity and defers to the authoritative profile
         },
       }),
     ],
-  };
+  });
+  vi.advanceTimersToNextFrame();
   await settleLitElement(pane);
   expect(update).toHaveBeenCalledOnce();
   expect(pane.chatProps?.userName).toBe("Updated self");
@@ -149,14 +165,15 @@ it("refreshes the fallback self identity and defers to the authoritative profile
     identity: { type: "profile", id: "self" },
     name: "Authoritative self",
   };
-  pane.requestUpdate();
+  publishGateway();
   await settleLitElement(pane);
   update.mockClear();
-  pane.presencePayload = {
+  pane.presence.update({
     presence: [
       person("self", { watchedSessions: [], user: { id: "self", name: "Old tab label" } }),
     ],
-  };
+  });
+  vi.advanceTimersToNextFrame();
   await settleLitElement(pane);
   expect(update).not.toHaveBeenCalled();
   expect(pane.chatProps?.userName).toBe("Authoritative self");

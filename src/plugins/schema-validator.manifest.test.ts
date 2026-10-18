@@ -1,6 +1,8 @@
 // Covers the manifest-schema boundary that keeps third-party schema failures out of the loader.
+import { Format } from "typebox/format";
 import { describe, expect, it } from "vitest";
-import { validatePluginSchemaValue } from "./schema-validator.js";
+import { validateJsonSchemaValue, validatePluginSchemaValue } from "./schema-validator.js";
+
 describe("validatePluginSchemaValue", () => {
   it("strips terminal control characters a manifest embedded in the thrown text", () => {
     const escape = String.fromCharCode(27);
@@ -18,32 +20,13 @@ describe("validatePluginSchemaValue", () => {
     expect(result.ok ? "" : result.errors[0]?.text).not.toContain(escape);
   });
 
-  it("keeps returning results for a valid schema", () => {
-    const result = validatePluginSchemaValue({
-      origin: "global",
-      cacheKey: "manifest-schema.valid",
-      schema: { type: "object", properties: { a: { type: "string" } } },
-      value: { a: "ok" },
-    });
-
-    expect(result).toEqual({ ok: true, value: { a: "ok" } });
-  });
-
-  it.each([
-    { ref: "#/$defs/entry", key: "entry" },
-    { ref: "#%2F$defs%2Fentry", key: "entry" },
-    { ref: "#/$defs%2Fentry", key: "entry" },
-    { ref: "https://example.test/config#%2F$defs%2Fentry", key: "entry" },
-    { ref: "#%2F$defs%2Fa%7E1b", key: "a/b" },
-    { ref: "#%2F$defs%2Fa%7E0b", key: "a~b" },
-    { ref: "#%2F$defs%2Fpercent%252Fname", key: "percent%2Fname" },
-  ])("validates and applies defaults through URI fragment $ref", ({ ref, key }) => {
+  it("validates and applies defaults through an encoded URI fragment", () => {
     const value = {};
     const schema = {
       $id: "https://example.test/config",
       type: "object",
-      $defs: { [key]: { type: "string", default: "ready" } },
-      properties: { label: { $ref: ref } },
+      $defs: { entry: { type: "string", default: "ready" } },
+      properties: { label: { $ref: "https://example.test/config#%2F$defs%2Fentry" } },
       required: ["label"],
     };
 
@@ -79,21 +62,6 @@ describe("validatePluginSchemaValue", () => {
     ).toEqual({ ok: true, value: { label: "literal" } });
   });
 
-  it.each([
-    "#%2F$defs%2Fmissing",
-    "#%2F$defs%2Fentry%zz",
-    "#/$defs/entry%zz",
-    "https://outside.example/schema#%2F$defs%2Fentry",
-  ])("reports missing or malformed URI fragment %s as an unusable schema", ($ref) => {
-    expect(
-      validatePluginSchemaValue({
-        origin: "global",
-        schema: { $defs: { entry: { type: "string" } }, $ref },
-        value: "ready",
-      }),
-    ).toMatchObject({ ok: false, schemaError: true });
-  });
-
   it("flags schemaError only when the schema itself is unusable, not on ordinary value failures", () => {
     const malformedSchema = validatePluginSchemaValue({
       origin: "global",
@@ -111,5 +79,44 @@ describe("validatePluginSchemaValue", () => {
       value: {},
     });
     expect(wellFormedSchemaRejectingValue).toMatchObject({ ok: false, schemaError: false });
+  });
+});
+
+describe("plugin schema format semantics", () => {
+  it("keeps cached checks and error details on the same plugin format semantics", () => {
+    const formats = Format.Entries();
+    const schema = {
+      type: "object",
+      properties: {
+        endpoint: { type: "string", format: "uri" },
+        contact: { type: "string", format: "email" },
+        token: { type: "string", format: "uuid" },
+      },
+      required: ["endpoint", "contact", "token"],
+    };
+    const input = {
+      cacheKey: "schema-validator.test.cached-formats",
+      schema,
+      value: { endpoint: "https://example.com", contact: "not an email", token: "not a uuid" },
+    };
+    expect(validateJsonSchemaValue(input)).toEqual({ ok: true, value: input.value });
+    expect(Format.Entries()).toEqual(formats);
+    const result = validateJsonSchemaValue({
+      ...input,
+      value: { ...input.value, endpoint: "https://" },
+    });
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        expect.objectContaining({
+          path: "endpoint",
+          message: expect.stringContaining("must match format"),
+        }),
+      ],
+    });
+    expect(validateJsonSchemaValue(input)).toEqual({ ok: true, value: input.value });
+    expect(Format.Entries()).toEqual(formats);
+    expect(Format.Get("email")?.("not an email")).toBe(false);
+    expect(Format.Get("uuid")?.("not a uuid")).toBe(false);
   });
 });

@@ -8,7 +8,7 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
-import { createCanonicalAgentConfigFixture, stopChildProcess } from "openclaw/plugin-sdk/test-env";
+import { stopChildProcess } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { createOllamaNodeHostCommands } from "./node-inference.js";
@@ -40,6 +40,13 @@ type NodeInvokeFrame = {
   paramsJSON?: string | null;
 };
 
+type PairedNode = {
+  nodeId: string;
+  displayName?: string;
+  connected?: boolean;
+  commands?: string[];
+};
+
 describe("Ollama paired-node Gateway inference", () => {
   it(
     "routes authenticated discovery and chat over the actual paired node socket",
@@ -60,30 +67,28 @@ describe("Ollama paired-node Gateway inference", () => {
       let node: GatewayClient | undefined;
 
       try {
-        await state.writeConfig(
-          createCanonicalAgentConfigFixture({
-            gateway: {
-              mode: "local",
-              port: gatewayPort,
-              bind: "loopback",
-              auth: { mode: "token", token: gatewayToken },
-              controlUi: { enabled: false },
-              nodes: { commands: { allow: ["ollama.models", "ollama.chat"] } },
+        await state.writeConfig({
+          gateway: {
+            mode: "local",
+            port: gatewayPort,
+            bind: "loopback",
+            auth: { mode: "token", token: gatewayToken },
+            controlUi: { enabled: false },
+            nodes: { commands: { allow: ["ollama.models", "ollama.chat"] } },
+          },
+          plugins: {
+            allow: ["ollama"],
+          },
+          agents: {
+            defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
+            entries: { main: { tools: { allow: ["node_inference"] } } },
+          },
+          models: {
+            providers: {
+              ollama: { api: "ollama", baseUrl: gatewayOllama.baseUrl, models: [] },
             },
-            plugins: {
-              allow: ["ollama"],
-            },
-            agents: {
-              defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
-              entries: { main: { default: true, tools: { allow: ["node_inference"] } } },
-            },
-            models: {
-              providers: {
-                ollama: { api: "ollama", baseUrl: gatewayOllama.baseUrl, models: [] },
-              },
-            },
-          }).config,
-        );
+          },
+        });
 
         const gatewayEntryArgs =
           process.env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1"
@@ -416,29 +421,20 @@ async function approvePendingNodePairings(
   const pairingOptions = () => ({
     timeoutMs: remainingPhaseTimeoutMs(readinessDeadline, "Gateway node pairing"),
   });
-  const devices = await operator.request<{
-    pending?: Array<{ requestId?: string; role?: string }>;
-  }>("device.pair.list", {}, pairingOptions());
-  for (const request of devices.pending ?? []) {
-    if (request.requestId) {
-      await operator.request(
-        "device.pair.approve",
-        { requestId: request.requestId },
-        pairingOptions(),
-      );
-    }
-  }
-
-  const nodes = await operator.request<{
-    pending?: Array<{ requestId?: string; displayName?: string }>;
-  }>("node.pair.list", {}, pairingOptions());
-  for (const request of nodes.pending ?? []) {
-    if (request.requestId) {
-      await operator.request(
-        "node.pair.approve",
-        { requestId: request.requestId },
-        pairingOptions(),
-      );
+  for (const owner of ["device", "node"]) {
+    const result = await operator.request<{ pending?: Array<{ requestId?: string }> }>(
+      `${owner}.pair.list`,
+      {},
+      pairingOptions(),
+    );
+    for (const request of result.pending ?? []) {
+      if (request.requestId) {
+        await operator.request(
+          `${owner}.pair.approve`,
+          { requestId: request.requestId },
+          pairingOptions(),
+        );
+      }
     }
   }
 }
@@ -466,20 +462,11 @@ async function waitForPairedInferenceNode(
   logs: string[],
   readinessDeadline: number,
 ) {
-  let paired:
-    | { nodeId: string; displayName?: string; connected?: boolean; commands?: string[] }
-    | undefined;
+  let paired: PairedNode | undefined;
   await vi.waitFor(
     async () => {
       await approvePendingNodePairings(operator, readinessDeadline);
-      const result = await operator.request<{
-        nodes?: Array<{
-          nodeId: string;
-          displayName?: string;
-          connected?: boolean;
-          commands?: string[];
-        }>;
-      }>(
+      const result = await operator.request<{ nodes?: PairedNode[] }>(
         "node.list",
         {},
         {

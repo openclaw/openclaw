@@ -1,15 +1,45 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { isPidAlive } from "../shared/pid-alive.js";
-import { parseGatewayLockPayload } from "./gateway-lock-payload.js";
+import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
+import {
+  classifyGatewayLockProcessNamespace,
+  GatewayLockNamespaceError,
+  parseGatewayLockPayload,
+  readGatewayLockProcessNamespace,
+  type LockPayload,
+} from "./gateway-lock-payload.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
+
+/** Admission and reclamation use the same namespace-qualified PID evidence. */
+export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: string): boolean {
+  const payload = isRecord(value) ? value : null;
+  const namespace = classifyGatewayLockProcessNamespace(payload?.processNamespace, lockPath);
+  if (namespace === "unknown") {
+    throw new GatewayLockNamespaceError(payload ?? {}, lockPath);
+  }
+  return (
+    namespace === "dead" ||
+    isLockOwnerDefinitelyStale({
+      payload: payload ? { pid: payload.pid, starttime: payload.startTime } : null,
+    })
+  );
+}
+
+export class StateDatabaseAccessError extends Error {
+  override name = "StateDatabaseAccessError";
+}
 
 export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
   Symbol.for("openclaw.stateDatabaseAdmissionPendingError"),
   () =>
-    class extends Error {
+    class extends StateDatabaseAccessError {
       constructor(
         readonly databasePath: string,
         message: string,
@@ -19,6 +49,26 @@ export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
     },
 );
 
+/** A live foreign process holds offline-maintenance custody of this database. */
+export const StateDatabaseOfflineMaintenanceError = resolveGlobalSingleton(
+  Symbol.for("openclaw.stateDatabaseOfflineMaintenanceError"),
+  () =>
+    class extends StateDatabaseAccessError {
+      constructor(
+        readonly databasePath: string,
+        message: string,
+      ) {
+        super(message);
+      }
+    },
+);
+
+export const isStateDatabaseMaintenanceContention = (error: unknown): boolean =>
+  error instanceof AggregateError
+    ? error.errors.length > 0 && error.errors.every(isStateDatabaseMaintenanceContention)
+    : error instanceof StateDatabaseAdmissionPendingError ||
+      error instanceof StateDatabaseOfflineMaintenanceError;
+
 /** Persisted ownership can identify a holder but cannot lend this process maintenance authority. */
 export function assertPersistedStateDatabaseAccessAllowed(params: {
   databasePath: string;
@@ -26,7 +76,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   assertMaintenance: () => void;
 }): void {
   const { databasePath, ownerPath, assertMaintenance } = params;
-  const unavailable = `OpenClaw state ownership at ${databasePath} could not be verified; retry after maintenance finishes.`;
+  const unavailable = `OpenClaw state ownership at ${databasePath} could not be verified from ${ownerPath}; restart the Gateway.`;
   let raw: string;
   try {
     raw = fs.readFileSync(ownerPath, "utf8");
@@ -34,7 +84,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     if (extractErrorCode(error) === "ENOENT") {
       return;
     }
-    throw new Error(unavailable, { cause: error });
+    throw new StateDatabaseAccessError(unavailable, { cause: error });
   }
   const owner = parseGatewayLockPayload(raw);
   if (!owner) {
@@ -42,13 +92,9 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     throw new StateDatabaseAdmissionPendingError(databasePath, unavailable);
   }
   if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) {
-    throw new Error(unavailable);
+    throw new StateDatabaseAccessError(unavailable);
   }
-  if (
-    isLockOwnerDefinitelyStale({
-      payload: { pid: owner.pid, starttime: owner.startTime },
-    })
-  ) {
+  if (isGatewayStateOwnerDefinitelyStale(owner, ownerPath)) {
     return;
   }
   // Workers share the process PID, but their schema authority still comes from
@@ -57,7 +103,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     return;
   }
   if (!isPidAlive(owner.pid)) {
-    throw new Error(unavailable);
+    throw new StateDatabaseAccessError(unavailable);
   }
   const role = owner.role ?? "gateway";
   if (role === "gateway" || role === "agent-embedded") {
@@ -67,13 +113,28 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     assertMaintenance();
     return;
   }
+  const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`;
   if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
-    throw new StateDatabaseAdmissionPendingError(
-      databasePath,
-      `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`,
-    );
+    throw new StateDatabaseAdmissionPendingError(databasePath, maintenancePending);
   }
-  throw new Error(
-    `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`,
-  );
+  throw new StateDatabaseOfflineMaintenanceError(databasePath, maintenancePending);
+}
+
+export function defaultPayload(databasePath: string): LockPayload {
+  const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
+  const startTime = getFileLockProcessStartTime(process.pid);
+  const parentPid = getCliParentPid();
+  const parentStartTime = parentPid === undefined ? null : getFileLockProcessStartTime(parentPid);
+  return {
+    pid: process.pid,
+    ownerId: randomUUID(),
+    createdAt: new Date().toISOString(),
+    stateDir,
+    configPath: path.join(stateDir, "openclaw.json"),
+    role: "sqlite-maintenance",
+    processNamespace: readGatewayLockProcessNamespace(),
+    ...(parentPid === undefined ? {} : { parentPid }),
+    ...(parentStartTime === null ? {} : { parentStartTime }),
+    ...(startTime === null ? {} : { startTime }),
+  };
 }

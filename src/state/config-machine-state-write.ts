@@ -1,18 +1,20 @@
-// Machine-state mutations own serialization and the shared write transaction.
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+// Machine-state mutations own serialization and the shared write transaction.
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   normalizeConfigMachineStateKey,
+  publishConfigMachineStateRow,
   type ConfigMachineStateDatabase,
-} from "./config-machine-state.js";
+} from "./config-machine-state-row.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { withAuthProfileCredentialWrite } from "./user-model-account-authority.js";
 
 function serializeStateValue(value: unknown): string {
   const serialized = JSON.stringify(value);
@@ -22,21 +24,41 @@ function serializeStateValue(value: unknown): string {
   return serialized;
 }
 
+function publishMachineStateWrite<T>(
+  database: EngineConnection,
+  stateKey: string,
+  valueJson: string | undefined,
+  write: () => T,
+  didWrite?: (result: T) => boolean,
+): T {
+  return stateKey === "authProfiles.store"
+    ? withAuthProfileCredentialWrite(
+        database,
+        valueJson === undefined ? undefined : JSON.parse(valueJson),
+        write,
+        didWrite,
+      )
+    : write();
+}
+
 function upsertConfigMachineState(
-  database: DatabaseSync,
+  database: EngineConnection,
   stateKey: string,
   valueJson: string,
   now: number,
 ): void {
-  executeSqliteQuerySync(
-    database,
-    getNodeSqliteKysely<ConfigMachineStateDatabase>(database)
-      .insertInto("config_machine_state")
-      .values({ state_key: stateKey, value_json: valueJson, updated_at_ms: now })
-      .onConflict((conflict) =>
-        conflict.column("state_key").doUpdateSet({ value_json: valueJson, updated_at_ms: now }),
-      ),
+  publishMachineStateWrite(database, stateKey, valueJson, () =>
+    executeSqliteQuerySync(
+      database,
+      getNodeSqliteKysely<ConfigMachineStateDatabase>(database)
+        .insertInto("config_machine_state")
+        .values({ state_key: stateKey, value_json: valueJson, updated_at_ms: now })
+        .onConflict((conflict) =>
+          conflict.column("state_key").doUpdateSet({ value_json: valueJson, updated_at_ms: now }),
+        ),
+    ),
   );
+  publishConfigMachineStateRow(database, stateKey, { value_json: valueJson, updated_at_ms: now });
 }
 
 export function writeConfigMachineState(
@@ -52,6 +74,22 @@ export function writeConfigMachineState(
     options,
     { operationLabel: "config-machine-state.write" },
   );
+}
+
+/** Write an owner-held value on its existing admitted transaction connection. */
+export function writeConfigMachineStateInDatabase(
+  database: EngineConnection,
+  key: string,
+  value: unknown,
+): number {
+  const now = Date.now();
+  upsertConfigMachineState(
+    database,
+    normalizeConfigMachineStateKey(key),
+    serializeStateValue(value),
+    now,
+  );
+  return now;
 }
 
 /** Atomically update one machine-state value from its current database value. */
@@ -82,19 +120,19 @@ export function updateConfigMachineState<T>(
 
 /** Update an already-normalized key on the caller's admitted transaction connection. */
 export function updateConfigMachineStateInDatabase<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   stateKey: string,
   update: (current: T | undefined) => T,
   now: number,
 ): T;
 export function updateConfigMachineStateInDatabase<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   stateKey: string,
   update: (current: T | undefined) => T | undefined,
   now: number,
 ): T | undefined;
 export function updateConfigMachineStateInDatabase<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   stateKey: string,
   update: (current: T | undefined) => T | undefined,
   now: number,
@@ -108,11 +146,14 @@ export function updateConfigMachineStateInDatabase<T>(
   const value = update(row ? (JSON.parse(row.value_json) as T) : undefined);
   if (value === undefined) {
     if (row) {
-      executeSqliteQuerySync(
-        database,
-        db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
+      publishMachineStateWrite(database, stateKey, undefined, () =>
+        executeSqliteQuerySync(
+          database,
+          db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
+        ),
       );
     }
+    publishConfigMachineStateRow(database, stateKey, undefined);
     return undefined;
   }
   upsertConfigMachineState(database, stateKey, serializeStateValue(value), now);
@@ -128,10 +169,13 @@ export function deleteConfigMachineState(
   return runOpenClawStateWriteTransaction(
     (database) => {
       const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database.db);
-      const result = executeSqliteQuerySync(
-        database.db,
-        db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
+      const result = publishMachineStateWrite(database.db, stateKey, undefined, () =>
+        executeSqliteQuerySync(
+          database.db,
+          db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
+        ),
       );
+      publishConfigMachineStateRow(database.db, stateKey, undefined);
       return (result.numAffectedRows ?? 0n) > 0n;
     },
     options,
@@ -158,25 +202,33 @@ export function importConfigMachineState(
       const imported: string[] = [];
       const kept: string[] = [];
       for (const entry of normalized) {
-        const existing = executeSqliteQueryTakeFirstSync(
+        const inserted = publishMachineStateWrite(
           database.db,
-          db
-            .selectFrom("config_machine_state")
-            .select("state_key")
-            .where("state_key", "=", entry.key),
+          entry.key,
+          entry.valueJson,
+          () =>
+            executeSqliteQueryTakeFirstSync(
+              database.db,
+              db
+                .insertInto("config_machine_state")
+                .values({
+                  state_key: entry.key,
+                  value_json: entry.valueJson,
+                  updated_at_ms: now,
+                })
+                .onConflict((conflict) => conflict.column("state_key").doNothing())
+                .returning("state_key"),
+            ),
+          (result) => result !== undefined,
         );
-        if (existing) {
+        if (!inserted) {
           kept.push(entry.key);
           continue;
         }
-        executeSqliteQuerySync(
-          database.db,
-          db.insertInto("config_machine_state").values({
-            state_key: entry.key,
-            value_json: entry.valueJson,
-            updated_at_ms: now,
-          }),
-        );
+        publishConfigMachineStateRow(database.db, entry.key, {
+          value_json: entry.valueJson,
+          updated_at_ms: now,
+        });
         imported.push(entry.key);
       }
       return { imported, kept };

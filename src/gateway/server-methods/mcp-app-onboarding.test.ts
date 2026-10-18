@@ -61,10 +61,11 @@ it.each(["success", "caller-revoked", "session-replaced", "native-denied"] as co
     const release = vi.fn();
     vi.spyOn(sessionAccess, "prepareGatewaySessionAccessAuthority").mockImplementation(
       async (params) => {
-        access = await prepareAccess(params);
+        const prepared = await prepareAccess(params);
+        access = prepared.authority;
         release.mockImplementation(access.release);
         access.release = release;
-        return access;
+        return prepared;
       },
     );
     let chat: GatewayRequestHandlerOptions | undefined;

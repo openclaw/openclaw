@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { beforeAll, expect, test } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   loadAuthProfileStoreForRuntime,
@@ -17,6 +17,11 @@ import { setupGatewaySessionsHandlerTestHarness } from "./test/server-sessions.t
 
 const { createSelectedGlobalSessionStore } = setupGatewaySessionsHandlerTestHarness();
 
+// This handler fixture starts a Gateway after selecting its shared auth owner.
+beforeAll(async () => {
+  await import("./server-start.js");
+});
+
 test("models.authOrderSet keeps main priority and Reset agent-owned", async () => {
   const agentId = "main";
   await createSelectedGlobalSessionStore();
@@ -25,7 +30,7 @@ test("models.authOrderSet keeps main priority and Reset agent-owned", async () =
   const siblingDir = resolveAgentDir(cfg, "work");
   // Select the shared owner before startup captures process-stable auth snapshots.
   writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" });
-  reloadSharedAuthStoreOwnership(process.env);
+  await reloadSharedAuthStoreOwnership(process.env);
   const provider = "fixture";
   const initialOrder = ["fixture:first"];
   const updatedOrder = ["fixture:second", "fixture:first"];

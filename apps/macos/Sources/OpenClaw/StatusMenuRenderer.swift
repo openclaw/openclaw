@@ -127,7 +127,13 @@ final class StatusMenuRenderer: NSObject {
     }
 
     func reconcile(_ descriptor: StatusMenuDescriptor) {
-        let entries = self.flatten(descriptor)
+        var entries: [RenderEntry] = []
+        for section in descriptor.sections where !section.entries.isEmpty {
+            if !entries.isEmpty {
+                entries.append(.separator("separator.\(section.id)"))
+            }
+            entries.append(contentsOf: section.entries.map(RenderEntry.content))
+        }
         let liveItems = self.menu.items
 
         func matches(_ item: NSMenuItem, _ entry: RenderEntry) -> Bool {
@@ -168,17 +174,6 @@ final class StatusMenuRenderer: NSObject {
         }
     }
 
-    private func flatten(_ descriptor: StatusMenuDescriptor) -> [RenderEntry] {
-        var entries: [RenderEntry] = []
-        for section in descriptor.sections where !section.entries.isEmpty {
-            if !entries.isEmpty {
-                entries.append(.separator("separator.\(section.id)"))
-            }
-            entries.append(contentsOf: section.entries.map(RenderEntry.content))
-        }
-        return entries
-    }
-
     private func makeItem(for entry: RenderEntry) -> NSMenuItem {
         let item = switch entry {
         case .separator:
@@ -202,7 +197,11 @@ final class StatusMenuRenderer: NSObject {
         switch content.kind {
         case .header:
             Self.configureHostedView(
-                item, rootView: StatusMenuHeaderView(state: self.state, isSleeping: self.isSleeping))
+                item,
+                rootView: StatusMenuHeaderView(
+                    state: self.state,
+                    isSleeping: self.isSleeping,
+                    onCheckForUpdates: self.onInstallUpdate))
         case let .session(row):
             StatusMenuSessions.shared.configureSessionItem(item, row: row)
         case let .approval(request):
@@ -283,15 +282,11 @@ final class StatusMenuRenderer: NSObject {
         }
 
         self.configureNative(item, title: title, symbol: symbol, action: #selector(self.performAction(_:)))
-        item.isEnabled = action != .talkMode || voiceWakeSupported
         item.keyEquivalent = ""
 
         switch action {
-        case .settings:
-            item.keyEquivalent = ","
-            item.keyEquivalentModifierMask = [.command]
-        case .quit:
-            item.keyEquivalent = "q"
+        case .settings, .quit:
+            item.keyEquivalent = action == .settings ? "," : "q"
             item.keyEquivalentModifierMask = [.command]
         case .quickChat:
             if let shortcut = KeyboardShortcuts.getShortcut(for: .toggleQuickChat),

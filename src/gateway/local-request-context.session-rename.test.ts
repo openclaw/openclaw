@@ -20,8 +20,10 @@ import {
 import { roleClient } from "./session-sharing.test-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
+// mock-isolation: Session routing uses no plugin tools and must not load ambient plugin state.
 vi.mock("../agents/openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
+  resolveOpenClawPluginToolsForOptionsAsync: async () => [],
 }));
 
 afterEach(drainSessionToolsFixture);
@@ -82,15 +84,16 @@ describe("guest session rename through the agent catalog", () => {
           if (!tool) {
             throw new Error("sessions tool unavailable");
           }
+          // The full definition stays stable; broader actions are refused when they run (below).
           expect(tool.parameters).toHaveProperty("properties.label");
-          expect(tool.parameters).not.toHaveProperty("properties.model");
-          expect(tool.parameters).not.toHaveProperty("properties.archived");
-          const loopback = resolveGatewayScopedTools({
-            ...options,
-            cfg: options.config,
-            surface: "loopback",
-            admittedRunContext,
-          }).tools.find((candidate) => candidate.name === "sessions");
+          const loopback = (
+            await resolveGatewayScopedTools({
+              ...options,
+              cfg: options.config,
+              surface: "loopback",
+              admittedRunContext,
+            })
+          ).tools.find((candidate) => candidate.name === "sessions");
           expect(loopback?.parameters).toHaveProperty("properties.label");
           const result = await tool.execute("rename", { action: "patch", label: "Research plan" });
           expect(result.details).toMatchObject({
@@ -270,12 +273,14 @@ describe("guest session rename through the agent catalog", () => {
                 ],
                 [
                   "loopback",
-                  resolveGatewayScopedTools({
-                    ...options,
-                    cfg: config,
-                    surface: "loopback",
-                    admittedRunContext,
-                  }).tools,
+                  (
+                    await resolveGatewayScopedTools({
+                      ...options,
+                      cfg: config,
+                      surface: "loopback",
+                      admittedRunContext,
+                    })
+                  ).tools,
                 ],
               ] as const;
               for (const [surface, tools] of catalogs) {
@@ -285,7 +290,10 @@ describe("guest session rename through the agent catalog", () => {
                   continue;
                 }
                 if (!canRename) {
-                  expect(tool.parameters).not.toHaveProperty("properties.label");
+                  // The definition stays stable across turns; the read-only caller is refused when it runs.
+                  await expect(
+                    tool.execute("denied", { action: "patch", label: "Read only" }),
+                  ).rejects.toThrow("Only assign_owner is available to non-owner callers");
                   continue;
                 }
                 expect(tool.parameters).toHaveProperty("properties.label");
@@ -329,7 +337,13 @@ describe("guest session rename through the agent catalog", () => {
                 const absent = (tools: ReturnType<typeof createOpenClawCodingTools>) =>
                   expect(tools.some((tool) => tool.name === "sessions")).toBe(false);
                 absent(
-                  resolveGatewayScopedTools({ ...options, cfg: config, surface: "loopback" }).tools,
+                  (
+                    await resolveGatewayScopedTools({
+                      ...options,
+                      cfg: config,
+                      surface: "loopback",
+                    })
+                  ).tools,
                 );
                 absent(createOpenClawCodingTools({ ...nativeOptions, senderIsOwner: true }));
                 absent(

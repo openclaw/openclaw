@@ -18,11 +18,10 @@ function telegramMonospaceGraphemeWidth(grapheme: string): number {
   if (
     grapheme.includes(KEYCAP_COMBINING_MARK) ||
     EMOJI_PRESENTATION_PATTERN.test(grapheme) ||
-    (grapheme.includes(EMOJI_PRESENTATION_SELECTOR) && EXTENDED_PICTOGRAPHIC_PATTERN.test(grapheme))
+    (grapheme.includes(EMOJI_PRESENTATION_SELECTOR) &&
+      EXTENDED_PICTOGRAPHIC_PATTERN.test(grapheme)) ||
+    TELEGRAM_WIDE_CODE_POINT_PATTERN.test(grapheme)
   ) {
-    return 2;
-  }
-  if (TELEGRAM_WIDE_CODE_POINT_PATTERN.test(grapheme)) {
     return 2;
   }
   return NON_PRINTING_ONLY_PATTERN.test(grapheme) ? 0 : 1;
@@ -44,11 +43,10 @@ export function renderTelegramMonospaceGrid(
   rows: readonly (readonly string[])[],
   options: { headerSeparator?: boolean } = {},
 ): string {
-  const columnCount = Math.max(...rows.map((row) => row.length), 0);
-  const widths = Array.from({ length: columnCount }, () => 3);
+  const widths: number[] = [];
   for (const row of rows) {
-    for (let index = 0; index < columnCount; index += 1) {
-      widths[index] = Math.max(widths[index] ?? 3, telegramMonospaceWidth(row[index] ?? ""));
+    for (const [index, text] of row.entries()) {
+      widths[index] = Math.max(widths[index] ?? 3, telegramMonospaceWidth(text ?? ""));
     }
   }
   const renderRow = (row: readonly string[]) =>

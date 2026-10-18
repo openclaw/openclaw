@@ -1,13 +1,9 @@
 import { wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
   resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
-  resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
-import { resolveNormalizedXaiToolModel } from "./tool-config-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
@@ -42,39 +38,30 @@ export function buildXaiWebSearchPayload(params: {
   };
 }
 
-function resolveXaiSearchConfig(searchConfig?: Record<string, unknown>): Record<string, unknown> {
-  return isRecord(searchConfig?.grok) ? searchConfig.grok : {};
-}
+/** Typed deadline the web_search boundary reports as a timeout. */
+class XaiWebSearchTimeoutError extends Error {
+  override readonly name = "TimeoutError";
+  readonly code = "ETIMEDOUT";
+  readonly timeoutMs: number;
 
-export function resolveXaiWebSearchModel(searchConfig?: Record<string, unknown>): string {
-  return resolveNormalizedXaiToolModel({
-    config: resolveXaiSearchConfig(searchConfig),
-    defaultModel: XAI_DEFAULT_MODEL_ID,
-  });
-}
-
-export function resolveXaiWebSearchEndpoint(searchConfig?: Record<string, unknown>): string {
-  return resolveXaiResponsesEndpoint(resolveXaiSearchConfig(searchConfig).baseUrl);
-}
-
-export function resolveXaiInlineCitations(searchConfig?: Record<string, unknown>): boolean {
-  return resolveXaiSearchConfig(searchConfig).inlineCitations === true;
+  constructor(timeoutSeconds: number, cause: Error) {
+    super(
+      `xAI web search timed out after ${timeoutSeconds}s. Check xAI authentication or try a simpler request.`,
+      { cause },
+    );
+    this.timeoutMs = timeoutSeconds * 1_000;
+  }
 }
 
 export function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
   if (
     error instanceof Error &&
+    !(error instanceof XaiWebSearchTimeoutError) &&
     (error.name === "AbortError" ||
       error.name === "TimeoutError" ||
       error.message === "This operation was aborted")
   ) {
-    throw Object.assign(
-      new Error(
-        `xAI web search timed out after ${timeoutSeconds}s. Check xAI authentication or try a simpler request.`,
-        { cause: error },
-      ),
-      { code: "ETIMEDOUT" },
-    );
+    throw new XaiWebSearchTimeoutError(timeoutSeconds, error);
   }
   throw error;
 }

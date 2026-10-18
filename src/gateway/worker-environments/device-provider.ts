@@ -15,6 +15,7 @@ import type {
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { workerInferencePlacement } from "./inference-placement.js";
 import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
 
 export { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
@@ -85,6 +86,10 @@ export async function reconcileDeviceWorker(
 }
 
 function requireDeviceId(profile: WorkerProfile): string {
+  workerInferencePlacement({
+    providerId: DEVICE_WORKER_PROVIDER_ID,
+    profileSnapshot: { settings: profile },
+  });
   const deviceId = profile.device;
   if (typeof deviceId !== "string" || !deviceId.trim()) {
     throw new WorkerProviderError("device worker profile requires a device setting");

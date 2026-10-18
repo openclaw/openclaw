@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Runs the test-helper extension import boundary checker.
 import { createExtensionImportBoundaryChecker } from "./lib/extension-import-boundary-checker.mts";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
@@ -12,9 +11,6 @@ const checker = createExtensionImportBoundaryChecker({
   inventoryTitle: "Test-helper extension import boundary inventory:",
 });
 
-/**
- * Entrypoint for the test-helper extension import boundary checker.
- */
 export const main = checker.main;
 
 runAsScript(import.meta.url, main);

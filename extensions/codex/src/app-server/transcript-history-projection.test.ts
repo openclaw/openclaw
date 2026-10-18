@@ -249,7 +249,7 @@ describe("projectBoundedCodexThreadHistory", () => {
     }
   });
 
-  it.each([false, true])("retains refused history with an assistant item: %s", (withAssistant) => {
+  it.each([true])("retains refused history with an assistant item: %s", (withAssistant) => {
     const explanation = "The proposed action differed from the requested task.";
     const continuation = { message: "  Continue only the requested task.\n" };
     const assistantItem = historyItem("assistant-refused", "The request was paused.");

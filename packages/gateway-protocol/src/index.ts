@@ -1,6 +1,8 @@
 export * from "./error-details.js";
+export * from "./node-permissions.js";
 export * from "./github-publication-api.js";
 export * from "./session-agent-status.js";
+export * from "./session-row-deltas.js";
 export type {
   ModelCatalogScope,
   ModelCatalogTarget,
@@ -18,7 +20,6 @@ export * from "./schema/worker-inference.js";
 export * from "./schema/worker-gateway-tool.js";
 export * from "./schema/worker-computer.js";
 export * from "./schema/computer.js";
-export * from "./schema/skill-history.js";
 export * from "./schema/skill-library.js";
 export * from "./schema/plugin-credentials.js";
 export * from "./schema/web-search.js";
@@ -32,14 +33,12 @@ export * from "./schema/canvas.js";
 export * from "./schema/progress-card.js";
 export * from "./schema/transcripts.js";
 export {
-  SessionConversationLinkSchema,
   SessionCreatedActorSchema,
   SessionEntryArchiveReasonSchema,
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
-  type SessionConversationLink,
   type SessionEntryArchiveReason,
   type SessionOwner,
   type SessionPermissionMode,
@@ -93,3 +92,11 @@ export {
 export type * from "./schema-types.js";
 export type { GatewayCoreRequestParams } from "./core-request-params.js";
 export type { SessionsPatchResult } from "./sessions-patch-result.js";
+
+export * from "./schema/session-processes.js";
+export type {
+  DoctorMemoryStatusPayload,
+  DoctorMemoryEmbeddingRuntimePayload,
+  DoctorMemoryDreamingConfig,
+  DoctorMemoryDreamingPayload,
+} from "./doctor-memory.js";

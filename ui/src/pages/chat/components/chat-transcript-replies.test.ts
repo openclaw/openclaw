@@ -1,17 +1,17 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import * as chatMessage from "./chat-message.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import {
-  getTranscriptState,
+  render,
+  renderChatThread,
   renderTranscriptSearch,
-  toggleTranscriptSearch,
-} from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
+} from "../test-helpers/chat-transcript-native.tsx";
+import * as chatMessage from "./chat-message-group-frame.ts";
+import { getTranscriptState, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -26,6 +26,13 @@ function requireElement(container: ParentNode, selector: string): HTMLElement {
 describe("chat transcript replies", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  async function commitLayout() {
+    flush();
+    await Promise.resolve();
+    vi.advanceTimersToNextFrame();
+    flush();
+  }
 
   function replyMessages(
     client?: readonly [id: string, mode: string, displayName: string] | null,
@@ -58,9 +65,20 @@ describe("chat transcript replies", () => {
     ] as const;
   }
 
-  it.each([false, true])(
-    "resolves persisted replies and owns their flash lifetime (reduced motion: %s)",
-    async (reducedMotion) => {
+  it.each([
+    { name: "ordinary motion", reducedMotion: false, textless: false },
+    { name: "reduced motion", reducedMotion: true, textless: false },
+    { name: "textless original", reducedMotion: false, textless: true },
+  ])(
+    "reveals loaded replies and owns their flash lifetime: $name",
+    async ({ reducedMotion, textless }) => {
+      const flushFrames = stubAnimationFrames();
+      const commitReplyLayout = async () => {
+        flush();
+        await Promise.resolve();
+        flushFrames();
+        flush();
+      };
       vi.stubGlobal("matchMedia", (query: string) => ({
         matches: query.includes("prefers-reduced-motion") && reducedMotion,
         addEventListener: vi.fn(),
@@ -68,90 +86,69 @@ describe("chat transcript replies", () => {
       }));
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
-      const props = threadProps("pane-reply-preview", "agent:main:main", [...replyMessages()]);
+      const [source, reply] = replyMessages();
+      const open = vi.fn();
+      const props = threadProps("pane-reply-preview", "agent:main:main", [
+        textless
+          ? {
+              ...source,
+              role: "user",
+              content: [],
+              __openclaw: { ...source["__openclaw"], replyToId: "elsewhere" },
+            }
+          : source,
+        reply,
+      ]);
+      props.replyMessageAccess = { revision: 0, navigationId: null, read: () => undefined, open };
       render(renderChatThread(props, transcript), container);
-      transcript.hostConnected();
-      transcript.hostUpdated();
+      transcript.start();
+      transcript.update();
       await flushDeferredRowPrune();
 
       const preview = container.querySelector<HTMLButtonElement>(
         ".chat-reply-attribution--inline button",
       );
-      expect(preview?.getAttribute("aria-label")).toBe("Replying to Molty");
+      if (!textless) {
+        expect(preview?.getAttribute("aria-label")).toBe("Replying to Molty");
+      }
       expect(preview?.textContent).not.toContain("source-message");
 
       const sourceBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
         (bubble) => bubble.dataset.entryId === "source-message",
       )!;
       const duration = reducedMotion ? 1_000 : 1_200;
-      vi.useFakeTimers();
+      vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
       try {
         preview?.click();
         await Promise.resolve();
+        await commitReplyLayout();
+        expect(open).not.toHaveBeenCalled();
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
-        sourceBubble.firstElementChild!.dispatchEvent(new Event("animationend", { bubbles: true }));
+        if (!textless) {
+          sourceBubble.firstElementChild!.dispatchEvent(
+            new Event("animationend", { bubbles: true }),
+          );
+        }
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
         vi.advanceTimersByTime(duration / 2);
         preview?.click();
         await Promise.resolve();
+        await commitReplyLayout();
         vi.advanceTimersByTime(duration - 1);
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
         vi.advanceTimersByTime(1);
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
         preview?.click();
         await Promise.resolve();
-        transcript.hostDisconnected();
+        await commitReplyLayout();
+        transcript.dispose();
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
         vi.useRealTimers();
       }
     },
   );
-
-  it("reveals a loaded original without text instead of paging history", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const open = vi.fn();
-    const props = threadProps("pane-reply-textless", "agent:main:main", [
-      // Rendered for its own reply line, with no text of its own.
-      {
-        role: "user",
-        content: [],
-        __openclaw: { id: "textless", replyToId: "elsewhere" },
-        timestamp: 1_000,
-      },
-      {
-        role: "user",
-        content: "Follow up",
-        __openclaw: { id: "reply-message", replyToId: "textless" },
-        timestamp: 2_000,
-      },
-    ]);
-    props.replyMessageAccess = {
-      revision: 0,
-      navigationId: null,
-      read: () => undefined,
-      request: vi.fn(),
-      open,
-    };
-    try {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostConnected();
-      transcript.hostUpdated();
-      await flushDeferredRowPrune();
-      requireElement(container, ".chat-reply-attribution--inline button").click();
-      await Promise.resolve();
-      expect(open).not.toHaveBeenCalled();
-      expect(
-        requireElement(container, "[data-entry-id='textless']").classList.contains(
-          "chat-bubble--reply-target",
-        ),
-      ).toBe(true);
-    } finally {
-      transcript.hostDisconnected();
-    }
-  });
 
   it.each([
     ["assistant", null, false, "Molty"],
@@ -165,7 +162,6 @@ describe("chat transcript replies", () => {
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       let resolvedMessage: unknown = undefined;
-      const request = vi.fn();
       const open = vi.fn();
       const props = {
         ...threadProps("pane-reply-hydration", "agent:main:main", [followUp]),
@@ -175,20 +171,18 @@ describe("chat transcript replies", () => {
           revision: 0,
           navigationId: null,
           read: () => resolvedMessage,
-          request,
           open,
         },
       };
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         await flushDeferredRowPrune();
 
-        expect(request).toHaveBeenCalledWith("source-message");
         expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
 
         resolvedMessage = { ...sourceMessage, content: "The original message" };
@@ -205,7 +199,7 @@ describe("chat transcript replies", () => {
         preview?.click();
         expect(open).toHaveBeenCalledWith("source-message");
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -213,28 +207,32 @@ describe("chat transcript replies", () => {
   it.each([false, true])(
     "opens folded work when a reply navigation loads its source (run frame: %s)",
     async (framed) => {
-      const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       const [sourceMessage, followUp] = replyMessages();
       const props = threadProps("pane-folded-history-reply", "agent:main:dashboard:reply", [
         followUp,
       ]);
+      const transcript = createTestTranscript(props.paneId);
       const open = vi.fn();
       props.replyMessageAccess = {
         revision: 0,
         navigationId: null,
         read: () => sourceMessage,
-        request: vi.fn(),
         open,
       };
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         await flushDeferredRowPrune();
+        const viewport = requireElement(container, ".chat-thread");
+        viewport.scrollTo = (options?: ScrollToOptions | number, y?: number) => {
+          viewport.scrollTop = typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
+          viewport.dispatchEvent(new Event("scroll"));
+        };
         requireElement(container, ".chat-reply-attribution--inline button").click();
         expect(open).toHaveBeenCalledWith("source-message");
         props.replyMessageAccess.navigationId = "source-message";
@@ -256,6 +254,8 @@ describe("chat transcript replies", () => {
           followUp,
         ];
         rerender();
+        expect(transcript.revealMessage("source-message")).toBe(true);
+        rerender();
         await flushDeferredRowPrune();
         expect(
           requireElement(container, ".chat-work-group button").getAttribute("aria-expanded"),
@@ -264,7 +264,7 @@ describe("chat transcript replies", () => {
           "The original answer",
         );
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -289,22 +289,72 @@ describe("chat transcript replies", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     if (searchQuery) {
-      Object.assign(getTranscriptState(props.paneId), { searchOpen: true, searchQuery });
+      getTranscriptState(props.paneId).search.toggle();
+      getTranscriptState(props.paneId).search.setQuery(searchQuery);
     }
     render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     await flushDeferredRowPrune();
-    transcript.hostDisconnected();
-    const strips = [...container.querySelectorAll(".chat-reply-attribution--reply")].map((strip) =>
-      strip.querySelector(".chat-reply-attribution__name")?.textContent?.trim(),
-    );
-    // No reply cue renders beyond the named strips.
-    expect(container.textContent?.split("Replying to").length).toBe(strips.length + 1);
-    return strips;
+    try {
+      const strips = [...container.querySelectorAll(".chat-reply-attribution--reply")].map(
+        (strip) => strip.querySelector(".chat-reply-attribution__name")?.textContent?.trim(),
+      );
+      // No reply cue renders beyond the named strips.
+      expect(container.textContent?.split("Replying to").length).toBe(strips.length + 1);
+      return strips;
+    } finally {
+      transcript.dispose();
+    }
   }
 
+  const currentReplyCases = [
+    { linkage: "the prompt that owns its run", strips: ["Alice"] },
+    { linkage: "its own prompt in a 1:1 thread", latest: null, strips: [] },
+    { linkage: "an older prompt in a 1:1 thread", latest: alice, strips: ["Alice"] },
+    { linkage: "a legacy reply without a run", replyRun: null, strips: [] },
+    { linkage: "a prompt without a run key", promptRun: null, strips: [] },
+    { linkage: "another run's prompt", promptRun: "run-b", strips: [] },
+    { linkage: "duplicate run owners", duplicate: true, strips: [] },
+    {
+      linkage: "a channel-mirrored reply keyed only by its send",
+      reply: { mirrorOrigin: "discord", idempotencyKey: "run-a" },
+      strips: [],
+    },
+  ].map(
+    ({
+      linkage,
+      promptRun = "run-a",
+      replyRun = "run-a",
+      latest = bob,
+      duplicate,
+      reply,
+      strips,
+    }) => ({
+      case: linkage,
+      query: undefined,
+      session: undefined,
+      strips,
+      messages: [
+        ...(duplicate
+          ? [turn("p1", "user", "Earlier", { ...alice, idempotencyKey: "run-a:user" })]
+          : []),
+        turn("p2", "user", "hey hey", {
+          ...alice,
+          ...(promptRun ? { idempotencyKey: `${promptRun}:user` } : {}),
+        }),
+        // The latest prompt never stands in for an unresolved origin.
+        ...(latest ? [turn("p3", "user", "Unrelated", latest)] : []),
+        {
+          ...turn("a4", "assistant", "Tô aqui", reply ?? (replyRun ? { runId: replyRun } : {})),
+          openclawDelivery: { replyToCurrent: true },
+        },
+      ],
+    }),
+  );
+
   it.each([
+    ...currentReplyCases,
     {
       case: "search hides the other speaker",
       messages: [
@@ -379,7 +429,7 @@ describe("chat transcript replies", () => {
       strips: [],
     },
   ])(
-    "keeps reply attribution from the full conversation when $case",
+    "keeps cached reply attribution from the full conversation when $case",
     async ({ messages, query, session, strips }) => {
       const props = threadProps("pane-reply-context", "agent:main:main", [...messages]);
       if (session) {
@@ -390,42 +440,11 @@ describe("chat transcript replies", () => {
           ...session,
         } as GatewaySessionRow;
       }
+      if (props.selectedSession) {
+        props.transcriptMetadata = projectChatTranscriptMetadata(props.selectedSession);
+        props.selectedSession = undefined;
+      }
       expect(await renderedStrips(props, query)).toEqual(strips);
-    },
-  );
-
-  it.each([
-    { linkage: "the prompt that owns its run", strips: ["Alice"] },
-    { linkage: "its own prompt in a 1:1 thread", latest: null, strips: [] },
-    { linkage: "an older prompt in a 1:1 thread", latest: alice, strips: ["Alice"] },
-    { linkage: "a legacy reply without a run", replyRun: null, strips: [] },
-    { linkage: "a prompt without a run key", promptRun: null, strips: [] },
-    { linkage: "another run's prompt", promptRun: "run-b", strips: [] },
-    { linkage: "duplicate run owners", duplicate: true, strips: [] },
-    {
-      linkage: "a channel-mirrored reply keyed only by its send",
-      reply: { mirrorOrigin: "discord", idempotencyKey: "run-a" },
-      strips: [],
-    },
-  ])(
-    "attributes reply_to_current only through $linkage",
-    async ({ promptRun = "run-a", replyRun = "run-a", latest = bob, duplicate, reply, strips }) => {
-      const props = threadProps("pane-reply-current", "agent:main:main", [
-        ...(duplicate
-          ? [turn("p1", "user", "Earlier", { ...alice, idempotencyKey: "run-a:user" })]
-          : []),
-        turn("p2", "user", "hey hey", {
-          ...alice,
-          ...(promptRun ? { idempotencyKey: `${promptRun}:user` } : {}),
-        }),
-        // The latest prompt never stands in for an unresolved origin.
-        ...(latest ? [turn("p3", "user", "Unrelated", latest)] : []),
-        {
-          ...turn("a4", "assistant", "Tô aqui", reply ?? (replyRun ? { runId: replyRun } : {})),
-          openclawDelivery: { replyToCurrent: true },
-        },
-      ]);
-      expect(await renderedStrips(props)).toEqual(strips);
     },
   );
 
@@ -475,23 +494,18 @@ describe("chat transcript replies", () => {
         revision: 0,
         navigationId: null,
         read: () => undefined,
-        request: vi.fn(),
         open,
       };
     }
-    const requestUpdate = () => queueMicrotask(rerender);
     const rerender = () => {
-      render(renderTranscriptSearch(paneId, requestUpdate), searchContainer);
-      render(
-        renderChatThread({ ...props, onRequestUpdate: requestUpdate }, transcript),
-        threadContainer,
-      );
-      transcript.hostUpdated();
+      render(renderTranscriptSearch(paneId), searchContainer);
+      render(renderChatThread(props, transcript), threadContainer);
+      transcript.update();
     };
     try {
-      toggleTranscriptSearch(paneId, requestUpdate);
+      toggleTranscriptSearch(paneId);
       rerender();
-      transcript.hostConnected();
+      transcript.start();
       const input = requireElement(searchContainer, "input") as HTMLInputElement;
       input.value = "Follow up";
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -500,6 +514,7 @@ describe("chat transcript replies", () => {
       expect(threadContainer.querySelector(sourceSelector)).toBeNull();
       requireElement(threadContainer, ".chat-reply-attribution button").click();
       await vi.advanceTimersByTimeAsync(0);
+      await commitLayout();
 
       expect(searchContainer.querySelector("input")).toBeNull();
       if (loaded) {
@@ -513,7 +528,7 @@ describe("chat transcript replies", () => {
         expect(open).toHaveBeenCalledWith(sourceId);
       }
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
       vi.useRealTimers();
     }
   });
@@ -569,7 +584,7 @@ describe("chat transcript replies", () => {
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       const attribution = () =>
         expectDefined(
@@ -579,9 +594,10 @@ describe("chat transcript replies", () => {
             ?.querySelector(".chat-reply-attribution--reply"),
           "reply attribution",
         );
+      const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         await flushDeferredRowPrune();
         // The snapshot names an original outside the loaded history; it still navigates.
         expect(
@@ -594,7 +610,8 @@ describe("chat transcript replies", () => {
             ?.getAttribute("data-chat-row-key"),
           "unrelated group key",
         );
-        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+        expect(prepareFrame.mock.calls.some(([group]) => group.key === unrelatedKey)).toBe(true);
+        prepareFrame.mockClear();
 
         for (const [name, text] of [
           ["Carol", "Original question loaded"],
@@ -614,12 +631,12 @@ describe("chat transcript replies", () => {
           expect(
             attribution().querySelector("button .chat-reply-attribution__name")?.textContent,
           ).toBe(name);
-          expect(renderGroup.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual(
+          expect(prepareFrame.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual(
             [],
           );
         }
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );

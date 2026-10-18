@@ -2,7 +2,7 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import type { Static, TSchema } from "typebox";
 import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
-import { resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import { toolExecutionErrorResult } from "./tool-result.js";
 import type { FeishuToolsConfig } from "./types.js";
 
@@ -13,10 +13,15 @@ export function registerFeishuTool<TSchemaType extends TSchema>(
     label: string;
     description: string;
     family: keyof FeishuToolsConfig;
+    workspaceAccess?: boolean | "execute";
     parameters: TSchemaType;
     createExecute: (
       ctx: OpenClawPluginToolContext,
       cfg: OpenClawConfig,
+      createClient: (
+        params: { accountId?: string } | undefined,
+        label: string,
+      ) => ReturnType<typeof createFeishuToolClient>,
     ) => (
       params: Static<TSchemaType> & { accountId?: string },
     ) => Promise<AgentToolResult<unknown>>;
@@ -29,7 +34,14 @@ export function registerFeishuTool<TSchemaType extends TSchema>(
       if (!cfg || !resolveAnyEnabledFeishuToolsConfig(cfg)[tool.family]) {
         return null;
       }
-      const execute = tool.createExecute(ctx, cfg);
+      const execute = tool.createExecute(ctx, cfg, (params, label) =>
+        createFeishuToolClient({
+          cfg,
+          executeParams: params,
+          defaultAccountId: ctx.agentAccountId,
+          requiredTool: { family: tool.family, label },
+        }),
+      );
       return {
         name: tool.name,
         label: tool.label,
@@ -46,6 +58,9 @@ export function registerFeishuTool<TSchemaType extends TSchema>(
         },
       };
     },
-    { name: tool.name },
+    {
+      name: tool.name,
+      ...(tool.workspaceAccess !== undefined ? { workspaceAccess: tool.workspaceAccess } : {}),
+    },
   );
 }

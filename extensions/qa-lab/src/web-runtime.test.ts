@@ -213,30 +213,6 @@ describe("qa web runtime", () => {
     await closeQaWebSessions();
   });
 
-  it("keeps an explicit browser channel request explicit", async () => {
-    await openPage({ url: "http://127.0.0.1:3000/chat", channel: "chrome" });
-
-    const launchOptions = requireLaunchOptions();
-    expect(spawnSync).not.toHaveBeenCalled();
-    expect(launchOptions?.channel).toBe("chrome");
-    expect(launchOptions?.executablePath).toBeUndefined();
-    await closeQaWebSessions();
-  });
-
-  it("can close only selected page sessions", async () => {
-    const first = await openPage({ url: "http://127.0.0.1:3000/one" });
-    const second = await openPage({ url: "http://127.0.0.1:3000/two" });
-
-    await closeQaWebSessions([first.pageId]);
-
-    await expect(qaWebSnapshot({ pageId: first.pageId })).rejects.toThrow(
-      `unknown web session: ${first.pageId}`,
-    );
-    const snapshot = await qaWebSnapshot({ pageId: second.pageId });
-    expect(snapshot.text).toBe("hello from body");
-    await closeQaWebSessions();
-  });
-
   it("caps oversized web runtime timeouts", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");

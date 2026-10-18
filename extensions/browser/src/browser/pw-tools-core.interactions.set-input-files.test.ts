@@ -74,17 +74,6 @@ describe("upload handoff", () => {
     });
   });
 
-  it("sets resolved files once and leaves browser events to Playwright", async () => {
-    await upload();
-    expect(resolveStrictExistingUploadPaths).toHaveBeenCalledWith({ requestedPaths: paths });
-    expect(session.refLocator).toHaveBeenCalledWith(page, "e7");
-    expect(stat).not.toHaveBeenCalled();
-    expect(readFile).not.toHaveBeenCalled();
-    expect(detectMime).not.toHaveBeenCalled();
-    expect(setInputFiles).toHaveBeenCalledExactlyOnceWith([canonical], nativeOptions);
-    expect(elementHandle).not.toHaveBeenCalled();
-  });
-
   it("uses an octet-stream payload when mime detection has no answer", async () => {
     detectMime.mockResolvedValueOnce(undefined);
     await upload({ cdpUrl: "https://browser.example/cdp", ssrfPolicy: {} });
@@ -113,6 +102,28 @@ describe("upload handoff", () => {
     expect(setInputFiles).not.toHaveBeenCalled();
   });
 
+  it.each([47, 48, 50])("keeps extension path handoff for a %i MiB upload", async (mib) => {
+    stat.mockResolvedValueOnce({ size: mib * 1024 * 1024 });
+    await upload({
+      browserFilesystemLocal: false,
+      uploadPathsFallbackOnPayloadLimit: true,
+      ssrfPolicy: {},
+    });
+    expect(readFile).not.toHaveBeenCalled();
+    expect(setInputFiles).toHaveBeenCalledExactlyOnceWith([canonical], nativeOptions);
+  });
+
+  it("sends extension uploads below the relay bound as bytes", async () => {
+    stat.mockResolvedValue({ size: 46 * 1024 * 1024, mtimeMs: payload.lastModifiedMs });
+    await upload({
+      browserFilesystemLocal: false,
+      uploadPathsFallbackOnPayloadLimit: true,
+      ssrfPolicy: {},
+    });
+    expect(readFile).toHaveBeenCalledWith(canonical);
+    expect(setInputFiles).toHaveBeenCalledExactlyOnceWith([payload], nativeOptions);
+  });
+
   it("keeps guarded local-filesystem uploads as paths inside the policy guard", async () => {
     await upload({
       browserFilesystemLocal: true,
@@ -122,6 +133,9 @@ describe("upload handoff", () => {
     expect(readFile).not.toHaveBeenCalled();
     expect(detectMime).not.toHaveBeenCalled();
     expect(setInputFiles).toHaveBeenCalledExactlyOnceWith([canonical], nativeOptions);
+    expect(resolveStrictExistingUploadPaths).toHaveBeenCalledWith({ requestedPaths: paths });
+    expect(session.refLocator).toHaveBeenCalledWith(page, "e7");
+    expect(elementHandle).not.toHaveBeenCalled();
     expect(session.withPageNavigationRequestGuard).toHaveBeenCalledOnce();
     expect(session.assertPageNavigationCompletedSafely).toHaveBeenCalledOnce();
   });

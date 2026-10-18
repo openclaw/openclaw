@@ -31,6 +31,10 @@ In the Control UI, enable **Exact timing** to disable staggering. For recurring 
 
 An `on-exit` job disables itself when its payload is queued to run. Re-enable the job to watch again; this also works while the previous payload is still finishing. If the new command exits before that payload finishes, its exit waits for the previous run to settle before disabling the job and starting the next payload. This includes cleanup still running after a timeout response. Disabling or changing the watch cancels its pending exit. You can change the watched command or working directory when re-enabling it.
 
+The Gateway owns the watched command's process tree, including cleanup after failed startup. Cleanup must finish before its payload fires or a replacement command starts. If cleanup cannot be confirmed, the Gateway reports the failure, keeps a suspension blocker, and refuses to rearm that watch in the same process. Inspect and stop any remaining command processes, then restart the Gateway; disabling and re-enabling the job does not clear uncertain cleanup.
+
+Changing an `at` or `on-exit` job to an `every` or `cron` schedule clears its inherited `deleteAfterRun` setting. An explicit `deleteAfterRun` value in the same update takes precedence.
+
 ### Heartbeat task migration
 
 Heartbeat scratch supported a structured `tasks:` block before v2026.8.1. If you are upgrading from an earlier release, run `openclaw doctor --fix` to convert each entry into an ordinary editable main-session automation job. Doctor preserves the interval and previous last-run timing, creates the jobs before removing the block, and safely converges the same declaration keys on rerun.
@@ -58,7 +62,7 @@ openclaw automations add \
 
 Matching has a bounded processing budget and queue. If either limit is exceeded, the source stops with a recorded error; check the match expression and Gateway load, then manually re-enable the job.
 
-Only one payload fire and one bounded pending batch are retained per job. Lines arriving while a payload runs, or before the built-in 30-second trigger interval has elapsed, coalesce into that pending batch rather than building an unbounded queue. One serialized owner records gate drops, payload errors, and not-running dispatches in `streamDroppedBatches`; bounded merges increment `streamCoalescedBatches`. Failed payloads are not retried because they may not be idempotent. A logical source identity remains stable across supervised child restarts, but rotates when the source is disabled, removed, or replaced, so queued batches from the retired source cannot fire even after an A-to-B-to-A edit. After a stop completes, late callbacks from an old child are inert. There is no native WebSocket source; bridge one with an argv command such as `websocat wss://example.invalid/events`.
+Only one payload fire and one bounded pending batch are retained per job. Lines arriving while a payload runs, or before the built-in 30-second trigger interval has elapsed, coalesce into that pending batch rather than building an unbounded queue. One serialized owner records gate drops, payload errors, and not-running dispatches in `streamDroppedBatches`; bounded merges increment `streamCoalescedBatches`. Failed payloads are not retried because repeating them may duplicate their effects. A logical source identity remains stable across supervised child restarts, but rotates when the source is disabled, removed, or replaced, so queued batches from the retired source cannot fire even after an A-to-B-to-A edit. After a stop completes, late callbacks from an old child are inert. There is no native WebSocket source; bridge one with an argv command such as `websocat wss://example.invalid/events`.
 
 Batch deadlines and retries when a job is busy use the Gateway scheduler. After sleep, each elapsed deadline runs once. Stopping a source cancels its pending deadlines and waits for started callbacks to settle.
 
@@ -105,6 +109,8 @@ An event trigger adds a headless condition script to an `every`, `cron`, or `str
   payload: { kind: "agentTurn", message: "Investigate the CI status change." },
 }
 ```
+
+Forced manual runs bypass this gate: `openclaw automations run <job-id>` (forced by default) and the `automations` tool with `action: "run", runMode: "force"` skip `trigger.script` and execute the payload directly. An `agentTurn` payload wakes the model even if the script would return `fire: false`. To test the gate, wait for a scheduled evaluation or use `openclaw automations run <job-id> --due` when the job is due. The tool's default `runMode: "due"` also honors the gate; neither due mode makes a job due early.
 
 `openclaw doctor --fix` converts persisted trigger scripts that call `tools.call('exec', args)` and read the `.result.details` envelope. Doctor leaves custom or ambiguous scripts unchanged and identifies each affected job for manual conversion; standalone script payloads are not converted.
 

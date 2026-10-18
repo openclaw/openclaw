@@ -1,12 +1,6 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { codeModeFailureCode } from "./code-mode-errors.js";
 import * as worker from "./code-mode-executor.js";
-import {
-  resolveCodeModeConfig,
-  addClientToolsToCodeModeCatalog,
-  applyCodeModeCatalog,
-} from "./code-mode.js";
+import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "./code-mode.js";
 import {
   resetCodeModeTestState,
   pluginToolWithExecute,
@@ -14,37 +8,27 @@ import {
   expectCodeModeSharedBudget,
   pluginTool,
   resultDetails,
-  createCodeModeHarness,
-  runUntilCompleted,
   testing,
+  createCatalogCodeModeHarness as createGuestHarness,
+  expectCompleted,
+  expectFailure,
+  expectToolCalls,
+  jsonTool,
 } from "./code-mode.test-support.js";
-import { jsonResult } from "./tools/common.js";
-import type { AnyAgentTool } from "./tools/common.js";
-
-function createGuestHarness(targets: AnyAgentTool[] = []) {
-  const harness = createCodeModeHarness();
-  const compacted = applyCodeModeCatalog({
-    ...harness.ctx,
-    tools: [...harness.tools, ...targets],
-  });
-  return { ...harness, compacted };
-}
-
-function run(tools: AnyAgentTool[], code: string) {
-  return runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code });
-}
+import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 
 describe("Code Mode guest execution", () => {
   afterEach(resetCodeModeTestState);
 
   it("does not invoke toJSON while serializing final values", async () => {
     const noop = pluginTool("fake_noop", "Noop");
-    const { tools: codeModeTools } = createGuestHarness([noop]);
-
-    const details = await run(
-      codeModeTools,
+    const { complete } = createGuestHarness([noop]);
+    const details = await complete(
       `
-        const result = { invoked: false, value: null };
+        const result = {
+          invoked: false,
+          hostGlobals: [typeof process, typeof module, typeof require, typeof globalThis.__openclawHostRequest],
+        };
         result.value = {
           toJSON() {
             result.invoked = true;
@@ -58,30 +42,30 @@ describe("Code Mode guest execution", () => {
 
     expect(details).toMatchObject({
       status: "completed",
-      value: { invoked: false },
+      value: { invoked: false, hostGlobals: ["undefined", "undefined", "undefined", "undefined"] },
       telemetry: { searchCount: 0, describeCount: 0, callCount: 0 },
     });
     expect(noop.execute).not.toHaveBeenCalled();
-    expect(testing.activeRuns.size).toBe(0);
-    expect(testing.resumingRunIds.size).toBe(0);
+    expect(testing).toMatchObject({ activeRuns: { size: 0 }, resumingRunIds: { size: 0 } });
   });
 
   it("keeps normalized, reserved, and colliding prompt names aligned with runtime", async () => {
-    const targets = [
-      pluginTool("llm-task", "Run an LLM task"),
-      pluginTool("llm_task", "Run the exact-name task"),
-      pluginTool("catalog", "Collide with discovery"),
-      pluginTool("TextEncoder", "Collide with text encoding"),
-      pluginTool("TextDecoder", "Collide with text decoding"),
-      pluginTool("class", "Use a reserved word"),
-      pluginTool("9patch", "Start with a digit"),
-      pluginTool("__openclawResult", "Collide with a private lifecycle hook"),
-      pluginTool("tool___openclawResult", "Keep the exact safe lifecycle-shaped name"),
+    const names: Array<[string, string | RegExp]> = [
+      ["llm-task", /^llm_task_[a-f0-9]{8}$/u],
+      ["llm_task", "llm_task"],
+      ["catalog", /^catalog_[a-f0-9]{8}$/u],
+      ["store", /^store_[a-f0-9]{8}$/u],
+      ["load", /^load_[a-f0-9]{8}$/u],
+      ["TextEncoder", /^TextEncoder_[a-f0-9]{8}$/u],
+      ["TextDecoder", /^TextDecoder_[a-f0-9]{8}$/u],
+      ["class", /^class_[a-f0-9]{8}$/u],
+      ["9patch", "tool_9patch"],
+      ["__openclawResult", /^tool___openclawResult_[a-f0-9]{8}$/u],
+      ["tool___openclawResult", "tool___openclawResult"],
     ];
-    const { tools: codeModeTools, compacted } = createGuestHarness([...targets]);
-
-    const details = await run(
-      codeModeTools,
+    const targets = names.map(([name]) => pluginTool(name, name));
+    const { complete, ctx, catalogRef } = createGuestHarness(targets);
+    const details = await complete(
       `
         const handles = catalog.all();
         const results = {};
@@ -89,7 +73,6 @@ describe("Code Mode guest execution", () => {
         return {
           names: handles.map((handle) => handle.callableName),
           results,
-          catalogSearch: typeof catalog.search,
           encoding: new TextDecoder().decode(new TextEncoder().encode("still works")),
         };
       `,
@@ -97,22 +80,15 @@ describe("Code Mode guest execution", () => {
 
     expect(details.status).toBe("completed");
     const value = details.value as { names: string[]; results: Record<string, unknown> };
-    expect(value.names).toContain("llm_task");
-    expect(value.names).toContain("tool_9patch");
-    expect(value.names).toContain("tool___openclawResult");
     expect(value.names).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(/^llm_task_[a-f0-9]{8}$/u),
-        expect.stringMatching(/^catalog_[a-f0-9]{8}$/u),
-        expect.stringMatching(/^TextEncoder_[a-f0-9]{8}$/u),
-        expect.stringMatching(/^TextDecoder_[a-f0-9]{8}$/u),
-        expect.stringMatching(/^class_[a-f0-9]{8}$/u),
-        expect.stringMatching(/^tool___openclawResult_[a-f0-9]{8}$/u),
-      ]),
+      expect.arrayContaining(
+        names.map(([, name]) => (typeof name === "string" ? name : expect.stringMatching(name))),
+      ),
     );
+    const catalogPrompt = buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []);
     for (const name of value.names) {
       expect(name.startsWith("__openclaw")).toBe(false);
-      expect(compacted.tools[0]?.description).toContain(`- ${name} `);
+      expect(catalogPrompt).toContain(`- ${name} `);
     }
     expect(details).toMatchObject({ value: { encoding: "still works" } });
     expect(value.results).toEqual(
@@ -122,27 +98,20 @@ describe("Code Mode guest execution", () => {
 
   it("uses the client tool as the single winner for a shadowed exact name", async () => {
     const plugin = pluginTool("shared_action", "Plugin action");
-    const { ctx, tools: codeModeTools } = createGuestHarness([plugin]);
+    const { ctx, complete } = createGuestHarness([plugin]);
     const client = pluginTool("shared_action", "Client action");
-    addClientToolsToCodeModeCatalog({
-      tools: [client as never],
-      ...ctx,
-    });
+    addClientToolsToToolCatalog({ enabled: true, tools: [client], ...ctx });
 
-    const details = await run(
-      codeModeTools,
+    const details = await complete(
       `
         const matches = await catalog.search("shared_action");
         return { count: matches.length, value: await shared_action({ source: "guest" }) };
       `,
     );
 
-    expect(details).toMatchObject({
-      status: "completed",
-      value: {
-        count: 1,
-        value: { name: "shared_action", input: { source: "guest" } },
-      },
+    expectCompleted(details, {
+      count: 1,
+      value: { name: "shared_action", input: { source: "guest" } },
     });
     expect(plugin.execute).not.toHaveBeenCalled();
     expect(client.execute).toHaveBeenCalledTimes(1);
@@ -197,41 +166,21 @@ describe("Code Mode guest execution", () => {
     },
   );
 
-  it("never exposes Node module-loader globals to the real guest worker", async () => {
-    const { tools: codeModeTools } = createGuestHarness([pluginTool("fake_noop", "Noop")]);
-
-    const details = await run(
-      codeModeTools,
-      "return [typeof process, typeof module, typeof require];",
-    );
-
-    expect(details).toMatchObject({
-      status: "completed",
-      value: ["undefined", "undefined", "undefined"],
-    });
-    expect(testing.activeRuns.size).toBe(0);
-  });
-
   it.each(["node", "quickjs"] as const)(
     "%s rejects malformed commands before dispatch and accepts a corrected follow-up",
     async (executor) => {
-      const { ctx, tools: codeModeTools } = createCodeModeHarness({ codeMode: { executor } });
       const command = pluginTool("fake_command", "Run a synthetic command");
-      applyCodeModeCatalog({ ...ctx, tools: [...codeModeTools, command] });
-      const execTool = expectDefined(codeModeTools[0], "Code Mode exec");
+      const { complete, run: execute } = createGuestHarness([command], {
+        codeMode: { executor },
+      });
       const malformed = [
         'await fake_command({ value: "first" });',
         String.raw`const patch = { 'newText:' const value = 1;\n };`,
         "return await fake_command({ value: \"import test from 'node:test';\" });",
       ].join("\n");
-      const details = resultDetails(
-        await execTool.execute("code-call-syntax", { code: malformed }),
-      );
+      const details = await execute(malformed, "code-call-syntax");
 
-      expect(details).toMatchObject({
-        status: "failed",
-        code: "invalid_input",
-        failurePhase: "input",
+      expectFailure(details, "input", "invalid_input", {
         bridgeDispatchStarted: false,
         replaySafe: false,
         telemetry: { callCount: 0 },
@@ -240,14 +189,9 @@ describe("Code Mode guest execution", () => {
       expect(command.execute).not.toHaveBeenCalled();
       expect(testing.activeRuns.size).toBe(0);
 
-      const corrected = await runUntilCompleted({
-        execTool,
-        waitTool: expectDefined(codeModeTools[1], "Code Mode wait"),
-        code:
-          "return await fake_command({ value: " +
-          JSON.stringify("import test from 'node:test';") +
-          " });",
-      });
+      const corrected = await complete(
+        `return await fake_command({ value: "import test from 'node:test';" });`,
+      );
       expect(corrected).toMatchObject({
         status: "completed",
         replaySafe: false,
@@ -258,67 +202,43 @@ describe("Code Mode guest execution", () => {
     },
   );
 
-  it.each(["node", "quickjs"] as const)(
-    "%s surfaces guest errors at the submitted source line",
-    async (executor) => {
-      const code = "const valid = 1;\nreturn missingFn();";
-      const { ctx, tools: codeModeTools } = createCodeModeHarness({ codeMode: { executor } });
-      applyCodeModeCatalog({
-        tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-        ...ctx,
+  it.each([
+    {
+      executor: "quickjs",
+      source: "return missingFn();",
+      error: "ReferenceError: missingFn is not defined",
+    },
+    { executor: "node", source: 'throw new Error("interrupted");', error: "Error: interrupted" },
+  ] as const)(
+    "$executor preserves guest error classification and source lines: $error",
+    async ({ executor, source, error }) => {
+      const code = "const valid = 1;\n" + source;
+      const { run: execute } = createGuestHarness([pluginTool("fake_noop", "Noop")], {
+        codeMode: { executor },
       });
+      const details = await execute(code, "code-call-runtime");
 
-      const details = resultDetails(
-        await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-          "code-call-runtime",
-          { code },
-        ),
-      );
-
-      expect(details.status).toBe("failed");
-      const error = String(details.error);
-      expect(details).toMatchObject({ code: "internal_error", failurePhase: "guest" });
-      expect(error).toContain("ReferenceError");
-      expect(error).toContain("missingFn is not defined");
-      expect(error).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
-      expect(error).not.toContain("<eval>");
-      expect(error.startsWith("at ")).toBe(false);
+      const diagnostic = String(details.error);
+      expectFailure(details, "guest");
+      expect(diagnostic).toContain(error);
+      expect(diagnostic).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
+      expect(diagnostic).not.toContain("<eval>");
+      expect(diagnostic.startsWith("at ")).toBe(false);
     },
   );
 
-  it("does not expose the raw host request callback", async () => {
-    const { tools: codeModeTools } = createGuestHarness([pluginTool("fake_noop", "Noop")]);
-
-    const details = resultDetails(
-      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-        "code-hidden-host-request",
-        { code: "return typeof globalThis.__openclawHostRequest;" },
-      ),
-    );
-
-    expect(details).toMatchObject({
-      status: "completed",
-      value: "undefined",
-    });
-  });
   it.each([false, true])(
     "refuses a new host effect after the boundary deadline (resume=%s)",
     async (resume) => {
-      const target = pluginToolWithExecute("late_effect", "Must not dispatch late", async () =>
-        jsonResult({ done: true }),
-      );
-      const { ctx, config, tools } = createCodeModeHarness();
-      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
+      const target = jsonTool("late_effect", { done: true });
+      const { run: execute, resume: wait } = createGuestHarness([target]);
       const clock = vi.spyOn(performance, "now").mockReturnValue(0);
       const original = worker.runCodeModeExecutor;
-      const spy = vi.spyOn(worker, "runCodeModeExecutor").mockImplementation(async (...args) => {
-        const inline = args[1].inlineHost;
-        if (!inline) {
-          return await original(...args);
-        }
-        return await original(args[0], {
-          ...args[1],
-          inlineHost: {
+      const spy = vi.spyOn(worker, "runCodeModeExecutor").mockImplementation((config, options) => {
+        const inline = options.inlineHost;
+        return original(config, {
+          ...options,
+          inlineHost: inline && {
             ...inline,
             onBoundary: async (boundary, context) => {
               if (boundary.pendingRequests.some((request) => request.method === "callValue")) {
@@ -330,14 +250,13 @@ describe("Code Mode guest execution", () => {
         });
       });
       try {
-        let result = resultDetails(
-          await tools[0]!.execute("late", {
-            code: (resume ? "await yield_control(); " : "") + "return await late_effect({});",
-          }),
+        let result = await execute(
+          (resume ? "await yield_control(); " : "") + "return await late_effect({});",
+          "late",
         );
         if (resume) {
           expect(result.status).toBe("waiting");
-          result = resultDetails(await tools[1]!.execute("late-resume", { runId: result.runId }));
+          result = await wait(result, "late-resume");
         }
         expect(target.execute).not.toHaveBeenCalled();
         expect(result, JSON.stringify(result)).toMatchObject({ status: "failed", code: "timeout" });
@@ -348,83 +267,122 @@ describe("Code Mode guest execution", () => {
     },
   );
   it.each([
-    { name: "original 1KiB", cap: 1024, firstText: "🦞".repeat(140), lastText: "é".repeat(240) },
-    {
-      name: "clipped first leg",
-      cap: 1024,
-      firstText: "🦞".repeat(1000),
-      lastText: '\\"\n\té'.repeat(30),
-    },
+    ["original 1KiB", "🦞".repeat(140), "é".repeat(240)],
+    ["clipped first leg", "🦞".repeat(1000), '\\"\n\té'.repeat(30)],
   ])(
-    "bounds cumulative original output across yielded waits: $name",
-    async ({ cap, firstText, lastText }) => {
-      const { ctx, tools } = createCodeModeHarness({ codeMode: { maxOutputBytes: cap } });
-      applyCodeModeCatalog({ ...ctx, tools });
-      const exec = expectDefined(tools[0], "exec");
-      const wait = expectDefined(tools[1], "wait");
+    "bounds cumulative original output across yielded waits: %s",
+    async (_name, firstText, lastText) => {
+      const cap = 1024;
+      const { run: execute, resume } = createGuestHarness([], {
+        codeMode: { maxOutputBytes: cap },
+      });
       const original = [
         { type: "text", text: firstText },
         { type: "text", text: lastText },
       ];
-      const first = resultDetails(
-        await exec.execute("cumulative", {
-          code: `text(${JSON.stringify(firstText)}); await yield_control(); await yield_control(); text(${JSON.stringify(lastText)}); await yield_control(); return true;`,
-        }),
+      const first = await execute(
+        `text(${JSON.stringify(firstText)}); await yield_control(); await yield_control(); text(${JSON.stringify(lastText)}); await yield_control(); return true;`,
+        "cumulative",
       );
       expect(first.status).toBe("waiting");
-      if (Buffer.byteLength(JSON.stringify([original[0]])) > (cap ?? 65536)) {
+      if (Buffer.byteLength(JSON.stringify([original[0]])) > cap) {
         expectOriginalCodeModeMarker((first.output as unknown[])[0], [original[0]]);
       } else {
         expect(first.output).toEqual([original[0]]);
       }
-      const empty = resultDetails(await wait.execute("empty-leg", { runId: first.runId }));
-      expect(empty.status).toBe("waiting");
-      expect(empty.output).toEqual([]);
-      const changed = resultDetails(await wait.execute("new-leg", { runId: first.runId }));
+      const empty = await resume(first, "empty-leg");
+      expect(empty).toMatchObject({ status: "waiting", output: [] });
+      const changed = await resume(first, "new-leg");
       expect(changed.status).toBe("waiting");
       expectOriginalCodeModeMarker((changed.output as unknown[])[0], original);
-      const final = resultDetails(await wait.execute("final", { runId: first.runId }));
-      expect(final.status).toBe("completed");
-      expect(final.value).toBe(true);
+      const final = await resume(first, "final");
+      expect(final).toMatchObject({ status: "completed", value: true });
       expectOriginalCodeModeMarker((final.output as unknown[])[0], original);
       for (const frame of [first, empty, changed, final]) {
-        expectCodeModeSharedBudget(frame, cap ?? 65536);
+        expectCodeModeSharedBudget(frame, cap);
       }
       expect(testing.activeRuns.size).toBe(0);
     },
   );
 
-  it("normalizes only transport interrupt errors as timeouts", () => {
-    expect(codeModeFailureCode(new Error("interrupted"))).toBe("timeout");
-    const timeout = { status: "failed", code: "timeout", error: "interrupted" };
-    expect(testing.normalizeCodeModeTimeoutResult(timeout)).toEqual({
-      ...timeout,
-      error: "code mode timeout exceeded",
+  it("preserves returned tool failures while catching thrown tool errors", async () => {
+    const reason = "Start the Gateway with visitor-access enabled before managing visitors.";
+    const errorTool = (name: string, text: string, details: unknown) =>
+      pluginToolWithExecute(name, "Fail", async () => ({
+        content: [{ type: "text" as const, text }],
+        details,
+        isError: true,
+      }));
+    const tools = [
+      errorTool("flag_only", reason, { error: true }),
+      errorTool("no_details", "Gateway unavailable.", undefined),
+      errorTool("blank_message", "Visitor store is locked.", { error: true, message: " " }),
+      errorTool("structured", "Rendered failure.", { status: "failed", error: "structured" }),
+      pluginToolWithExecute("throw_error", "Throw", async () => {
+        throw new Error("Tool execution threw.");
+      }),
+    ];
+    const { tools: controls, run } = createGuestHarness(tools);
+    expect(controls[0]!.description).toContain(
+      "Thrown tool errors are catchable. Returned values may instead report failure. Follow the tool's result contract, and inspect possible effects before retrying.",
+    );
+    const result = await run(
+      `
+          const values = [await flag_only(), await no_details(), await blank_message(), await structured()];
+          const thrownMessage = await throw_error().catch(error => error.message);
+          return { values, thrownMessage };
+        `,
+      "tool-error-text",
+    );
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(result.value).toEqual({
+      values: [
+        { error: true, message: reason },
+        { message: "Gateway unavailable." },
+        { error: true, message: "Visitor store is locked." },
+        { status: "failed", error: "structured" },
+      ],
+      thrownMessage: "Tool execution threw.",
     });
-    const guestError = { ...timeout, code: "internal_error" };
-    expect(testing.normalizeCodeModeTimeoutResult(guestError)).toEqual(guestError);
+    expectToolCalls(1, ...tools);
   });
 
-  it("does not classify guest interrupted errors as timeouts", async () => {
-    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+  async function executeSource(args: Record<string, unknown>) {
+    const { tools } = createGuestHarness();
+    return resultDetails(await tools[0]!.execute("source", args));
+  }
 
-    const result = await testing.runCodeModeExecutor(
-      {
-        kind: "exec",
-        source: 'throw new Error("interrupted");',
-        config,
-        catalog: [],
-        namespaces: [],
-      },
-      { timeoutMs: 10_000, executor: config.executor },
-    );
+  describe("Code Mode source validation", () => {
+    it.each([
+      { code: " ", command: "return 7;" },
+      { code: "return 7;", command: " \n " },
+    ])("executes the populated alias: %j", async (args) => {
+      expectCompleted(await executeSource(args), 7);
+    });
 
-    expect(result.status).toBe("failed");
-    // A guest error whose message happens to be "interrupted" must stay
-    // internal_error and not be misclassified as a QuickJS interrupt/timeout.
-    expect(result).toMatchObject({ code: "internal_error" });
-    if (result.status === "failed") {
-      expect(result.error).toContain("interrupted");
-    }
+    it.each([
+      { args: { code: "return 1;", command: "return 2;" }, error: "code and command must match" },
+      { args: { code: "", command: "   " }, error: "code or command must be a non-empty string" },
+      { args: { code: "return 1;", language: "typescript" }, error: "JavaScript only" },
+      { args: { code: "return 1;", typecheck: false }, error: "JavaScript only" },
+    ])("rejects invalid control arguments: $args", async ({ args, error }) => {
+      await expect(executeSource(args)).rejects.toThrow(error);
+      expect(testing.activeRuns.size).toBe(0);
+    });
+
+    it.each([
+      String.raw`return r\u0065quire('node:fs');`,
+      "return require?.('node:fs');",
+      "return (0, require)('node:fs');",
+      "return module.require('node:fs');",
+      "return `${({ value: import('node:fs') }).value}`;",
+    ])("rejects module access before dispatch: %s", async (code) => {
+      expectFailure(await executeSource({ code }), "input", "invalid_input", {
+        bridgeDispatchStarted: false,
+        telemetry: { callCount: 0 },
+        error: expect.stringContaining("module access is disabled"),
+      });
+      expect(testing.activeRuns.size).toBe(0);
+    });
   });
 });

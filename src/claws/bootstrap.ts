@@ -3,12 +3,15 @@ import { resolve } from "node:path";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, seedWorkspaceBootstrap } from "../agents/workspace.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import {
+  mergeWorkspaceBootstrapSetupStateForAdd,
+  type ClawAddStateOptions,
+} from "./add-state-write.js";
 import { digestClawBytes } from "./digest.js";
 import { clawContainedRelativePath } from "./path-containment.js";
 import type { ClawAddPlan } from "./types.js";
 
-export class ClawBootstrapWriteError extends Error {
+class ClawBootstrapWriteError extends Error {
   constructor(
     readonly code: string,
     message: string,
@@ -22,8 +25,8 @@ export async function seedClawPackageBootstrap(
   plan: ClawAddPlan,
   options: {
     nowMs?: number;
-    seedBootstrap?: typeof seedWorkspaceBootstrap;
-  } & OpenClawStateDatabaseOptions = {},
+    assertForwardCurrent?: () => void;
+  } & ClawAddStateOptions = {},
 ): Promise<"seeded" | "already-seeded" | "consumed" | undefined> {
   const actions = plan.actions.filter((action) => action.kind === "bootstrap");
   if (actions.length === 0) {
@@ -73,10 +76,29 @@ export async function seedClawPackageBootstrap(
     );
   }
 
-  return (options.seedBootstrap ?? seedWorkspaceBootstrap)({
+  const assertForwardCurrent = () => {
+    options.assertCurrent?.();
+    options.assertForwardCurrent?.();
+  };
+  return seedWorkspaceBootstrap({
     dir: plan.agent.workspace,
     content: read.buffer,
     ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
-    stateOptions: options,
+    stateOptions: { ...options, readOnly: options.stateMode === "worker" },
+    beforePersistentApply: assertForwardCurrent,
+    mergeSetupState: (workspaceDir, next, nowMs) => {
+      if (!next.bootstrapSeededAt) {
+        throw new ClawBootstrapWriteError(
+          "bootstrap_state_invalid",
+          "Missing bootstrap timestamp.",
+        );
+      }
+      return mergeWorkspaceBootstrapSetupStateForAdd(
+        workspaceDir,
+        next.bootstrapSeededAt,
+        nowMs ?? Date.now(),
+        { ...options, assertCurrent: assertForwardCurrent },
+      );
+    },
   });
 }

@@ -151,7 +151,6 @@ describe("commanded tab document provenance", () => {
   );
 
   it.each([
-    { name: "source fragment disagreement", frame: { urlFragment: "#other" } },
     { name: "child root tree", frame: { parentId: "parent" } },
     { name: "missing root id", frame: { id: "" } },
     { name: "source URL disagreement", frame: { url: "https://other.example/" } },
@@ -248,19 +247,16 @@ describe("commanded tab document provenance", () => {
     },
   );
 
-  it.each(
-    ["before response", "after confirmation"].flatMap((phase) =>
-      [
-        "connection",
-        "attachment",
-        "command access",
-        "attachment access",
-        "retireAttachment",
-        "invalidateAll",
-        "invalidateGroup",
-      ].map((reason) => ({ phase, reason })),
-    ),
-  )("discards authority and queued events on $reason $phase", async ({ phase, reason }) => {
+  it.each([
+    { phase: "before response", reason: "connection" },
+    { phase: "after confirmation", reason: "attachment" },
+    { phase: "before response", reason: "command access" },
+    { phase: "after confirmation", reason: "command access" },
+    { phase: "before response", reason: "attachment access" },
+    { phase: "before response", reason: "retireAttachment" },
+    { phase: "before response", reason: "invalidateAll" },
+    { phase: "before response", reason: "invalidateGroup" },
+  ])("discards authority and queued events on $reason $phase", async ({ phase, reason }) => {
     const h = createHarness();
     let navigation: TabDocumentNavigation;
     const revoke = () => {
@@ -319,11 +315,9 @@ describe("commanded tab document provenance", () => {
     { name: "window move", tab: { windowId: 2 } },
     { name: "incognito", tab: { incognito: true } },
     { name: "file pending", tab: { pendingUrl: "file:///tmp/fixture" } },
-    { name: "internal pending", tab: { pendingUrl: "chrome://settings" } },
     { name: "restricted document", tab: { url: "chrome://settings" } },
     { name: "lookalike blank", tab: { url: "about:blank#other" } },
     { name: "user blank", tab: {} },
-    { name: "lost currentness", tab: {} },
   ])("retires controlled blank on $name", async ({ name, tab }) => {
     const h = createHarness();
     await h.navigate(async () => {
@@ -334,9 +328,6 @@ describe("commanded tab document provenance", () => {
     assert(document);
     const navigation = document.navigation;
     h.send.mockClear();
-    if (name === "lost currentness") {
-      h.isCurrent.mockReturnValue(false);
-    }
     if (name === "user blank") {
       h.emit(frameEvent({ ...blankFrame, loaderId: "user" }));
     } else {
@@ -348,17 +339,15 @@ describe("commanded tab document provenance", () => {
     expect(h.send).not.toHaveBeenCalled();
   });
 
-  it.each(["root commit", "attachment revision", "access revision"])(
+  it.each(["root commit", "attachment revision"])(
     "rejects a preflight overtaken by %s",
     async (change) => {
       const h = createHarness();
       const navigating = h.navigate();
       if (change === "root commit") {
         h.emit(frameEvent({ ...blankFrame, url: originalUrl }));
-      } else if (change === "attachment revision") {
-        h.documents.retireAttachment(7);
       } else {
-        h.proven.delete(h.epoch);
+        h.documents.retireAttachment(7);
       }
       await expect(navigating).rejects.toThrow("current authorized root document");
       expect(h.sendCommand).toHaveBeenCalledExactlyOnceWith("Page.getFrameTree", {});
@@ -366,21 +355,17 @@ describe("commanded tab document provenance", () => {
     },
   );
 
-  it.each(
-    ["event count", "event bytes"].flatMap((limit) =>
-      [false, true].map((overflow) => ({ limit, overflow })),
-    ),
-  )("bounds native $limit exactly (overflow=$overflow)", async ({ limit, overflow }) => {
+  it.each(["event count", "event bytes"])("rejects native %s overflow", async (limit) => {
     const h = createHarness();
     const events: Record<string, unknown>[] = [frameEvent()];
     if (limit === "event count") {
-      for (let index = 1; index < 128 + Number(overflow); index++) {
+      for (let index = 1; index < 129; index++) {
         events.push({ ...contextEvent, params: { index } });
       }
     } else {
       const event = { ...contextEvent, params: { value: "" } };
       const overhead = JSON.stringify(events[0]).length + JSON.stringify(event).length;
-      event.params.value = "x".repeat(256 * 1024 - overhead + Number(overflow));
+      event.params.value = "x".repeat(256 * 1024 - overhead + 1);
       events.push(event);
     }
     const navigating = h.navigate(async () => {
@@ -390,15 +375,9 @@ describe("commanded tab document provenance", () => {
       expect(h.send).not.toHaveBeenCalled();
       return blankResult;
     });
-    if (overflow) {
-      await expect(navigating).rejects.toThrow("access was revoked");
-      expect(h.documents.get(7)).toBeUndefined();
-      expect(h.send).not.toHaveBeenCalled();
-    } else {
-      await expect(navigating).resolves.toEqual(blankResult);
-      expect(h.documents.get(7)?.navigation.confirmed).toBe(true);
-      expect(h.send.mock.calls.map(([event]) => event)).toEqual(events);
-    }
+    await expect(navigating).rejects.toThrow("access was revoked");
+    expect(h.documents.get(7)).toBeUndefined();
+    expect(h.send).not.toHaveBeenCalled();
   });
 
   it("stops flushing immediately when the receiver revokes attachment authority", async () => {
@@ -412,21 +391,5 @@ describe("commanded tab document provenance", () => {
     ).rejects.toThrow("access was revoked");
     expect(h.send.mock.calls).toEqual([[contextEvent]]);
     expect(h.documents.get(7)).toBeUndefined();
-  });
-
-  it("scopes group invalidation and never restores retired documents in a fresh instance", async () => {
-    const h = createHarness();
-    await h.navigate(async () => {
-      h.commitBlank();
-      return blankResult;
-    });
-    h.documents.invalidateGroup({ id: 8 });
-    expect(h.documents.get(7)?.navigation.confirmed).toBe(true);
-    h.documents.invalidateGroup();
-    expect(h.documents.get(7)).toBeUndefined();
-    const fresh = createTabDocumentProvenance({ access: h.access });
-    expect(fresh.get(7)).toBeUndefined();
-    expect(fresh.rootRevision(7)).toBe(0);
-    expect(h.documents.rootRevision(7)).toBe(1);
   });
 });

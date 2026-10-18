@@ -192,7 +192,7 @@ describe("Gateway followup owner final effect", () => {
         return input
           ? {
               ...input,
-              complete: (terminal: AgentRunTerminalOutcome) => {
+              completeAsync: async (terminal: AgentRunTerminalOutcome) => {
                 options.assertCompletionCurrent?.();
                 return terminal;
               },
@@ -325,7 +325,13 @@ describe("Gateway followup owner final effect", () => {
           await admission.finish();
           entered.resolve();
         }
-        return { payloads: [{ text: "owner proof settled" }], meta: { durationMs: 1 } };
+        return {
+          payloads: [{ text: "owner proof settled" }],
+          meta: {
+            durationMs: 1,
+            terminalReply: { disposition: "visible", text: "owner proof settled" },
+          },
+        };
       });
       const delayedDispatch =
         outcome === "observer error before dispatch" || outcome === "cancel before dispatch";
@@ -337,7 +343,11 @@ describe("Gateway followup owner final effect", () => {
           completion,
           runId: "owner-proof-child",
           skip: false,
-          reply: { status: "ok", replyText: "ready" },
+          reply: {
+            status: "ok",
+            replyText: "ready",
+            terminalReply: { disposition: "visible", text: "ready" },
+          },
           notifyRequesterOnWaitFailure: true,
           targetSessionKey: CHILD,
           targetAgentId: "main",

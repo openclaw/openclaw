@@ -68,9 +68,19 @@ type SessionWorktreeDisplayRow = {
   placement?: GatewaySessionRow["placement"];
   execNode?: string;
   execCwd?: string;
+  deviceFolder?: { deviceId: string; path: string };
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
 };
+
+function resolveWorktreeBranch(row: SessionWorktreeDisplayRow): string | undefined {
+  const branch =
+    normalizeOptionalString(row.repository?.branch) ??
+    normalizeOptionalString(row.worktree?.branch);
+  return !row.repository && branch?.startsWith(WORKTREE_BRANCH_PREFIX)
+    ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
+    : branch;
+}
 
 export type SessionWorkContext =
   | { kind: "project"; name: string; path: string; cwd?: string; branch?: string }
@@ -79,6 +89,13 @@ export type SessionWorkContext =
 export function resolveSessionWorkContext(
   row: SessionWorktreeDisplayRow,
 ): SessionWorkContext | undefined {
+  if (row.deviceFolder) {
+    return {
+      kind: "workspace",
+      name: pathDisplayName(row.deviceFolder.path),
+      path: row.deviceFolder.path,
+    };
+  }
   // Cloud repository identity is not a Gateway filesystem path. A bare node
   // cwd likewise must not borrow repository facts from a local worktree.
   const repoRoot =
@@ -91,19 +108,13 @@ export function resolveSessionWorkContext(
         : undefined;
     const repositoryDirectory =
       remoteDirectory ?? (row.execNode ? normalizeOptionalString(row.execCwd) : undefined);
-    const branch =
-      normalizeOptionalString(row.repository?.branch) ??
-      normalizeOptionalString(row.worktree?.branch);
     return {
       kind: "project",
       name: pathDisplayName(repoRoot),
       // Project grouping uses the source repository, not this task checkout.
       path: repoRoot,
       cwd: row.repository ? repositoryDirectory : normalizeOptionalString(row.spawnedCwd),
-      branch:
-        !row.repository && branch?.startsWith(WORKTREE_BRANCH_PREFIX)
-          ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
-          : branch,
+      branch: resolveWorktreeBranch(row),
     };
   }
 
@@ -119,19 +130,16 @@ export function resolveSessionWorkContext(
 
 /** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */
 export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
+  if (row.deviceFolder) {
+    return `${row.deviceFolder.path} · ${shortenOpaqueIdRuns(row.deviceFolder.deviceId)}`;
+  }
   // execNode is often a raw node id (long hex); never render it in full.
   const rawNode = normalizeOptionalString(row.execNode);
   const node = rawNode ? shortenOpaqueIdRuns(rawNode) : undefined;
   const repoRoot =
     normalizeOptionalString(row.repository?.url.replace(/\.git$/u, "")) ??
     normalizeOptionalString(row.worktree?.repoRoot);
-  const rawBranch =
-    normalizeOptionalString(row.repository?.branch) ??
-    normalizeOptionalString(row.worktree?.branch);
-  const branch =
-    !row.repository && rawBranch?.startsWith(WORKTREE_BRANCH_PREFIX)
-      ? rawBranch.slice(WORKTREE_BRANCH_PREFIX.length)
-      : rawBranch;
+  const branch = resolveWorktreeBranch(row);
   const checkout = repoRoot
     ? branch
       ? `${pathDisplayName(repoRoot)} ⎇ ${branch}`
@@ -162,6 +170,20 @@ type SessionDisplayRow = {
   /** Canonical account projected from the delivery route by the Gateway. */
   accountId?: string;
 } & SessionWorktreeDisplayRow;
+
+/** Naming has a separate lifetime from the first reply; a usable name always wins. */
+export function isSessionTitlePending(
+  key: string,
+  row?: SessionDisplayRow & { titlePending?: boolean },
+): boolean {
+  return (
+    /^agent:[^:]+:dashboard:/.test(key) &&
+    row?.titlePending === true &&
+    ![row.label, row.displayName, row.derivedTitle].some(
+      (name) => name?.trim() && name.trim() !== key,
+    )
+  );
+}
 
 export function formatSessionChannelLabel(channel: string): string {
   return CHANNEL_LABELS.get(channel) ?? channel.charAt(0).toUpperCase() + channel.slice(1);

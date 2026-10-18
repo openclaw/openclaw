@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
@@ -14,7 +15,6 @@ afterEach(() => vi.restoreAllMocks());
 describe("session responsibility assignment in non-owner turns", () => {
   it.each([
     { senderIsOwner: false, messageProvider: "webchat" },
-    { senderIsOwner: false, messageProvider: "test-channel" },
     { senderIsOwner: undefined, messageProvider: undefined },
   ])(
     "limits assignment without channel policy or senderless management changes ($messageProvider)",
@@ -40,18 +40,18 @@ describe("session responsibility assignment in non-owner turns", () => {
         throw new Error("sessions tool missing");
       }
       const assignmentOnly = senderIsOwner === false;
+      // One schema for every turn kind keeps the prompt prefix stable; the action gate
+      // limits non-owner turns when the call runs.
+      expect(tool.parameters).toHaveProperty(
+        "properties.action.enum",
+        expect.arrayContaining(["assign_owner", "patch", "group_set"]),
+      );
       if (assignmentOnly) {
-        expect(tool.parameters).toHaveProperty("properties.action.enum", ["assign_owner"]);
-        expect(tool.parameters).not.toHaveProperty("properties.model");
-        expect(tool.parameters).toHaveProperty(
-          "required",
-          expect.arrayContaining(["ownerType", "ownerId", "action"]),
-        );
-      } else {
-        expect(tool.parameters).toHaveProperty(
-          "properties.action.enum",
-          expect.arrayContaining(["patch", "group_set"]),
-        );
+        await expect(
+          withSessionToolTestCaller(() =>
+            tool.execute("refused-patch", { action: "group_set", names: ["ops"] }),
+          ),
+        ).rejects.toThrow("Only assign_owner is available to non-owner callers");
       }
       const result = await withSessionToolTestCaller(() =>
         tool.execute(
@@ -91,4 +91,35 @@ describe("session responsibility assignment in non-owner turns", () => {
       expect(denied.some((candidate) => candidate.name === "sessions")).toBe(false);
     },
   );
+});
+
+describe("standalone session creation tool registration", () => {
+  it("exposes creation only with admitted session-write authority and preserves explicit denies", async () => {
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "profile-requester",
+      scopes: ["operator.sessions.write"],
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    });
+    const assemble = (deny?: string[]) =>
+      createOpenClawCodingTools({
+        config: { tools: { allow: ["sessions", "sessions_create"], deny } },
+        sessionKey: "agent:main:main",
+        senderIsOwner: false,
+        workspaceDir: process.cwd(),
+      });
+    expect(assemble().some((tool) => tool.name === "sessions_create")).toBe(false);
+    await withSessionToolTestCaller(async () => {
+      const tools = assemble();
+      expect(tools.find((tool) => tool.name === "sessions_create")).toBeDefined();
+      expect(tools.find((tool) => tool.name === "sessions")?.parameters).toHaveProperty(
+        "properties.action.enum",
+        expect.arrayContaining(["patch", "assign_owner", "group_set"]),
+      );
+      expect(assemble(["sessions_create"]).some((tool) => tool.name === "sessions_create")).toBe(
+        false,
+      );
+      expect(assemble(["sessions"]).some((tool) => tool.name === "sessions_create")).toBe(true);
+    }, authority);
+  });
 });

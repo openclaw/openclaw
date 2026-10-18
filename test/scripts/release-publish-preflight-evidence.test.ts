@@ -392,9 +392,9 @@ function coreEvidenceFixture() {
 }
 
 describe("publish preflight immutable npm evidence", () => {
-  it("qualifies the complete prepared core package set against exact source metadata", () => {
+  it("qualifies the complete prepared core package set against exact source metadata", async () => {
     const fixture = coreEvidenceFixture();
-    expect(fixture.verify().corePackages).toEqual(fixture.corePackages);
+    expect((await fixture.verify()).corePackages).toEqual(fixture.corePackages);
   });
 
   it.each([
@@ -404,7 +404,7 @@ describe("publish preflight immutable npm evidence", () => {
     ["invalid checksums", "checksum verification failed"],
     ["changed reused manifest", "changed after candidate validation"],
     ["changed reused root bytes", "wrong digest"],
-  ])("rejects %s before publication", (mode, message) => {
+  ])("rejects %s before publication", async (mode, message) => {
     const fixture = coreEvidenceFixture();
     if (mode === "missing required package") {
       fixture.manifest.corePackageTarballs = fixture.corePackages.slice(0, -1);
@@ -428,7 +428,7 @@ describe("publish preflight immutable npm evidence", () => {
     if (mode === "changed reused root bytes") {
       writeFileSync(join(fixture.artifacts, "openclaw.tgz"), "changed root bytes");
     }
-    expect(() => fixture.verify()).toThrow(message);
+    await expect(fixture.verify()).rejects.toThrow(message);
   });
 
   it.each([

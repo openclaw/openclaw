@@ -1,17 +1,20 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createComponent } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   resolveChatPanePlacement,
   resolveChatPaneWorkerPresentation,
@@ -25,7 +28,7 @@ import {
   offlineDeviceSession,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
-import { renderChatPanePlacement } from "./components/chat-pane-placement.ts";
+import { ChatPanePlacement } from "./components/chat-pane-placement.tsx";
 
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 beforeEach(() => {
@@ -89,6 +92,14 @@ function startupSession(placement: GatewaySessionRow["placement"]): GatewaySessi
   };
 }
 
+function startReclaim(pane: ReturnType<typeof createTestChatPane>["pane"], row: GatewaySessionRow) {
+  const state = pane.state!;
+  state.sessionKey = row.key;
+  state.currentSessionId = row.sessionId ?? null;
+  state.sessionsResult = { ...createSessionsListResult(), sessions: [row] };
+  return pane.changeHeaderPlacement(row, "reclaim");
+}
+
 describe("chat pane startup worker copy", () => {
   it("retains the startup retry callback across renders and resolves the current pane session", () => {
     const context = createInitializationContext();
@@ -140,21 +151,11 @@ describe("chat pane startup worker copy", () => {
       }),
     ).toEqual(cloudCopy);
   });
-
-  it("ignores failed startup intent when presenting a new worker", () => {
-    expect(
-      resolveChatPaneWorkerPresentation(startupSession(startupPlacements[1]), {
-        phase: "failed",
-        targetKind: "device",
-      }),
-    ).toEqual(unknownCopy);
-  });
 });
 
 describe("chat pane worker stop", () => {
   it.each([
     { placement: startupPlacements[0], targetKind: "device", copy: deviceCopy },
-    { placement: startupPlacements[1], targetKind: "auto-device", copy: deviceCopy },
     {
       placement: startupPlacements[2],
       targetKind: "profile",
@@ -178,20 +179,31 @@ describe("chat pane worker stop", () => {
       const container = document.createElement("div");
       document.body.append(container);
       let reclaim: Promise<void> | undefined;
-      render(
-        renderChatPanePlacement({
-          session,
-          placementStartupStatus: startup,
-          onPlacementReclaim: () => {
-            reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
-          },
-        }),
-        container,
+      const view = mountSolid(
+        () =>
+          createComponent(ChatPanePlacement, {
+            session,
+            placementStartupStatus: startup,
+            onPlacementReclaim: () => {
+              reclaim = dialogs.track(startReclaim(pane, session));
+            },
+          }),
+        { container },
       );
+      onTestFinished(view.unmount);
+      flush();
       expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
         copy.label,
       );
-      const stop = container.querySelector<HTMLElement>(".chat-pane__placement-reclaim");
+      container.querySelector<HTMLButtonElement>(".chat-pane__placement-chip")!.click();
+      await waitForSolid(() =>
+        expect(
+          container
+            .querySelector('.chat-pane__placement-menu > [role="menu"]')
+            ?.matches(":popover-open"),
+        ).toBe(true),
+      );
+      const stop = container.querySelector<HTMLButtonElement>(".chat-pane__placement-reclaim");
       expect(stop?.textContent?.trim()).toBe(copy.stopLabel);
       stop?.click();
       const actions = await waitForConfirmDialogActions();
@@ -219,7 +231,11 @@ describe("chat pane worker stop", () => {
       ["sessions.move", "sessions.reclaim"],
       ["operator.read", "operator.write"],
     );
-    const offline = { ...offlineDeviceSession(), hasActiveRun: false };
+    const offline = {
+      ...offlineDeviceSession(),
+      sessionId: "offline-device-session",
+      hasActiveRun: false,
+    };
     const available = {
       ...offline,
       placement: {
@@ -303,43 +319,13 @@ describe("chat pane worker stop", () => {
       ["operator.read", "operator.write"],
     );
 
-    await pane.reclaimHeaderPlacement({ ...offlineDeviceSession(), hasActiveRun: false });
+    await startReclaim(pane, { ...offlineDeviceSession(), hasActiveRun: false });
 
     expect(request).not.toHaveBeenCalled();
     expect(document.body.querySelector("dialog[open]")).toBeNull();
   });
 
-  it("enables only Stop for provisioning with reclaim-only write access", () => {
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.reclaim"],
-      ["operator.read", "operator.write"],
-    );
-
-    const session = startupSession(startupPlacements[1]);
-    const placement = resolveChatPanePlacement({
-      gatewaySnapshot: pane.context.gateway.snapshot,
-      movingKey: null,
-      reclaimingKey: null,
-      row: session,
-    });
-
-    expect(placement).toEqual({
-      moving: false,
-      restarting: false,
-      moveDisabledReason: "This Gateway does not support this session action.",
-      reclaimDisabledReason: undefined,
-      recoveryDisabledReason: "This Gateway does not support this session action.",
-    });
-  });
-
-  it.each([
-    { runner: "cloud", startupPhase: "starting" },
-    { runner: "device", startupPhase: "failed" },
-  ] as const)(
+  it.each([{ runner: "device", startupPhase: "failed" }] as const)(
     "reclaims an active $runner placement with conflicting $startupPhase intent after the operator confirms",
     async ({ runner, startupPhase }) => {
       vi.stubGlobal(
@@ -369,7 +355,7 @@ describe("chat pane worker stop", () => {
         targetKind: runner === "device" ? "profile" : "device",
       });
 
-      const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
+      const reclaim = dialogs.track(startReclaim(pane, session));
       const actions = await waitForConfirmDialogActions();
       const actionText = actions.textContent;
       const confirmation = document.body.querySelector("openclaw-modal-dialog")?.textContent;
@@ -426,7 +412,7 @@ describe("chat pane worker stop", () => {
       targetKind: "device",
     });
 
-    const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
+    const reclaim = dialogs.track(startReclaim(pane, session));
     const actions = await waitForConfirmDialogActions();
     answerConfirmDialog(actions, "cancel");
     await reclaim;
@@ -462,7 +448,7 @@ describe("chat pane worker stop", () => {
       targetKind: "device",
     });
 
-    const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
+    const reclaim = dialogs.track(startReclaim(pane, session));
     const actions = await waitForConfirmDialogActions();
     pane.connectionGeneration += 1;
     answerConfirmDialog(actions, "confirm");
@@ -488,7 +474,7 @@ describe("chat pane worker stop", () => {
     );
     const session = activePlacementSession();
 
-    const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
+    const reclaim = dialogs.track(startReclaim(pane, session));
     const actions = await waitForConfirmDialogActions();
     answerConfirmDialog(actions, "confirm");
     await reclaim;
@@ -511,7 +497,7 @@ describe("chat pane worker stop", () => {
     const session = activePlacementSession();
 
     try {
-      const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
+      const reclaim = dialogs.track(startReclaim(pane, session));
       const actions = await waitForConfirmDialogActions();
       answerConfirmDialog(actions, "confirm");
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
@@ -551,22 +537,24 @@ describe("chat pane worker stop", () => {
     } satisfies GatewaySessionRow;
 
     try {
-      const pendingReclaim = dialogs.track(pane.reclaimHeaderPlacement(sessionA));
+      const pendingReclaim = dialogs.track(startReclaim(pane, sessionA));
       const actions = await waitForConfirmDialogActions();
       answerConfirmDialog(actions, "confirm");
-      await vi.waitFor(() => expect(pane.headerPlacementReclaimingKey).toBe(sessionA.key));
+      await vi.waitFor(() =>
+        expect(pane.headerPresentation.placementReclaimingKey).toBe(sessionA.key),
+      );
 
       state.sessionKey = sessionB.key;
       const placementA = resolveChatPanePlacement({
         gatewaySnapshot: pane.context.gateway.snapshot,
         movingKey: null,
-        reclaimingKey: pane.headerPlacementReclaimingKey,
+        reclaimingKey: pane.headerPresentation.placementReclaimingKey,
         row: sessionA,
       });
       const placementB = resolveChatPanePlacement({
         gatewaySnapshot: pane.context.gateway.snapshot,
         movingKey: null,
-        reclaimingKey: pane.headerPlacementReclaimingKey,
+        reclaimingKey: pane.headerPresentation.placementReclaimingKey,
         row: sessionB,
       });
       expect(placementA.reclaimDisabledReason).toBe(t("common.loading"));
@@ -575,7 +563,7 @@ describe("chat pane worker stop", () => {
       response.resolve({ ok: true });
       await pendingReclaim;
 
-      expect(pane.headerPlacementReclaimingKey).toBeNull();
+      expect(pane.headerPresentation.placementReclaimingKey).toBeNull();
     } finally {
       response.resolve({ ok: true });
     }

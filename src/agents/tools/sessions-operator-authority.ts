@@ -1,3 +1,4 @@
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { readOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
@@ -24,22 +25,30 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
   const sources = [
     ...new Set([authority, caller, invocation?.operatorRunAuthority, retained]),
   ].filter((source): source is AdmittedRunOperatorAuthority => source !== undefined);
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  const assertCurrent = () => {
-    for (const source of sources) {
-      assertAdmittedRunOperatorAuthority(source);
-      source.assertCurrent();
-      if (source.source !== authority.source) {
-        throw new Error("Session control operator source changed.");
+  const assertCurrent = composeSessionSourceAssertion(
+    [
+      ...sources.map((source) =>
+        composeSessionSourceAssertion([source.assertCurrent], (assertSource) => {
+          assertAdmittedRunOperatorAuthority(source);
+          assertSource();
+          if (source.source !== authority.source) {
+            throw new Error("Session control operator source changed.");
+          }
+        }),
+      ),
+      captureGatewayToolCallerAssertion("sessions.patch"),
+      composeSessionSourceAssertion([invocation?.assertCurrent], (assertSource) => {
+        invocation?.signal.throwIfAborted();
+        assertSource();
+      }),
+    ],
+    (assertSources) => {
+      assertSources();
+      if (retained && scope?.hasCurrentClientAuthority?.() === false) {
+        throw new Error("Session control caller authority is no longer active.");
       }
-    }
-    assertCallerCurrent?.("sessions.patch");
-    invocation?.signal.throwIfAborted();
-    invocation?.assertCurrent?.();
-    if (retained && scope?.hasCurrentClientAuthority?.() === false) {
-      throw new Error("Session control caller authority is no longer active.");
-    }
-  };
+    },
+  );
   assertCurrent();
   return {
     authority,
@@ -51,44 +60,39 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
   };
 }
 
-/** Resolve the original host-issued source without upgrading an insufficient scope. */
-export function readSessionControlAuthority(
-  prepared?: AdmittedRunOperatorAuthority,
-): AdmittedRunOperatorAuthority | undefined {
-  return captureSessionControlAuthority(prepared)?.authority;
-}
-
 /** Availability only; the target guard and underlying Gateway policy still apply. */
 export function hasSessionControlAuthority(prepared?: AdmittedRunOperatorAuthority): boolean {
   return captureSessionControlAuthority(prepared)?.allows("operator.write") ?? false;
 }
 
-/** Rename uses the existing creator-scoped session mutation, not general session controls. */
-export function hasSessionRenameAuthority(prepared?: AdmittedRunOperatorAuthority): boolean {
+/** Create and rename use the existing creator-scoped session write grant, not general controls. */
+export function hasSessionWriteAuthority(prepared?: AdmittedRunOperatorAuthority): boolean {
   return captureSessionControlAuthority(prepared)?.allows("operator.sessions.write") ?? false;
 }
 
-/** Default sandbox exposure is paired with a label-only implementation, never full management. */
-export function prepareSandboxSessionRename(params: {
+/** Default guest exposure adds independent creation and label-only management, never full controls. */
+export function prepareSandboxSessionTools(params: {
   policy?: SandboxToolPolicy;
   senderIsOwner?: boolean;
   authority?: AdmittedRunOperatorAuthority;
 }): { policy?: SandboxToolPolicy; renameOnly: boolean } {
   const policy = params.policy;
+  const defaultAllow = policy?.[SANDBOX_DEFAULT_TOOL_ALLOW];
   if (
     params.senderIsOwner !== false ||
-    !policy?.[SANDBOX_DEFAULT_TOOL_ALLOW] ||
-    policy[SANDBOX_DEFAULT_TOOL_ALLOW] !== policy.allow ||
-    !hasSessionRenameAuthority(params.authority)
+    !policy ||
+    !defaultAllow ||
+    defaultAllow !== policy.allow ||
+    !hasSessionWriteAuthority(params.authority)
   ) {
     return { policy, renameOnly: false };
   }
-  const blocked = classifyToolAgainstSandboxToolPolicy("sessions", policy);
-  if (!blocked.blockedByAllow || blocked.blockedByDeny) {
-    return { policy, renameOnly: false };
-  }
+  const added = ["sessions", "sessions_create"].filter((name) => {
+    const blocked = classifyToolAgainstSandboxToolPolicy(name, policy);
+    return blocked.blockedByAllow && !blocked.blockedByDeny;
+  });
   return {
-    policy: { ...policy, allow: [...policy[SANDBOX_DEFAULT_TOOL_ALLOW], "sessions"] },
-    renameOnly: true,
+    policy: added.length ? { ...policy, allow: [...defaultAllow, ...added] } : policy,
+    renameOnly: added.includes("sessions"),
   };
 }

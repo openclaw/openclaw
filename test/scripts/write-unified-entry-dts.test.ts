@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, vi } from "vitest";
-import { TSDOWN_NON_SDK_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
+import { TSDOWN_UNIFIED_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "../../scripts/lib/tsdown-declaration-generator-inputs.mts";
 import {
   createDeclarationFixture as createFixture,
@@ -32,15 +32,17 @@ describe("write-unified-entry-dts", () => {
         "scripts/lib/plugin-sdk-entrypoints.json",
         "scripts/windows-cmd-helpers.mjs",
         "packages/normalization-core/src/mountinfo-path.ts",
-        "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
+        "src/infra/runtime-process-manifest.ts",
         "src/state/openclaw-state-schema.sql",
         "src/state/openclaw-agent-schema.sql",
+        "src/state/postgres-schema.generated/sqlite-state-catalogs.json",
         "src/shared/freebsd-process-identity.ts",
         "src/infra/update-managed-service-handoff-native-loader.ts",
+        "src/infra/package-update-activation-native-loader.ts",
       ]),
     );
     expect(closure).not.toContain("scripts/lib/ci-node-test-plan.mts");
-    expect(closure).not.toContain("src/infra/node_modules/koffi/indirect.cjs");
+    expect(closure).not.toContain("src/infra/node_modules/@openclaw/proc-safe/dist/identity.js");
   });
 
   it("still traverses a compiler source when the generator also imports it", () => {
@@ -58,7 +60,9 @@ describe("write-unified-entry-dts", () => {
           process.cwd(),
           "scripts/write-unified-entry-dts.ts",
         ),
-      ).toThrow(/node_modules[/\\]koffi[/\\]indirect\.cjs/u);
+      ).toThrow(
+        "Unresolved dynamic module edges in src/infra/update-managed-service-handoff-native-loader.ts",
+      );
     } finally {
       read.mockRestore();
     }
@@ -132,7 +136,7 @@ describe("write-unified-entry-dts", () => {
     }
   });
 
-  it("reuses unaffected canonical groups while rebuilding runtime after input edits", ({
+  it("compiles declarations once and restores them while rebuilding runtime after input edits", ({
     command,
     onTestFailed,
   }) =>
@@ -170,7 +174,7 @@ describe("write-unified-entry-dts", () => {
         }
       };
       const { root, write, production, declarations } = await measurePhase("fixture", () =>
-        createFixture(command, TSDOWN_NON_SDK_DTS_CONFIG_GROUPS),
+        createFixture(command, TSDOWN_UNIFIED_DTS_CONFIG_GROUPS),
       );
       expect(Object.values(declarations).every((entries) => entries.length > 0)).toBe(true);
       expect(production).toHaveLength(Object.values(declarations).flat().length);
@@ -188,7 +192,7 @@ describe("write-unified-entry-dts", () => {
           'export { typedRuntime } from "./typed-runtime.js";',
         ].join("\n"),
       );
-      // Keep external type compatibility in a cached group during the isolated edit.
+      // Preserve external type compatibility when another entry changes.
       fs.appendFileSync(
         path.join(root, "extensions/fixture-b/index.ts"),
         [
@@ -239,7 +243,7 @@ describe("write-unified-entry-dts", () => {
       expect(initial.status, initial.stdout + initial.stderr).toBe(0);
       expect(
         (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/\d finished/gu),
-      ).toHaveLength(7);
+      ).toHaveLength(2);
       for (const entry of production) {
         expect(fs.statSync(path.join(root, `dist/${entry}.d.ts`)).size, entry).toBeGreaterThan(0);
       }
@@ -338,10 +342,10 @@ describe("write-unified-entry-dts", () => {
           /\[tsdown-build\] invocation \d\/\d finished/gu,
         ),
       ).toHaveLength(2);
-      expect(records).toHaveLength(TSDOWN_NON_SDK_DTS_CONFIG_GROUPS.length);
+      expect(records).toHaveLength(TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
       expect(records.filter((record) => record.inputs?.includes(pluginInput))).toHaveLength(1);
       expect(records.filter((record) => record.inputs?.includes("src/shared.ts"))).toHaveLength(
-        TSDOWN_NON_SDK_DTS_CONFIG_GROUPS.length,
+        TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length,
       );
       const changedDeclaration = readPluginDeclaration();
       expect(changedDeclaration).toContain('pluginRevision = "fixture_alpha"');
@@ -364,59 +368,102 @@ describe("write-unified-entry-dts", () => {
       );
       expect(cold.status, cold.stdout + cold.stderr).toBe(0);
       expect(
-        (cold.stdout + cold.stderr).match(/\[tsdown-build\] invocation \d\/6 finished/gu),
-      ).toHaveLength(6);
+        (cold.stdout + cold.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
+      ).toHaveLength(1);
       expect(
         await measurePhase("cold-dist-hash", () => treeHashes(path.join(root, "dist"))),
       ).toEqual(mixedGeneration);
       expectStagingClean(root);
     }));
 
-  it.concurrent("records successful empty partitions for a bounded plugin selection", ({
+  it.concurrent("caches the complete declaration program for a bounded plugin selection", ({
     command,
   }) =>
     command.lifetime.run(async () => {
-      const { root } = createFixture(command, TSDOWN_NON_SDK_DTS_CONFIG_GROUPS);
+      const { root, write } = createFixture(command, TSDOWN_UNIFIED_DTS_CONFIG_GROUPS);
+      for (const [file, marker, flag] of [
+        [
+          "scripts/lib/tsdown-declaration-generator-inputs.mts",
+          '  configEntry = "tsdown.config.ts",\n) {',
+          "DECLARATION_TEST_DENY_CACHE_SNAPSHOT",
+        ],
+        [
+          "scripts/lib/compiler-input-snapshot.mts",
+          "constructor(rootDir: string, policy: CompilerInputPolicy) {",
+          "DECLARATION_TEST_DENY_CACHE_SNAPSHOT",
+        ],
+        [
+          "scripts/tsdown-build.mts",
+          "  const args = params.args ?? [];\n  const plan = resolveTsdownBuildPlan(params);",
+          "DECLARATION_TEST_DENY_COMPILER_PLAN",
+        ],
+      ] as const) {
+        const current = fs.readFileSync(path.join(root, file), "utf8");
+        expect(current).toContain(marker);
+        write(
+          file,
+          current.replace(
+            marker,
+            marker +
+              "\nif (process.env[" +
+              JSON.stringify(flag) +
+              '] === "1") throw new Error("Unexpected declaration preparation");\n',
+          ),
+        );
+      }
       const env = { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "fixture-a" };
       const initial = await runUnifiedWriter(command, root, env);
       expect(initial.status, initial.stdout + initial.stderr).toBe(0);
-      for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+      for (const group of TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
         expect(initial.stderr).toContain(
           `[tsdown-unified] ${group}: cache miss (record-unavailable)`,
         );
       }
       expect(
-        (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/6 finished/gu),
-      ).toHaveLength(6);
+        (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
+      ).toHaveLength(1);
       expect(fs.existsSync(path.join(root, "dist/extensions/fixture-a/index.d.ts"))).toBe(true);
       expect(fs.existsSync(path.join(root, "dist/extensions/fixture-b/index.d.ts"))).toBe(false);
       const before = treeHashes(path.join(root, "dist"));
-      const repeated = await runUnifiedWriter(command, root, env);
+      const repeated = await runUnifiedWriter(command, root, {
+        ...env,
+        DECLARATION_TEST_DENY_COMPILER_PLAN: "1",
+      });
       expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
-      for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+      for (const group of TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
         expect(repeated.stderr).toContain(`[tsdown-unified] ${group}: cache hit (fresh-cache)`);
       }
       expect(repeated.stdout + repeated.stderr).not.toContain("[tsdown-build] invocation");
       expect(treeHashes(path.join(root, "dist"))).toEqual(before);
+      const cached = treeHashes(path.join(root, ".artifacts/build-all-cache"));
+      const uncached = await runUnifiedWriter(command, root, {
+        ...env,
+        OPENCLAW_BUILD_CACHE: "0",
+        DECLARATION_TEST_DENY_CACHE_SNAPSHOT: "1",
+      });
+      expect(uncached.status, uncached.stdout + uncached.stderr).toBe(0);
+      expect(treeHashes(path.join(root, "dist"))).toEqual(before);
+      expect(treeHashes(path.join(root, ".artifacts/build-all-cache"))).toEqual(cached);
       expectStagingClean(root);
     }));
 
   it.concurrent.for([
-    "last compiler failure",
+    "compiler failure",
     "missing successful receipt",
-    "cached input mutation after emit",
+    "missing successful receipt without cache",
   ])("preserves the previous generation on %s", (failure, { command }) =>
     command.lifetime.run(async () => {
       const { root, write, declarations } = createFixture(
         command,
-        TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+        TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
       );
+      const cacheDisabled = failure === "missing successful receipt without cache";
       write("dist/index.d.ts", "previous root declaration");
       write("dist/extensions/retained/index.d.ts", "previous plugin declaration");
-      let before = treeHashes(path.join(root, "dist"));
-      let cached: Record<string, string> = {};
-      const last = TSDOWN_NON_SDK_DTS_CONFIG_GROUPS.at(-1)!;
-      if (failure === "last compiler failure") {
+      const before = treeHashes(path.join(root, "dist"));
+      const cached: Record<string, string> = {};
+      const last = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.at(-1)!;
+      if (failure === "compiler failure") {
         write(declarations[last]![0]!, 'export type { Missing } from "@openclaw/llm-core";');
       } else {
         write(
@@ -426,43 +473,28 @@ const selected = configs.find(config => config.name === ${JSON.stringify(last)})
 const register = selected.hooks;
 selected.hooks = async hooks => {
   await register(hooks);
-${
-  failure === "missing successful receipt"
-    ? '  hooks.clearHook("build:done");'
-    : `  hooks.hook("build:done", () => {
-    if (fs.existsSync(".artifacts/mutate-cached-input")) {
-      fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_NON_SDK_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
-    }
-  });`
-}
+  hooks.clearHook("build:done");
 };
 `,
         );
       }
-      if (failure === "cached input mutation after emit") {
-        const initial = await runUnifiedWriter(command, root);
-        expect(initial.status, initial.stdout + initial.stderr).toBe(0);
-        before = treeHashes(path.join(root, "dist"));
-        cached = treeHashes(path.join(root, ".artifacts/build-all-cache"));
-        write(".artifacts/mutate-cached-input", "armed");
-        fs.appendFileSync(path.join(root, declarations[last]![0]!), "\n");
-      }
-      const failed = await runUnifiedWriter(command, root);
-      expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
-      expect(failed.stdout + failed.stderr).toContain(
-        failure === "cached input mutation after emit"
-          ? "invocation 1/1 finished"
-          : "invocation 6/6 finished",
+      const failed = await runUnifiedWriter(
+        command,
+        root,
+        cacheDisabled ? { OPENCLAW_BUILD_CACHE: "0" } : {},
       );
+      expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
+      expect(failed.stdout + failed.stderr).toContain("invocation 1/1 finished");
       expect(failed.stdout + failed.stderr).toContain(
-        failure === "last compiler failure"
-          ? "TS2305"
-          : failure === "missing successful receipt"
-            ? "Missing successful compiler membership"
-            : "changed during compilation",
+        failure === "compiler failure" ? "TS2305" : "Missing successful compiler membership",
       );
       expect(treeHashes(path.join(root, "dist"))).toEqual(before);
-      expect(treeHashes(path.join(root, ".artifacts/build-all-cache"))).toEqual(cached);
+      const cacheDirectory = path.join(root, ".artifacts/build-all-cache");
+      if (cacheDisabled) {
+        expect(fs.existsSync(cacheDirectory)).toBe(false);
+      } else {
+        expect(treeHashes(cacheDirectory)).toEqual(cached);
+      }
       expectStagingClean(root);
     }),
   );

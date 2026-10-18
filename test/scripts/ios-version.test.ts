@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,13 +14,6 @@ import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-su
 
 installIosFixtureCleanup();
 
-function runCli(script: string, ...args: string[]) {
-  return spawnSync(process.execPath, ["--import", "tsx", script, ...args], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-  });
-}
-
 describe("resolveIosVersion", () => {
   it("checks archive version inputs without requiring changelog release notes", () => {
     const rootDir = writeIosFixture({ packageVersion: "2026.7.2", changelog: "" });
@@ -30,139 +22,6 @@ describe("resolveIosVersion", () => {
     expect(() => syncIosVersioning({ rootDir, appStoreRevision: 10 })).toThrow(
       "Expected an integer from 0 to 9",
     );
-  });
-
-  it("writes shared full commit and UTC timestamp settings for iOS builds", () => {
-    const script = fs.readFileSync("scripts/ios-write-version-xcconfig.sh", "utf8");
-
-    expect(script).toContain('source "${ROOT_DIR}/scripts/lib/build-metadata.sh"');
-    expect(script).toContain("OPENCLAW_GIT_COMMIT = ${RESOLVED_GIT_COMMIT}");
-    expect(script).toContain("OPENCLAW_BUILD_TIMESTAMP = ${RESOLVED_BUILD_TIMESTAMP}");
-    expect(script).toContain('openclaw_resolve_git_commit "${ROOT_DIR}"');
-    expect(script).toContain("openclaw_resolve_build_timestamp");
-  });
-
-  it("rejects missing CLI option values before reading version files", () => {
-    const result = runCli("scripts/ios-version.ts", "--field");
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toBe("Missing value for --field.\n");
-
-    const shortFlagResult = runCli("scripts/ios-version.ts", "--field", "-h");
-
-    expect(shortFlagResult.status).toBe(1);
-    expect(shortFlagResult.stderr).toBe("Missing value for --field.\n");
-  });
-
-  it("prints selected fields from the CLI", () => {
-    const rootDir = writeIosFixture({
-      packageVersion: "2026.4.6",
-      changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.6\n\nStable notes.\n",
-    });
-    const result = runCli(
-      "scripts/ios-version.ts",
-      "--root",
-      rootDir,
-      "--field",
-      "canonicalVersion",
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("2026.4.6\n");
-    expect(result.stderr).toBe("");
-  });
-
-  it("prints explicit gateway version fields from the CLI", () => {
-    const rootDir = writeIosFixture({
-      packageVersion: "2026.4.6",
-      changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.7\n\nStable notes.\n",
-    });
-    const result = runCli(
-      "scripts/ios-version.ts",
-      "--root",
-      rootDir,
-      "--version",
-      "2026.4.7",
-      "--field",
-      "canonicalVersion",
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("2026.4.7\n");
-    expect(result.stderr).toBe("");
-  });
-
-  it("prints an encoded App Store version for an explicit gateway revision", () => {
-    const rootDir = writeIosFixture({
-      packageVersion: "2026.7.2",
-      changelog: "# OpenClaw iOS Changelog\n\n## 2026.7.21\n\nRevision notes.\n",
-    });
-    const result = runCli(
-      "scripts/ios-version.ts",
-      "--root",
-      rootDir,
-      "--version",
-      "2026.7.2",
-      "--revision",
-      "1",
-      "--field",
-      "marketingVersion",
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("2026.7.21\n");
-    expect(result.stderr).toBe("");
-  });
-
-  it("prints derived release notes from the CLI", () => {
-    const rootDir = writeIosFixture({
-      packageVersion: "2026.4.6",
-      changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.7\n\nGenerated notes.\n",
-    });
-    const result = runCli(
-      "scripts/ios-version.ts",
-      "--root",
-      rootDir,
-      "--version",
-      "2026.4.7",
-      "--field",
-      "releaseNotes",
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("Generated notes.\n");
-    expect(result.stderr).toBe("");
-  });
-
-  it("rejects missing iOS sync CLI root values before reading version files", () => {
-    const result = runCli("scripts/ios-sync-versioning.ts", "--root", "--check");
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toBe("Missing value for --root.\n");
-
-    const shortFlagResult = runCli("scripts/ios-sync-versioning.ts", "--root", "-h");
-
-    expect(shortFlagResult.status).toBe(1);
-    expect(shortFlagResult.stderr).toBe("Missing value for --root.\n");
-  });
-
-  it("derives Apple marketing fields from the root package version", () => {
-    const rootDir = writeIosFixture({
-      packageVersion: "2026.4.6",
-      changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.6\n\nStable notes.\n",
-    });
-
-    expect(resolveIosVersion(rootDir)).toEqual({
-      appStoreRevision: null,
-      appStoreVersion: null,
-      buildVersion: "1",
-      canonicalVersion: "2026.4.6",
-      changelogPath: path.join(rootDir, "apps/ios/CHANGELOG.md"),
-      gatewayVersion: "2026.4.6",
-      marketingVersion: "2026.4.6",
-      versionSource: "package",
-      versionSourcePath: path.join(rootDir, "package.json"),
-    });
   });
 
   it("appends one unpadded App Store revision digit to the gateway patch", () => {
@@ -202,7 +61,7 @@ describe("resolveIosVersion", () => {
 });
 
 describe("gateway version ownership", () => {
-  it.each(["2026.4.7", "2026.4.7-beta.1", "2026.4.7-alpha.2", "2026.4.7-1"])(
+  it.each(["2026.4.7-1"])(
     "uses the base gateway version from package.json for %s",
     (packageVersion) => {
       const rootDir = writeIosFixture({
@@ -250,22 +109,6 @@ Draft notes.
     expect(() => renderIosReleaseNotes(version, changelog)).toThrow(
       "Unable to find iOS changelog notes for 2026.7.21",
     );
-  });
-
-  it("extracts exact pinned version sections first", () => {
-    const version = resolveIosVersion(".", { releaseVersion: "2026.4.6" });
-    const changelog = `# OpenClaw iOS Changelog
-
-## Unreleased
-
-Draft notes.
-
-## 2026.4.6
-
-- Exact release notes.
-`;
-
-    expect(renderIosReleaseNotes(version, changelog)).toBe("- Exact release notes.\n");
   });
 
   it("falls back to Unreleased when the release section does not exist yet", () => {

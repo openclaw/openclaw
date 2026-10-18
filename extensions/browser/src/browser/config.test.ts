@@ -251,6 +251,20 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "chrome")?.cdpPort).toBe(18798);
   });
 
+  it.each([
+    { label: "managed", pinned: { cdpUrl: "http://127.0.0.1:18799", attachOnly: true } },
+    {
+      label: "existing-session",
+      pinned: { driver: "existing-session" as const, cdpUrl: "http://127.0.0.1:18799" },
+    },
+  ])("does not assign an implicit extension relay a $label profile's cdpUrl port", ({ pinned }) => {
+    const resolved = resolveBrowserConfig({
+      profiles: { pinned: { ...pinned, color: "#00AA00" } },
+    });
+
+    expect(resolveProfile(resolved, "chrome")?.cdpPort).toBe(18798);
+  });
+
   it("rejects implicit extension relays that exhaust the reserved port band", () => {
     const profiles: NonNullable<BrowserConfig["profiles"]> = Object.fromEntries(
       Array.from({ length: 8 }, (_, index) => [
@@ -463,25 +477,25 @@ describe("browser config", () => {
 
     it.each([
       {
-        name: "falls back to headless for local managed Linux profiles without display",
+        name: "defaults local managed profiles to headless without a display",
         config: {},
         profileName: "openclaw",
-        expected: { headless: true, source: "linux-display-fallback" },
+        expected: { headless: true, source: "default" },
       },
       {
-        name: "does not apply the no-display fallback to remote CDP profiles",
+        name: "does not change remote CDP default mode",
         config: withProfile("remote", { cdpUrl: "http://10.0.0.42:9222" }),
         profileName: "remote",
         expected: { headless: false, source: "default" },
       },
       {
-        name: "lets explicit profile headless=false beat the Linux no-display fallback",
+        name: "lets explicit profile headless=false beat the headless default",
         config: withProfile("openclaw", { cdpPort: 18800, headless: false }, { headless: true }),
         profileName: "openclaw",
         expected: { headless: false, source: "profile" },
       },
       {
-        name: "lets explicit global headless=false beat the Linux no-display fallback",
+        name: "lets explicit global headless=false beat the headless default",
         config: { headless: false },
         profileName: "openclaw",
         expected: { headless: false, source: "config" },
@@ -556,8 +570,8 @@ describe("browser config", () => {
     it("uses defaults for local launch and post-launch readiness windows", () => {
       const resolved = resolveBrowserConfig({});
 
-      expect(resolved.localLaunchTimeoutMs).toBe(15_000);
-      expect(resolved.localCdpReadyTimeoutMs).toBe(8_000);
+      expect(resolved.localLaunchTimeoutMs).toBe(60_000);
+      expect(resolved.localCdpReadyTimeoutMs).toBe(30_000);
     });
   });
 

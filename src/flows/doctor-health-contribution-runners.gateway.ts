@@ -48,6 +48,8 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
     return;
   }
+  const { maybeRepairNodeServiceConfig } = await import("../commands/doctor-node-services.js");
+  await maybeRepairNodeServiceConfig(ctx.runtime, ctx.prompter, ctx.env ?? process.env);
   if (!(await shouldManageGatewayService(ctx.env ?? process.env))) {
     return;
   }
@@ -56,11 +58,7 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     maybeResolveDuelingSystemdGatewayScopes,
     maybeScanExtraGatewayServices,
   } = await import("../commands/doctor-gateway-services.js");
-  const {
-    noteMacLaunchAgentOverrides,
-    noteMacLaunchctlGatewayEnvOverrides,
-    noteMacStaleOpenClawUpdateLaunchdJobs,
-  } = await import("../commands/doctor-platform-notes.js");
+  const { noteMacGatewayPlatformWarnings } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
   await maybeResolveDuelingSystemdGatewayScopes(ctx.runtime, ctx.prompter);
   ctx.cfg = await maybeRepairGatewayServiceConfig(
@@ -73,9 +71,7 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
       writeConfig: (nextConfig) => writeDoctorGatewayConfig(ctx, nextConfig),
     },
   );
-  await noteMacLaunchAgentOverrides();
-  await noteMacStaleOpenClawUpdateLaunchdJobs();
-  await noteMacLaunchctlGatewayEnvOverrides(ctx.cfg);
+  await noteMacGatewayPlatformWarnings(ctx.cfg);
 }
 
 export async function runHostDesktopHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -117,7 +113,7 @@ export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Prom
   const { hasConfiguredGitHubApiCredential } = await import("../gateway/github-public-api.js");
   if (!hasConfiguredGitHubApiCredential(ctx.env ?? process.env, ctx.cfg)) {
     note(
-      "Prefer gateway.controlUi.github.token for Gateway-owned GitHub project access, or set GH_TOKEN/GITHUB_TOKEN in the shared Gateway process environment. Without either, search is public-only.",
+      "Set gateway.controlUi.github.token with gateway.controlUi.github.host matching gateway.github.host for private project access. Public github.com can also use GH_TOKEN/GITHUB_TOKEN; otherwise search is public-only.",
       "GitHub projects",
     );
   }

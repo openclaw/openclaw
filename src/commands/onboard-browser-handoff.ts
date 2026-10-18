@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
+import { openUrlPrivately } from "../infra/browser-handoff.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { sleep } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
@@ -22,7 +23,6 @@ import {
 import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
-  openUrl,
   resolveAdvertisedControlUiLinks,
 } from "./onboard-helpers.js";
 
@@ -41,38 +41,6 @@ type BrowserHatchTarget = {
   tlsConfig?: ControlUiHandoffTarget["tlsConfig"];
   token?: string;
   password?: string;
-};
-
-type DashboardPresenceProbeResult =
-  | { reachable: true; clientKeys: string[] }
-  | { reachable: false };
-
-type DashboardWaitResult =
-  | { connected: true }
-  | { connected: false; reason: "gateway-unreachable" | "timeout" };
-
-export type BrowserHatchHandoffResult =
-  | { handedOff: true }
-  | {
-      handedOff: false;
-      reason: "gateway-unreachable" | "target-unavailable" | "timeout";
-    };
-
-type BrowserHatchHandoffDeps = {
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  openBrowser?: (url: string) => Promise<boolean>;
-  resolveTarget?: (config: OpenClawConfig, env: NodeJS.ProcessEnv) => Promise<BrowserHatchTarget>;
-  probePresence?: (
-    target: BrowserHatchTarget,
-    timeoutMs: number,
-  ) => Promise<DashboardPresenceProbeResult>;
-  waitForDocument?: typeof waitForControlUiDocument;
-  issueBrowserHandoff?: typeof issueControlUiBrowserHandoff;
-  verifyLoopbackAlias?: typeof hasVerifiedControlUiLoopbackAlias;
-  pollForClient?: typeof waitForDashboardClient;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
 };
 
 async function resolveBrowserHatchTarget(
@@ -135,9 +103,7 @@ function retargetBrowserHandoffUrl(
   return visible.toString();
 }
 
-export function resolveConnectedControlUiPresenceKeys(
-  entries: readonly SystemPresence[],
-): string[] {
+function resolveConnectedControlUiPresenceKeys(entries: readonly SystemPresence[]): string[] {
   return entries
     .filter(isConnectedControlUi)
     .map((entry) => [entry.deviceId, entry.instanceId, entry.host, entry.mode].join("\0"));
@@ -146,7 +112,7 @@ export function resolveConnectedControlUiPresenceKeys(
 async function probeDashboardPresence(
   target: BrowserHatchTarget,
   timeoutMs: number,
-): Promise<DashboardPresenceProbeResult> {
+): Promise<string[] | null> {
   try {
     // Read presence over the same trusted local CLI path every `openclaw`
     // command uses. A raw shared-auth call with a (possibly SecretRef-managed)
@@ -166,12 +132,9 @@ async function probeDashboardPresence(
       expectFinal: false,
       ignoreEnvUrlOverride: true,
     });
-    return {
-      reachable: true,
-      clientKeys: resolveConnectedControlUiPresenceKeys(presence ?? []),
-    };
+    return resolveConnectedControlUiPresenceKeys(presence ?? []);
   } catch {
-    return { reachable: false };
+    return null;
   }
 }
 
@@ -179,33 +142,28 @@ async function waitForDashboardClient(params: {
   target: BrowserHatchTarget;
   baselineClientKeys: ReadonlySet<string>;
   timeoutMs: number;
-  probe: (target: BrowserHatchTarget, timeoutMs: number) => Promise<DashboardPresenceProbeResult>;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-}): Promise<DashboardWaitResult> {
-  const now = params.now ?? Date.now;
-  const sleepFor = params.sleep ?? sleep;
-  const deadline = now() + params.timeoutMs;
+}): Promise<boolean> {
+  const deadline = Date.now() + params.timeoutMs;
   while (true) {
-    const beforeProbeMs = deadline - now();
+    const beforeProbeMs = deadline - Date.now();
     if (beforeProbeMs <= 0) {
-      return { connected: false, reason: "timeout" };
+      return false;
     }
-    const result = await params.probe(
+    const result = await probeDashboardPresence(
       params.target,
       Math.min(HANDOFF_PROBE_TIMEOUT_MS, beforeProbeMs),
     );
-    if (!result.reachable) {
-      return { connected: false, reason: "gateway-unreachable" };
+    if (!result) {
+      return false;
     }
-    if (result.clientKeys.some((key) => !params.baselineClientKeys.has(key))) {
-      return { connected: true };
+    if (result.some((key) => !params.baselineClientKeys.has(key))) {
+      return true;
     }
-    const remainingMs = deadline - now();
+    const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      return { connected: false, reason: "timeout" };
+      return false;
     }
-    await sleepFor(Math.min(HANDOFF_POLL_INTERVAL_MS, remainingMs));
+    await sleep(Math.min(HANDOFF_POLL_INTERVAL_MS, remainingMs));
   }
 }
 
@@ -232,35 +190,32 @@ export async function resolveOnboardingDashboardTarget(
 }
 
 /** Opens or prints the dashboard and waits for its Control UI client connection. */
-export async function runBrowserHatchHandoff(
-  params: {
-    config: OpenClawConfig;
-    prompter: WizardPrompter;
-    suppressTokenOutput?: boolean;
-    agentId?: string;
-  },
-  deps: BrowserHatchHandoffDeps = {},
-): Promise<BrowserHatchHandoffResult> {
-  const env = deps.env ?? process.env;
+export async function runBrowserHatchHandoff(params: {
+  config: OpenClawConfig;
+  prompter: WizardPrompter;
+  suppressTokenOutput?: boolean;
+  agentId?: string;
+}): Promise<boolean> {
+  const env = process.env;
   if (params.suppressTokenOutput === true || params.config.gateway?.controlUi?.enabled === false) {
-    return { handedOff: false, reason: "target-unavailable" };
+    return false;
   }
-  const browserSupport = await detectBrowserOpenSupport(deps);
+  const browserSupport = await detectBrowserOpenSupport();
   const canOpenBrowser = browserSupport.ok;
   let target: BrowserHatchTarget;
   try {
-    target = await (deps.resolveTarget ?? resolveBrowserHatchTarget)(params.config, env);
+    target = await resolveBrowserHatchTarget(params.config, env);
   } catch {
-    return { handedOff: false, reason: "target-unavailable" };
+    return false;
   }
 
-  if (!(await (deps.verifyLoopbackAlias ?? hasVerifiedControlUiLoopbackAlias)(target))) {
-    return { handedOff: false, reason: "target-unavailable" };
+  if (!(await hasVerifiedControlUiLoopbackAlias(target))) {
+    return false;
   }
 
   let progress: ReturnType<WizardPrompter["progress"]> | undefined;
   try {
-    const document = await (deps.waitForDocument ?? waitForControlUiDocument)({
+    const document = await waitForControlUiDocument({
       url: target.documentUrl,
       tlsConfig: target.tlsConfig,
       onPending: () => {
@@ -268,25 +223,22 @@ export async function runBrowserHatchHandoff(
       },
     });
     if (!document.ready) {
-      return { handedOff: false, reason: "target-unavailable" };
+      return false;
     }
   } catch {
-    return { handedOff: false, reason: "target-unavailable" };
+    return false;
   } finally {
     progress?.stop();
   }
 
-  const probePresence = deps.probePresence ?? probeDashboardPresence;
-  const baseline = await probePresence(target, HANDOFF_PROBE_TIMEOUT_MS);
-  if (!baseline.reachable) {
-    return { handedOff: false, reason: "gateway-unreachable" };
+  const baseline = await probeDashboardPresence(target, HANDOFF_PROBE_TIMEOUT_MS);
+  if (!baseline) {
+    return false;
   }
 
   let browserUrl: string;
   try {
-    const browserHandoff = await (deps.issueBrowserHandoff ?? issueControlUiBrowserHandoff)(
-      target.links,
-    );
+    const browserHandoff = await issueControlUiBrowserHandoff(target.links);
     const { url } = await resolveOnboardingDashboardTarget(
       browserHandoff.browserUrl,
       params.config,
@@ -294,13 +246,17 @@ export async function runBrowserHatchHandoff(
     );
     browserUrl = url.toString();
   } catch {
-    return { handedOff: false, reason: "target-unavailable" };
+    return false;
   }
 
   let opened = false;
   if (canOpenBrowser) {
     try {
-      opened = await (deps.openBrowser ?? openUrl)(browserUrl);
+      // The handoff URL carries the one-time pairing credential in its
+      // fragment. Open it through a private file handoff so the credential
+      // never appears in a browser-opener process argument, where another
+      // OS user could read it from /proc on default procfs hosts.
+      opened = await openUrlPrivately(browserUrl);
     } catch {
       opened = false;
     }
@@ -353,20 +309,17 @@ export async function runBrowserHatchHandoff(
     );
   }
 
-  const wait = await (deps.pollForClient ?? waitForDashboardClient)({
+  const wait = await waitForDashboardClient({
     target,
-    baselineClientKeys: new Set(baseline.clientKeys),
+    baselineClientKeys: new Set(baseline),
     timeoutMs: opened ? GUI_HANDOFF_TIMEOUT_MS : HEADLESS_HANDOFF_TIMEOUT_MS,
-    probe: probePresence,
-    ...(deps.now ? { now: deps.now } : {}),
-    ...(deps.sleep ? { sleep: deps.sleep } : {}),
   });
-  if (!wait.connected) {
-    return { handedOff: false, reason: wait.reason };
+  if (!wait) {
+    return false;
   }
   await params.prompter.note(
     t("wizard.guided.browserHandoffContinuing"),
     t("wizard.guided.browserHandoffTitle"),
   );
-  return { handedOff: true };
+  return true;
 }

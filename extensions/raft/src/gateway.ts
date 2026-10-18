@@ -1,6 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { EventEmitter } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import process from "node:process";
@@ -9,7 +8,10 @@ import { keepHttpServerTaskAlive, waitUntilAbort } from "openclaw/plugin-sdk/cha
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
-import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
+import {
+  killProcessTree,
+  spawnOomScoreAdjusted as spawn,
+} from "openclaw/plugin-sdk/process-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -48,17 +50,7 @@ const WAKE_EVENT_ID_FIELDS = [
   "id",
 ] as const;
 
-type RaftBridgeProcess = Pick<ChildProcess, "pid"> & Pick<EventEmitter, "once">;
-
 type RaftWakeReplayEvent = { accountId: string; key: string };
-
-type RaftWakeReplayGuard = ReturnType<typeof createChannelReplayGuard<RaftWakeReplayEvent>>;
-
-type RaftGatewayDeps = {
-  createToken?: () => string;
-  spawnBridge?: (params: { profile: string; endpoint: string; token: string }) => RaftBridgeProcess;
-  wakeDedupe?: RaftWakeReplayGuard;
-};
 
 class WakeRequestError extends Error {
   constructor(
@@ -75,7 +67,7 @@ function spawnRaftBridge(params: {
   profile: string;
   endpoint: string;
   token: string;
-}): RaftBridgeProcess {
+}): ChildProcess {
   // Raft owns the fixed bridge command. OpenClaw passes profile/loopback
   // endpoint/token as separate argv/env fields; wake payloads never reach argv.
   return spawn(
@@ -182,7 +174,7 @@ function closeServer(server: Server, sockets: Set<Socket>) {
   }
 }
 
-function stopBridge(child: RaftBridgeProcess) {
+function stopBridge(child: ChildProcess) {
   if (typeof child.pid !== "number") {
     return;
   }
@@ -209,7 +201,6 @@ async function listenLoopback(server: Server): Promise<number> {
 
 export async function startRaftGatewayAccount(
   ctx: ChannelGatewayContext<ResolvedRaftAccount>,
-  deps: RaftGatewayDeps = {},
 ): Promise<void> {
   const profile = ctx.account.profile;
   if (!ctx.account.enabled) {
@@ -224,23 +215,21 @@ export async function startRaftGatewayAccount(
   }
 
   const wakeQueue = new KeyedAsyncQueue();
-  const wakeDedupe =
-    deps.wakeDedupe ??
-    createChannelReplayGuard<RaftWakeReplayEvent>({
-      dedupe: {
-        ttlMs: WAKE_DEDUPE_TTL_MS,
-        memoryMaxSize: WAKE_DEDUPE_MEMORY_MAX_SIZE,
-        pluginId: RAFT_CHANNEL_ID,
-        namespacePrefix: "raft-wake-dedupe",
-        stateMaxEntries: WAKE_DEDUPE_STATE_MAX_ENTRIES,
-        onDiskError: (error) => {
-          ctx.log?.warn?.(`Raft wake dedupe storage failed: ${String(error)}`);
-        },
+  const wakeDedupe = createChannelReplayGuard<RaftWakeReplayEvent>({
+    dedupe: {
+      ttlMs: WAKE_DEDUPE_TTL_MS,
+      memoryMaxSize: WAKE_DEDUPE_MEMORY_MAX_SIZE,
+      pluginId: RAFT_CHANNEL_ID,
+      namespacePrefix: "raft-wake-dedupe",
+      stateMaxEntries: WAKE_DEDUPE_STATE_MAX_ENTRIES,
+      onDiskError: (error) => {
+        ctx.log?.warn?.(`Raft wake dedupe storage failed: ${String(error)}`);
       },
-      buildReplayKey: (event) => event.key,
-      namespace: (event) => event.accountId,
-    });
-  const token = deps.createToken ? deps.createToken() : randomBytes(32).toString("hex");
+    },
+    buildReplayKey: (event) => event.key,
+    namespace: (event) => event.accountId,
+  });
+  const token = randomBytes(32).toString("hex");
   const runtimeSession = randomUUID();
   const sockets = new Set<Socket>();
   let stopped = false;
@@ -306,19 +295,11 @@ export async function startRaftGatewayAccount(
           { accountId: ctx.accountId, key: dedupeKey },
           async () => {
             assertWakeActive();
-            await dispatchRaftWake({ ctx });
+            await dispatchRaftWake(ctx);
           },
         );
-        if (result.kind === "duplicate") {
-          return false;
-        }
-        if (result.kind === "inflight") {
-          if (await result.pending) {
-            return false;
-          }
-          throw new WakeRequestError(503, "Raft wake delivery is retrying.");
-        }
-        return true;
+        // The account FIFO settles each replay claim before admitting the next.
+        return result.kind === "processed";
       });
       sendJson(response, 202, {
         ok: true,
@@ -353,7 +334,7 @@ export async function startRaftGatewayAccount(
     socket.once("close", () => sockets.delete(socket));
   });
 
-  let bridge: RaftBridgeProcess | undefined;
+  let bridge: ChildProcess | undefined;
   let bridgeStopRequested = false;
   const requestBridgeStop = () => {
     if (!bridge || bridgeStopRequested) {
@@ -365,7 +346,7 @@ export async function startRaftGatewayAccount(
   try {
     const port = await listenLoopback(server);
     const endpoint = `http://${BRIDGE_HOST}:${port}${WAKE_PATH}`;
-    bridge = (deps.spawnBridge ?? spawnRaftBridge)({ profile, endpoint, token });
+    bridge = spawnRaftBridge({ profile, endpoint, token });
     bridge.once("error", (error) => {
       if (!stopped) {
         bridgeExited = new Error(`Raft bridge failed to start: ${String(error)}`);

@@ -10,6 +10,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../../../config/session
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../../state/openclaw-agent-db-validation-cache.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -29,6 +30,7 @@ const reclamation = vi.hoisted(() => ({
   databasePath: undefined as string | undefined,
   exits: [] as Promise<number>[],
   exitCodes: [] as number[],
+  invalidateAtStart: undefined as string | undefined,
 }));
 
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -40,6 +42,16 @@ vi.mock("node:worker_threads", async (importOriginal) => {
       private observedValidation = false;
 
       constructor(filename: string | URL, options: WorkerOptions = {}) {
+        if (
+          reclamation.invalidateAtStart !== undefined &&
+          options.workerData?.operation === "reclaim" &&
+          options.workerData.databaseOptions.path === reclamation.invalidateAtStart
+        ) {
+          // Preparation already admitted the executor; expire its shared proof before
+          // the reclaimer requests validation for its own native handle.
+          invalidateOpenClawAgentDatabaseValidation(reclamation.invalidateAtStart);
+          reclamation.invalidateAtStart = undefined;
+        }
         const gate =
           options.workerData?.operation === "reclaim" || reclamation.databasePath
             ? reclamation.gate
@@ -149,6 +161,7 @@ afterEach(async () => {
   reclamation.databasePath = undefined;
   reclamation.exits = [];
   reclamation.exitCodes = [];
+  reclamation.invalidateAtStart = undefined;
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -213,16 +226,26 @@ test("sessions.delete admits unrelated same-store patches during Worker validati
     },
     storePath,
   });
+  // Empty deletions reuse the admitted writer and do not enter reclamation validation.
+  await seedLinearSessionTranscript({
+    agentId: "main",
+    sessionKey: targetKey,
+    sessionId: "validation-delete",
+    storePath,
+    contents: ["archived transcript"],
+  });
   const { ws } = await openClient();
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
+  // Seed a host handle; the worker interceptor expires proof after executor preparation.
+  await closeOpenClawAgentDatabaseByPathAsync(databasePath, "main");
+  openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
   const validation = holdReclamationValidation();
   const { gate } = validation;
   try {
     expect(await rpcReq(ws, "sessions.patch", { key: unrelatedKey, label: "warm" })).toMatchObject({
       ok: true,
     });
-    invalidateOpenClawAgentDatabaseValidation(
-      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-    );
+    reclamation.invalidateAtStart = databasePath;
     const deletion = validation.own(rpcReq(ws, "sessions.delete", { key: targetKey }));
     await validation.entered(deletion, signal);
     expect(loadSessionEntry({ sessionKey: targetKey, storePath })?.sessionId).toBe(
@@ -293,6 +316,8 @@ test("sessions.delete rejects revoked authority before repairing the same databa
     agentId: "main",
     path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
   };
+  // Retire the seeded executor so validation must open beside this native handle.
+  await closeOpenClawAgentDatabaseByPathAsync(databaseOptions.path, "main");
   const database = openOpenClawAgentDatabase(databaseOptions);
   const stateDatabase = openOpenClawStateDatabase();
   const readLeases = () =>
@@ -301,8 +326,8 @@ test("sessions.delete rejects revoked authority before repairing the same databa
       .all(database.path);
   const originalLeases = readLeases();
   expect(originalLeases).toHaveLength(1);
-  // A late commit guard can roll back deletion but cannot undo an earlier
-  // database-open repair. Keep the original cached handle warm throughout.
+  // Shared preparation still needs a current caller before repairing the store.
+  // Revoking deletion must preserve its session and transcript throughout.
   database.db.exec("DROP INDEX idx_agent_cache_expiry");
   invalidateOpenClawAgentDatabaseValidation(database.path);
   const readRepairIndex = () =>
@@ -331,7 +356,8 @@ test("sessions.delete rejects revoked authority before repairing the same databa
     expect(readRepairIndex()).toBeUndefined();
     expect(openOpenClawAgentDatabase(databaseOptions)).toBe(database);
     expect(database.db.isOpen).toBe(true);
-    expect(readLeases()).toHaveLength(originalLeases.length + 1);
+    const preparingLeases = readLeases();
+    expect(preparingLeases).toHaveLength(originalLeases.length + 1);
     const callsBeforeRevocation = guardCalls;
     authorized = false;
     validation.release();
@@ -343,12 +369,14 @@ test("sessions.delete rejects revoked authority before repairing the same databa
     await expect(loadSeededTranscriptEvents(transcriptScope)).resolves.toEqual(originalTranscript);
     expect(Atomics.load(validation.gate, 2)).toBeGreaterThan(0);
     expect(Atomics.load(validation.gate, 3)).toBeGreaterThan(0);
+    expect(readRepairIndex()).toBeUndefined();
     // Refused native opening joins broker termination before returning its authority error.
     expect(reclamation.exitCodes).toEqual([1]);
     expect(readLeases()).toEqual(originalLeases);
-    expect(readRepairIndex()).toBeUndefined();
     await closeOpenClawAgentDatabasesAsync();
+    // The broker explicitly terminates its shared executor after native close.
     expect(reclamation.exitCodes).toEqual([1]);
+    expect(readLeases()).toEqual([]);
   } finally {
     await validation.close();
   }

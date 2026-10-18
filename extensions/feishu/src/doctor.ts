@@ -1,20 +1,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { safeStatSync } from "@openclaw/fs-safe/path";
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorSequenceResult,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { readDirectoryEntriesSync, safeStatSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   isValidAgentHarnessSessionStoreEntry,
   deleteSessionEntry,
-  listSessionEntries,
-  loadTranscriptEventsSync,
-  resolveSessionStoreBackupPaths,
+  getSessionEntryAsync,
+  listSessionEntriesAsync,
+  loadTranscriptEvents,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
@@ -22,6 +22,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { collectFeishuDoctorAgentIds } from "./doctor-agent-roster.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { collectFeishuWebhookNotes } from "./webhook-route.js";
 
@@ -72,22 +73,8 @@ type FeishuDoctorSessionEntry = {
   entry: FeishuSessionEntry;
 };
 
-type FeishuDoctorInspection = {
-  stateDir: string;
-  feishuStateDir: string;
-  findings: FeishuDoctorFinding[];
-  sessionEntries: FeishuDoctorSessionEntry[];
-};
-
-type FeishuDoctorRepairReport = {
-  backupDir: string;
-  stateDirRepairAttempted: boolean;
-  rebuiltStateDir: boolean;
-  removedSessionEntries: number;
-  touchedSessionStores: number;
-  archivedSessionArtifacts: number;
-  warnings: string[];
-};
+type FeishuDoctorInspection = Awaited<ReturnType<typeof inspectFeishuDoctorState>>;
+type FeishuDoctorRepairReport = Awaited<ReturnType<typeof repairFeishuDoctorState>>;
 
 function timestampForPath(now = new Date()): string {
   return now.toISOString().replaceAll(":", "-");
@@ -107,24 +94,8 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function existsDir(dir: string): boolean {
-  return safeStatSync(dir)?.isDirectory() ?? false;
-}
-
-function existsFile(filePath: string): boolean {
-  return safeStatSync(filePath)?.isFile() ?? false;
-}
-
 function resolveFeishuAgentSessionsDir(agentId: string): string {
   return path.join(resolveStateDir(), "agents", normalizeAgentId(agentId), "sessions");
-}
-
-function safeReadDir(dir: string): fs.Dirent[] {
-  try {
-    return fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
 }
 
 function formatDisplayPath(filePath: string): string {
@@ -206,23 +177,6 @@ function isFeishuSessionEntry(key: string, value: unknown): boolean {
   );
 }
 
-function collectConfiguredAgentIds(cfg: OpenClawConfig): string[] {
-  const ids = new Set<string>();
-  ids.add(resolveConfiguredDefaultAgentId(cfg));
-  for (const agent of cfg.agents?.list ?? []) {
-    if (typeof agent.id === "string" && agent.id.trim()) {
-      ids.add(normalizeAgentId(agent.id));
-    }
-  }
-  return [...ids].toSorted();
-}
-
-function resolveConfiguredDefaultAgentId(cfg: OpenClawConfig): string {
-  const agents = cfg.agents?.list ?? [];
-  const chosen = agents.find((agent) => agent?.default) ?? agents[0];
-  return normalizeAgentId(typeof chosen?.id === "string" && chosen.id.trim() ? chosen.id : "main");
-}
-
 function collectFeishuSessionTargets(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -238,7 +192,7 @@ function collectFeishuSessionTargets(params: {
     });
   };
 
-  for (const agentId of collectConfiguredAgentIds(params.cfg)) {
+  for (const agentId of collectFeishuDoctorAgentIds(params.cfg)) {
     addTarget({
       agentId,
       storePath: resolveStorePath(params.cfg.session?.store, { agentId, env: params.env }),
@@ -246,13 +200,13 @@ function collectFeishuSessionTargets(params: {
   }
 
   const agentsDir = path.join(params.stateDir, "agents");
-  for (const agentDir of safeReadDir(agentsDir)) {
+  for (const agentDir of readDirectoryEntriesSync(agentsDir)) {
     if (!agentDir.isDirectory()) {
       continue;
     }
     const agentId = normalizeAgentId(agentDir.name);
     const storePath = path.join(agentsDir, agentDir.name, "sessions", "sessions.json");
-    if (existsFile(storePath)) {
+    if (safeStatSync(storePath)?.isFile()) {
       addTarget({ agentId, storePath });
     }
   }
@@ -268,7 +222,7 @@ function collectJsonFiles(rootDir: string, limit = 200): string[] {
     if (files.length >= limit) {
       return;
     }
-    for (const entry of safeReadDir(dir).toSorted((left, right) =>
+    for (const entry of readDirectoryEntriesSync(dir).toSorted((left, right) =>
       left.name.localeCompare(right.name),
     )) {
       const fullPath = path.join(dir, entry.name);
@@ -284,7 +238,7 @@ function collectJsonFiles(rootDir: string, limit = 200): string[] {
       }
     }
   };
-  if (existsDir(rootDir)) {
+  if (safeStatSync(rootDir)?.isDirectory()) {
     visit(rootDir);
   }
   return files;
@@ -302,14 +256,14 @@ function collectCorruptFeishuStateJsonFindings(feishuStateDir: string): FeishuDo
   return findings;
 }
 
-function resolveSessionTranscriptCandidates(params: {
+function resolveSessionTranscriptPath(params: {
   agentId: string;
   storePath: string;
   entry: FeishuSessionEntry;
-}): string[] {
+}): string | undefined {
   const candidate = params.entry.sessionFile;
   if (typeof candidate !== "string" || !candidate.trim()) {
-    return [];
+    return undefined;
   }
   const sessionsDir = path.dirname(params.storePath);
   const agentSessionsDir = resolveFeishuAgentSessionsDir(params.agentId);
@@ -321,8 +275,8 @@ function resolveSessionTranscriptCandidates(params: {
     resolved !== agentSessionsDir &&
     (isPathStrictlyInside(sessionsDir, resolved) ||
       isPathStrictlyInside(agentSessionsDir, resolved))
-    ? [resolved]
-    : [];
+    ? resolved
+    : undefined;
 }
 
 function isSessionHeader(value: unknown): boolean {
@@ -454,15 +408,15 @@ function inspectSessionTranscript(params: {
   return inspectTranscriptEntries({ ...params, entries, malformedLines });
 }
 
-function inspectCanonicalSessionTranscript(params: {
+async function inspectCanonicalSessionTranscript(params: {
   agentId: string;
   sessionId: string;
   sessionKey: string;
   storePath: string;
-}): FeishuDoctorFinding | null {
+}): Promise<FeishuDoctorFinding | null> {
   let entries: unknown[];
   try {
-    entries = loadTranscriptEventsSync({
+    entries = await loadTranscriptEvents({
       agentId: params.agentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -486,15 +440,15 @@ function inspectCanonicalSessionTranscript(params: {
   });
 }
 
-function collectFeishuSessionFindings(params: {
+async function collectFeishuSessionFindings(params: {
   agentId: string;
   sessionKey: string;
   storePath: string;
   entry: FeishuSessionEntry;
-}): FeishuDoctorFinding[] {
+}): Promise<FeishuDoctorFinding[]> {
   const sessionId = typeof params.entry.sessionId === "string" ? params.entry.sessionId.trim() : "";
   if (sessionId) {
-    const finding = inspectCanonicalSessionTranscript({
+    const finding = await inspectCanonicalSessionTranscript({
       agentId: params.agentId,
       sessionId,
       sessionKey: params.sessionKey,
@@ -502,9 +456,11 @@ function collectFeishuSessionFindings(params: {
     });
     return finding ? [finding] : [];
   }
-  const transcriptCandidates = resolveSessionTranscriptCandidates(params);
-  const existing = transcriptCandidates.filter(existsFile);
-  if (transcriptCandidates.length > 0 && existing.length === 0) {
+  const transcriptPath = resolveSessionTranscriptPath(params);
+  if (!transcriptPath) {
+    return [];
+  }
+  if (!safeStatSync(transcriptPath)?.isFile()) {
     return [
       {
         kind: "missing-session-transcript",
@@ -514,18 +470,12 @@ function collectFeishuSessionFindings(params: {
     ];
   }
 
-  const findings: FeishuDoctorFinding[] = [];
-  for (const transcriptPath of existing) {
-    const finding = inspectSessionTranscript({
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      transcriptPath,
-    });
-    if (finding) {
-      findings.push(finding);
-    }
-  }
-  return findings;
+  const finding = inspectSessionTranscript({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    transcriptPath,
+  });
+  return finding ? [finding] : [];
 }
 
 function hasCorruptFeishuStateJsonFinding(inspection: FeishuDoctorInspection): boolean {
@@ -563,21 +513,19 @@ function collectRepairSessionEntries(
   );
 }
 
-function inspectFeishuDoctorState(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): FeishuDoctorInspection {
+async function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env, os.homedir);
   const feishuStateDir = path.join(stateDir, FEISHU_STATE_DIR);
   const findings: FeishuDoctorFinding[] = collectCorruptFeishuStateJsonFindings(feishuStateDir);
-  const sessionEntries: FeishuDoctorInspection["sessionEntries"] = [];
+  const sessionEntries: FeishuDoctorSessionEntry[] = [];
 
   for (const target of collectFeishuSessionTargets({ cfg: params.cfg, env, stateDir })) {
-    for (const { sessionKey: key, entry } of listSessionEntries({
+    const entries = await listSessionEntriesAsync({
       agentId: target.agentId,
       storePath: target.storePath,
-    })
+    });
+    for (const { sessionKey: key, entry } of entries
       .filter(
         ({ sessionKey, entry: sessionEntry }) =>
           !isValidAgentHarnessSessionStoreEntry(sessionKey, sessionEntry) &&
@@ -592,12 +540,12 @@ function inspectFeishuDoctorState(params: {
         entry: sessionEntry,
       });
       findings.push(
-        ...collectFeishuSessionFindings({
+        ...(await collectFeishuSessionFindings({
           sessionKey: key,
           storePath: target.storePath,
           agentId: target.agentId,
           entry: sessionEntry,
-        }),
+        })),
       );
     }
   }
@@ -643,36 +591,20 @@ function movePathToBackup(params: {
   return true;
 }
 
-function copyStoreBackup(params: { storePath: string; backupDir: string; agentId: string }) {
-  const targetDir = path.join(params.backupDir, "session-stores", params.agentId);
-  for (const sourcePath of resolveSessionStoreBackupPaths({
-    agentId: params.agentId,
-    storePath: params.storePath,
-  })) {
-    if (!existsFile(sourcePath)) {
-      continue;
-    }
-    const targetPath = path.join(targetDir, path.basename(sourcePath));
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o700 });
-    fs.copyFileSync(sourcePath, resolveUniquePath(targetPath));
-  }
-}
-
 function collectSessionArtifactPaths(params: {
   agentId: string;
   storePath: string;
   entry: FeishuSessionEntry;
 }): string[] {
-  const artifacts = new Set<string>();
-  for (const transcriptPath of resolveSessionTranscriptCandidates(params)) {
-    artifacts.add(transcriptPath);
-    if (transcriptPath.endsWith(".jsonl")) {
-      const base = transcriptPath.slice(0, -".jsonl".length);
-      artifacts.add(`${base}.trajectory.jsonl`);
-      artifacts.add(`${base}.trajectory-path.json`);
-    }
+  const transcriptPath = resolveSessionTranscriptPath(params);
+  if (!transcriptPath) {
+    return [];
   }
-  return [...artifacts].toSorted();
+  if (!transcriptPath.endsWith(".jsonl")) {
+    return [transcriptPath];
+  }
+  const base = transcriptPath.slice(0, -".jsonl".length);
+  return [transcriptPath, `${base}.trajectory.jsonl`, `${base}.trajectory-path.json`].toSorted();
 }
 
 function archiveSessionArtifacts(params: {
@@ -688,7 +620,7 @@ function archiveSessionArtifacts(params: {
       agentId: entry.agentId,
       entry: entry.entry,
     })) {
-      if (seen.has(artifactPath) || !existsFile(artifactPath)) {
+      if (seen.has(artifactPath) || !safeStatSync(artifactPath)?.isFile()) {
         continue;
       }
       seen.add(artifactPath);
@@ -705,10 +637,11 @@ async function repairFeishuDoctorState(params: {
   env?: NodeJS.ProcessEnv;
   now?: Date;
   inspection?: FeishuDoctorInspection;
-}): Promise<FeishuDoctorRepairReport> {
+}) {
   const env = params.env ?? process.env;
   const now = params.now ?? new Date();
-  const inspection = params.inspection ?? inspectFeishuDoctorState({ cfg: params.cfg, env });
+  const inspection =
+    params.inspection ?? (await inspectFeishuDoctorState({ cfg: params.cfg, env }));
   const backupDir = ensureBackupDir(inspection.stateDir, now);
   const archiveTimestamp = timestampForPath(now);
   const warnings: string[] = [];
@@ -743,22 +676,24 @@ async function repairFeishuDoctorState(params: {
   )) {
     const agentId = entries[0]!.agentId;
     try {
-      copyStoreBackup({ storePath, backupDir, agentId });
+      let storeBackupDir: string | undefined = resolveUniquePath(
+        path.join(backupDir, "session-stores", agentId),
+      );
       const removedEntries: typeof entries = [];
       for (const entry of entries) {
         const { key } = entry;
-        const currentEntry = listSessionEntries({ agentId, storePath }).find(
-          (candidate) => candidate.sessionKey === key,
-        )?.entry;
+        const currentEntry = await getSessionEntryAsync({ agentId, storePath, sessionKey: key });
         if (!currentEntry || isValidAgentHarnessSessionStoreEntry(key, currentEntry)) {
           continue;
         }
         const deleted = await deleteSessionEntry({
           agentId,
           archiveTranscript: true,
+          backupDir: storeBackupDir,
           sessionKey: key,
           storePath,
         });
+        storeBackupDir = undefined;
         if (!deleted) {
           continue;
         }
@@ -849,7 +784,9 @@ async function runFeishuDoctorSequence(params: {
   shouldRepair: boolean;
 }): Promise<ChannelDoctorSequenceResult> {
   const notes = collectFeishuWebhookNotes(params);
-  const inspection = params.cfg.channels?.feishu ? inspectFeishuDoctorState(params) : undefined;
+  const inspection = params.cfg.channels?.feishu
+    ? await inspectFeishuDoctorState(params)
+    : undefined;
   if (!inspection || inspection.findings.length === 0) {
     return { changeNotes: [], ...notes };
   }

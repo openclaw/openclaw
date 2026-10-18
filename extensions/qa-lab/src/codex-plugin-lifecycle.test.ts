@@ -1,6 +1,10 @@
 // Qa Lab tests cover codex plugin lifecycle plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   QA_CODEX_OAUTH_PROFILE_ID,
@@ -29,6 +33,8 @@ async function createAgentState(prefix: string) {
 }
 
 afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   await tempDirs.cleanup();
 });
 
@@ -99,7 +105,7 @@ describe("codex plugin lifecycle: doctor migration safety matrix", () => {
     {
       name: "mixed profile with main-agent OpenClaw pin",
       profileShape: "mixed" as const,
-      config: { agents: { list: { main: { agentRuntime: { id: "openclaw" } } } } },
+      config: { agents: { entries: { main: { agentRuntime: { id: "openclaw" } } } } },
       expectedRemovedRuntimePins: ["agentRuntime.id=openclaw"],
     },
   ])(

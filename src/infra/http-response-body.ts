@@ -14,12 +14,6 @@ export async function cancelUnreadResponseBody(response: Response | undefined): 
   }
 }
 
-type ReadResponsePrefixResult = {
-  materializeBuffer: () => Buffer;
-  size: number;
-  truncated: boolean;
-};
-
 export type ReadResponseTextPrefixOptions = {
   signal?: AbortSignal;
   chunkTimeoutMs?: number;
@@ -29,47 +23,12 @@ export type ReadResponseTextPrefixOptions = {
   onTimeout?: (params: { timeoutMs: number }) => Error;
 };
 
-async function readResponsePrefixFromReader(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  maxBytes: number,
-  stopAtLimit: boolean,
-  options?: ReadResponseTextPrefixOptions,
-): Promise<ReadResponsePrefixResult> {
-  const chunks: Uint8Array[] = [];
-  const result = await withResponseBodyIdleTimeout(
-    reader,
-    options?.chunkTimeoutMs || undefined,
-    options?.onIdleTimeout,
-    (refreshTimeout) =>
-      consumeResponseBytes({
-        maxBytes,
-        stopAtLimit,
-        read: () => {
-          refreshTimeout?.();
-          return reader.read();
-        },
-        onChunk: (chunk) => chunks.push(chunk),
-        onLimit: () => {
-          // Capture tees must not delay bounded dispatcher release.
-          void reader.cancel().catch(() => undefined);
-        },
-      }),
-  );
-
-  return {
-    // Full-body readers reject overflow before allocating a contiguous copy.
-    // MiB limits can yield fractional bytes; retained slices contain only whole bytes.
-    materializeBuffer: () => Buffer.concat(chunks, Math.floor(Math.min(result.size, maxBytes))),
-    ...result,
-  };
-}
-
 async function readResponsePrefix(
   response: Response,
   maxBytes: number,
   stopAtLimit: boolean,
   options?: ReadResponseTextPrefixOptions,
-): Promise<ReadResponsePrefixResult> {
+) {
   if (!Number.isFinite(maxBytes) || maxBytes < 0) {
     throw new RangeError(`maxBytes must be a non-negative finite number: ${maxBytes}`);
   }
@@ -81,50 +40,63 @@ async function readResponsePrefix(
     throw error;
   }
   const body = response.body;
-  if (!body || typeof body.getReader !== "function") {
-    return await withResponseBodyTimeout({
-      timeoutMs,
-      onTimeout: options?.onTimeout,
-      signal: options?.signal,
-      cancel: async (error) => await body?.cancel(error),
-      read: async () => {
-        const fallback = Buffer.from(await response.arrayBuffer());
-        const truncated = fallback.length > maxBytes;
-        return {
-          materializeBuffer: () => (truncated ? fallback.subarray(0, maxBytes) : fallback),
-          size: fallback.length,
-          truncated,
-        };
-      },
-    });
-  }
-
-  const reader = body.getReader();
+  const reader = body && typeof body.getReader === "function" ? body.getReader() : undefined;
   try {
     return await withResponseBodyTimeout({
       timeoutMs,
       onTimeout: options?.onTimeout,
       signal: options?.signal,
-      cancel: async (error) => await reader.cancel(error),
-      read: async () => await readResponsePrefixFromReader(reader, maxBytes, stopAtLimit, options),
+      cancel: async (error) => await (reader ?? body)?.cancel(error),
+      read: async () => {
+        if (!reader) {
+          const fallback = Buffer.from(await response.arrayBuffer());
+          const truncated = fallback.length > maxBytes;
+          return {
+            materializeBuffer: () => (truncated ? fallback.subarray(0, maxBytes) : fallback),
+            size: fallback.length,
+            truncated,
+          };
+        }
+        const chunks: Uint8Array[] = [];
+        const result = await withResponseBodyIdleTimeout(
+          reader,
+          options?.chunkTimeoutMs || undefined,
+          options?.onIdleTimeout,
+          (refreshTimeout) =>
+            consumeResponseBytes({
+              maxBytes,
+              stopAtLimit,
+              read: () => {
+                refreshTimeout?.();
+                return reader.read();
+              },
+              onChunk: (chunk) => chunks.push(chunk),
+              onLimit: () => {
+                // Capture tees must not delay bounded dispatcher release.
+                void reader.cancel().catch(() => undefined);
+              },
+            }),
+        );
+        return {
+          // Full-body readers reject overflow before allocating a contiguous copy.
+          // MiB limits can yield fractional bytes; retained slices contain only whole bytes.
+          materializeBuffer: () =>
+            Buffer.concat(chunks, Math.floor(Math.min(result.size, maxBytes))),
+          ...result,
+        };
+      },
     });
   } finally {
-    reader.releaseLock();
+    reader?.releaseLock();
   }
 }
-
-export type ReadResponseTextPrefixResult = {
-  text: string;
-  size: number;
-  truncated: boolean;
-};
 
 /** Reads and decodes a bounded text prefix while cancelling unread overflow. */
 export async function readResponseTextPrefix(
   response: Response,
   maxBytes: number,
   options?: ReadResponseTextPrefixOptions,
-): Promise<ReadResponseTextPrefixResult> {
+) {
   const prefix = await readResponsePrefix(response, maxBytes, true, options);
   return {
     text: decodeTextPrefix(prefix.materializeBuffer(), { truncated: prefix.truncated }),
@@ -162,10 +134,6 @@ export async function readResponseTextSnippet(
   const maxBytes = options?.maxBytes ?? 8 * 1024;
   const maxChars = options?.maxChars ?? 200;
   const prefix = await readResponseTextPrefix(response, maxBytes, options);
-  if (!prefix.text) {
-    return undefined;
-  }
-
   const collapsed = prefix.text.replace(/\s+/g, " ").trim();
   if (!collapsed) {
     return undefined;

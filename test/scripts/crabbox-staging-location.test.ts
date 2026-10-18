@@ -86,33 +86,42 @@ process.stdout.write(JSON.stringify({candidate:{files:files.length},topFiles:fil
   return { root, repository, home, env, git, prepare };
 }
 
-it("runs repo-local staging without recovery records", () => {
-  const f = fixture();
-  const index = f.git(f.repository, "ls-files", "--stage");
-  const syncRoot = join(f.repository, "stages");
-  const capsule = f.prepare(syncRoot);
-  try {
-    expect(capsule.staging.recorded).toBe(false);
-    capsule.staging.admitted();
-    capsule.staging.settled();
-    const artifacts = preserveCrabboxArtifacts(capsule.directory, f.repository);
-    if (!artifacts) {
-      throw new Error("Fixture expected disposable source artifact evidence");
+it.each(["directory", "alias"] as const)(
+  "runs repo-local staging through a %s without recovery records",
+  (kind) => {
+    const f = fixture(kind === "alias" ? "stages/\n" : "");
+    const index = f.git(f.repository, "ls-files", "--stage");
+    const inside = join(f.repository, "stages");
+    const syncRoot = kind === "alias" ? join(f.root, "alias") : inside;
+    if (kind === "alias") {
+      mkdirSync(inside);
+      symlinkSync(inside, syncRoot, process.platform === "win32" ? "junction" : "dir");
+      expect(canRecordStaging(join(syncRoot, generation), f.repository, f.env)).toBe(false);
     }
-    capsule.staging.preserved(artifacts);
-    expect(readdirSync(capsule.staging.root)).toEqual(["payload"]);
-    expect(readdirSync(capsule.staging.payload)).toEqual(["source"]);
-    expect(
-      f.git(capsule.directory, "ls-tree", "-r", "--name-only", capsule.tree).split("\n"),
-    ).toEqual([".gitignore", "source.txt"]);
-    expect(readFileSync(join(capsule.directory, "source.txt"), "utf8")).toBe("original source\n");
-    expect(f.git(f.repository, "ls-files", "--stage")).toBe(index);
-  } finally {
-    capsule.cleanup();
-  }
-  expect(readdirSync(syncRoot)).toEqual([]);
-  expect(readFileSync(join(f.repository, "source.txt"), "utf8")).toBe("original source\n");
-});
+    const capsule = f.prepare(syncRoot);
+    try {
+      expect(capsule.staging.recorded).toBe(false);
+      capsule.staging.admitted();
+      capsule.staging.settled();
+      const artifacts = preserveCrabboxArtifacts(capsule.directory, f.repository);
+      if (!artifacts) {
+        throw new Error("Fixture expected disposable source artifact evidence");
+      }
+      capsule.staging.preserved(artifacts);
+      expect(readdirSync(capsule.staging.root)).toEqual(["payload"]);
+      expect(readdirSync(capsule.staging.payload)).toEqual(["source"]);
+      expect(
+        f.git(capsule.directory, "ls-tree", "-r", "--name-only", capsule.tree).split("\n"),
+      ).toEqual([".gitignore", "source.txt"]);
+      expect(readFileSync(join(capsule.directory, "source.txt"), "utf8")).toBe("original source\n");
+      expect(f.git(f.repository, "ls-files", "--stage")).toBe(index);
+    } finally {
+      capsule.cleanup();
+    }
+    expect(readdirSync(syncRoot)).toEqual([]);
+    expect(readFileSync(join(f.repository, "source.txt"), "utf8")).toBe("original source\n");
+  },
+);
 
 it("reevaluates registration when staging roots and ignore rules change", () => {
   const f = fixture();
@@ -135,28 +144,10 @@ it("reevaluates registration when staging roots and ignore rules change", () => 
   }
 });
 
-it("declines repository-local registration through a directory alias", () => {
-  const f = fixture("stages/\n");
-  const inside = join(f.repository, "stages");
-  mkdirSync(inside);
-  const alias = join(f.root, "alias");
-  symlinkSync(inside, alias, process.platform === "win32" ? "junction" : "dir");
-  expect(canRecordStaging(join(alias, generation), f.repository, f.env)).toBe(false);
-  const capsule = f.prepare(alias);
-  try {
-    expect(capsule.staging.recorded).toBe(false);
-    expect(readdirSync(capsule.staging.root)).toEqual(["payload"]);
-  } finally {
-    capsule.cleanup();
-  }
-});
-
-it("also protects the effective Git workspace outside a supplied subdirectory", () => {
+it("requires known placement outside the effective Git workspace before recording", () => {
   const f = fixture();
   const source = join(f.repository, "packages", "source");
   mkdirSync(source, { recursive: true });
-  expect(canRecordStaging(join(f.repository, "stages", generation), source, f.env)).toBe(false);
-  expect(canRecordStaging(join(f.root, "external-staging", generation), source, f.env)).toBe(true);
   const override = {
     ...f.env,
     GIT_CONFIG_COUNT: "invalid",
@@ -168,18 +159,8 @@ it("also protects the effective Git workspace outside a supplied subdirectory", 
   expect(rejected.error).toBeUndefined();
   expect(rejected.status).not.toBe(0);
   expect(rejected.stderr).toContain("GIT_CONFIG_COUNT");
-  expect(canRecordStaging(join(f.repository, "stages", generation), source, override)).toBe(false);
-  expect(canRecordStaging(join(f.root, "external-staging", generation), source, override)).toBe(
-    true,
-  );
   const alternate = join(f.root, "alternate-workspace");
   mkdirSync(alternate);
-  expect(
-    canRecordStaging(join(alternate, generation), f.repository, {
-      ...f.env,
-      GIT_WORK_TREE: alternate,
-    }),
-  ).toBe(false);
   const stage = join(f.root, "external-staging", generation);
   const nativeCwd = join(stage, "payload", "source");
   mkdirSync(nativeCwd, { recursive: true });
@@ -201,19 +182,23 @@ it("also protects the effective Git workspace outside a supplied subdirectory", 
     expect(result.status, result.stderr).toBe(0);
     expect(normalize(result.stdout.trim())).toBe(normalize(expected));
   }
-  expect(canRecordStaging(stage, source, relativeRouting)).toBe(false);
-  expect(canRecordStaging(stage, f.repository, { ...f.env, GIT_DIR: ".git" })).toBe(false);
-});
-
-it("treats unknown placement or Git context as ineligible without throwing", () => {
-  const f = fixture();
-  const root = join(f.root, "external-staging", generation);
-  expect(canRecordStaging(root, join(f.root, "missing-source"), f.env)).toBe(false);
-  expect(
-    canRecordStaging(root, f.repository, { ...f.env, PATH: join(f.root, "missing-bin") }),
-  ).toBe(false);
+  const root = join(f.root, "unknown-staging", generation);
   const file = join(f.root, "not-a-directory");
   writeFileSync(file, "fixture\n");
-  expect(canRecordStaging(join(file, generation), f.repository, f.env)).toBe(false);
+  const cases: [string, string, NodeJS.ProcessEnv, boolean][] = [
+    [join(f.repository, "stages", generation), source, f.env, false],
+    [stage, source, f.env, true],
+    [join(f.repository, "stages", generation), source, override, false],
+    [stage, source, override, true],
+    [join(alternate, generation), f.repository, { ...f.env, GIT_WORK_TREE: alternate }, false],
+    [stage, source, relativeRouting, false],
+    [stage, f.repository, { ...f.env, GIT_DIR: ".git" }, false],
+    [root, join(f.root, "missing-source"), f.env, false],
+    [root, f.repository, { ...f.env, PATH: join(f.root, "missing-bin") }, false],
+    [join(file, generation), f.repository, f.env, false],
+  ];
+  for (const [candidate, repository, env, recorded] of cases) {
+    expect(canRecordStaging(candidate, repository, env), candidate).toBe(recorded);
+  }
   expect(existsSync(root)).toBe(false);
 });

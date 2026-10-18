@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { observeCronJobWrites } from "../../../test/helpers/cron/runtime-mutation.js";
+import { observeCronJobCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -39,9 +39,9 @@ function createScopedJob(): CronJob {
 }
 
 describe("cron caller scope ownership", () => {
-  it.each([false, true])(
-    "rechecks consumed creator authority before a job update commits (revoked=%s)",
-    async (revokeBeforeCommit) => {
+  it.each(["before dispatch", "after commit"] as const)(
+    "handles creator revocation %s without misreporting the stored update",
+    async (revocation) => {
       await withOpenClawTestState({ label: "cron-creator-commit-authority" }, async (fixture) => {
         const now = Date.now();
         const storePath = fixture.statePath("cron", "jobs.json");
@@ -81,11 +81,17 @@ describe("cron caller scope ownership", () => {
         if (!capture) {
           throw new Error("Creator fixture did not retain its runtime capture");
         }
-        const captureRuntimeAuthority = vi.fn(capture.captureRuntimeAuthority);
-        let observedWrite = false;
-        const stopObserving = observeCronJobWrites(job.id, () => {
-          observedWrite = true;
-          if (revokeBeforeCommit) {
+        const captureRuntimeAuthority = vi.fn(() => {
+          const captured = capture.captureRuntimeAuthority();
+          if (revocation === "before dispatch") {
+            issuerCurrent = false;
+          }
+          return captured;
+        });
+        let observedCommit = false;
+        const stopObserving = observeCronJobCommits(job.id, () => {
+          observedCommit = true;
+          if (revocation === "after commit") {
             issuerCurrent = false;
           }
         });
@@ -95,19 +101,22 @@ describe("cron caller scope ownership", () => {
             { name: "committed creator update" },
             { captureRuntimeAuthority, commitGuard: capture.assertCurrent },
           );
-          if (revokeBeforeCommit) {
+          if (revocation === "before dispatch") {
             await expect(update).rejects.toThrow("no longer active");
           } else {
             await expect(update).resolves.toMatchObject({ name: "committed creator update" });
           }
-          expect(observedWrite).toBe(true);
+          expect(observedCommit).toBe(revocation === "after commit");
           expect(captureRuntimeAuthority).toHaveBeenCalledOnce();
           expect(captureRuntimeAuthority.mock.results[0]?.value).toEqual(authority);
+          expect(capture.assertCurrent).toThrow("no longer active");
           expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("no longer active");
           const persisted = (await loadCronStore(storePath)).jobs.find(
             (entry) => entry.id === job.id,
           );
-          expect(persisted?.name).toBe(revokeBeforeCommit ? job.name : "committed creator update");
+          expect(persisted?.name).toBe(
+            revocation === "before dispatch" ? job.name : "committed creator update",
+          );
         } finally {
           stopObserving();
           cron.stop();

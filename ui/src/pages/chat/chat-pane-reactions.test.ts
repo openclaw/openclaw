@@ -20,7 +20,6 @@ type ReactionsPane = {
   syncSessionReactions(): void;
   handleSessionReactionEvent(event: SessionReactionEvent): void;
   setMessageReaction(messageId: string, emoji: string, remove: boolean): Promise<void>;
-  messageReactions: Map<string, MessageReactionSummary[]>;
 };
 
 function fixture(
@@ -69,19 +68,37 @@ function fixture(
 }
 
 describe("pane reaction ownership", () => {
-  it("loads once per session and retains live events over an older list response", async () => {
-    const list = createDeferred<SessionReactionsListResult>();
-    const { pane, event, requests } = fixture(list.promise);
-    pane.syncSessionReactions();
-    pane.syncSessionReactions();
-    pane.handleSessionReactionEvent(event());
-    list.resolve({ sessionId: "session-1", reactions: {} });
-    await list.promise;
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(requests).toEqual(["session.reactions.list"]);
-    expect(pane.messageReactions.get("message-1")).toEqual(peerReaction);
-  });
+  it.each(["list", "set"] as const)(
+    "retains live events over an older %s response",
+    async (operation) => {
+      const list = createDeferred<SessionReactionsListResult>();
+      const set = createDeferred<SessionReactionsSetResult>();
+      const { pane, event, requests } = fixture(list.promise, set.promise);
+      pane.syncSessionReactions();
+      pane.syncSessionReactions();
+      let write: Promise<void> | undefined;
+      if (operation === "set") {
+        list.resolve({ sessionId: "session-1", reactions: {} });
+        await list.promise;
+        await Promise.resolve();
+        await Promise.resolve();
+        write = pane.setMessageReaction("message-1", "🎉", false);
+      }
+      pane.handleSessionReactionEvent(event());
+      list.resolve({ sessionId: "session-1", reactions: {} });
+      set.resolve({ messageId: "message-1", reactions: [] });
+      await write;
+      await list.promise;
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(requests).toEqual(
+        operation === "set"
+          ? ["session.reactions.list", "session.reactions.set"]
+          : ["session.reactions.list"],
+      );
+      expect(pane.collaboration.reactions.get("message-1")).toEqual(peerReaction);
+    },
+  );
 
   it("clears reset sessions and rejects their delayed reads, writes, and events", async () => {
     const list = createDeferred<SessionReactionsListResult>();
@@ -96,22 +113,6 @@ describe("pane reaction ownership", () => {
     list.resolve({ sessionId: "session-1", reactions: { "message-1": peerReaction } });
     set.resolve({ messageId: "message-1", reactions: peerReaction });
     await write;
-    expect(pane.messageReactions.size).toBe(0);
-  });
-
-  it("does not replace a newer peer event with a delayed set response", async () => {
-    const list = createDeferred<SessionReactionsListResult>();
-    const set = createDeferred<SessionReactionsSetResult>();
-    const { pane, event } = fixture(list.promise, set.promise);
-    pane.syncSessionReactions();
-    list.resolve({ sessionId: "session-1", reactions: {} });
-    await list.promise;
-    await Promise.resolve();
-    await Promise.resolve();
-    const write = pane.setMessageReaction("message-1", "🎉", false);
-    pane.handleSessionReactionEvent(event());
-    set.resolve({ messageId: "message-1", reactions: [] });
-    await write;
-    expect(pane.messageReactions.get("message-1")).toEqual(peerReaction);
+    expect(pane.collaboration.reactions.size).toBe(0);
   });
 });

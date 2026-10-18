@@ -1,10 +1,13 @@
 import type { ResolvedChannelImplicitMentions } from "../../config/implicit-mentions.js";
 import type { AccessGroupConfig } from "../../config/types.access-groups.js";
+import type { DmPolicy, GroupPolicy } from "../../config/types.base.js";
+import type { ChatType } from "../chat-type.js";
 import type { ChatChannelId } from "../ids.js";
 import type { InboundImplicitMentionKind, InboundMentionFacts } from "../mention-gating.js";
 import type { IdentifierAuthentication } from "./identifier-authentication.js";
 
 export type ChannelIngressChannelId = ChatChannelId;
+export type ChannelIngressMatchContext = "dm" | "group" | "route" | "command";
 
 export type ChannelIngressIdentifierKind =
   | "stable-id"
@@ -82,14 +85,14 @@ type InternalChannelIngressNormalizeResult = {
 export type InternalChannelIngressAdapter = {
   normalizeEntries(params: {
     entries: readonly string[];
-    context: "dm" | "group" | "route" | "command";
+    context: ChannelIngressMatchContext;
     accountId: string;
   }): InternalChannelIngressNormalizeResult | Promise<InternalChannelIngressNormalizeResult>;
 
   matchSubject(params: {
     subject: NormalizedIngressSubject;
     entries: readonly NormalizedIngressEntry[];
-    context: "dm" | "group" | "route" | "command";
+    context: ChannelIngressMatchContext;
   }): RedactedIngressMatch | Promise<RedactedIngressMatch>;
 };
 
@@ -211,7 +214,7 @@ export type ChannelIngressStateInput = {
   accountId: string;
   subject: InternalChannelIngressSubject;
   conversation: {
-    kind: "direct" | "group" | "channel";
+    kind: ChatType;
     id: string;
     parentId?: string;
     threadId?: string;
@@ -233,8 +236,8 @@ export type ChannelIngressStateInput = {
 };
 
 export type ChannelIngressPolicyInput = {
-  dmPolicy: "pairing" | "allowlist" | "open" | "disabled";
-  groupPolicy: "allowlist" | "open" | "disabled";
+  dmPolicy: DmPolicy;
+  groupPolicy: GroupPolicy;
   groupAllowFromFallbackToAllowFrom?: boolean;
   minIdentifierAuthentication?: IdentifierAuthentication;
   /** @deprecated `enabled` maps to minimum `mutable`; otherwise minimum `asserted`. Remove in the next Plugin SDK major. */
@@ -347,7 +350,7 @@ export type AccessGraphGate = {
 export type ChannelIngressState = {
   channelId: ChannelIngressChannelId;
   accountId: string;
-  conversationKind: "direct" | "group" | "channel";
+  conversationKind: ChatType;
   event: RedactedChannelIngressEvent;
   mentionFacts?: InboundMentionFacts;
   routeFacts: ResolvedRouteGateFacts[];

@@ -1,5 +1,7 @@
+import type { EnvironmentSummary } from "@openclaw/gateway-protocol";
 import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { DesktopConnectionHandle } from "./desktop-client.ts";
 import "./desktop-panel.ts";
 
@@ -18,19 +20,21 @@ export const desktopEnvironment = {
     tunnelStatus: "connected",
     desktopApps: [],
   },
-} as const;
+} satisfies EnvironmentSummary;
 
 export function createPanel() {
   const panel = document.createElement("openclaw-desktop-panel");
-  panel.sessions = {
-    describe: (params, options) => {
-      const client = options?.client ?? panel.client;
-      if (!client) {
-        throw new Error("Desktop fixture has no Gateway client");
-      }
-      return client.request("sessions.describe", params);
+  updatePanel(panel, {
+    sessions: {
+      describe: (params, options) => {
+        const client = options?.client ?? panel.client;
+        if (!client) {
+          throw new Error("Desktop fixture has no Gateway client");
+        }
+        return client.request("sessions.describe", params);
+      },
     },
-  };
+  });
   return panel;
 }
 
@@ -51,7 +55,7 @@ export function clickPanelButton(
   panel: DesktopPanelElement,
   selector = ".desktop-environment button",
 ): void {
-  const button = panel.renderRoot.querySelector<HTMLButtonElement>(selector);
+  const button = panel.querySelector<HTMLButtonElement>(selector);
   if (!button) {
     throw new Error(`expected Desktop button: ${selector}`);
   }
@@ -59,7 +63,7 @@ export function clickPanelButton(
 }
 
 export function sizingMenu(panel: DesktopPanelElement): HTMLSelectElement {
-  const menu = panel.renderRoot.querySelector<HTMLSelectElement>(".desktop-sizing");
+  const menu = panel.querySelector<HTMLSelectElement>(".desktop-sizing");
   if (!menu) {
     throw new Error("expected the desktop sizing menu");
   }
@@ -72,11 +76,23 @@ export function selectSizing(panel: DesktopPanelElement, mode: string): void {
   menu.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-export async function settleTasks(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    window.setTimeout(resolve, 0);
-  });
+export function updatePanel(
+  panel: DesktopPanelElement,
+  changes: Partial<DesktopPanelElement>,
+): void {
+  Object.assign(panel, changes);
+}
+
+export async function mountPanel(panel: DesktopPanelElement): Promise<void> {
+  document.body.append(panel);
+  await panel.updateComplete;
+  flush();
+}
+
+export async function unmountPanel(panel: DesktopPanelElement): Promise<void> {
+  panel.remove();
   await Promise.resolve();
+  flush();
 }
 
 export function createGatewayClient(request: unknown) {

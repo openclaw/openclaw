@@ -1,20 +1,25 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import { escapeXml } from "../shared/xml.js";
 import { publishServiceFile } from "./service-stage.js";
 
-// XML is required to disable both battery-stop defaults (#59299); the remaining
-// fields mirror the former ONLOGON, least-privilege, single-instance CLI task.
+// Node hosts need the user's desktop; Gateway services must also start before logon.
 export function buildScheduledTaskXml(params: {
   taskDescription: string;
   taskUser: string | null;
   launchPath: string;
+  interactive?: boolean;
 }): string {
   const description = escapeXml(params.taskDescription);
-  const command = escapeXml(params.launchPath);
+  const unattended = Boolean(params.taskUser && !params.interactive);
+  const command = escapeXml(unattended ? getWindowsCmdExePath() : params.launchPath);
+  const action = unattended
+    ? `\n      <Arguments>${escapeXml(`/d /s /c ""${params.launchPath}""`)}</Arguments>\n      <WorkingDirectory>${escapeXml(path.dirname(params.launchPath))}</WorkingDirectory>`
+    : "";
   const principalLogon = params.taskUser
-    ? `\n      <UserId>${escapeXml(params.taskUser)}</UserId>\n      <LogonType>InteractiveToken</LogonType>`
+    ? `\n      <UserId>${escapeXml(params.taskUser)}</UserId>\n      <LogonType>${unattended ? "S4U" : "InteractiveToken"}</LogonType>`
     : "\n      <GroupId>S-1-5-32-545</GroupId>";
   const triggerUser = params.taskUser
     ? `\n      <UserId>${escapeXml(params.taskUser)}</UserId>`
@@ -24,7 +29,7 @@ export function buildScheduledTaskXml(params: {
   <RegistrationInfo>
     <Description>${description}</Description>
   </RegistrationInfo>
-  <Triggers>
+  <Triggers>${unattended ? "\n    <BootTrigger><Enabled>true</Enabled></BootTrigger>" : ""}
     <LogonTrigger>
       <Enabled>true</Enabled>${triggerUser}
     </LogonTrigger>
@@ -59,7 +64,7 @@ export function buildScheduledTaskXml(params: {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>${command}</Command>
+      <Command>${command}</Command>${action}
     </Exec>
   </Actions>
 </Task>`;

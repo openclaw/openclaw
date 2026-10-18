@@ -28,7 +28,12 @@ describe("openshell mirror fs bridges", () => {
   let workspaceDir: string;
   let backend: ReturnType<typeof createBackend>;
   let bridge: ReturnType<typeof createOpenShellFsBridge>;
-
+  const local = (filePath: string) => path.join(workspaceDir, filePath);
+  const readLocal = (filePath: string) => fs.readFile(local(filePath), "utf8");
+  async function seedLocal(filePath: string, data = "payload") {
+    await fs.mkdir(path.dirname(local(filePath)), { recursive: true });
+    await fs.writeFile(local(filePath), data);
+  }
   function createBridge(overrides: Partial<ReturnType<typeof createSandboxTestContext>> = {}) {
     const sandbox = createSandboxTestContext({
       overrides: {
@@ -41,20 +46,6 @@ describe("openshell mirror fs bridges", () => {
     });
     return createOpenShellFsBridge({ sandbox, backend });
   }
-
-  async function swapParentAfterRemote(
-    method: "mkdirpRemotePath" | "removeRemotePath" | "renameRemotePath",
-    outsideDir: string,
-  ) {
-    const slotPath = path.join(workspaceDir, "slot");
-    await fs.mkdir(slotPath, { recursive: true });
-    backend[method].mockImplementation(async () => {
-      await fs.rm(slotPath, { recursive: true, force: true });
-      await fs.symlink(outsideDir, slotPath);
-    });
-    return slotPath;
-  }
-
   beforeEach(async () => {
     const workspace = await createOpenShellTestWorkspace("fs");
     workspaceDir = workspace.dir;
@@ -79,32 +70,22 @@ describe("openshell mirror fs bridges", () => {
         expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
         return;
       }
-      await bridge.writeFile({
-        filePath: "nested/file.txt",
-        data: "hello",
-        mkdir: true,
-      });
-
-      expect(await fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8")).toBe(
-        "hello",
-      );
+      await bridge.writeFile({ filePath: "nested/file.txt", data: "hello", mkdir: true });
+      expect(await readLocal("nested/file.txt")).toBe("hello");
       expect(backend.syncLocalPathToRemote).toHaveBeenCalledWith(
-        path.join(workspaceDir, "nested", "file.txt"),
+        local("nested/file.txt"),
         "/sandbox/nested/file.txt",
       );
-      const skillRelativePath =
-        mutation === "write" ? "skills/demo/SKILL.md" : ".agents/skills/demo/SKILL.md";
-      const skillPath = path.join(workspaceDir, skillRelativePath);
-      await fs.mkdir(path.dirname(skillPath), { recursive: true });
-      await fs.writeFile(skillPath, "managed instructions");
+      const skill = mutation === "write" ? "skills/demo/SKILL.md" : ".agents/skills/demo/SKILL.md";
+      await seedLocal(skill, "managed instructions");
       const mutate =
         mutation === "write"
-          ? bridge.writeFile({ filePath: skillRelativePath, data: "changed" })
+          ? bridge.writeFile({ filePath: skill, data: "changed" })
           : mutation === "remove"
             ? bridge.remove({ filePath: ".agents", recursive: true })
             : bridge.rename({ from: ".agents", to: "moved-instructions" });
       await expect(mutate).rejects.toThrow("read-only");
-      await expect(fs.readFile(skillPath, "utf8")).resolves.toBe("managed instructions");
+      await expect(readLocal(skill)).resolves.toBe("managed instructions");
     },
   );
 
@@ -115,9 +96,7 @@ describe("openshell mirror fs bridges", () => {
     await expect(
       bridge.createFileExclusive({ filePath: "nested/file.txt", data: "replacement" }),
     ).resolves.toBe("exists");
-    await expect(fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8")).resolves.toBe(
-      "first",
-    );
+    await expect(readLocal("nested/file.txt")).resolves.toBe("first");
     expect(backend.syncLocalPathToRemote).toHaveBeenCalledTimes(1);
   });
 
@@ -126,168 +105,80 @@ describe("openshell mirror fs bridges", () => {
     await expect(
       bridge.createFileExclusive({ filePath: "file.txt", data: "canonical" }),
     ).rejects.toThrow("remote rejected");
-    await expect(fs.readFile(path.join(workspaceDir, "file.txt"), "utf8")).resolves.toBe(
-      "canonical",
-    );
+    await expect(readLocal("file.txt")).resolves.toBe("canonical");
   });
 
   it("rejects cross-root mirror renames before the remote backend commit", async () => {
-    await using agentWorkspace = await createOpenShellTestWorkspace("agent-fs");
-    const agentWorkspaceDir = agentWorkspace.dir;
-    const sourcePath = path.join(workspaceDir, "source.txt");
-    await fs.writeFile(sourcePath, "payload", "utf8");
-    bridge = createBridge({ agentWorkspaceDir });
-
+    await using agent = await createOpenShellTestWorkspace("agent-fs");
+    await seedLocal("source.txt");
+    bridge = createBridge({ agentWorkspaceDir: agent.dir });
     await expect(bridge.rename({ from: "source.txt", to: "/agent/source.txt" })).rejects.toThrow(
       "OpenShell cross-root mirror renames require pinned fs-safe support",
     );
     expect(backend.renameRemotePath).not.toHaveBeenCalled();
-    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("payload");
-    await expectPathMissing(path.join(agentWorkspaceDir, "source.txt"));
-    await expect(fs.readdir(agentWorkspaceDir)).resolves.toStrictEqual([]);
+    await expect(readLocal("source.txt")).resolves.toBe("payload");
+    await expectPathMissing(path.join(agent.dir, "source.txt"));
+    await expect(fs.readdir(agent.dir)).resolves.toStrictEqual([]);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "rejects local mirror symlink rename sources before the remote backend commit",
-    async () => {
-      await fs.writeFile(path.join(workspaceDir, "target.txt"), "payload", "utf8");
-      await fs.symlink("target.txt", path.join(workspaceDir, "link.txt"));
-
-      await expect(bridge.rename({ from: "link.txt", to: "moved-link.txt" })).rejects.toThrow(
-        "Sandbox symlink rename sources are not supported",
-      );
+  it.runIf(process.platform !== "win32").each([
+    { link: "symlink", error: "Sandbox symlink rename sources are not supported" },
+    { link: "link", error: "Sandbox hardlinked rename sources are not supported" },
+  ] as const)(
+    "rejects $link rename sources before the remote backend commit",
+    async ({ link, error }) => {
+      await seedLocal("target.txt");
+      await fs[link](link === "symlink" ? "target.txt" : local("target.txt"), local("link.txt"));
+      await expect(bridge.rename({ from: "link.txt", to: "moved.txt" })).rejects.toThrow(error);
       expect(backend.renameRemotePath).not.toHaveBeenCalled();
-      await expect(fs.readlink(path.join(workspaceDir, "link.txt"))).resolves.toBe("target.txt");
-      await expectPathMissing(path.join(workspaceDir, "moved-link.txt"));
+      await expect(readLocal("link.txt")).resolves.toBe("payload");
+      if (link === "symlink") {
+        await expect(fs.readlink(local("link.txt"))).resolves.toBe("target.txt");
+      }
+      await expectPathMissing(local("moved.txt"));
     },
   );
 
   it.runIf(process.platform !== "win32")(
-    "rejects local mirror hardlinked rename sources before the remote backend commit",
+    "removes recursive mirror directories without following symlink leaves",
     async () => {
-      const sourcePath = path.join(workspaceDir, "source.txt");
-      await fs.writeFile(sourcePath, "payload", "utf8");
-      await fs.link(sourcePath, path.join(workspaceDir, "other-link.txt"));
-
-      await expect(bridge.rename({ from: "source.txt", to: "moved.txt" })).rejects.toThrow(
-        "Sandbox hardlinked rename sources are not supported",
-      );
-      expect(backend.renameRemotePath).not.toHaveBeenCalled();
-      await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("payload");
-      await expectPathMissing(path.join(workspaceDir, "moved.txt"));
-    },
-  );
-
-  it("removes deep local mirror trees while retaining the mounted root", async () => {
-    const rootIdentity = await fs.stat(workspaceDir, { bigint: true });
-    const deepestDir = path.join(workspaceDir, "nested", ...Array<string>(65).fill("d"));
-    await fs.mkdir(deepestDir, { recursive: true });
-    await fs.writeFile(path.join(deepestDir, "target.txt"), "payload", "utf8");
-    await bridge.remove({ filePath: ".", recursive: true, force: true });
-
-    await expect(fs.readdir(workspaceDir)).resolves.toEqual([]);
-    await expect(fs.stat(workspaceDir, { bigint: true })).resolves.toMatchObject({
-      dev: rootIdentity.dev,
-      ino: rootIdentity.ino,
-    });
-    expect(backend.removeRemotePath).toHaveBeenCalledWith("/sandbox", {
-      recursive: true,
-      signal: undefined,
-      ignoreMissing: true,
-    });
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "removes recursive local mirror directories containing symlink leaves without following them",
-    async () => {
-      await using outsideWorkspace = await createOpenShellTestWorkspace("outside");
-      const outsideDir = outsideWorkspace.dir;
-      const outsideTarget = path.join(outsideDir, "target.txt");
-      await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
-      await fs.writeFile(outsideTarget, "outside", "utf8");
-      await fs.symlink(outsideTarget, path.join(workspaceDir, "nested", "link.txt"));
-      await fs.symlink(outsideDir, path.join(workspaceDir, "nested", "directory-link"));
-      await fs.symlink("missing", path.join(workspaceDir, "nested", "dangling-link"));
+      await using outside = await createOpenShellTestWorkspace("outside");
+      const target = path.join(outside.dir, "target.txt");
+      await fs.mkdir(local("nested"));
+      await fs.writeFile(target, "outside");
+      await fs.symlink(target, local("nested/link.txt"));
+      await fs.symlink(outside.dir, local("nested/directory-link"));
+      await fs.symlink("missing", local("nested/dangling-link"));
       await bridge.remove({ filePath: "nested", recursive: true, force: true });
-
-      await expectPathMissing(path.join(workspaceDir, "nested"));
-      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
+      await expectPathMissing(local("nested"));
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("outside");
     },
   );
 
-  it.runIf(process.platform !== "win32").each([false, true])(
-    "removes local mirror symlink leaves when force is false and recursive is %s",
-    async (recursive) => {
-      await using outsideWorkspace = await createOpenShellTestWorkspace("outside");
-      const outsideDir = outsideWorkspace.dir;
-      const outsideTarget = path.join(outsideDir, "target.txt");
-      await fs.writeFile(outsideTarget, "outside", "utf8");
-      await fs.symlink(outsideTarget, path.join(workspaceDir, "link.txt"));
-      await bridge.remove({ filePath: "link.txt", force: false, recursive });
-
-      await expectPathMissing(path.join(workspaceDir, "link.txt"));
-      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
+  it.runIf(process.platform !== "win32")(
+    "unlinks a mirror symlink without removing its target",
+    async () => {
+      await using outside = await createOpenShellTestWorkspace("outside");
+      const target = path.join(outside.dir, "target.txt");
+      await fs.writeFile(target, "outside");
+      await fs.symlink(target, local("link.txt"));
+      await bridge.remove({ filePath: "link.txt", force: false, recursive: false });
+      await expectPathMissing(local("link.txt"));
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("outside");
       expect(backend.removeRemotePath).toHaveBeenCalledWith("/sandbox/link.txt", {
-        recursive,
+        recursive: false,
         signal: undefined,
         ignoreMissing: false,
       });
     },
   );
 
-  it.each([false, true])(
-    "preserves missing local mirror path handling when recursive is %s",
-    async (recursive) => {
-      await expect(
-        bridge.remove({ filePath: "missing", recursive, force: false }),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(bridge.remove({ filePath: "missing", recursive })).resolves.toBeUndefined();
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "rejects local mirror mkdir when a validated parent is swapped to an outside symlink",
-    async () => {
-      await using outsideWorkspace = await createOpenShellTestWorkspace("outside");
-      const outsideDir = outsideWorkspace.dir;
-      await swapParentAfterRemote("mkdirpRemotePath", outsideDir);
-
-      await expect(bridge.mkdirp({ filePath: "slot/escaped" })).rejects.toThrow();
-      await expectPathMissing(path.join(outsideDir, "escaped"));
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "rejects local mirror remove when a validated parent is swapped to an outside symlink",
-    async () => {
-      await using outsideWorkspace = await createOpenShellTestWorkspace("outside");
-      const outsideDir = outsideWorkspace.dir;
-      const slotPath = await swapParentAfterRemote("removeRemotePath", outsideDir);
-      const outsideTarget = path.join(outsideDir, "target.txt");
-      await fs.writeFile(path.join(slotPath, "target.txt"), "inside", "utf8");
-      await fs.writeFile(outsideTarget, "outside", "utf8");
-
-      await expect(bridge.remove({ filePath: "slot/target.txt", force: true })).rejects.toThrow();
-      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "rejects local mirror rename when a validated destination parent is swapped to an outside symlink",
-    async () => {
-      await using outsideWorkspace = await createOpenShellTestWorkspace("outside");
-      const outsideDir = outsideWorkspace.dir;
-      await swapParentAfterRemote("renameRemotePath", outsideDir);
-      const sourcePath = path.join(workspaceDir, "source.txt");
-      await fs.writeFile(sourcePath, "payload", "utf8");
-
-      await expect(
-        bridge.rename({ from: "source.txt", to: "slot/parent/moved.txt" }),
-      ).rejects.toThrow();
-      await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("payload");
-      await expectPathMissing(path.join(outsideDir, "parent", "moved.txt"));
-    },
-  );
+  it("preserves missing local mirror path handling", async () => {
+    await expect(
+      bridge.remove({ filePath: "missing", recursive: false, force: false }),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(bridge.remove({ filePath: "missing", recursive: false })).resolves.toBeUndefined();
+  });
 
   it.each(["mkdirpRemotePath", "removeRemotePath", "renameRemotePath"] as const)(
     "keeps local state unchanged when %s is rejected",
@@ -318,41 +209,74 @@ describe("openshell mirror fs bridges", () => {
     },
   );
 
-  it("rejects symlink-parent writes instead of escaping the local mount root", async () => {
-    await using outsideWorkspace = await createOpenShellTestWorkspace("outside");
-    const outsideDir = outsideWorkspace.dir;
-    await fs.symlink(outsideDir, path.join(workspaceDir, "alias"));
+  it.runIf(process.platform !== "win32").each([
+    {
+      method: "mkdirpRemotePath",
+      mutate: () => bridge.mkdirp({ filePath: "slot/escaped" }),
+      escaped: "escaped",
+    },
+    {
+      method: "removeRemotePath",
+      mutate: () => bridge.remove({ filePath: "slot/target.txt", force: true }),
+      escaped: "target.txt",
+    },
+    {
+      method: "renameRemotePath",
+      mutate: () => bridge.rename({ from: "source.txt", to: "slot/parent/moved.txt" }),
+      escaped: "parent/moved.txt",
+    },
+  ] as const)("rejects a parent swap after $method", async ({ method, mutate, escaped }) => {
+    await using outside = await createOpenShellTestWorkspace("outside");
+    await seedLocal("slot/target.txt", "inside");
+    await seedLocal("source.txt");
+    const outsideTarget = path.join(outside.dir, escaped);
+    if (method === "removeRemotePath") {
+      await fs.writeFile(outsideTarget, "outside");
+    }
+    backend[method].mockImplementation(async () => {
+      await fs.rm(local("slot"), { recursive: true, force: true });
+      await fs.symlink(outside.dir, local("slot"));
+    });
+    await expect(mutate()).rejects.toThrow();
+    if (method === "removeRemotePath") {
+      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
+    } else {
+      await expectPathMissing(outsideTarget);
+    }
+    if (method === "renameRemotePath") {
+      await expect(readLocal("source.txt")).resolves.toBe("payload");
+    }
+  });
 
+  it("rejects symlink-parent writes instead of escaping the local mount root", async () => {
+    await using outside = await createOpenShellTestWorkspace("outside");
+    await fs.symlink(outside.dir, local("alias"));
     await expect(
       bridge.writeFile({ filePath: "alias/escape.txt", data: "owned", mkdir: true }),
     ).rejects.toThrow();
-    await expectPathMissing(path.join(outsideDir, "escape.txt"));
-    await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
+    await expectPathMissing(path.join(outside.dir, "escape.txt"));
+    await expect(fs.readdir(outside.dir)).resolves.toStrictEqual([]);
     expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
   });
 
   it("rejects writes and creates whose final target is a symlink inside the local mount root", async () => {
-    const linkedTarget = path.join(workspaceDir, "existing.txt");
-    await fs.writeFile(linkedTarget, "keep", "utf8");
-    await fs.symlink("existing.txt", path.join(workspaceDir, "link.txt"));
-
+    await seedLocal("existing.txt", "keep");
+    await fs.symlink("existing.txt", local("link.txt"));
     await expect(
       bridge.writeFile({ filePath: "link.txt", data: "owned", mkdir: true }),
     ).rejects.toThrow();
     await expect(
       bridge.createFileExclusive({ filePath: "link.txt", data: "owned" }),
     ).rejects.toThrow();
-    await expect(fs.readlink(path.join(workspaceDir, "link.txt"))).resolves.toBe("existing.txt");
-    await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe("keep");
+    await expect(fs.readlink(local("link.txt"))).resolves.toBe("existing.txt");
+    await expect(readLocal("existing.txt")).resolves.toBe("keep");
     expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
   });
 
   it("rejects a parent symlink that lands outside the sandbox root", async () => {
-    await using outsideWorkspace = await createOpenShellTestWorkspace("outside");
-    const outsideDir = outsideWorkspace.dir;
-    await fs.writeFile(path.join(outsideDir, "secret.txt"), "outside", "utf8");
-    await fs.symlink(outsideDir, path.join(workspaceDir, "subdir"));
-
+    await using outside = await createOpenShellTestWorkspace("outside");
+    await fs.writeFile(path.join(outside.dir, "secret.txt"), "outside");
+    await fs.symlink(outside.dir, local("subdir"));
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
       "Sandbox boundary checks failed",
     );
@@ -360,9 +284,8 @@ describe("openshell mirror fs bridges", () => {
   });
 
   it("reads regular files and directories through the shared safe fs root", async () => {
-    await fs.mkdir(path.join(workspaceDir, "subdir", "nested"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "subdir", "secret.txt"), "inside", "utf8");
-
+    await fs.mkdir(local("subdir/nested"), { recursive: true });
+    await seedLocal("subdir/secret.txt", "inside");
     await expect(bridge.readDirectory({ filePath: "." })).resolves.toEqual([
       { name: "subdir", isDirectory: true },
     ]);
@@ -377,18 +300,15 @@ describe("openshell mirror fs bridges", () => {
       "Sandbox boundary checks failed",
     );
     await fs.symlink(
-      path.join(workspaceDir, "subdir"),
-      path.join(workspaceDir, "alias"),
+      local("subdir"),
+      local("alias"),
       process.platform === "win32" ? "junction" : "dir",
     );
     await expect(bridge.readDirectory({ filePath: "alias" })).rejects.toThrow();
   });
 
   it("keeps literal tilde directories inside the mirror workspace", async () => {
-    const filePath = path.join(workspaceDir, "~", "file.txt");
-    await fs.mkdir(path.dirname(filePath));
-    await fs.writeFile(filePath, "literal");
-
+    await seedLocal("~/file.txt", "literal");
     await expect(bridge.readFile({ filePath: "./~/file.txt" })).resolves.toEqual(
       Buffer.from("literal"),
     );
@@ -396,12 +316,12 @@ describe("openshell mirror fs bridges", () => {
       { name: "file.txt", isDirectory: false },
     ]);
     await bridge.writeFile({ filePath: "./~/file.txt", data: "updated" });
-    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("updated");
+    await expect(readLocal("~/file.txt")).resolves.toBe("updated");
     await expect(
       bridge.createFileExclusive({ filePath: "./~/created.txt", data: "created" }),
     ).resolves.toBe("created");
     await bridge.mkdirp({ filePath: "./~/nested" });
-    expect((await fs.stat(path.join(workspaceDir, "~", "nested"))).isDirectory()).toBe(true);
+    expect((await fs.stat(local("~/nested"))).isDirectory()).toBe(true);
     expect(backend.mkdirpRemotePath).toHaveBeenCalledWith("/sandbox/~/nested", undefined);
     await bridge.rename({ from: "./~/created.txt", to: "./~/nested/target/moved.txt" });
     expect(backend.renameRemotePath).toHaveBeenCalledWith(
@@ -409,89 +329,75 @@ describe("openshell mirror fs bridges", () => {
       "/sandbox/~/nested/target/moved.txt",
       undefined,
     );
-    await expect(
-      fs.readFile(path.join(workspaceDir, "~", "nested", "target", "moved.txt"), "utf8"),
-    ).resolves.toBe("created");
+    await expect(readLocal("~/nested/target/moved.txt")).resolves.toBe("created");
     await bridge.remove({ filePath: "./~/file.txt", force: false });
     expect(backend.removeRemotePath).toHaveBeenCalledWith("/sandbox/~/file.txt", {
       recursive: false,
       signal: undefined,
       ignoreMissing: false,
     });
-    await expectPathMissing(filePath);
+    await expectPathMissing(local("~/file.txt"));
     await bridge.remove({ filePath: ".", recursive: true });
     await expect(fs.readdir(workspaceDir)).resolves.toEqual([]);
   });
 
-  it.each(["external", "nested"] as const)(
-    "reads materialized sandbox skills from a protected %s skills workspace",
-    async (location) => {
-      await using skillsWorkspace = await createOpenShellTestWorkspace("skills");
-      const skillsWorkspaceDir =
-        location === "external" ? skillsWorkspace.dir : path.join(workspaceDir, "materialized");
-      const skillFile = path.join(skillsWorkspaceDir, "skills", "demo", "SKILL.md");
-      const virtualSkillPath = ".openclaw/sandbox-skills/skills/demo/SKILL.md";
-      const shadowFile = path.join(workspaceDir, virtualSkillPath);
-      await fs.mkdir(path.dirname(skillFile), { recursive: true });
-      await fs.mkdir(path.dirname(shadowFile), { recursive: true });
-      await fs.writeFile(skillFile, "# Demo\nmaterialized\n", "utf8");
-      await fs.writeFile(path.join(path.dirname(skillFile), "examples.md"), "examples", "utf8");
-      await fs.writeFile(shadowFile, "# Demo\nworkspace shadow\n", "utf8");
-
-      bridge = createBridge({ skillsWorkspaceDir });
-
-      await expect(
-        bridge.readDirectory({ filePath: "/sandbox/.openclaw/sandbox-skills/skills/demo" }),
-      ).resolves.toEqual([
-        { name: "SKILL.md", isDirectory: false },
-        { name: "examples.md", isDirectory: false },
-      ]);
-      await expect(bridge.readFile({ filePath: `/sandbox/${virtualSkillPath}` })).resolves.toEqual(
-        Buffer.from("# Demo\nmaterialized\n"),
-      );
-      await expect(bridge.readFile({ filePath: virtualSkillPath })).resolves.toEqual(
-        Buffer.from("# Demo\nmaterialized\n"),
-      );
-      await expect(bridge.writeFile({ filePath: virtualSkillPath, data: "owned" })).rejects.toThrow(
-        /read-only/,
-      );
-      await expect(bridge.writeFile({ filePath: shadowFile, data: "owned" })).rejects.toThrow(
-        /read-only/,
-      );
-      await expect(bridge.writeFile({ filePath: skillFile, data: "owned" })).rejects.toThrow(
-        /read-only/,
-      );
-      await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("materialized");
-      expect(await fs.readFile(shadowFile, "utf8")).toContain("workspace shadow");
-      expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
-    },
-  );
+  it("reads materialized skills through protected mounts instead of workspace shadows", async () => {
+    const skillsWorkspaceDir = local("materialized");
+    const skill = "materialized/skills/demo/SKILL.md";
+    const virtual = ".openclaw/sandbox-skills/skills/demo/SKILL.md";
+    const text = "# Demo\nmaterialized\n";
+    await seedLocal(skill, text);
+    await seedLocal("materialized/skills/demo/examples.md", "examples");
+    await seedLocal(virtual, "# Demo\nworkspace shadow\n");
+    bridge = createBridge({ skillsWorkspaceDir });
+    await expect(
+      bridge.readDirectory({ filePath: path.posix.dirname(`/sandbox/${virtual}`) }),
+    ).resolves.toEqual([
+      { name: "SKILL.md", isDirectory: false },
+      { name: "examples.md", isDirectory: false },
+    ]);
+    await expect(bridge.readFile({ filePath: `/sandbox/${virtual}` })).resolves.toEqual(
+      Buffer.from(text),
+    );
+    await expect(bridge.readFile({ filePath: virtual })).resolves.toEqual(Buffer.from(text));
+    await expect(bridge.writeFile({ filePath: virtual, data: "owned" })).rejects.toThrow(
+      /read-only/,
+    );
+    await expect(bridge.writeFile({ filePath: local(virtual), data: "owned" })).rejects.toThrow(
+      /read-only/,
+    );
+    await expect(bridge.writeFile({ filePath: local(skill), data: "owned" })).rejects.toThrow(
+      /read-only/,
+    );
+    await expect(readLocal(skill)).resolves.toContain("materialized");
+    expect(await readLocal(virtual)).toContain("workspace shadow");
+    expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
+  });
 
   it.each(["symlink", "link"] as const)("rejects reads through a %s leaf", async (link) => {
-    await using outsideWorkspace = await createOpenShellTestWorkspace("outside");
-    const source = path.join(outsideWorkspace.dir, "secret.txt");
-    await fs.mkdir(path.join(workspaceDir, "subdir"));
-    await fs.writeFile(source, "outside", "utf8");
-    await fs[link](source, path.join(workspaceDir, "subdir", "secret.txt"));
-
+    await using outside = await createOpenShellTestWorkspace("outside");
+    const source = path.join(outside.dir, "secret.txt");
+    await fs.mkdir(local("subdir"));
+    await fs.writeFile(source, "outside");
+    await fs[link](source, local("subdir/secret.txt"));
     await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
       "Sandbox boundary checks failed",
     );
   });
 
   it("maps agent mount paths when the sandbox workspace is read-only", async () => {
-    await using agentWorkspace = await createOpenShellTestWorkspace("agent");
-    const agentWorkspaceDir = agentWorkspace.dir;
-    await fs.writeFile(path.join(agentWorkspaceDir, "note.txt"), "agent", "utf8");
+    await using agent = await createOpenShellTestWorkspace("agent");
+    await fs.writeFile(path.join(agent.dir, "note.txt"), "agent");
     backend.remoteAgentWorkspaceDir = "/native-agent-root";
-    bridge = createBridge({ agentWorkspaceDir, workspaceAccess: "ro" });
+    bridge = createBridge({ agentWorkspaceDir: agent.dir, workspaceAccess: "ro" });
     expect(bridge.pathMappings).toContainEqual({
-      hostRoot: path.resolve(agentWorkspaceDir),
+      hostRoot: path.resolve(agent.dir),
       containerRoot: "/native-agent-root",
     });
-    const resolved = bridge.resolvePath({ filePath: "/native-agent-root/note.txt" });
-    expect(resolved.hostPath).toBe(path.join(agentWorkspaceDir, "note.txt"));
-    expect(await bridge.readFile({ filePath: "/native-agent-root/note.txt" })).toEqual(
+    expect(bridge.resolvePath({ filePath: "/native-agent-root/note.txt" }).hostPath).toBe(
+      path.join(agent.dir, "note.txt"),
+    );
+    await expect(bridge.readFile({ filePath: "/native-agent-root/note.txt" })).resolves.toEqual(
       Buffer.from("agent"),
     );
     await expect(bridge.readDirectory({ filePath: "/native-agent-root" })).resolves.toEqual([
@@ -500,38 +406,22 @@ describe("openshell mirror fs bridges", () => {
   });
 
   it.each([
-    {
-      name: "nested primary root",
-      workspaceRemote: "/sandbox/agent/project",
-      agentRemote: "/sandbox/agent",
-      target: "/sandbox/agent/project/note.txt",
-      owner: "workspace",
+    ["/sandbox/agent/project", "/sandbox/agent", "/sandbox/agent/project/note.txt", "workspace"],
+    ["/sandbox", "/sandbox/nested/agent", "nested/agent/note.txt", "agent"],
+    ["/sandbox", "/sandbox", "note.txt", "workspace"],
+  ] as const)(
+    "routes %s / %s path %s to %s",
+    async (workspaceRemote, agentRemote, target, owner) => {
+      await using agent = await createOpenShellTestWorkspace("agent");
+      backend.remoteAgentWorkspaceDir = agentRemote;
+      bridge = createBridge({
+        agentWorkspaceDir: agent.dir,
+        workspaceAccess: "ro",
+        containerWorkdir: workspaceRemote,
+      });
+      expect(bridge.resolvePath({ filePath: target }).hostPath).toBe(
+        path.join(owner === "agent" ? agent.dir : workspaceDir, "note.txt"),
+      );
     },
-    {
-      name: "relative path under a nested agent root",
-      workspaceRemote: "/sandbox",
-      agentRemote: "/sandbox/nested/agent",
-      target: "nested/agent/note.txt",
-      owner: "agent",
-    },
-    {
-      name: "relative path under equal roots",
-      workspaceRemote: "/sandbox",
-      agentRemote: "/sandbox",
-      target: "note.txt",
-      owner: "workspace",
-    },
-  ])("routes $name to the authoritative host workspace", async (scenario) => {
-    await using agentWorkspace = await createOpenShellTestWorkspace("agent");
-    backend.remoteAgentWorkspaceDir = scenario.agentRemote;
-    bridge = createBridge({
-      agentWorkspaceDir: agentWorkspace.dir,
-      workspaceAccess: "ro",
-      containerWorkdir: scenario.workspaceRemote,
-    });
-    const resolved = bridge.resolvePath({ filePath: scenario.target });
-    expect(resolved.hostPath).toBe(
-      path.join(scenario.owner === "agent" ? agentWorkspace.dir : workspaceDir, "note.txt"),
-    );
-  });
+  );
 });

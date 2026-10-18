@@ -89,14 +89,7 @@ function looksLikeNestedUrlValue(value: string): boolean {
   if (URL_SCHEME_RE.test(value)) {
     return true;
   }
-  const forwardAuthorityIndex = value.indexOf("//");
-  const backwardAuthorityIndex = value.indexOf("\\\\");
-  const authorityIndex =
-    forwardAuthorityIndex < 0
-      ? backwardAuthorityIndex
-      : backwardAuthorityIndex < 0
-        ? forwardAuthorityIndex
-        : Math.min(forwardAuthorityIndex, backwardAuthorityIndex);
+  const authorityIndex = value.search(/\/\/|\\\\/u);
   if (authorityIndex >= 0 && value.includes("@", authorityIndex + 2)) {
     return true;
   }
@@ -123,16 +116,13 @@ export function isSensitiveUrlQueryParamName(name: string): boolean {
 
 /** True for config paths whose URL values may contain credentials or secret query params. */
 export function isSensitiveUrlConfigPath(path: string): boolean {
-  if (path.endsWith(".baseUrl") || path.endsWith(".httpUrl")) {
-    return true;
-  }
-  if (path.endsWith(".cdpUrl")) {
-    return true;
-  }
-  if (path.endsWith(".request.proxy.url")) {
-    return true;
-  }
-  return /^(?:nodeHost\.)?mcp\.servers\.(?:\*|[^.]+)\.url$/.test(path);
+  return (
+    path.endsWith(".baseUrl") ||
+    path.endsWith(".httpUrl") ||
+    path.endsWith(".cdpUrl") ||
+    path.endsWith(".request.proxy.url") ||
+    /^(?:nodeHost\.)?mcp\.servers\.(?:\*|[^.]+)\.url$/.test(path)
+  );
 }
 
 /** True when a config UI hint explicitly marks a URL-like value as secret-bearing. */
@@ -173,12 +163,11 @@ function redactDirectSensitiveUrl(value: string): string {
 
 function redactQueryString(value: string, depth: number): string {
   const params = new URLSearchParams(value);
-  const entries = Array.from(params.entries());
   const redactedEntries: Array<[string, string]> = [];
   const seenSensitiveKeys = new Set<string>();
   let mutated = false;
 
-  for (const [key, entryValue] of entries) {
+  for (const [key, entryValue] of params) {
     if (isSensitiveUrlQueryParamName(key)) {
       mutated = true;
       if (!seenSensitiveKeys.has(key)) {

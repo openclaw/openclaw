@@ -42,23 +42,16 @@ export async function runSafeGatewayRestart(
     throw new Error("--safe cannot be combined with --wait; safe restart uses gateway deferral");
   }
   const skipDeferral = opts.skipDeferral === true;
-  const params: {
-    reason: string;
-    safe?: true;
-    skipDeferral?: true;
-    target?: SafeRestartTarget;
-  } = { reason: "gateway.restart.safe" };
-  if (target) {
-    params.safe = true;
-    params.target = {
-      pid: target.pid,
-      ownerId: target.ownerId,
-      port: target.port,
-    };
-  }
-  if (skipDeferral) {
-    params.skipDeferral = true;
-  }
+  const params = {
+    reason: "gateway.restart.safe",
+    ...(target
+      ? {
+          safe: true as const,
+          target: { pid: target.pid, ownerId: target.ownerId, port: target.port },
+        }
+      : {}),
+    ...(skipDeferral ? { skipDeferral: true as const } : {}),
+  };
   if (process.platform === "linux") {
     const reportRefreshError = (error: unknown) => {
       defaultRuntime.error(

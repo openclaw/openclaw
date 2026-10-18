@@ -15,17 +15,16 @@ import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 export type RootHelpRenderOptions = Pick<PluginLoadOptions, "pluginSdkResolution"> & {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  includePluginDescriptors?: boolean;
 };
 
-async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Promise<Command> {
+/** Write root help without registering command runtimes. */
+export async function outputRootHelp(renderOptions?: RootHelpRenderOptions): Promise<void> {
   const program = new Command();
-  const pluginDescriptors =
-    renderOptions?.includePluginDescriptors === true || renderOptions?.config
-      ? await getPluginCliCommandDescriptors(renderOptions.config, renderOptions.env, {
-          pluginSdkResolution: renderOptions.pluginSdkResolution,
-        })
-      : [];
+  const pluginDescriptors = renderOptions?.config
+    ? await getPluginCliCommandDescriptors(renderOptions.config, renderOptions.env, {
+        pluginSdkResolution: renderOptions.pluginSdkResolution,
+      })
+    : [];
   configureProgramHelp(
     program,
     { programVersion: VERSION },
@@ -47,19 +46,8 @@ async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Prom
     ]),
   );
 
-  return program;
-}
-
-/** Render root help text for tests, docs, and command output. */
-export async function renderRootHelpText(renderOptions?: RootHelpRenderOptions): Promise<string> {
-  const program = await buildRootHelpProgram(renderOptions);
   let output = "";
   program.configureOutput({ writeOut: (chunk) => (output += formatProgramHelpOutput(chunk)) });
   program.outputHelp();
-  return output;
-}
-
-/** Write rendered root help directly to stdout. */
-export async function outputRootHelp(renderOptions?: RootHelpRenderOptions): Promise<void> {
-  process.stdout.write(await renderRootHelpText(renderOptions));
+  process.stdout.write(output);
 }

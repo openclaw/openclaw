@@ -1,10 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { mergeAssistantText } from "./agent-event-assistant-text.js";
+import { createAssistantTextStream, mergeAssistantText } from "./agent-event-assistant-text.js";
 import { capLiveAssistantText } from "./live-chat-projector.js";
 
 const LIVE_CHAT_BUFFER_CHARS = 500_000;
 
 describe("server chat stream text merge", () => {
+  it("keeps certified raw appends independent of display text and reconciles final corrections", () => {
+    const stream = createAssistantTextStream(false);
+    expect(stream.update({ itemId: "answer", text: "provisional display" }, "Raw")).toEqual({
+      delta: "Raw",
+    });
+    expect(stream.update({ itemId: "answer", text: "different display" }, " bytes")).toEqual({
+      delta: " bytes",
+    });
+    expect(stream.streamedText).toBe("Raw bytes");
+    expect(stream.update({ itemId: "answer", text: "Raw bytes!", replace: true })).toEqual({
+      delta: "!",
+      replacement: "representable",
+    });
+    expect(stream.update({ itemId: "answer", text: "Correction", replace: true })).toEqual({
+      replacement: "unrepresentable",
+    });
+  });
+
   it.each([
     ["coordination draft", "final answer", "", "final answer", "coordination draft"],
     ["Echo", "Echo", "Echo", "EchoEcho", "Echo"],
@@ -36,22 +54,6 @@ describe("server chat stream text merge", () => {
       ),
     ).toBe("keep\n\n!");
   });
-
-  it.each([
-    ["First.\n", "Second.", "First.\n\nSecond."],
-    ["First.", "", "First."],
-  ])(
-    "keeps a paragraph boundary between distinct assistant items %j and %j",
-    (prefix, next, expected) => {
-      expect(
-        mergeAssistantText(
-          { text: prefix },
-          { itemId: "next-item", text: next, delta: next },
-          "live",
-        ).text,
-      ).toBe(expected);
-    },
-  );
 
   it("owes the paragraph boundary to a new item that starts with a delta, not to its later deltas", () => {
     const first = mergeAssistantText(

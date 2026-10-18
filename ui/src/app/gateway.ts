@@ -18,11 +18,16 @@ export type ApplicationGatewayPhase =
 
 export type ApplicationGatewaySnapshot = {
   client: GatewayBrowserClient | null;
+  /** The live transport/admission fact; retained hello metadata does not authorize dispatch. */
   phase: ApplicationGatewayPhase;
   offlineStable: boolean;
   restartPending?: boolean;
   suspensionPhase?: GatewaySuspension["phase"];
-  /** Transport identity stays stable while plugin capability fields are refreshed. */
+  /**
+   * Last accepted handshake for the current client identity, retained while reconnecting.
+   * A new hello replaces it; plugin capability refreshes preserve its object identity.
+   * Live dispatch eligibility comes from phase, not hello presence.
+   */
   hello: GatewayHelloOk | null;
   pluginCapabilities?: PluginsUiDescriptorsResult | null;
   usagePublications?: Readonly<
@@ -35,7 +40,7 @@ export type ApplicationGatewaySnapshot = {
   lastErrorCode: string | null;
   reconnectAt?: number;
   lastErrorAuthReason?: string | null;
-  /** This connection owns its identity; users.self resolves the canonical profile. */
+  /** This connection owns identity: undefined is unresolved; null is resolved profileless. */
   selfUser?: AuthenticatedUser | null;
 };
 

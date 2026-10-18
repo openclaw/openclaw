@@ -658,6 +658,30 @@
             ]
           }
         ],
+        "contracts": {
+          "webSearchProviders": [
+            "deepseek"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "deepseek",
+            "label": "DeepSeek",
+            "hint": "Structured search results from DeepSeek's search engine",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "DeepSeek API key",
+            "envVars": [
+              "DEEPSEEK_API_KEY"
+            ],
+            "placeholder": "sk-...",
+            "signupUrl": "https://platform.deepseek.com/api_keys",
+            "docsUrl": "https://docs.openclaw.ai/providers/deepseek#web-search",
+            "credentialPath": "plugins.entries.deepseek.config.webSearch.apiKey",
+            "autoDetectOrder": 80
+          }
+        ],
         "install": {
           "clawhubSpec": "clawhub:@openclaw/deepseek-provider",
           "npmSpec": "@openclaw/deepseek-provider",

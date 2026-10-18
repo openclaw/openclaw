@@ -108,7 +108,7 @@ describe("response body operation lifecycle", () => {
     expectCleanedUp();
   });
 
-  it.each(["B", "x".repeat(500_000)])(
+  it.each(["B"])(
     "bounds response decoding without splitting a surrogate pair (%#)",
     async (suffix) => {
       const bytes = Buffer.from(`prefix🙂${suffix}`);

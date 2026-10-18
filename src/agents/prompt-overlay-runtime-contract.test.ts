@@ -99,12 +99,12 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     expect(contribution?.sectionOverrides).toStrictEqual({});
   });
 
-  it("does not apply GPT-5 overlays to non-GPT-5 models", () => {
-    expect(
-      resolveGpt5SystemPromptContribution({
-        providerId: OPENAI_CONTRACT_PROVIDER_ID,
-        modelId: NON_GPT5_CONTRACT_MODEL_ID,
-      }),
-    ).toBeUndefined();
-  });
+  it.each([NON_GPT5_CONTRACT_MODEL_ID, "gpt-oss-120b", "o3", "codex-mini-latest"])(
+    "does not apply GPT-5 overlays to %s",
+    (modelId) => {
+      expect(
+        resolveGpt5SystemPromptContribution({ providerId: OPENAI_CONTRACT_PROVIDER_ID, modelId }),
+      ).toBeUndefined();
+    },
+  );
 });

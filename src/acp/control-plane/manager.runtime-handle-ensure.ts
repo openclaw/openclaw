@@ -100,9 +100,7 @@ export async function ensureManagerRuntimeHandle(
     normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
   const mode = params.meta.mode;
   const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
-  const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
-  const model = normalizeText(runtimeOptions.model);
-  const thinking = normalizeText(runtimeOptions.thinking);
+  const { cwd, model, thinking } = runtimeOptions;
   const configuredBackend = (
     params.selectedBackend ||
     params.meta.backend ||
@@ -197,12 +195,9 @@ export async function ensureManagerRuntimeHandle(
     });
     try {
       assertCurrent();
-      if (params.readAcpControl?.()) {
-        await assertControlBindingCurrent();
-      }
       return ensured;
     } catch (error) {
-      // A control read can yield to reset before the caller receives this handle.
+      // Ensure may finish after its actor was reset.
       if (!isCurrentActor()) {
         await closeSupersededRuntimeHandle({
           runtime,
@@ -365,9 +360,6 @@ export async function ensureManagerRuntimeHandle(
       if (publication.refusal) {
         throw publication.refusal.error;
       }
-    }
-    if (expectedControlBinding || params.readAcpControl?.()) {
-      await assertControlBindingCurrent();
     }
     assertCurrent();
     params.runtimeHandles.set(params, {

@@ -12,6 +12,7 @@ import { waitForControlUiDocument } from "../../../src/commands/control-ui-hando
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../../src/state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../../src/state/openclaw-state-db.paths.js";
+import { quotaRequestMode } from "../../../test/e2e/qa-lab/runtime/quota-reset-diagnostics.mjs";
 import {
   ACCOUNT_ID,
   MARKER,
@@ -217,11 +218,19 @@ async function captureFinalStatus(
         );
         return isRecord(observation) ? observation.frame : undefined;
       };
+      const snapshot = observations.findLast(
+        (entry) =>
+          isRecord(entry) &&
+          entry.action === "browser-event" &&
+          isRecord(entry.frame) &&
+          entry.frame.event === "models.snapshot",
+      );
       await captureControlUiE2eFailureDiagnostics(page, {
         error: error instanceof Error ? error : new Error("Quota final-status failure"),
         label: "quota-final-status",
         modelResponses: {
           list: latestResponse("models.list"),
+          snapshot: isRecord(snapshot) ? snapshot.frame : undefined,
           authStatus: latestResponse("models.authStatus"),
         },
       });
@@ -327,16 +336,13 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
           const beforeRecovery = provider.requests.length;
           let beforeRecoveryReply: ReturnType<typeof stats>;
           if (catalogHold) {
-            const heldCatalog = catalogHold;
             provider.observeNextSuccess(
               () => {
                 beforeRecoveryReply = stats();
                 observations.push({
-                  action: "catalog-release-at-recovery",
+                  action: "recovery-response-started",
                   state: beforeRecoveryReply,
                 });
-                // Publish after recovery without spending the catalog deadline on terminal delivery.
-                heldCatalog.release();
               },
               { model: "gpt-5.5", path: "/v1/responses" },
             );
@@ -359,7 +365,11 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             .filter((request) => request.path.endsWith("/responses"));
           const primaryInference = inference.filter(({ body }) => {
             const request: unknown = JSON.parse(body ?? "{}");
-            return isRecord(request) && request.model === "gpt-5.5";
+            return (
+              isRecord(request) &&
+              request.model === "gpt-5.5" &&
+              quotaRequestMode(body) === "inference"
+            );
           });
           observations.push({ action: "next-ordinary-turn", result: nextTurn, state: stats() });
           expect.soft(nextTurn, evidence()).toEqual({ status: "ok", output: [MARKER] });
@@ -376,25 +386,45 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
           if (catalogHold) {
             expect(beforeRecoveryReply, evidence()).toBeDefined();
             expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
-            const refreshed = await catalogRefresh;
-            observations.push({ action: "held-catalog-refresh", result: refreshed });
-            expect(refreshed, evidence()).toMatchObject({ ok: true });
+            // A cleared persisted block precedes publication of the replacement catalog owner.
+            // Keep the old response held until a prepared-only read observes that replacement.
             let published: ModelsListResult | undefined;
             await expect
               .poll(async () => {
                 published = await client.request<ModelsListResult>("models.list", {
                   agentId: "main",
                   view: "configured",
+                  preparedOnly: true,
                 });
-                return published.pendingProviders?.includes("openai") ?? false;
+                return {
+                  pending: published.pendingProviders?.includes("openai") ?? false,
+                  available: published.models.some(
+                    (model) =>
+                      model.provider === "openai" && model.id === "gpt-5.5" && model.available,
+                  ),
+                };
               })
-              .toBe(false);
+              .toEqual({ pending: false, available: true });
             observations.push({ action: "catalog-published-after-recovery", result: published });
             expect
               .soft(published?.models, evidence())
               .toContainEqual(
                 expect.objectContaining({ provider: "openai", id: "gpt-5.5", available: true }),
               );
+            catalogHold.release();
+            const refreshed = await catalogRefresh;
+            observations.push({ action: "held-catalog-refresh", result: refreshed });
+            // Recovery changes availability, so the held generation must not publish stale facts.
+            expect(refreshed, evidence()).toMatchObject({
+              ok: false,
+              error: {
+                name: "GatewayClientRequestError",
+                code: "UNAVAILABLE",
+                retryable: true,
+                retryAfterMs: 0,
+                message: expect.stringContaining("catalog generation was superseded"),
+              },
+            });
             expect(provider.heldCatalogResponses[0]?.releaseReason, evidence()).toBe("explicit");
           }
           await captureFinalStatus(fixture, artifactDir, observations);

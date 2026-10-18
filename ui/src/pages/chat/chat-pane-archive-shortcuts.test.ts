@@ -112,74 +112,68 @@ describe("direct session archive shortcuts", () => {
   });
 
   it.each([
-    { key: "agent:main:main" },
-    { archived: true },
-    { sessionId: undefined },
-  ] satisfies Partial<GatewaySessionRow>[])(
-    "does not archive protected, archived, or non-durable rows: %j",
-    async (row) => {
-      const { pane, patch } = fixture(row);
-      expect(press(pane).defaultPrevented).toBe(false);
+    "protected",
+    "archived",
+    "non-durable",
+    "modal",
+    "onboarding",
+    "offline",
+    "read-only",
+    "unavailable",
+    "missing-row",
+    "repeated-keydown",
+  ])("does not archive when %s", async (guard) => {
+    const row: Partial<GatewaySessionRow> =
+      guard === "protected"
+        ? { key: "agent:main:main" }
+        : guard === "archived"
+          ? { archived: true }
+          : guard === "non-durable"
+            ? { sessionId: undefined }
+            : {};
+    const { pane, state, patch } = fixture(row);
+    const modal = document.createElement("div");
+    if (guard === "onboarding") {
+      pane.onboarding = true;
+    }
+    if (guard === "offline") {
+      state.connected = false;
+    }
+    if (guard === "missing-row") {
+      state.sessionsResult = null;
+    }
+    if (guard === "read-only") {
+      pane.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
+    }
+    if (guard === "unavailable") {
+      pane.context.gateway.snapshot.hello!.features!.methods = [];
+    }
+    if (guard === "modal") {
+      (document.openClawModalLayers ??= new Set()).add(modal);
+    }
+    try {
+      expect(press(pane, { repeat: guard === "repeated-keydown" }).defaultPrevented).toBe(false);
+      await vi.dynamicImportSettled();
+      expect(patch).not.toHaveBeenCalled();
+    } finally {
+      document.openClawModalLayers?.delete(modal);
+    }
+  });
+
+  it.each(["authority", "presentation"])(
+    "rechecks %s after loading the action implementation",
+    async (revoked) => {
+      const { pane, patch } = fixture();
+      expect(press(pane).defaultPrevented).toBe(true);
+      if (revoked === "authority") {
+        pane.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
+      } else {
+        pane.presented = false;
+      }
       await vi.dynamicImportSettled();
       expect(patch).not.toHaveBeenCalled();
     },
   );
-
-  it.each(["modal", "onboarding", "offline", "read-only", "unavailable", "missing-row"])(
-    "does not act during %s",
-    async (guard) => {
-      const { pane, state, patch } = fixture();
-      const modal = document.createElement("div");
-      if (guard === "onboarding") {
-        pane.onboarding = true;
-      }
-      if (guard === "offline") {
-        state.connected = false;
-      }
-      if (guard === "missing-row") {
-        state.sessionsResult = null;
-      }
-      if (guard === "read-only") {
-        pane.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
-      }
-      if (guard === "unavailable") {
-        pane.context.gateway.snapshot.hello!.features!.methods = [];
-      }
-      if (guard === "modal") {
-        (document.openClawModalLayers ??= new Set()).add(modal);
-      }
-      try {
-        expect(press(pane).defaultPrevented).toBe(false);
-        await vi.dynamicImportSettled();
-        expect(patch).not.toHaveBeenCalled();
-      } finally {
-        document.openClawModalLayers?.delete(modal);
-      }
-    },
-  );
-
-  it("ignores repeated archive keydowns", async () => {
-    const { pane, patch } = fixture();
-    expect(press(pane, { repeat: true }).defaultPrevented).toBe(false);
-    await vi.dynamicImportSettled();
-    expect(patch).not.toHaveBeenCalled();
-  });
-
-  it("rechecks live authority after loading the action implementation", async () => {
-    const { pane, patch } = fixture();
-    expect(press(pane).defaultPrevented).toBe(true);
-    pane.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
-    await vi.dynamicImportSettled();
-    expect(patch).not.toHaveBeenCalled();
-  });
-
-  it("does not archive after the originating pane loses presentation during lazy loading", async () => {
-    const { pane, patch } = fixture();
-    expect(press(pane).defaultPrevented).toBe(true);
-    pane.presented = false;
-    await vi.dynamicImportSettled();
-    expect(patch).not.toHaveBeenCalled();
-  });
 
   it("keeps the draft and reports archive failure without navigating or offering Undo", async () => {
     const { pane, state, patch, sessions, row } = fixture();

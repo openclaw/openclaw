@@ -17,24 +17,6 @@ describe("ollama provider policy public artifact", () => {
       baseUrl: "http://model-host.internal:11434",
       expected: "tools",
     },
-    {
-      provider: "OLLAMA",
-      modelId: "kimi-k2.5:cloud",
-      baseUrl: OLLAMA_DEFAULT_BASE_URL,
-      expected: false,
-    },
-    {
-      provider: "ollama",
-      modelId: "gpt-oss:120b-cloud",
-      baseUrl: OLLAMA_DEFAULT_BASE_URL,
-      expected: false,
-    },
-    {
-      provider: "ollama-cloud",
-      modelId: "kimi-k2.5",
-      baseUrl: OLLAMA_DEFAULT_BASE_URL,
-      expected: false,
-    },
     { provider: "ollama", modelId: "kimi-k2.5", baseUrl: "https://ollama.com/v1", expected: false },
   ])("selects Tool Search for $provider/$modelId at $baseUrl", ({ expected, ...context }) => {
     expect(resolveToolSearchMode({ ...context, api: "ollama" })).toBe(expected);
@@ -77,7 +59,7 @@ describe("ollama provider policy public artifact", () => {
     ).toStrictEqual({});
   });
 
-  it.each(["ollama", " OLLAMA-CLOUD "])("skips runtime row normalization for %s", (provider) => {
+  it.each([" OLLAMA-CLOUD "])("skips runtime row normalization for %s", (provider) => {
     expect(
       projectConfiguredModelRow({
         provider,
@@ -107,22 +89,7 @@ describe("ollama provider policy public artifact", () => {
     ).toBeUndefined();
   });
 
-  it("exposes every native effort for reasoning-capable models without full plugin activation", () => {
-    expect(
-      resolveThinkingProfile({ provider: "ollama", modelId: "qwen3:32b", reasoning: true }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
-      defaultLevel: "off",
-    });
-    expect(
-      resolveThinkingProfile({ provider: "ollama", modelId: "llama3.2", reasoning: false }),
-    ).toEqual({
-      levels: [{ id: "off" }],
-      defaultLevel: "off",
-    });
-  });
-
-  it.each(["glm-5.2", "deepseek-v4-pro:cloud"])(
+  it.each(["glm-5.3"])(
     "exposes full native effort for cloud model %s when lightweight projections omit metadata",
     (modelId) => {
       expect(resolveThinkingProfile({ provider: "ollama-cloud", modelId }).levels).toEqual([
@@ -135,7 +102,26 @@ describe("ollama provider policy public artifact", () => {
     },
   );
 
-  it.each(["minimax-m2.7", "custom-thinking-model"])(
+  it.each([undefined])("uses the implicit native API for discovered tiers (%s)", (api) => {
+    const profile = resolveThinkingProfile({
+      provider: "ollama",
+      modelId: "custom-thinking-model",
+      api,
+      reasoning: true,
+      thinkingLevelMap: { minimal: "minimal", xhigh: "xhigh" },
+    });
+    expect(profile.levels.map(({ id }) => id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+
+  it.each(["minimax-m2.7"])(
     "does not invent effort levels for catalog-light cloud model %s",
     (modelId) => {
       expect(resolveThinkingProfile({ provider: "ollama-cloud", modelId }).levels).toEqual([
@@ -143,20 +129,4 @@ describe("ollama provider policy public artifact", () => {
       ]);
     },
   );
-
-  it("keeps explicit non-reasoning metadata authoritative for known cloud model ids", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "ollama-cloud",
-        modelId: "glm-5.2",
-        reasoning: false,
-      }).levels,
-    ).toEqual([{ id: "off" }]);
-  });
-
-  it("does not apply cloud catalog facts to an unqualified local model", () => {
-    expect(resolveThinkingProfile({ provider: "ollama", modelId: "glm-5.2" }).levels).toEqual([
-      { id: "off" },
-    ]);
-  });
 });

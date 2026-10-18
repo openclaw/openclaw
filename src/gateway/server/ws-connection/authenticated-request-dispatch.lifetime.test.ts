@@ -3,85 +3,91 @@ import { EventEmitter } from "node:events";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../../../config/paths.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
+import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 
+beforeEach(() => vi.resetModules());
 afterEach(() => {
   vi.doUnmock("./authenticated-request-dispatch.server-methods.runtime.js");
   vi.doUnmock("./request-start.js");
   vi.doUnmock("../../session-sharing.js");
+  vi.doUnmock("../../session-sharing-authorization-async.js");
   vi.doUnmock("../../session-sharing-target-input.js");
   vi.doUnmock("../../server-methods/gateway-personal-caller.js");
   vi.resetModules();
 });
 
+function mockDispatchStage(
+  stage: string,
+  hold: () => Promise<void>,
+  handler: (options: GatewayRequestOptions) => Promise<void>,
+) {
+  // mock-isolation: Hold dispatch entry so the test can revoke authority before the handler runs.
+  vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
+    if (stage === "lazy import") {
+      await hold();
+    }
+    const { handleGatewayRequest } =
+      stage === "profile authorization"
+        ? await vi.importActual<typeof import("../../server-methods.js")>("../../server-methods.js")
+        : { handleGatewayRequest: handler };
+    return { handleGatewayRequest };
+  });
+  if (stage === "start scheduler") {
+    vi.doMock("./request-start.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./request-start.js")>()),
+      scheduleGatewayRequestStart: hold,
+    }));
+  }
+}
+
 describe("authenticated request completion", { concurrent: false }, () => {
-  it.each(["return", "throw"])(
-    "holds reconnect capacity through handler settlement (%s)",
-    async (outcome) => {
-      const held = createDeferredCore();
-      const full = createDeferredCore();
-      const starts: string[] = [];
-      vi.resetModules();
-      vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", () => ({
-        handleGatewayRequest: async ({ req, respond }: GatewayRequestOptions) => {
-          starts.push(req.id);
-          respond(true);
-          if (starts.length === 4) {
-            void nextTurn().then(full.resolve);
-          }
-          await held.promise;
-          if (outcome === "throw") {
-            throw new Error("synthetic preparation failure");
-          }
-        },
-      }));
-      const { createDispatchTestHarness, createOperatorWsClient } =
-        await import("./authenticated-request-dispatch.test-support.js");
-      const harness = createDispatchTestHarness();
-      const client = createOperatorWsClient();
-      const calls = Array.from({ length: 8 }, (_, index) =>
-        harness.dispatcher.dispatch(
-          { type: "req", id: String(index), method: "sessions.subscribe", params: {} },
-          client,
-        ),
-      );
-      try {
-        await full.promise;
-        expect(starts).toEqual(["0", "1", "2", "3"]);
-      } finally {
-        held.resolve();
-        await Promise.all(calls);
-      }
-      expect(starts).toEqual(["0", "1", "2", "3", "4", "5", "6", "7"]);
-    },
-  );
+  it("holds reconnect capacity through handler settlement (throw)", async () => {
+    const held = createDeferredCore();
+    const full = createDeferredCore();
+    const starts: string[] = [];
+    // mock-isolation: Control handler settlement to measure reconnect capacity ownership.
+    vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", () => ({
+      handleGatewayRequest: async ({ req, respond }: GatewayRequestOptions) => {
+        starts.push(req.id);
+        respond(true);
+        if (starts.length === 4) {
+          void nextTurn().then(full.resolve);
+        }
+        await held.promise;
+        throw new Error("synthetic preparation failure");
+      },
+    }));
+    const { createDispatchTestHarness, createOperatorWsClient } =
+      await import("./authenticated-request-dispatch.test-support.js");
+    const harness = createDispatchTestHarness();
+    const client = createOperatorWsClient();
+    const calls = Array.from({ length: 8 }, (_, index) =>
+      harness.dispatcher.dispatch(
+        { type: "req", id: String(index), method: "sessions.subscribe", params: {} },
+        client,
+      ),
+    );
+    try {
+      await full.promise;
+      expect(starts).toEqual(["0", "1", "2", "3"]);
+    } finally {
+      held.resolve();
+      await Promise.all(calls);
+    }
+    expect(starts).toEqual(["0", "1", "2", "3", "4", "5", "6", "7"]);
+  });
 
   it.for(["lazy import", "start scheduler"] as const)(
     "rejects access revoked during %s before entering the handler",
     async (stage, { signal }) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const gate = createRequestGate(signal);
       const grant = new AbortController();
       const handleGatewayRequest = vi.fn(async () => {});
-      const unblock = () => release.resolve();
-      signal.addEventListener("abort", unblock, { once: true });
-      const hold = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      vi.resetModules();
-      vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
-        if (stage === "lazy import") {
-          await hold();
-        }
-        return { handleGatewayRequest };
-      });
-      if (stage === "start scheduler") {
-        vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
-      }
+      mockDispatchStage(stage, gate.wait, handleGatewayRequest);
       const { createDispatchTestHarness, createOperatorWsClient } =
         await import("./authenticated-request-dispatch.test-support.js");
       const harness = createDispatchTestHarness();
@@ -97,12 +103,12 @@ describe("authenticated request completion", { concurrent: false }, () => {
         client,
       );
       try {
-        await entered.promise;
+        await gate.entered;
         grant.abort(new Error("Access ended"));
       } finally {
-        unblock();
+        gate.release();
         await dispatch;
-        signal.removeEventListener("abort", unblock);
+        gate.cleanup();
       }
       expect(handleGatewayRequest).not.toHaveBeenCalled();
       expect([...harness.clients.authorityClients]).toEqual([]);
@@ -117,8 +123,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
   ] as const)(
     "joins %s before its caller can restore state selection",
     async (stage, { signal }) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const gate = createRequestGate(signal);
       const finished = createDeferredCore();
       const initialRoot = path.join(os.tmpdir(), "dispatch-lifetime", "fixture");
       const restoredRoot = path.join(os.tmpdir(), "dispatch-lifetime", "restored");
@@ -126,40 +131,18 @@ describe("authenticated request completion", { concurrent: false }, () => {
       const selection = { OPENCLAW_STATE_DIR: initialRoot };
       let selectedRoot: string | undefined;
       let dispatched = false;
-      const unblock = () => release.resolve();
-      signal.addEventListener("abort", unblock, { once: true });
-      const hold = async () => {
-        entered.resolve();
-        await release.promise;
-      };
       const handleGatewayRequest = async (options: GatewayRequestOptions) => {
         try {
           options.respond(true, { accepted: true });
           if (stage === "handler after response") {
-            await hold();
+            await gate.wait();
           }
           selectedRoot = resolveStateDir(selection);
         } finally {
           finished.resolve();
         }
       };
-      vi.resetModules();
-      // A fresh factory prevents shared workers from reusing the prior case's handler.
-      vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
-        if (stage === "lazy import") {
-          await hold();
-        }
-        return {
-          handleGatewayRequest:
-            stage === "profile authorization"
-              ? (
-                  await vi.importActual<typeof import("../../server-methods.js")>(
-                    "../../server-methods.js",
-                  )
-                ).handleGatewayRequest
-              : handleGatewayRequest,
-        };
-      });
+      mockDispatchStage(stage, gate.wait, handleGatewayRequest);
       if (stage === "profile authorization") {
         // This admin auxiliary request has no session target or personal-caller policy.
         // Keep the real router/profile fence without loading those unrelated runtimes.
@@ -171,6 +154,10 @@ describe("authenticated request completion", { concurrent: false }, () => {
             resolveSessionMutationAuthorization: () => ({ error: null }),
           };
         });
+        // mock-isolation: This admin auxiliary request has no session target or sharing storage.
+        vi.doMock("../../session-sharing-authorization-async.js", () => ({
+          resolveSessionMutationAuthorizationAsync: async () => ({ error: null }),
+        }));
         vi.doMock("../../session-sharing-target-input.js", () => ({
           resolveDirectIncognitoTargets: () => [],
           resolveDirectSessionTargets: () => [],
@@ -178,9 +165,6 @@ describe("authenticated request completion", { concurrent: false }, () => {
         vi.doMock("../../server-methods/gateway-personal-caller.js", () => ({
           isSyntheticGatewayCaller: () => false,
         }));
-      }
-      if (stage === "start scheduler") {
-        vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
       }
       const { createDispatchTestHarness, createOperatorWsClient } =
         await import("./authenticated-request-dispatch.test-support.js");
@@ -191,7 +175,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
       const client = createOperatorWsClient({ socket: new EventEmitter() });
       if (stage === "profile authorization") {
         client.authenticatedGitHubIdentitySync = async () => {
-          await hold();
+          await gate.wait();
           client.authenticatedUserProfile = {
             profileId: "lifetime-profile",
             displayName: "Lifetime fixture",
@@ -209,16 +193,16 @@ describe("authenticated request completion", { concurrent: false }, () => {
           selection.OPENCLAW_STATE_DIR = restoredRoot;
         });
       try {
-        await entered.promise;
+        await gate.entered;
         await nextTurn();
         expect.soft(dispatched, `${stage} is still executing`).toBe(false);
         expect([...harness.clients.authorityClients]).toEqual([client]);
       } finally {
         // Join the handler independently: the broken dispatcher returns before it finishes.
-        unblock();
+        gate.release();
         await finished.promise;
         await dispatch;
-        signal.removeEventListener("abort", unblock);
+        gate.cleanup();
       }
       expect(selectedRoot).toBe(initialRoot);
       expect(dispatched).toBe(true);

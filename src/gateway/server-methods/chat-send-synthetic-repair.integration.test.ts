@@ -255,28 +255,20 @@ it("chat.send replays synthetic repairs through session history and the register
           );
           const results = blocks.filter((block) => block.type === "tool_result");
           expect(results).toHaveLength(4);
-          expect.soft(results, scenario).toEqual([
-            expect.objectContaining({
-              tool_use_id: "callmissing",
-              content: late ? "LATE_ACTUAL_RESULT" : DEFAULT_MISSING_TOOL_RESULT_TEXT,
-              is_error: !late,
-            }),
-            expect.objectContaining({
-              tool_use_id: "callreal",
-              content: "REAL_SIBLING_RESULT",
-              is_error: false,
-            }),
-            expect.objectContaining({
-              tool_use_id: "callerror",
-              content: "File not found",
-              is_error: true,
-            }),
-            expect.objectContaining({
-              tool_use_id: "callquoted",
-              content: DEFAULT_MISSING_TOOL_RESULT_TEXT,
-              is_error: false,
-            }),
-          ]);
+          const resultBlock = (id: string, content: string, is_error: boolean) =>
+            expect.objectContaining({ tool_use_id: `call${id}`, content, is_error });
+          expect
+            .soft(results, scenario)
+            .toEqual([
+              resultBlock(
+                "missing",
+                late ? "LATE_ACTUAL_RESULT" : DEFAULT_MISSING_TOOL_RESULT_TEXT,
+                !late,
+              ),
+              resultBlock("real", "REAL_SIBLING_RESULT", false),
+              resultBlock("error", "File not found", true),
+              resultBlock("quoted", DEFAULT_MISSING_TOOL_RESULT_TEXT, false),
+            ]);
           expect(blocks.filter((block) => block.type === "tool_use")).toEqual(
             ["missing", "real", "error", "quoted"].map((id) =>
               expect.objectContaining({

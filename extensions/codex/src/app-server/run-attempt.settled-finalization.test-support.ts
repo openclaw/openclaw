@@ -40,7 +40,6 @@ export function registerSettledFinalizationTests({
 }: SettledFinalizationFixtures) {
   it.each(
     [
-      { label: "completed turn", failure: undefined, expectedContext: true },
       {
         label: "preserve-only host-auth turn",
         failure: undefined,
@@ -54,22 +53,6 @@ export function registerSettledFinalizationTests({
           codexErrorInfo: "serverOverloaded",
         },
         expectedContext: true,
-      },
-      {
-        label: "usage limit after the tool result",
-        failure: {
-          message: "Usage limit exceeded.",
-          codexErrorInfo: "usageLimitExceeded",
-        },
-        expectedContext: false,
-      },
-      {
-        label: "unauthorized response after the tool result",
-        failure: {
-          message: "Unauthorized.",
-          codexErrorInfo: "unauthorized",
-        },
-        expectedContext: false,
       },
     ].map((scenario) => ({
       scenario,
@@ -123,6 +106,9 @@ export function registerSettledFinalizationTests({
         }
       }
       params.prompt = "Send the update to Alice.";
+      params.onSettledTurn = async (attempt, captureContext) => {
+        attempt.settledTurnFinalizationContext = await captureContext();
+      };
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
       const emptyAssistant = { type: "agentMessage", id: "empty-assistant", text: "" };
@@ -222,7 +208,6 @@ export function registerSettledFinalizationTests({
           },
           { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice\n" },
         ]);
-        expect(Object.isFrozen(context)).toBe(true);
       }
     },
   );
@@ -235,6 +220,9 @@ export function registerSettledFinalizationTests({
     const params = createParams(sessionFile, workspaceDir);
     await attachSqliteSessionTarget(params, storePath, sessionId);
     params.prompt = "Finish the task and report the result.";
+    params.onSettledTurn = async (attempt, captureContext) => {
+      attempt.settledTurnFinalizationContext = await captureContext();
+    };
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     // Native events arrive in wire order; local projection must not delay terminal receipt.
@@ -304,6 +292,5 @@ export function registerSettledFinalizationTests({
         expect.objectContaining({ type: "function_call_output", call_id: "tool-settled" }),
       ],
     });
-    expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
   });
 }

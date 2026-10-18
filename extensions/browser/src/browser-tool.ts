@@ -1,5 +1,16 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  type AnyAgentTool,
+  callGatewayTool,
+  readGatewayToolOperatorScopes,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/channel-actions";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { asNullableRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { BrowserDashboardResponse } from "./browser-dashboard.types.js";
 import {
@@ -7,6 +18,7 @@ import {
   createBrowserNodeSessionTabRoute,
   type BrowserProxyRequest,
 } from "./browser-node-proxy.js";
+import { isBrowserLifecycleAction } from "./browser-tool-action-facts.js";
 import { applyBrowserTabToolBinding } from "./browser-tool-binding.js";
 import { createBrowserToolDefinition } from "./browser-tool-description.js";
 import { executeBrowserTabAction } from "./browser-tool-dispatch.js";
@@ -17,26 +29,17 @@ import {
   resolveBrowserToolNodeTarget,
   resolveBrowserToolTimeoutMs,
 } from "./browser-tool.routing.js";
+import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
+import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
+import type { browserAct } from "./browser/client-actions.js";
+import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
+import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
+import { withBrowserRequestScope } from "./browser/request-scope.js";
 import {
-  type AnyAgentTool,
-  type browserAct,
-  type BrowserToolCapabilities,
-  getRuntimeConfig,
-  getBrowserProfileCapabilities,
-  readPositiveIntegerParam,
-  readStringParam,
-  readStringValue,
-  resolveBrowserConfig,
-  resolveProfile,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
-  jsonResult,
-  callGatewayTool,
-  readGatewayToolOperatorScopes,
-} from "./browser-tool.runtime.js";
-import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
-import { withBrowserRequestScope } from "./browser/request-scope.js";
+} from "./browser/session-tab-registry.js";
 
 type BrowserTabIdentity = { targetId: string; profile: string } & (
   | { target: "host" }
@@ -263,7 +266,7 @@ export function createBrowserTool(
             browserDashboard: await callDashboard("POST", true),
           });
         }
-        if (["doctor", "status", "start", "stop", "profiles", "importprofile"].includes(action)) {
+        if (isBrowserLifecycleAction(action)) {
           throw new Error(
             "Use browser tab actions with a dashboard selector; open resumes it and close pauses it",
           );
@@ -448,6 +451,7 @@ export function createBrowserTool(
         resolvedBrowser,
       });
       const sessionTabs = createBrowserToolSessionTabs({
+        agentId: opts?.agentId,
         sessionKey: opts?.agentSessionKey,
         requestedProfile: profile,
         defaultProfile: resolvedBrowser.defaultProfile,
@@ -460,26 +464,18 @@ export function createBrowserTool(
         isHostFallbackActive: proxyRequest?.isHostFallbackActive,
         registry: { touchSessionBrowserTab, trackSessionBrowserTab, untrackSessionBrowserTab },
       });
-      switch (action) {
-        case "doctor":
-        case "status":
-        case "start":
-        case "stop":
-        case "profiles":
-        case "importprofile":
-          return await executeBrowserLifecycleAction({
-            action,
-            input: params,
-            baseUrl,
-            profile,
-            timeoutMs: toolTimeoutMs,
-            proxyRequest,
-            allowHostControl: opts?.allowHostControl,
-            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-            signal,
-          });
-        default:
-          break;
+      if (isBrowserLifecycleAction(action)) {
+        return await executeBrowserLifecycleAction({
+          action,
+          input: params,
+          baseUrl,
+          profile,
+          timeoutMs: toolTimeoutMs,
+          proxyRequest,
+          allowHostControl: opts?.allowHostControl,
+          sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+          signal,
+        });
       }
       let tabIdentity: BrowserTabIdentity | undefined;
       if (browserDashboard) {

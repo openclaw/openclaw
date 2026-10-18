@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { serializeModelRequestBody } from "../../packages/ai/src/transports/model-request-body.js";
 import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
 import {
   buildOpenAIResponsesParams,
@@ -99,7 +100,7 @@ function emptyResponsesContext() {
 
 describe("openai transport stream", () => {
   it("omits Responses replay item ids when OpenAI Responses requests disable store", () => {
-    const params = buildOpenAIResponsesParams(
+    const request = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "gpt-5.5",
         name: "GPT-5.5",
@@ -126,6 +127,9 @@ describe("openai transport stream", () => {
         ],
       }),
       { sessionId: "session-123" },
+    );
+    const params = JSON.parse(
+      new TextDecoder().decode(serializeModelRequestBody(request).body),
     ) as {
       store?: boolean;
       input?: Array<{
@@ -403,7 +407,7 @@ describe("openai transport stream", () => {
     const onCompactionRejected = vi.fn();
 
     await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
+      testing.createResponsesStreamWithRecovery({
         client: { responses: { create } } as never,
         request: request as never,
         requestOptions: undefined,
@@ -441,7 +445,7 @@ describe("openai transport stream", () => {
     const onCompactionRejected = vi.fn();
 
     await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
+      testing.createResponsesStreamWithRecovery({
         client: { responses: { create } } as never,
         request: {
           model: "gpt-5.5",
@@ -476,7 +480,7 @@ describe("openai transport stream", () => {
     const onCompactionRejected = vi.fn();
 
     await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
+      testing.createResponsesStreamWithRecovery({
         client: { responses: { create } } as never,
         request: {
           model: "gpt-5.5",
@@ -509,7 +513,7 @@ describe("openai transport stream", () => {
         response: new Response(null, { status: 200 }),
       }),
     });
-    const result = await testing.createResponsesStreamWithEncryptedContentRetry({
+    const result = await testing.createResponsesStreamWithRecovery({
       client: { responses: { create } } as never,
       request: {
         model: "gpt-5.5",

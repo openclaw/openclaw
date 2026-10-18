@@ -10,6 +10,7 @@ import { createCodexCatalogHomeResolver } from "../session-catalog-homes.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import type { CodexPluginConfig } from "./config-contracts.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config-runtime.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -21,7 +22,7 @@ import {
 } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import { importCodexThreadHistoryToTranscript } from "./transcript-mirror.js";
 import {
   createForkTestRuntime,
@@ -33,8 +34,8 @@ import {
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   ...(await importOriginal()),
-  deleteSessionUpstreamLink: vi.fn(),
-  upsertSessionUpstreamLink: vi.fn(() => true),
+  deleteSessionUpstreamLinkAsync: vi.fn(),
+  upsertSessionUpstreamLinkAsync: vi.fn(() => true),
 }));
 
 import { forkCodexUpstreamSession } from "./upstream-session-fork.js";
@@ -47,17 +48,14 @@ describe("persistent upstream fork continuation", () => {
     const sourceAgentDir = path.join(root, "agents", "source", "agent");
     const secondaryHome = resolveCodexAppServerHomeDir(sourceAgentDir);
     const env = { HOME: root, CODEX_HOME: path.join(root, "primary-codex-home") };
-    const pluginConfig = {
+    const pluginConfig: CodexPluginConfig = {
       supervision: { enabled: true },
       appServer: { approvalsReviewer: "user" },
     };
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        list: [
-          { id: "main", agentDir },
-          { id: "source", agentDir: sourceAgentDir },
-        ],
+        entries: { main: { agentDir }, source: { agentDir: sourceAgentDir } },
       },
       session: { store: path.join(root, "openclaw-agent.sqlite") },
     };

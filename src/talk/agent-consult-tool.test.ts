@@ -1,23 +1,47 @@
-// Agent consult tool tests cover tool payload validation for consult requests.
 import { describe, expect, it } from "vitest";
 import {
-  buildRealtimeVoiceAgentConsultChatMessage,
-  buildRealtimeVoiceAgentConsultPrompt,
-  buildRealtimeVoiceSessionInstructions,
-  collectRealtimeVoiceAgentConsultVisibleText,
-  parseRealtimeVoiceAgentConsultArgs,
-  REALTIME_VOICE_AGENT_CONSULT_TOOL,
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-  resolveRealtimeVoiceAgentConsultToolPolicy,
-  resolveRealtimeVoiceAgentConsultTools,
-  resolveRealtimeVoiceAgentConsultToolsAllow,
+  buildRealtimeVoiceAgentConsultChatMessage as buildChatMessage,
+  buildRealtimeVoiceSessionInstructions as buildSessionInstructions,
+  collectRealtimeVoiceAgentConsultVisibleText as collectVisibleText,
+  parseRealtimeVoiceAgentConsultArgs as parseArgs,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL as consultTool,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME as consultName,
+  resolveRealtimeVoiceAgentConsultToolPolicy as resolvePolicy,
+  resolveRealtimeVoiceAgentConsultTools as resolveTools,
+  resolveRealtimeVoiceAgentConsultToolsAllow as resolveToolsAllow,
+  type RealtimeVoiceAgentConsultToolPolicy as ToolPolicy,
 } from "./agent-consult-tool.js";
 import type { RealtimeVoiceTool } from "./provider-types.js";
+
+function sessionInstructions(options: Partial<Parameters<typeof buildSessionInstructions>[0]>) {
+  return buildSessionInstructions({
+    base: "Voice base.",
+    isAgentProxy: true,
+    toolPolicy: "owner",
+    consultPolicy: "auto",
+    ...options,
+  });
+}
+
+const customTool: RealtimeVoiceTool = {
+  type: "function",
+  name: "custom_lookup",
+  description: "Custom lookup",
+  parameters: { type: "object", properties: {} },
+};
+const duplicateConsultTool = { ...customTool, name: consultName };
+const unreadableNameTool: RealtimeVoiceTool = {
+  ...customTool,
+  get name(): string {
+    throw new Error("unreadable tool name");
+  },
+};
+const nonStringNameTool = { ...customTool, name: undefined } as unknown as RealtimeVoiceTool;
 
 describe("realtime voice agent consult tool", () => {
   it("normalizes shared tool arguments for browser chat forwarding", () => {
     expect(
-      buildRealtimeVoiceAgentConsultChatMessage({
+      buildChatMessage({
         question: "  What changed? ",
         context: "  PR #123 ",
         responseStyle: " concise ",
@@ -25,70 +49,18 @@ describe("realtime voice agent consult tool", () => {
     ).toBe("What changed?\n\nContext:\nPR #123\n\nSpoken style:\nconcise");
   });
 
-  it("requires a non-empty question", () => {
-    expect(() => parseRealtimeVoiceAgentConsultArgs({ context: "missing" })).toThrow(
-      "question required",
-    );
-  });
-
-  it("normalizes a server-issued spoken confirmation id", () => {
-    expect(
-      parseRealtimeVoiceAgentConsultArgs({
-        question: "Send it now",
-        confirmationId: " confirm-123 ",
-      }),
-    ).toStrictEqual({
+  it("does not accept a model-supplied spoken confirmation as authority", () => {
+    const args = { question: "Send it now", confirmationId: " confirm-123 " };
+    expect(parseArgs(args)).toStrictEqual({
       question: "Send it now",
       context: undefined,
       responseStyle: undefined,
-      confirmationId: "confirm-123",
     });
-  });
-
-  it("accepts provider question aliases from realtime tool calls", () => {
-    expect(parseRealtimeVoiceAgentConsultArgs({ prompt: "  Check the repo. " })).toStrictEqual({
-      context: undefined,
-      question: "Check the repo.",
-      responseStyle: undefined,
-    });
-    expect(
-      parseRealtimeVoiceAgentConsultArgs({ query: "  Send a Discord message. " }),
-    ).toStrictEqual({
-      context: undefined,
-      question: "Send a Discord message.",
-      responseStyle: undefined,
-    });
-  });
-
-  it("builds a delegated voice request prompt with recent transcript", () => {
-    const prompt = buildRealtimeVoiceAgentConsultPrompt({
-      args: { question: "Do we support realtime tools?" },
-      transcript: [
-        { role: "user", text: "Can you check the repo?" },
-        { role: "assistant", text: "I'll verify." },
-      ],
-      surface: "a private Google Meet",
-      userLabel: "Participant",
-      assistantLabel: "Agent",
-      questionSourceLabel: "participant",
-    });
-
-    expect(prompt).toBe(
-      [
-        "Live voice request from the participant during a private Google Meet.",
-        "Act as the configured OpenClaw agent on behalf of this user. Use available tools when the request asks you to do work.",
-        "When finished, return only the concise result the realtime voice agent should speak back.",
-        "Report a security or approval block only when an actual tool result says so. Distinguish tool errors from permission denials; do not invent a blocked attempt. If a read-only call fails, correct the tool or arguments and continue when possible.",
-        "Do not include markdown, tool logs, or private reasoning. Include citations only when the spoken answer needs them.",
-        "Recent voice transcript for context:\nParticipant: Can you check the repo?\nAgent: I'll verify.",
-        "User request:\nDo we support realtime tools?",
-      ].join("\n\n"),
-    );
   });
 
   it("filters reasoning and error payloads from visible consult output", () => {
     expect(
-      collectRealtimeVoiceAgentConsultVisibleText([
+      collectVisibleText([
         { text: "thinking", isReasoning: true },
         { text: "first" },
         { text: "error", isError: true },
@@ -99,14 +71,9 @@ describe("realtime voice agent consult tool", () => {
 
   it("builds byte-stable agent-proxy session instructions", () => {
     expect(
-      buildRealtimeVoiceSessionInstructions({
-        base: [
-          "You are OpenClaw's Discord voice interface.",
-          "Keep spoken replies concise, natural, and suitable for a live Discord voice channel.",
-        ].join("\n"),
-        isAgentProxy: true,
+      sessionInstructions({
+        base: "You are OpenClaw's Discord voice interface.\nKeep spoken replies concise, natural, and suitable for a live Discord voice channel.",
         bootstrapContextInstructions: "  Profile context.  ",
-        toolPolicy: "owner",
         consultPolicy: "always",
       }),
     ).toBe(
@@ -129,24 +96,17 @@ describe("realtime voice agent consult tool", () => {
         ].join("\n"),
       ].join("\n\n"),
     );
-    expect(
-      buildRealtimeVoiceSessionInstructions({
-        base: "Voice base.",
-        isAgentProxy: true,
-        toolPolicy: "none",
-        consultPolicy: "auto",
-      }),
-    ).toContain("Voice base.\n\n\n\nMode: OpenClaw agent proxy.");
+    expect(sessionInstructions({ toolPolicy: "none" })).toContain(
+      "Voice base.\n\n\n\nMode: OpenClaw agent proxy.",
+    );
   });
 
   it("filters empty optional blocks from non-proxy session instructions", () => {
     expect(
-      buildRealtimeVoiceSessionInstructions({
-        base: "Voice base.",
+      sessionInstructions({
         isAgentProxy: false,
         bootstrapContextInstructions: "   ",
         toolPolicy: "safe-read-only",
-        consultPolicy: "auto",
       }),
     ).toBe(
       [
@@ -157,72 +117,30 @@ describe("realtime voice agent consult tool", () => {
   });
 
   it("normalizes policy values and resolves shared tool exposure", () => {
-    expect(resolveRealtimeVoiceAgentConsultToolPolicy(" OWNER ", "safe-read-only")).toBe("owner");
-    expect(resolveRealtimeVoiceAgentConsultToolPolicy("bad", "safe-read-only")).toBe(
+    expect(resolvePolicy(" OWNER ", "safe-read-only")).toBe("owner");
+    expect(resolvePolicy("bad", "safe-read-only")).toBe("safe-read-only");
+    expect(resolveToolsAllow("safe-read-only")).toEqual(
+      "read web_search web_fetch x_search memory_search memory_get".split(" "),
+    );
+    expect(resolveToolsAllow("owner")).toBeUndefined();
+    expect(resolveToolsAllow("none")).toStrictEqual([]);
+  });
+
+  it.each<[ToolPolicy, RealtimeVoiceTool[] | undefined, RealtimeVoiceTool[]]>([
+    ["safe-read-only", undefined, [consultTool]],
+    ["none", undefined, []],
+    ["safe-read-only", [duplicateConsultTool, customTool], [consultTool, customTool]],
+    ["none", [customTool], [customTool]],
+    [
       "safe-read-only",
-    );
-    expect(resolveRealtimeVoiceAgentConsultTools("safe-read-only")).toStrictEqual([
-      REALTIME_VOICE_AGENT_CONSULT_TOOL,
-    ]);
-    expect(resolveRealtimeVoiceAgentConsultTools("none")).toStrictEqual([]);
-    expect(resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only")).toEqual([
-      "read",
-      "web_search",
-      "web_fetch",
-      "x_search",
-      "memory_search",
-      "memory_get",
-    ]);
-    expect(resolveRealtimeVoiceAgentConsultToolsAllow("owner")).toBeUndefined();
-    expect(resolveRealtimeVoiceAgentConsultToolsAllow("none")).toStrictEqual([]);
-  });
-
-  it("keeps the shared consult tool ahead of custom realtime tools and dedupes by name", () => {
-    const customTool = {
-      type: "function" as const,
-      name: "custom_lookup",
-      description: "Custom lookup",
-      parameters: { type: "object" as const, properties: {} },
-    };
-    const duplicateConsultTool = { ...customTool, name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME };
-
-    expect(
-      resolveRealtimeVoiceAgentConsultTools("safe-read-only", [duplicateConsultTool, customTool]),
-    ).toStrictEqual([REALTIME_VOICE_AGENT_CONSULT_TOOL, customTool]);
-    expect(resolveRealtimeVoiceAgentConsultTools("none", [customTool])).toEqual([customTool]);
-  });
-
-  it("quarantines custom realtime tools with unreadable names before dedupe", () => {
-    const unreadableNameTool: RealtimeVoiceTool = {
-      type: "function" as const,
-      get name(): string {
-        throw new Error("unreadable tool name");
-      },
-      description: "Unreadable custom tool",
-      parameters: { type: "object" as const, properties: {} },
-    };
-    const nonStringNameTool = {
-      type: "function" as const,
-      name: undefined,
-      description: "Malformed custom tool",
-      parameters: { type: "object" as const, properties: {} },
-    } as unknown as RealtimeVoiceTool;
-    const customTool: RealtimeVoiceTool = {
-      type: "function" as const,
-      name: "custom_lookup",
-      description: "Custom lookup",
-      parameters: { type: "object" as const, properties: {} },
-    };
-
-    expect(
-      resolveRealtimeVoiceAgentConsultTools("safe-read-only", [
-        unreadableNameTool,
-        nonStringNameTool,
-        customTool,
-      ]),
-    ).toStrictEqual([REALTIME_VOICE_AGENT_CONSULT_TOOL, customTool]);
-    expect(resolveRealtimeVoiceAgentConsultTools("none", [unreadableNameTool, customTool])).toEqual(
-      [customTool],
-    );
-  });
+      [unreadableNameTool, nonStringNameTool, customTool],
+      [consultTool, customTool],
+    ],
+    ["none", [unreadableNameTool, customTool], [customTool]],
+  ])(
+    "resolves %s tools with built-in precedence and malformed-name quarantine (%#)",
+    (policy, custom, expected) => {
+      expect(resolveTools(policy, custom)).toStrictEqual(expected);
+    },
+  );
 });

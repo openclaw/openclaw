@@ -1,5 +1,3 @@
-// Gateway channel health policy.
-// Evaluates channel lifecycle snapshots for restart/readiness decisions.
 import {
   asFiniteNumber,
   isFutureDateTimestampMs,
@@ -54,10 +52,6 @@ type ChannelRestartReason =
   | "disconnected"
   | "ingress-unavailable";
 
-function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
-  return snapshot.enabled !== false && snapshot.configured !== false && snapshot.linked !== false;
-}
-
 function resolveObservedChannelTimestamp(value: unknown, now: number): number | null {
   return typeof value === "number" &&
     Number.isFinite(value) &&
@@ -77,11 +71,14 @@ export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
   policy: ChannelHealthPolicy,
 ): ChannelHealthEvaluation {
-  if (!isManagedAccount(snapshot)) {
+  if (snapshot.enabled === false || snapshot.configured === false) {
     return { healthy: true, reason: "unmanaged" };
   }
   if (!snapshot.running && snapshot.terminalDisconnect) {
     return { healthy: false, reason: "terminal-disconnect" };
+  }
+  if (snapshot.lifecycle === "blocked") {
+    return { healthy: false, reason: "blocked" };
   }
   // Transport liveness and inbound admission are independent failure domains: a
   // channel can hold a healthy socket and still admit nothing. This outranks the
@@ -92,8 +89,10 @@ export function evaluateChannelHealth(
   if (snapshot.ingressUnavailable === true) {
     return { healthy: false, reason: "ingress-unavailable" };
   }
-  if (snapshot.lifecycle === "blocked") {
-    return { healthy: false, reason: "blocked" };
+  // Ordinary unlinked accounts need no recovery, but losing linkage cannot hide
+  // an already recorded failure (for example, a terminal session logout).
+  if (snapshot.linked === false) {
+    return { healthy: true, reason: "unmanaged" };
   }
   const lastStartAt = asFiniteNumber(snapshot.lastStartAt) ?? null;
   const currentLifecycleStarted =
@@ -189,20 +188,15 @@ export function resolveChannelRestartReason(
 ): ChannelRestartReason {
   // Restart reasons are intentionally coarse: downstream logs/UI need stable
   // categories, while detailed channel state stays in the health snapshot.
-  if (evaluation.reason === "stale-socket") {
-    return "stale-socket";
-  }
-  // Restarting is also the only way to re-prove ingress: `ingressUnavailable`
-  // describes the last start attempt and is cleared by the next one. Naming the
-  // reason keeps a repeating restart readable as dead inbound rather than "stuck".
-  if (evaluation.reason === "ingress-unavailable") {
-    return "ingress-unavailable";
+  if (
+    evaluation.reason === "stale-socket" ||
+    evaluation.reason === "ingress-unavailable" ||
+    evaluation.reason === "disconnected"
+  ) {
+    return evaluation.reason;
   }
   if (evaluation.reason === "not-running") {
     return snapshot.reconnectAttempts && snapshot.reconnectAttempts >= 10 ? "gave-up" : "stopped";
-  }
-  if (evaluation.reason === "disconnected") {
-    return "disconnected";
   }
   return "stuck";
 }

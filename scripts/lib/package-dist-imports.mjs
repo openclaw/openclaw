@@ -11,8 +11,8 @@ function stripSpecifierSuffix(value) {
   return value.replace(/[?#].*$/u, "");
 }
 
-function hasJavaScriptFileExtension(value) {
-  return /\.(?:cjs|js|mjs)$/u.test(path.posix.basename(stripSpecifierSuffix(value)));
+function hasRuntimeFileExtension(value) {
+  return /\.(?:cjs|js|mjs|exe)$/u.test(path.posix.basename(stripSpecifierSuffix(value)));
 }
 
 function literal(node) {
@@ -116,7 +116,7 @@ function appendImportEdges(source, importerPath, imports, sourceType) {
     }
     if (
       specifier?.startsWith(".") &&
-      (kind !== "import-meta-url" || hasJavaScriptFileExtension(specifier))
+      (kind !== "import-meta-url" || hasRuntimeFileExtension(specifier))
     ) {
       const importedPath = path.posix.normalize(
         path.posix.join(
@@ -124,12 +124,12 @@ function appendImportEdges(source, importerPath, imports, sourceType) {
           kind === "require" ? specifier : stripSpecifierSuffix(specifier),
         ),
       );
-      // stageManagedHandoffRuntime copies this entry and stages its private Koffi
+      // stageManagedHandoffRuntime copies this entry and stages its private proc-safe
       // closure before launch; this URL belongs to that runtime, not the tarball.
       const stagedNativeUrl =
         kind === "import-meta-url" &&
         importerPath === "dist/managed-handoff-runtime.mjs" &&
-        importedPath === "dist/node_modules/koffi/indirect.cjs";
+        importedPath === "dist/node_modules/@openclaw/proc-safe/dist/identity.js";
       if (!stagedNativeUrl && (kind !== "import-meta-url" || importedPath.startsWith("dist/"))) {
         imports.push({ importerPath, importedPath, ...(kind === "require" ? { kind } : {}) });
       }

@@ -12,12 +12,10 @@ import { normalizeInboundTextNewlines } from "./inbound-text.js";
  * NOTICE carries the do-not-obey clause).
  */
 export function appendChannelPromptContext(base: string, channelPromptContext?: string[]): string {
-  if (!Array.isArray(channelPromptContext) || channelPromptContext.length === 0) {
+  if (!channelPromptContext?.length) {
     return base;
   }
-  const entries = channelPromptContext
-    .map((entry) => normalizeInboundTextNewlines(entry))
-    .filter((entry) => Boolean(entry));
+  const entries = channelPromptContext.map(normalizeInboundTextNewlines).filter(Boolean);
   if (entries.length === 0) {
     return base;
   }
@@ -61,7 +59,7 @@ export function formatContextJsonBlock(label: string, payload: unknown): string 
 export function selectInboundHistoryContext(
   ctx: Pick<TemplateContext, "InboundHistory" | "SessionTranscriptContext">,
 ) {
-  const history = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
+  const history = ctx.InboundHistory ?? [];
   const recent = ctx.SessionTranscriptContext?.historyKind === "recent";
   const configuredLimit = ctx.SessionTranscriptContext?.historyLimit;
   const limit =

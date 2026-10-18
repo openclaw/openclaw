@@ -32,6 +32,7 @@ export type McpAppPrepareToolCall = (request: {
   options: import("../gateway/server-methods/types.js").GatewayRequestHandlerOptions;
   toolName: string;
   input: Record<string, unknown>;
+  view?: McpAppViewLease;
   assertCurrent: () => void;
   signal?: AbortSignal;
 }) => Promise<void | (() => void)>;
@@ -74,6 +75,8 @@ export type McpAppViewLease = {
   csp?: McpAppCsp;
   permissions?: McpAppPermissions;
   allowedAppToolNames?: ReadonlySet<string>;
+  /** Requester-scoped, exact server/tool approvals live only as long as this view. */
+  toolApprovalGrants?: Map<string | undefined, Set<string>>;
   prepareToolCall?: McpAppPrepareToolCall;
   uploadResources?: McpFormResourceUpload;
   authorizeAppInteraction?: () => boolean | Promise<boolean>;
@@ -129,6 +132,7 @@ function deleteView(viewId: string, expected?: McpAppViewLease): void {
     return;
   }
   clearTimeout(view.expiryTimer);
+  view.toolApprovalGrants?.clear();
   // Publish the final context clear before retiring this view’s subscribers.
   clearMcpAppModelContextForView(view.runtime, view);
   notifyListeners(view.disposeCallbacks ?? [], undefined, (error) => {
@@ -150,12 +154,9 @@ export function releaseMcpAppView(viewId: string, runtime: SessionMcpRuntime): v
   }
 }
 
-function pruneViewStore(
-  additionalBytes = 0,
-  options?: { reserveEntry?: boolean; nowMs?: number },
-): void {
+function pruneViewStore(additionalBytes = 0, reserveEntry = false): void {
   const store = getViewStore();
-  const nowMs = options?.nowMs ?? Date.now();
+  const nowMs = Date.now();
   for (const [viewId, view] of store) {
     if (view.expiresAtMs <= nowMs) {
       deleteView(viewId, view);
@@ -163,7 +164,7 @@ function pruneViewStore(
   }
   let totalBytes = Array.from(store.values()).reduce((sum, view) => sum + (view.byteSize ?? 0), 0);
   while (
-    store.size + (options?.reserveEntry ? 1 : 0) > MCP_APP_VIEW_MAX_ENTRIES ||
+    store.size + (reserveEntry ? 1 : 0) > MCP_APP_VIEW_MAX_ENTRIES ||
     totalBytes + additionalBytes > MCP_APP_VIEW_STORE_MAX_BYTES
   ) {
     const oldest = store.keys().next().value;
@@ -350,13 +351,14 @@ export async function fetchMcpAppView(params: {
             ...(preferredDisplayMode ? { preferredDisplayMode } : {}),
           }
         : undefined;
+    const requestedDisplayMode = params.displayMode ?? preferredDisplayMode ?? "inline";
     const csp = normalizeMcpAppCsp(uiMeta?.csp);
     const permissions = normalizePermissions(uiMeta?.permissions);
     const title = `${params.toolName} UI`;
     const viewId = params.viewId ?? `mcp-app-${randomUUID()}`;
     releaseRuntimeLease = params.runtime.acquireLease?.();
     deleteView(viewId);
-    pruneViewStore(byteSize, { reserveEntry: true });
+    pruneViewStore(byteSize, true);
     const view: McpAppViewLease = {
       viewId,
       runtime: params.runtime,
@@ -384,7 +386,10 @@ export async function fetchMcpAppView(params: {
         ? { richModelContextSupported: params.richModelContextSupported }
         : {}),
       ...(params.deepLink ? { deepLink: params.deepLink } : {}),
-      ...(params.displayMode ? { displayMode: params.displayMode } : {}),
+      displayMode:
+        availableDisplayModes?.length && !availableDisplayModes.includes(requestedDisplayMode)
+          ? availableDisplayModes[0]
+          : requestedDisplayMode,
       ...(displayModes ? { displayModes } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
@@ -494,23 +499,16 @@ export async function leaseMcpAppModelContextForSessionTurn(params: {
     return undefined;
   }
   const modelContext = leases.flatMap((lease) => lease.modelContext);
+  const applyToLeases = (operation: "assertCurrent" | "commit" | "rollback") => () => {
+    for (const lease of leases) {
+      lease[operation]();
+    }
+  };
   return {
     project: (imageOffset: number) => projectMcpAppModelContextInput(modelContext, imageOffset),
-    assertCurrent: () => {
-      for (const lease of leases) {
-        lease.assertCurrent();
-      }
-    },
-    commit: () => {
-      for (const lease of leases) {
-        lease.commit();
-      }
-    },
-    rollback: () => {
-      for (const lease of leases) {
-        lease.rollback();
-      }
-    },
+    assertCurrent: applyToLeases("assertCurrent"),
+    commit: applyToLeases("commit"),
+    rollback: applyToLeases("rollback"),
   };
 }
 

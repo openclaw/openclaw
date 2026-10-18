@@ -1,11 +1,10 @@
-// Reads local agent/session state for status output.
 // This never contacts the gateway; it inspects configured agents and their read-only session stores.
 
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { listGatewayAgentsBasic, type GatewayAgentOwnership } from "../gateway/agent-list.js";
+import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { pathExists } from "../infra/fs-safe.js";
 import {
   evaluateAgentDatabaseAdmissions,
@@ -28,14 +27,9 @@ export type AgentLocalStatus = {
   lastActiveAgeMs: number | null;
 };
 
-export type AgentLocalStatusesResult = {
-  defaultId: string | null;
-  ownership: GatewayAgentOwnership;
-  selectionRequired: boolean;
-  agents: AgentLocalStatus[];
-  totalSessions: number;
-  bootstrapPendingCount: number;
-};
+export type AgentLocalStatusesResult = Awaited<
+  ReturnType<typeof collectStatusLocalSnapshot>
+>["agentStatus"];
 
 /** Returns per-agent local workspace, bootstrap, session count, and last activity status. */
 export async function collectStatusLocalSnapshot(cfg: OpenClawConfig) {
@@ -91,7 +85,7 @@ export async function collectStatusLocalSnapshot(cfg: OpenClawConfig) {
   }
 
   const bootstrapPendingCount = statuses.reduce((sum, s) => sum + (s.bootstrapPending ? 1 : 0), 0);
-  const agentStatus: AgentLocalStatusesResult = {
+  const agentStatus = {
     // The gateway keeps a projected first id for wire compatibility. Local status must
     // preserve the selection state so read-only consumers never treat that id as an owner.
     defaultId: agentList.selectionRequired ? null : agentList.defaultId,

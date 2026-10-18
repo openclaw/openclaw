@@ -5,6 +5,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { z } from "zod";
 import { hashFile } from "../../scripts/lib/gateway-bench-installed-package.ts";
 import type { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { normalizeWindowsTaskIdentity } from "./constants.js";
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
 import {
@@ -46,14 +47,24 @@ async function withInstalledStartupEntries(
   settleBeforeRemoval?: () => Promise<void>,
 ) {
   const { selected, launcher, lifetime, admissions, admissionPath } = params;
-  const { buildStartupLauncherScript, resolveStartupEntryPath, resolveTaskLauncherScriptPath } =
-    await import("./schtasks-layout.js");
+  const {
+    buildHiddenLauncherScript,
+    buildStartupLauncherScript,
+    resolveStartupEntryPath,
+    resolveTaskLauncherScriptPath,
+  } = await import("./schtasks-layout.js");
   const { encodeWindowsLauncherScript } = await import("../infra/windows-launcher-encoding.js");
   const { probeScheduledTaskExists } = await import("./schtasks-state-probe.js");
   const { readTaskXml } = await import("./schtasks.integration-observation.test-support.js");
   const launcherPath = resolveTaskLauncherScriptPath(launcher.env, launcher.scriptPath);
   assert.notEqual(launcherPath, launcher.scriptPath);
-  const sourcePaths = [launcher.scriptPath, launcherPath];
+  const installedHiddenLauncher = await fs.readFile(launcherPath).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  });
+  const sourcePaths = [launcher.scriptPath, ...(installedHiddenLauncher ? [launcherPath] : [])];
   const sourceHashes = await Promise.all(sourcePaths.map((pathname) => hashFile(pathname)));
   const snapshots = await Promise.all(
     [...new Set([selected, launcher])].map(async (task) => {
@@ -72,7 +83,14 @@ async function withInstalledStartupEntries(
       format: "cmd",
       content: buildStartupLauncherScript({ scriptPath: launcher.scriptPath }),
     }),
-    await fs.readFile(launcherPath),
+    installedHiddenLauncher ??
+      encodeWindowsLauncherScript({
+        format: "vbs",
+        content: buildHiddenLauncherScript({
+          scriptPath: launcher.scriptPath,
+          taskSupervisor: true,
+        }),
+      }),
   ];
   const aliasPath = canonicalPaths[1]!.replace(/\.vbs$/u, ".sibling.vbs");
   const admittedPaths = entries === "canonical" ? canonicalPaths : [...canonicalPaths, aliasPath];
@@ -174,8 +192,9 @@ async function withInstalledStartupEntries(
     taskDefinitionsRestored: true,
     startupEntriesRemoved: true,
     launcherExecutionRequested: false,
-    launcherScope:
-      "CMD wrapper uses the maintained renderer; gateway CMD and VBS bytes come from the installed fixture.",
+    launcherScope: installedHiddenLauncher
+      ? "CMD wrapper uses the maintained renderer; gateway CMD and VBS bytes come from the installed fixture."
+      : "CMD and VBS Startup wrappers use the maintained renderers; gateway CMD bytes come from the unattended installed fixture.",
   };
 }
 

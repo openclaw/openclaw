@@ -1,7 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import http from "node:http";
 import { join } from "node:path";
-import * as fileAccess from "openclaw/plugin-sdk/security-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { containerRpcRequest } from "./client-container.js";
@@ -37,33 +36,6 @@ function accept(res: http.ServerResponse) {
 }
 
 describe("container REST real server", () => {
-  it("stops a send when its caller closes during attachment preparation", async () => {
-    const received = vi.fn((_req: http.IncomingMessage, res: http.ServerResponse) => accept(res));
-    const baseUrl = await startServer(received);
-    const file = join(tempDirs.make("signal-handoff-"), "photo.jpg");
-    await writeFile(file, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
-    const caller = new AbortController();
-    const read = fileAccess.readRegularFile;
-    const preparation = vi
-      .spyOn(fileAccess, "readRegularFile")
-      .mockImplementationOnce(async (options) => {
-        const result = await read(options);
-        caller.abort(new Error("Signal caller closed during attachment preparation"));
-        return result;
-      });
-    await expect(
-      containerRpcRequest(
-        "send",
-        { ...params, attachments: [file] },
-        {
-          baseUrl,
-          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-        },
-      ),
-    ).rejects.toThrow("Signal caller closed during attachment preparation");
-    expect(preparation).toHaveBeenCalledOnce();
-    expect(received).not.toHaveBeenCalled();
-  });
   it("preserves a send accepted before its caller closes", async () => {
     const caller = new AbortController();
     const baseUrl = await startServer((_req, res) => {

@@ -13,6 +13,13 @@ const DEFAULT_AZURE_SPEECH_MAX_BYTES = 16 * 1024 * 1024;
 // Voice discovery should fail boundedly instead of waiting forever when the
 // Azure Speech voices endpoint accepts the connection but never responds.
 const DEFAULT_AZURE_SPEECH_VOICE_LIST_TIMEOUT_MS = 30_000;
+const AZURE_SPEECH_FILE_EXTENSIONS = [
+  ["ogg-", ".ogg"],
+  ["webm-", ".webm"],
+  ["riff-", ".wav"],
+  ["raw-", ".pcm"],
+  ["amr-", ".amr"],
+] as const;
 
 export function normalizeAzureSpeechBaseUrl(params: {
   baseUrl?: string;
@@ -63,22 +70,9 @@ export function inferAzureSpeechFileExtension(outputFormat: string): string {
   if (normalized.includes("mp3")) {
     return ".mp3";
   }
-  if (normalized.startsWith("ogg-")) {
-    return ".ogg";
-  }
-  if (normalized.startsWith("webm-")) {
-    return ".webm";
-  }
-  if (normalized.startsWith("riff-")) {
-    return ".wav";
-  }
-  if (normalized.startsWith("raw-")) {
-    return ".pcm";
-  }
-  if (normalized.startsWith("amr-")) {
-    return ".amr";
-  }
-  return ".audio";
+  return (
+    AZURE_SPEECH_FILE_EXTENSIONS.find(([prefix]) => normalized.startsWith(prefix))?.[1] ?? ".audio"
+  );
 }
 
 export function isAzureSpeechVoiceCompatible(outputFormat: string): boolean {
@@ -90,14 +84,6 @@ function readAzureVoiceTagStrings(value: unknown): string[] | undefined {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => trimToUndefined(entry) !== undefined)
     : undefined;
-}
-
-function formatVoiceDescription(
-  tailoredScenarios: string[] | undefined,
-  personalities: string[] | undefined,
-): string | undefined {
-  const parts = [...(tailoredScenarios ?? []), ...(personalities ?? [])];
-  return parts.length > 0 ? parts.join(", ") : undefined;
 }
 
 function isDeprecatedVoice(entry: Record<string, unknown>): boolean {
@@ -149,11 +135,12 @@ export async function listAzureSpeechVoices(params: {
           const voiceTag = asOptionalRecord(voice.VoiceTag);
           const tailoredScenarios = readAzureVoiceTagStrings(voiceTag?.TailoredScenarios);
           const personalities = readAzureVoiceTagStrings(voiceTag?.VoicePersonalities);
+          const description = [...(tailoredScenarios ?? []), ...(personalities ?? [])];
           return [
             {
               id,
               name: trimToUndefined(voice.DisplayName) ?? trimToUndefined(voice.LocalName),
-              description: formatVoiceDescription(tailoredScenarios, personalities),
+              description: description.length > 0 ? description.join(", ") : undefined,
               locale: trimToUndefined(voice.Locale),
               gender: trimToUndefined(voice.Gender),
               personalities,

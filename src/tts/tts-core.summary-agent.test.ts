@@ -52,10 +52,10 @@ describe("TTS summary model in a multi-agent setup", () => {
     const cfg = {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.4-mini" } },
-        list: [
-          { id: "main", model: "anthropic/claude-sonnet-4-5" },
-          { id: "work", model: "anthropic/claude-opus-4-1" },
-        ],
+        entries: {
+          main: { model: "anthropic/claude-sonnet-4-5" },
+          work: { model: "anthropic/claude-opus-4-1" },
+        },
       },
     } as OpenClawConfig;
 

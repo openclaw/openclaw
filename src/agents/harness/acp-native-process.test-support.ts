@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -5,12 +6,17 @@ import { fileURLToPath } from "node:url";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import type { AcpxRuntime } from "acpx/runtime";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestPluginApi } from "../../plugin-sdk/plugin-test-api.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/plugin-test-runtime.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
-import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import { createPluginStateRuntimeStores } from "../../plugin-state/plugin-state-store.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -32,6 +38,7 @@ import {
 } from "../admitted-run-context.js";
 import { createEmptyAgentDiscoveryStores } from "../embedded-agent-runner/model.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { registerAgentHarness } from "./registry.js";
 
 const agents = ["opencode", "qwen", "pi", "kilocode"] as const;
@@ -48,14 +55,21 @@ type ServiceModule = {
 };
 export function useNativeProcessFixture() {
   let snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+  let lifetime: ReturnType<typeof createFixtureLifetime>;
   beforeEach(() => {
+    lifetime = createFixtureLifetime();
     snapshot = captureActivePluginRegistrySnapshot();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await lifetime.cleanup();
+    clearRuntimeConfigSnapshot();
     restoreActivePluginRegistrySnapshot(snapshot);
     vi.restoreAllMocks();
   });
+  return {
+    track: <T>(completion: Promise<T>): Promise<T> => lifetime.track(completion),
+  };
 }
 
 export async function registerNative(
@@ -70,18 +84,11 @@ export async function registerNative(
     receiptEndpoint?: string;
   } = {},
 ) {
-  const peer = fileURLToPath(
-    {
-      "owner-agent.mjs": new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
-      "approval-effect-agent.mjs": new URL(
-        "../../../test/fixtures/acp/approval-effect-agent.mjs",
-        import.meta.url,
-      ),
-    }[peerName],
-  );
+  // Transcript writes read the Gateway-published runtime config; the test state resets it on exit.
+  setRuntimeConfigSnapshot(config);
+  const peer = fileURLToPath(new URL(`../../../test/fixtures/acp/${peerName}`, import.meta.url));
   const peerDirectory = state.path("peer");
-  await fs.mkdir(peerDirectory);
-  await fs.mkdir(path.join(peerDirectory, "effects"));
+  await fs.mkdir(path.join(peerDirectory, "effects"), { recursive: true });
   const receiptModule = path.join(peerDirectory, "receipts.mjs");
   if (peerOptions.receiptEndpoint) {
     await fs.writeFile(
@@ -99,6 +106,16 @@ export async function registerNative(
     artifactBasename: "index.js",
   });
   const getRuntimeConfig = vi.fn(() => config);
+  const args = [
+    peer,
+    peerDirectory,
+    ...(peerName === "owner-agent.mjs" ? ["--model-controls"] : []),
+    ...(peerOptions.holdModeControl ? ["--hold-mode-control"] : []),
+    ...(peerOptions.holdNewSession ? ["--hold-new-session"] : []),
+    ...(peerOptions.holdPromptReply ? ["--hold-prompt-reply"] : []),
+    ...(peerOptions.allowAlwaysOnly ? ["--allow-always-only"] : []),
+    ...(peerOptions.receiptEndpoint ? [`--receipt-module=${receiptModule}`] : []),
+  ];
   const api = createTestPluginApi({
     id: "acpx",
     config,
@@ -106,48 +123,27 @@ export async function registerNative(
       cwd: state.workspaceDir,
       stateDir: state.path("acpx-runtime"),
       agents: Object.fromEntries(
-        agents.map((agent) => [
-          agent,
-          {
-            command: process.execPath,
-            args: [
-              peer,
-              peerDirectory,
-              ...(peerName === "owner-agent.mjs" ? ["--model-controls"] : []),
-              ...(peerOptions.holdModeControl ? ["--hold-mode-control"] : []),
-              ...(peerOptions.holdNewSession ? ["--hold-new-session"] : []),
-              ...(peerOptions.holdPromptReply ? ["--hold-prompt-reply"] : []),
-              ...(peerOptions.allowAlwaysOnly ? ["--allow-always-only"] : []),
-              ...(peerOptions.receiptEndpoint ? [`--receipt-module=${receiptModule}`] : []),
-            ],
-          },
-        ]),
+        agents.map((agent) => [agent, { command: process.execPath, args: [...args] }]),
       ),
     },
     runtime: createPluginRuntimeMock({
       config: { current: getRuntimeConfig },
       state: {
         resolveStateDir: () => state.stateDir,
-        openKeyedStore: (options) => createPluginStateKeyedStore("acpx", options),
+        openKeyedStoreV2: createPluginStateRuntimeStores("acpx", () => {}).openKeyedStoreV2,
       },
     }),
     registerAgentHarness: (harness) => registerAgentHarness(harness, { ownerPluginId: "acpx" }),
     registerReload: (registration) => {
       const registry = getActivePluginRegistry();
-      if (!registry) {
-        throw new Error("Native process test registry missing");
-      }
+      assert(registry, "Native process test registry missing");
       registry.reloads.push({ pluginId: "acpx", pluginName: "ACPX", source: "test", registration });
     },
   });
-  if (!plugin.register) {
-    throw new Error("ACPX registration missing");
-  }
+  assert(plugin.register, "ACPX registration missing");
   plugin.register(api);
   const result = factory.mock.results.at(-1);
-  if (!result || result.type !== "return") {
-    throw new Error("ACPX service missing");
-  }
+  assert(result?.type === "return", "ACPX service missing");
   const service = result.value;
   const context = {
     config,
@@ -184,6 +180,7 @@ export async function attemptFor(
   });
   const admittedRunContext = await admission.admit("plugin-harness", "acpx");
   const provider = `acp-${agent}`;
+  const prompt = "Record the requested native effect.";
   const input: EmbeddedRunAttemptParams = {
     ...target,
     ...createEmptyAgentDiscoveryStores(),
@@ -196,28 +193,18 @@ export async function attemptFor(
     modelId: "selected",
     agentHarnessRuntimeOverride: provider,
     permissionMode,
-    prompt: "Record the requested native effect.",
+    prompt,
     timeoutMs: 30000,
     thinkLevel: "off",
-    model: {
+    model: makeProviderModelFixture({
       id: "selected",
-      name: "Selected",
       api: "openai-completions",
       provider,
       baseUrl: "",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32768,
-      maxTokens: 2048,
-    },
+    }),
     authProfileStore: { version: 1, profiles: {} },
     userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-      message: {
-        role: "user",
-        content: "Record the requested native effect.",
-        timestamp: Date.now(),
-      },
+      message: { role: "user", content: prompt, timestamp: Date.now() },
       target: { ...target, sessionEntry: entry },
       updateMode: "none",
     }),

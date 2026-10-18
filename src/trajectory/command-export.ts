@@ -3,24 +3,14 @@ import path from "node:path";
 import { pathScope } from "@openclaw/fs-safe/advanced";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import { root } from "../infra/fs-safe.js";
+import { isPathStrictlyInside } from "../infra/path-guards.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 
 // CLI-facing trajectory export wrapper: resolves safe workspace-local paths,
 // writes the diagnostic bundle, and formats the terse success summary.
-export type TrajectoryCommandExportSummary = {
-  outputDir: string;
-  displayPath: string;
-  sessionId: string;
-  eventCount: number;
-  runtimeEventCount: number;
-  transcriptEventCount: number;
-  files: string[];
-};
+export type TrajectoryCommandExportSummary = Awaited<ReturnType<typeof exportTrajectoryForCommand>>;
 
-async function resolveTrajectoryExportBaseDir(workspaceDir: string): Promise<{
-  baseDir: string;
-  realBase: string;
-}> {
+async function resolveTrajectoryExportBaseDir(workspaceDir: string) {
   const workspacePath = path.resolve(workspaceDir);
   const realWorkspace = await fsp.realpath(workspacePath);
   const relative = path.join(".openclaw", "trajectory-exports");
@@ -53,7 +43,7 @@ async function resolveTrajectoryCommandOutputDir(params: {
   const resolvedBase = path.resolve(baseDir);
   const outputDir = path.resolve(resolvedBase, raw);
   const relative = path.relative(resolvedBase, outputDir);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isPathStrictlyInside(resolvedBase, outputDir)) {
     throw new Error("Output path must stay inside the workspace trajectory exports directory");
   }
   // Prefix with `./` so normalized literal `~/...` names do not expand to HOME.
@@ -69,7 +59,7 @@ export async function exportTrajectoryForCommand(params: {
   sessionId: string;
   sessionKey: string;
   workspaceDir: string;
-}): Promise<TrajectoryCommandExportSummary> {
+}) {
   const outputDir =
     params.outputDir ??
     (await resolveTrajectoryCommandOutputDir({

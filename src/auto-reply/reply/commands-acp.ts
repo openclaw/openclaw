@@ -1,6 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { logVerbose } from "../../globals.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   commandReply,
   matchCommandPrefix,
@@ -19,31 +18,25 @@ type AcpActionHandler = (
   tokens: string[],
 ) => Promise<CommandHandlerResult> | CommandHandlerResult;
 
-const lifecycleHandlersLoader = createLazyImportLoader(() => import("./commands-acp/lifecycle.js"));
-const runtimeOptionHandlersLoader = createLazyImportLoader(
-  () => import("./commands-acp/runtime-options.js"),
-);
-const diagnosticHandlersLoader = createLazyImportLoader(
-  () => import("./commands-acp/diagnostics.js"),
-);
-
 const ACP_ACTION_LOADERS: Readonly<Record<string, () => Promise<AcpActionHandler>>> = {
-  spawn: async () => (await lifecycleHandlersLoader.load()).handleAcpSpawnAction,
-  cancel: async () => (await lifecycleHandlersLoader.load()).handleAcpCancelAction,
-  steer: async () => (await lifecycleHandlersLoader.load()).handleAcpSteerAction,
-  close: async () => (await lifecycleHandlersLoader.load()).handleAcpCloseAction,
-  status: async () => (await runtimeOptionHandlersLoader.load()).handleAcpStatusAction,
-  "set-mode": async () => (await runtimeOptionHandlersLoader.load()).handleAcpSetModeAction,
-  set: async () => (await runtimeOptionHandlersLoader.load()).handleAcpSetAction,
-  cwd: async () => (await runtimeOptionHandlersLoader.load()).handleAcpCwdAction,
-  permissions: async () => (await runtimeOptionHandlersLoader.load()).handleAcpPermissionsAction,
-  timeout: async () => (await runtimeOptionHandlersLoader.load()).handleAcpTimeoutAction,
-  model: async () => (await runtimeOptionHandlersLoader.load()).handleAcpModelAction,
+  spawn: async () => (await import("./commands-acp/lifecycle.js")).handleAcpSpawnAction,
+  cancel: async () => (await import("./commands-acp/lifecycle.js")).handleAcpCancelAction,
+  steer: async () => (await import("./commands-acp/lifecycle.js")).handleAcpSteerAction,
+  close: async () => (await import("./commands-acp/lifecycle.js")).handleAcpCloseAction,
+  status: async () => (await import("./commands-acp/runtime-options.js")).handleAcpStatusAction,
+  "set-mode": async () =>
+    (await import("./commands-acp/runtime-options.js")).handleAcpSetModeAction,
+  set: async () => (await import("./commands-acp/runtime-options.js")).handleAcpSetAction,
+  cwd: async () => (await import("./commands-acp/runtime-options.js")).handleAcpCwdAction,
+  permissions: async () =>
+    (await import("./commands-acp/runtime-options.js")).handleAcpPermissionsAction,
+  timeout: async () => (await import("./commands-acp/runtime-options.js")).handleAcpTimeoutAction,
+  model: async () => (await import("./commands-acp/runtime-options.js")).handleAcpModelAction,
   "reset-options": async () =>
-    (await runtimeOptionHandlersLoader.load()).handleAcpResetOptionsAction,
-  doctor: async () => (await diagnosticHandlersLoader.load()).handleAcpDoctorAction,
-  install: async () => (await diagnosticHandlersLoader.load()).handleAcpInstallAction,
-  sessions: async () => (await diagnosticHandlersLoader.load()).handleAcpSessionsAction,
+    (await import("./commands-acp/runtime-options.js")).handleAcpResetOptionsAction,
+  doctor: async () => (await import("./commands-acp/diagnostics.js")).handleAcpDoctorAction,
+  install: async () => (await import("./commands-acp/diagnostics.js")).handleAcpInstallAction,
+  sessions: async () => (await import("./commands-acp/diagnostics.js")).handleAcpSessionsAction,
 };
 
 const ACP_PUBLIC_ACTIONS = new Set(["doctor", "install", "sessions"]);

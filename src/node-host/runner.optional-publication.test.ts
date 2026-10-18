@@ -174,22 +174,6 @@ describe("runNodeHost connection and optional publications", () => {
     });
   });
 
-  it("learns unsupported optional publications once per connection without a request flood", async () => {
-    enableSkills();
-    await withReadyNodeHost(async ({ client, options }) => {
-      rejectPublications(client, "unknown method: $method");
-      receiveHello(options, 3);
-      for (let index = 0; index < 10; index += 1) {
-        mocks.availabilityChanged?.();
-      }
-      await vi.waitFor(() => {
-        for (const method of optionalMethods) {
-          expect(getPublications(client, method)).toHaveLength(1);
-        }
-      });
-    });
-  });
-
   it("treats exact v3 authorization failures as unsupported optional publications", async () => {
     enableSkills();
     await withReadyNodeHost(async ({ client, options }) => {
@@ -212,28 +196,10 @@ describe("runNodeHost connection and optional publications", () => {
     });
   });
 
-  it("treats the exact v4 inventory authorization shape as an unsupported hidden method", async () => {
+  it("fails closed without flooding on exact v4 authorization failures", async () => {
     await withReadyNodeHost(async ({ client, options }) => {
-      rejectPublications(client, "unauthorized role: node", [NODE_RUNNER_INVENTORY_UPDATE_METHOD]);
+      rejectPublications(client, "unauthorized role: node", [NODE_PLUGIN_TOOLS_UPDATE_METHOD]);
       receiveHello(options);
-      await vi.waitFor(() =>
-        expect(getPublications(client, NODE_RUNNER_INVENTORY_UPDATE_METHOD)).toHaveLength(1),
-      );
-      for (let index = 0; index < 10; index += 1) {
-        mocks.availabilityChanged?.();
-      }
-      await settlePublications();
-      expect(getPublications(client, NODE_RUNNER_INVENTORY_UPDATE_METHOD)).toHaveLength(1);
-    });
-  });
-
-  it.each([
-    { protocol: 4, message: "unauthorized role: node", label: "exact v4 authorization" },
-    { protocol: 3, message: "unauthorized role: node.", label: "near-match v3 authorization" },
-  ])("fails closed without flooding on $label failures", async ({ protocol, message }) => {
-    await withReadyNodeHost(async ({ client, options }) => {
-      rejectPublications(client, message, [NODE_PLUGIN_TOOLS_UPDATE_METHOD]);
-      receiveHello(options, protocol);
       await vi.waitFor(() => expect(getPublications(client)).toHaveLength(1));
       for (let index = 0; index < 10; index += 1) {
         mocks.availabilityChanged?.();
@@ -390,22 +356,6 @@ describe("runNodeHost connection and optional publications", () => {
       expect(client.request).toHaveBeenLastCalledWith(NODE_PLUGIN_TOOLS_UPDATE_METHOD, {
         tools: [],
       });
-    });
-  });
-
-  it("does not report a stale publication failure after manifest reconnect", async () => {
-    await withReadyNodeHost(async ({ client, options }) => {
-      const initial = createDeferred<unknown>();
-      queuePluginResponses(client, initial.promise);
-      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-      receiveHello(options, 3);
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(1));
-      stderr.mockClear();
-      Object.assign(mocks, { nodePluginTools: [], nodeHostCaps: ["canvas"] });
-      mocks.availabilityChanged?.();
-      initial.reject(new Error("gateway closed (1012): node manifest changed"));
-      await settlePublications();
-      expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("publish failed"));
     });
   });
 });

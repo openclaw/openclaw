@@ -53,7 +53,10 @@ export function hasCreateSpaceConfigInput(raw: Record<string, unknown>): boolean
   );
 }
 
-async function createSpaceFromParams(config: GoogleMeetConfig, raw: Record<string, unknown>) {
+export async function createSpaceFromParams(
+  config: GoogleMeetConfig,
+  raw: Record<string, unknown>,
+) {
   const token = await resolveGoogleMeetTokenFromParams(config, raw);
   const result = await createGoogleMeetSpace({
     accessToken: token.accessToken,
@@ -62,7 +65,10 @@ async function createSpaceFromParams(config: GoogleMeetConfig, raw: Record<strin
   return { source: "api" as const, token, ...result };
 }
 
-function hasGoogleMeetOAuth(config: GoogleMeetConfig, raw: Record<string, unknown>): boolean {
+export function hasGoogleMeetOAuth(
+  config: GoogleMeetConfig,
+  raw: Record<string, unknown>,
+): boolean {
   return Boolean(
     normalizeOptionalString(raw.accessToken) ??
     normalizeOptionalString(raw.refreshToken) ??

@@ -43,6 +43,9 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
     is disabled, and inclusion does not guarantee execution access.
   - The projection can use cached inventory while refreshing it. Unsaved UI
     edits are not inputs, and saved or runtime changes may not appear immediately.
+  - A saved `toolOverrides.webSearch=false` excludes core `web_search`. Changing
+    this override selects the matching preview instead of reusing the other
+    state's cached inventory.
   - `tools.effective` is read-only for MCP: it may project a warm session MCP
     catalog through the final tool policy, but does not create MCP runtimes,
     connect transports, or issue `tools/list`. If no matching warm catalog
@@ -68,6 +71,13 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `agentId` is optional; omit it to read the default agent workspace.
   - The response includes eligibility, missing requirements, config checks,
     and sanitized install options without exposing raw secret values.
+- `skills.files.get({ agentId?, path })` (`operator.read`) reads the current
+  `SKILL.md` of an installed skill. `path` is absolute, home-relative, or relative
+  to the selected agent's workspace; it must match a discovered skill. The
+  response contains `path`, `name`, and full UTF-8 `content`. Reads stay inside
+  that skill's directory and use the configured skill-file byte limit. Unknown
+  agents, unavailable files, paths outside the installed inventory, and oversized
+  files return `INVALID_REQUEST`. The method does not read arbitrary host files.
 - `skills.search` and `skills.detail` (`operator.read`) return ClawHub
   discovery metadata. `skills.detail({ slug, version? })` accepts the publisher-qualified
   `installRef` from search and reads that release's card and scan summary. See
@@ -129,6 +139,12 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `"all"`: full gateway catalog, bypassing `agents.defaults.modelPolicy.allow`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 
+Outside the `"provider-config"` view, rows that the
+[recommended models list](/concepts/recommended-models) names for their provider
+carry `recommended: true`. Each provider's recommended rows come before its other
+rows, in list order, after the session's selected model. Pickers may collapse the
+remaining rows behind an "All models" control.
+
 Clients that advertise `model-selection-policy` in connect `caps` receive
 `manualSelectionAllowed` on every `models.list` row. The same fact appears in
 their initial `models.snapshot`. Filter rows with `false` only when deriving
@@ -142,15 +158,15 @@ connections retain the previous row shape. Generic client libraries do not opt
 in: a proxy forwarding a capable connection must support its negotiated row
 shape, or use a capless context for an older closed-schema consumer.
 
-Ordinary requests read the published catalog without starting provider discovery.
-Views select rows; they do not decide whether discovery runs. If the owner is not
+Ordinary requests read the published catalog while the owner acquires native
+inventory in the background. If the owner is not
 published yet, the request reports that the model catalog is not ready. A result
 whose owner becomes stale during projection is rejected with `UNAVAILABLE`,
 `retryable: true`, and `retryAfterMs: 0`. The Control UI shares one retry across
 catalog consumers, retaining cancellation and any explicit request deadline.
 
-- `preparedOnly: true` remains supported for automatic clients. Ordinary reads
-  are passive with or without this flag.
+- `preparedOnly: true` and the `"provider-config"` view do not request native
+  inventory acquisition.
 - `refresh: true` requests provider acquisition before reading the new published
   generation. Concurrent refreshes share the owner build. A failed acquisition
   retains compatible rows and reports its `providerOutcomes`; successful empty
@@ -163,7 +179,17 @@ catalog consumers, retaining cancellation and any explicit request deadline.
   `contextTokens`, and a `local` endpoint classification. It does not expose
   endpoint URLs, headers, credentials, costs or runtime request parameters.
 
-For a conversation picker, pass `sessionKey` to read the session's canonical
+The Control UI shares the initial `models.snapshot` with matching configured
+catalog readers. If bootstrap does not deliver it within one second, readers
+fall back to `models.list`. A late bootstrap snapshot can still settle a pending
+read, but cannot overwrite a completed fallback result. This wait precedes
+the ordinary per-RPC timeout; explicit refreshes and sub-second timeout budgets
+bypass it. Cached catalogs, including pending discovery results,
+remain reusable until a catalog or session-model change invalidates their scope
+or a reported cooldown expires. A different session or account requires its own
+projection; returning to a cached scope does not fetch it again.
+
+For a conversation picker, pass `sessionKey` to read the session's saved
 agent and saved account selection. A conflicting `agentId` is rejected. The
 viewer's current account default does not replace a saved session's selection.
 For a new draft, `authProfileId` previews a retained account owned by the
@@ -172,7 +198,7 @@ default. `sessionKey` and `authProfileId` are mutually exclusive.
 
 Saved-session metadata and draft previews stay current across unrelated session
 creations and writes. Before publishing, the Gateway rechecks the selected
-session's identity and canonical metadata, runtime configuration, and current
+session's identity and saved metadata, runtime configuration, and current
 access authority. Recreating a row with identical session facts does not invalidate
 the read. `chat.metadata` also tolerates title, activity, and ordinary preference
 updates to the selected row when its metadata inputs and access facts remain
@@ -187,8 +213,22 @@ compatible rows remain usable; recovery clears it. A successful empty catalog
 remains empty.
 
 The Gateway advertises `session-scoped-model-catalog` for this contract.
-`chat.metadata` remains available to legacy clients; the Control UI reads models
-directly and keeps commands in its metadata cache. Opening a conversation picker
+`chat.metadata` remains available to legacy clients. Clients that read models
+directly can pass `includeModels: false` to skip the duplicate catalog, account
+selection, and runtime-selection projection. Commands and swarm availability
+remain available. Compact responses include an opaque `revision`; pass it as
+`ifRevision` on a later compact read to receive `unchanged: true` instead of
+another command list. The revision describes prepared command and swarm facts.
+The bundled Control UI reads these agent-scoped facts without a session or
+account selection and retains them across session activity. Session-scoped model
+results and full session rows can carry `sessionModelRevision`, an opaque token
+for the saved model, account, runtime, and lifecycle inputs. The UI keeps its
+catalog when that token matches; missing tokens and explicit `catalogChanged`
+notifications retain an authoritative read. Shared catalog, auth, config, and
+connection changes invalidate independently. Harness-owned, model-locked sessions
+omit this token because their native owner can replace a private model binding
+independently of the saved row. Native clients that also support older Gateways retain the default
+request shape. Opening a conversation picker
 performs a passive read, without a model-cache timer or implicit provider refresh.
 Metadata refresh publishes model-owner facts without preparing every agent's
 commands and model projections. Requests prepare their agent's metadata on demand;
@@ -198,6 +238,8 @@ is projected for the current session even when its model catalog is shared.
 Provider renewal with unchanged inventory and auth metadata preserves cached metadata
 without broadcasting `chat.metadata.changed`. Discovery progress alone does not
 invalidate metadata; catalog changes and `refreshFailed` transitions still do.
+Discovery progress retires shared RPC response bytes without rebuilding metadata
+or sending another client broadcast.
 Shared model or account replacement still gates these reads, and history
 uses only already-prepared catalogs without starting or waiting for preparation.
 The Models settings page uses `preparedOnly: true` for its initial load, then
@@ -213,6 +255,25 @@ does not make a reopened Settings picker refresh. The Gateway shares concurrent
 provider acquisition.
 
 `preparedOnly: true` and `refresh: true` remain mutually exclusive.
+
+The WebSocket dispatcher shares identical `cron.list`, `cron.status`, `sessions.list`,
+`models.list`, and `chat.metadata` responses between eligible human connections.
+Each request still checks its own current authority. Sharing keys separate user
+and profile identity, scopes, client capabilities, and request parameters,
+including agent, session, and account selection. Explicit model refreshes,
+synthetic callers, and cron reads with restricted session visibility do not share.
+Session, cron, and model metadata broadcasts retire the relevant responses before
+clients can refetch. Config, access, and session-row revisions also fence reuse.
+These methods currently use a one-second absolute ceiling; this bounds
+personal model metadata changes that do not publish a broadcast. This adds no
+client polling or provider refresh. Session catalogs and workboard reads do not use this response-sharing owner.
+
+The running cron owner retains immutable job read views and aggregate status until
+a committed revision, loaded store replacement, or scheduler mutation changes them.
+Each list request still applies its current visibility filters. Delivery previews
+keep their session and configuration dependencies; a cron revision alone does not
+make them reusable. Passive cron readers retain their store refresh behavior.
+
 The Gateway advertises these published-read and details controls as
 `published-model-catalog`. Clients that require this contract must check the
 capability before sending the new fields; an older Gateway requires an update
@@ -264,10 +325,10 @@ them rather than returning a native registry skill with the same slug.
 - Operator clients resolve by calling `exec.approval.resolve` (requires
   `operator.approvals`).
 - For `host=node`, `exec.approval.request` must include `systemRunPlan`
-  (canonical `argv`/`cwd`/`rawCommand`/session metadata). Requests missing
+  (prepared `argv`/`cwd`/`rawCommand`/session metadata). Requests missing
   `systemRunPlan` are rejected.
 - After approval, forwarded `node.invoke system.run` calls reuse that
-  canonical `systemRunPlan` as the authoritative command/cwd/session context.
+  stored `systemRunPlan` as the authoritative command/cwd/session context.
 - If a caller mutates `command`, `rawCommand`, `cwd`, `agentId`, or
   `sessionKey` between prepare and the final approved `system.run` forward,
   the gateway rejects the run instead of trusting the mutated payload.

@@ -1,4 +1,5 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { normalizeSessionKeyForComparison } from "@openclaw/normalization-core/session-key-comparison";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -11,6 +12,7 @@ import {
   parseAgentSessionKeyParts,
   type ParsedAgentSessionKey,
 } from "@openclaw/session-url-contract";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 
 export { buildAgentMainSessionKey, DEFAULT_MAIN_KEY };
 export const DEFAULT_AGENT_ID = "main";
@@ -27,15 +29,10 @@ const COMPARISON_KEY_CACHE_LIMIT = 4_096;
 export type UiSessionDefaultsHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null; scope?: string | null } | null;
-  hello?: { snapshot?: unknown } | null;
+  hello?: Pick<GatewayHelloOk, "snapshot"> | null;
 };
 
-type UiSessionDefaults = {
-  defaultAgentId?: string | null;
-  mainKey?: string | null;
-  mainSessionKey?: string | null;
-  modelConfigured?: boolean;
-};
+type UiSessionDefaults = NonNullable<NonNullable<GatewayHelloOk["snapshot"]>["sessionDefaults"]>;
 
 export { normalizeAgentId };
 
@@ -81,8 +78,15 @@ export function isPinnableUiSessionRow(row: {
   key: string;
   parentSessionKey?: string | null;
   spawnedBy?: string | null;
+  sidebarRoot?: boolean;
 }): boolean {
-  if (isSubagentSessionKey(row.key) || normalizeOptionalString(row.spawnedBy)) {
+  if (isSubagentSessionKey(row.key)) {
+    return false;
+  }
+  if (row.sidebarRoot) {
+    return true;
+  }
+  if (normalizeOptionalString(row.spawnedBy)) {
     return false;
   }
   const parentSessionKey = normalizeOptionalString(row.parentSessionKey);
@@ -104,7 +108,7 @@ export function normalizeSessionKeyForUiComparison(sessionKey: string | undefine
   if (cached !== undefined) {
     return cached;
   }
-  const normalized = normalizeComparisonKey(sessionKey);
+  const normalized = normalizeSessionKeyForComparison(sessionKey);
   if (comparisonKeys.size >= COMPARISON_KEY_CACHE_LIMIT) {
     comparisonKeys.clear();
   }
@@ -112,64 +116,10 @@ export function normalizeSessionKeyForUiComparison(sessionKey: string | undefine
   return normalized;
 }
 
-function normalizeComparisonKey(sessionKey: string): string {
-  const raw = normalizeOptionalString(sessionKey);
-  if (!raw) {
-    return "";
-  }
-  // Only opaque channel IDs need structural parsing to preserve tail casing.
-  if (!/(?:^|:)(?:catalog|matrix|signal)(?=:|$)/i.test(raw)) {
-    return raw.toLowerCase();
-  }
-  const parts = raw.split(":");
-  let bodyStart = 0;
-  while (parts.length - bodyStart >= 3 && parts[bodyStart]?.toLowerCase() === "agent") {
-    parts[bodyStart] = "agent";
-    parts[bodyStart + 1] = parts[bodyStart + 1]?.toLowerCase() ?? "";
-    bodyStart += 2;
-  }
-  while (bodyStart < parts.length && !parts[bodyStart]?.trim()) {
-    bodyStart += 1;
-  }
-  const channel = parts[bodyStart]?.toLowerCase();
-  // Catalog source identifiers are opaque; only the agent prefix is normalized.
-  if (channel === "catalog") {
-    return parts.join(":");
-  }
-  const peerKind = parts[bodyStart + 1]?.toLowerCase();
-  const preservesMatrixTail =
-    channel === "matrix" && (peerKind === "channel" || peerKind === "group");
-  const preservesSignalGroup = channel === "signal" && peerKind === "group";
-  if (!preservesMatrixTail && !preservesSignalGroup) {
-    return raw.toLowerCase();
-  }
-  parts[bodyStart] = channel;
-  parts[bodyStart + 1] = peerKind;
-  if (preservesMatrixTail) {
-    for (let index = parts.length - 2; index >= bodyStart + 2; index -= 1) {
-      if (parts[index]?.toLowerCase() === "thread") {
-        parts[index] = "thread";
-        break;
-      }
-    }
-  } else {
-    parts[bodyStart + 2] = parts[bodyStart + 2]?.trim() ?? "";
-    for (let index = bodyStart + 3; index < parts.length; index += 1) {
-      parts[index] = parts[index]?.toLowerCase() ?? "";
-    }
-  }
-  return parts.join(":");
-}
-
 export function readSessionDefaults(
   host: Pick<UiSessionDefaultsHost, "hello">,
 ): UiSessionDefaults | undefined {
-  const snapshot = host.hello?.snapshot;
-  if (!snapshot || typeof snapshot !== "object" || !("sessionDefaults" in snapshot)) {
-    return undefined;
-  }
-  const defaults = snapshot.sessionDefaults;
-  return defaults && typeof defaults === "object" ? (defaults as UiSessionDefaults) : undefined;
+  return host.hello?.snapshot?.sessionDefaults;
 }
 
 export function resolveUiConfiguredMainKey(
@@ -233,7 +183,7 @@ export function isUiGlobalScopeConfigured(
 export function resolveUiConversationIdentity(
   host: UiSessionDefaultsHost,
   sessionKey: string,
-  agentIdOverride?: string,
+  agentIdOverride?: string | null,
 ): { sessionKey: string; agentId?: string } {
   const raw = sessionKey.trim();
   const parsed = parseAgentSessionKey(raw);
@@ -440,6 +390,16 @@ export function canDeleteSessionRows(
   );
 }
 
+/** Native catalog adoptions retain their provider transcript outside OpenClaw's delete lifecycle. */
+export function isNativeCatalogAdoptionSessionKey(key: string): boolean {
+  const rest = parseAgentSessionKey(key)?.rest ?? key;
+  return (
+    rest.startsWith("plugin:anthropic:catalog-adopt:claude:") ||
+    rest.startsWith("harness:codex:supervision:") ||
+    rest.startsWith("harness:codex:node-session:")
+  );
+}
+
 export function isSessionKeyTiedToAgent(
   sessionKey: string | undefined | null,
   agentId: string,
@@ -468,4 +428,13 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
 /** ACP-backed sessions (`agent:<id>:acp:<uuid>`) belong to the Coding zone, not chat threads. */
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
   return hasSessionKeyPrefix(sessionKey, "acp:");
+}
+
+/**
+ * Dashboard sessions (`agent:<id>:dashboard:<uuid>`) are opened in their own
+ * right. A child with such a key was launched with `visible`; every other child
+ * of a session runs hidden, as its subagent.
+ */
+export function isDashboardSessionKey(sessionKey: string | undefined | null): boolean {
+  return hasSessionKeyPrefix(sessionKey, "dashboard:");
 }

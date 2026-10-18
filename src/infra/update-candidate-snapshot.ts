@@ -10,6 +10,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
+import { extractErrorCode } from "./errors.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -19,6 +20,7 @@ import {
   readUpdateCandidatePluginCodeLinks,
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
+import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
 import { createUpdateStateInspectionDiagnostics } from "./update-candidate-state.diagnostics.js";
 import {
   collectStateDatabasePaths,
@@ -36,10 +38,15 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 type SnapshotSize = { bytes: number; largest: number; pluginBytes: number | null };
 
-function requiredSnapshotBytes(size: SnapshotSize): number {
-  // Keep the completed generation and Doctor backup, plus the largest raw,
-  // compacting and publication copies. Metadata needs room on an empty state too.
-  return size.bytes * 2 + size.largest * 3 + (size.pluginBytes ?? 0) + 64 * 1024 * 1024;
+function requiredSnapshotBytes(size: SnapshotSize, legacyCandidate = false): number {
+  // Current workers keep one generation and process families sequentially.
+  // Recovery, transform journals and publication without hard links can each
+  // need one extra family, but do not overlap. No VACUUM or Doctor backup is
+  // part of this copy phase. Keep the old allowance for older candidate workers.
+  const sqliteBytes = legacyCandidate
+    ? size.bytes * 2 + size.largest * 3
+    : size.bytes + size.largest;
+  return sqliteBytes + (size.pluginBytes ?? 0) + 64 * 1024 * 1024;
 }
 
 function measureSnapshotCapacity(
@@ -47,6 +54,7 @@ function measureSnapshotCapacity(
   size: SnapshotSize,
   env: NodeJS.ProcessEnv,
   previous?: UpdateSnapshotCapacity,
+  legacyCandidate = false,
 ): UpdateSnapshotCapacity {
   const roots: Array<{
     kind: NonNullable<UpdateSnapshotCapacity["selection"]>["kind"];
@@ -88,7 +96,7 @@ function measureSnapshotCapacity(
       }
       return candidate;
     });
-  const requiredBytes = requiredSnapshotBytes(size);
+  const requiredBytes = requiredSnapshotBytes(size, legacyCandidate);
   return {
     reason: "snapshot-capacity-insufficient",
     sqliteBytes: size.bytes,
@@ -232,10 +240,12 @@ async function allocateSnapshotRoot(
 export async function prepareUpdateCandidateStateSnapshot(params: {
   config: OpenClawConfig;
   candidateRoot: string;
+  sourceBundledPlugins?: UpdateCandidateBundledSource;
   stateDir: string;
   env: NodeJS.ProcessEnv;
   workerEnv: (directory: string) => NodeJS.ProcessEnv;
   nodeRunner?: string;
+  fullIntegrityCheck?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -340,8 +350,6 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         timeoutMs: params.timeoutMs,
         signal: params.signal,
         operation: "snapshot",
-        nodeRunner: params.nodeRunner,
-        env: workerEnv,
       },
       async (signal) => {
         signal.throwIfAborted();
@@ -360,11 +368,14 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           {
             input: JSON.stringify({
               ...request,
+              includeLocalStoreVersions: true,
               streamProgress: true,
               stateDir: params.stateDir,
               config: params.config,
               targetStateDir: directory,
               candidateRoot: params.candidateRoot,
+              sourceBundledPlugins: params.sourceBundledPlugins,
+              fullIntegrityCheck: params.fullIntegrityCheck,
               env: {
                 HOME: params.env.HOME,
                 OPENCLAW_HOME: params.env.OPENCLAW_HOME,
@@ -405,12 +416,16 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
             result.outputLimitExceeded || stderrOutputExceeded
               ? "output-limit"
               : result.termination;
-          throw new Error(
-            `Update state snapshot failed (${termination}): ${redactSupportString(
-              diagnostics.failure(diagnostics.stderr() || result.stderr, termination).message,
-              { env: params.env, stateDir: params.stateDir },
-              { maxLength: 20_000 },
-            )}`,
+          const failure = diagnostics.failure(diagnostics.stderr() || result.stderr, termination);
+          throw Object.assign(
+            new Error(
+              `Update state snapshot failed (${termination}): ${redactSupportString(
+                failure.message,
+                { env: params.env, stateDir: params.stateDir },
+                { maxLength: 20_000 },
+              )}`,
+            ),
+            { code: extractErrorCode(failure) },
           );
         }
         return JSON.parse(result.stdout) as unknown;
@@ -450,7 +465,13 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
       )),
       pluginBytes: inventory.pluginBytes,
     };
-    capacity = measureSnapshotCapacity(params.stateDir, size, params.env, capacity);
+    capacity = measureSnapshotCapacity(
+      params.stateDir,
+      size,
+      params.env,
+      capacity,
+      inventory.snapshotSpace !== "single-generation",
+    );
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
     directory = await allocateSnapshotRoot(capacity, { root: selectedRoot.directory, directory });

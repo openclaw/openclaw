@@ -1,9 +1,12 @@
 import { asNullableRecord, readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { RecallPruneOperations } from "../recall-operation-api.js";
 import {
   SHORT_TERM_META_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   memoryCoreStateReference,
+  memoryCoreWorkspaceEntryKey,
+  openWorkspaceStore,
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
@@ -25,6 +28,26 @@ const SHORT_TERM_STORE_NAMESPACES = {
   recall: SHORT_TERM_RECALL_NAMESPACE,
   phase: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
 };
+
+// The workspace mutation lock covers source inspection and this atomic cleanup.
+export async function pruneShortTermStore(workspaceDir: string, keys: string[]): Promise<void> {
+  if (keys.length === 0) {
+    return;
+  }
+  const stores = [SHORT_TERM_RECALL_NAMESPACE, SHORT_TERM_PHASE_SIGNAL_NAMESPACE].map(
+    openWorkspaceStore,
+  );
+  await stores[0]!.createOperation!<RecallPruneOperations>(stores, {
+    moduleName: "recall-operation-api.js",
+    exportName: "pruneRecallEntries",
+  }).execute(
+    {
+      type: "prune",
+      input: { keys: keys.map((key) => memoryCoreWorkspaceEntryKey(workspaceDir, key)) },
+    },
+    { writeStores: [0, 1] },
+  );
+}
 
 export async function readShortTermStore(
   workspaceDir: string,
@@ -96,17 +119,13 @@ export function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore
   };
 }
 
-function normalizeShortTermPhaseSignalStore(
-  raw: unknown,
+export async function readPhaseSignalStore(
+  workspaceDir: string,
   nowIso: string,
-): ShortTermPhaseSignalStore {
-  const record = asNullableRecord(raw);
-  const entriesRaw = asNullableRecord(record?.entries);
-  if (!record || !entriesRaw) {
-    return emptyPhaseSignalStore(nowIso);
-  }
+): Promise<ShortTermPhaseSignalStore> {
+  const record = await readShortTermStore(workspaceDir, "phase", nowIso);
   const entries: Record<string, ShortTermPhaseSignalEntry> = {};
-  for (const [mapKey, value] of Object.entries(entriesRaw)) {
+  for (const [mapKey, value] of Object.entries(record.entries)) {
     const entry = asNullableRecord(value);
     if (!entry) {
       continue;
@@ -134,16 +153,6 @@ function normalizeShortTermPhaseSignalStore(
     updatedAt: readNonBlankString(record.updatedAt) ?? nowIso,
     entries,
   };
-}
-
-export async function readPhaseSignalStore(
-  workspaceDir: string,
-  nowIso: string,
-): Promise<ShortTermPhaseSignalStore> {
-  return normalizeShortTermPhaseSignalStore(
-    await readShortTermStore(workspaceDir, "phase", nowIso),
-    nowIso,
-  );
 }
 
 export async function writePhaseSignalStore(

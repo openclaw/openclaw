@@ -1,5 +1,6 @@
 // Control UI browser proof covers explicit agent ownership for automatic model reads.
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -60,15 +61,8 @@ suite.define(() => {
       await gateway.waitForRequest("models.list");
       const modelsListCount = (await gateway.getRequests("models.list")).length;
       const authStatusCount = (await gateway.getRequests("models.authStatus")).length;
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              navigate: (routeId: string, options: { pathname: string }) => void;
-            };
-          };
-        };
-        app.runtime?.context.navigate("model-providers", {
+      await evaluateControlUiContext(page, (context) => {
+        context.navigate("model-providers", {
           pathname: "/settings/model-providers",
         });
       });

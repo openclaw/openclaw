@@ -1,13 +1,12 @@
 import { Buffer } from "node:buffer";
-import type { DatabaseSync } from "node:sqlite";
 import type { AliasedExpression } from "kysely";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "./kysely-sync.js";
-
-export class SqliteJsonlReadBudgetExceededError extends Error {}
+import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
+import { SqliteJsonlReadBudgetExceededError } from "./sqlite-jsonl-budget-error.js";
 
 /** Admit a filtered JSONL source inside the caller's payload-read transaction. */
 export function assertSqliteJsonlReadBudget(
-  database: DatabaseSync,
+  database: EngineConnection,
   source: AliasedExpression<
     { event_json: string | null; event_utf8_bytes?: number | null },
     "events"
@@ -35,7 +34,10 @@ export function assertSqliteJsonlReadBudget(
       .select((eb) => [
         eb.fn<number | null>("octet_length", ["event_json"]).as("bytes"),
         (options.hasExactUtf8Bytes ? eb.ref("event_utf8_bytes") : eb.val(null)).as("utf8_bytes"),
-        eb.selectFrom("pragma_encoding").select("encoding").as("encoding"),
+        (isPostgresSqlConnection(database)
+          ? eb.val("UTF-8")
+          : eb.selectFrom("pragma_encoding").select("encoding")
+        ).as("encoding"),
       ])
       .$if(options.maxRows !== undefined, (query) => query.limit(options.maxRows! + 1)),
   );

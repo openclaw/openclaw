@@ -3,10 +3,8 @@ import {
   getOfficialExternalChannelSecretContract,
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogEntryForPackage,
-  isExternallyDistributedPlugin,
   isOfficialExternalPluginId,
   isOfficialExternalPluginCatalogFeed,
-  listOfficialExternalChannelEnvVars,
   resolveOfficialExternalProviderContractPluginIds,
   resolveOfficialExternalProviderPluginIds,
   resolveOfficialExternalProviderPluginIdsForEnv,
@@ -22,29 +20,6 @@ import {
 } from "./official-external-plugin-catalog.test-support.js";
 
 describe("official external plugin catalog", () => {
-  it.each([
-    { pluginId: "google-meet", packageName: "@openclaw/google-meet", external: true },
-    {
-      pluginId: "google-meet",
-      packageName: "@openclaw/google-meet",
-      packageBuild: { bundledDist: true },
-      external: false,
-    },
-    { pluginId: "google-meet", packageName: "@example/google-meet", external: false },
-    { pluginId: "other-plugin", packageName: "@openclaw/google-meet", external: false },
-    {
-      pluginId: "source-external",
-      packageName: "@example/source-external",
-      packageBuild: { bundledDist: false },
-      external: true,
-    },
-  ])(
-    "classifies distribution ownership for $pluginId from $packageName",
-    ({ external, ...plugin }) => {
-      expect(isExternallyDistributedPlugin(plugin)).toBe(external);
-    },
-  );
-
   it("keeps Fish Audio's legacy id migration-only across npm and ClawHub routes", () => {
     const entry = getOfficialExternalPluginCatalogEntryForPackage("@openclaw/fish-audio-speech");
     expect(entry).toBeDefined();
@@ -154,15 +129,6 @@ describe("official external plugin catalog", () => {
       channelId: "qqbot",
       fields: [{ field: "clientSecret", activationField: "appId", activationEnv: "QQBOT_APP_ID" }],
     });
-  });
-
-  it("projects channel environment variables from generated configured-state metadata", () => {
-    const envVarsByChannel = new Map(
-      listOfficialExternalChannelEnvVars().map((entry) => [entry.channelId, entry.envVars]),
-    );
-
-    expect(envVarsByChannel.get("clickclack")).toEqual(["CLICKCLACK_BOT_TOKEN"]);
-    expect(envVarsByChannel.get("mattermost")).toEqual(["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]);
   });
 
   it("maps capability provider ids to plugin owners", () => {

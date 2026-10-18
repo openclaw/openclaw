@@ -29,6 +29,24 @@ export function sendFailure(
   });
 }
 
+export function sendReplyResult(
+  receipt: { runId: string; sessionKey: string; watched?: boolean },
+  result: { replyText?: string; sourceReplyDelivered?: boolean },
+) {
+  const { replyText: reply, sourceReplyDelivered } = result;
+  return jsonResult({
+    ...receipt,
+    ...(reply
+      ? { status: "ok" as const, delivery: { status: "skipped" as const }, reply }
+      : {
+          status: "no_reply" as const,
+          message: sourceReplyDelivered
+            ? "The target delivered its final reply directly to its source conversation. Do not resend."
+            : "No visible reply or pending delivery. Continue or retry if needed.",
+        }),
+  });
+}
+
 export function resolveSessionDeliveryTargetFromKey(
   sessionKey: string,
 ): SessionDeliveryTarget | null {

@@ -1,10 +1,8 @@
-import {
-  TALK_VOICE_CHANGE_TIMEOUT_MS,
-  validateTalkVoiceChangeEvent,
-  type TalkVoiceChangeEvent,
-} from "@openclaw/gateway-protocol";
+import type { TalkVoiceChangeEvent, TalkVoiceCompleteParams } from "@openclaw/gateway-protocol";
+import { TALK_VOICE_CHANGE_TIMEOUT_MS } from "../../../../../packages/gateway-protocol/src/talk-voice-limits.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
+import { isTalkVoiceChangeEvent } from "../../../lib/protocol-validators.generated/session-input.js";
 
 export type RealtimeVoiceCall = { getVoiceSessionId(): string | undefined };
 type VoiceChange = {
@@ -17,6 +15,7 @@ type VoiceChange = {
 
 const VOICE_REQUEST_TIMEOUT_MS = TALK_VOICE_CHANGE_TIMEOUT_MS + 10_000;
 
+// Owns the Gateway voice-change subscription and request timer; dispose releases both.
 export class RealtimeTalkVoiceSelection {
   private active = true;
   private change: VoiceChange | undefined;
@@ -33,7 +32,7 @@ export class RealtimeTalkVoiceSelection {
     },
   ) {
     this.unsubscribe = owner.client.addEventListener((event) => {
-      if (event.event === "talk.voice.change" && validateTalkVoiceChangeEvent(event.payload)) {
+      if (event.event === "talk.voice.change" && isTalkVoiceChangeEvent(event.payload)) {
         this.receive(event.payload);
       }
     });
@@ -136,16 +135,7 @@ export class RealtimeTalkVoiceSelection {
       return;
     }
     change.completing = true;
-    void this.owner.client
-      .request(
-        "talk.voice.complete",
-        {
-          changeId: change.request.changeId,
-          voiceSessionId,
-          outcome: "ready",
-        },
-        { timeoutMs: VOICE_REQUEST_TIMEOUT_MS },
-      )
+    void this.complete(change, { voiceSessionId, outcome: "ready" })
       .then(() => {
         if (this.change === change && this.current(call)) {
           this.clearChange(change);
@@ -167,20 +157,24 @@ export class RealtimeTalkVoiceSelection {
 
   private reportFailure(change: VoiceChange, error: string) {
     const voiceSessionId = this.owner.currentCall()?.getVoiceSessionId();
-    void this.owner.client
-      .request(
-        "talk.voice.complete",
-        {
-          changeId: change.request.changeId,
-          ...(voiceSessionId && voiceSessionId !== change.request.voiceSessionId
-            ? { voiceSessionId }
-            : {}),
-          outcome: "failed",
-          error,
-        },
-        { timeoutMs: VOICE_REQUEST_TIMEOUT_MS },
-      )
-      .catch(() => undefined);
+    void this.complete(change, {
+      ...(voiceSessionId && voiceSessionId !== change.request.voiceSessionId
+        ? { voiceSessionId }
+        : {}),
+      outcome: "failed",
+      error,
+    }).catch(() => undefined);
+  }
+
+  private complete(
+    change: VoiceChange,
+    outcome: Omit<TalkVoiceCompleteParams, "changeId">,
+  ): Promise<unknown> {
+    return this.owner.client.request(
+      "talk.voice.complete",
+      { changeId: change.request.changeId, ...outcome },
+      { timeoutMs: VOICE_REQUEST_TIMEOUT_MS },
+    );
   }
 
   dispose() {

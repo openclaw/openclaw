@@ -41,8 +41,10 @@ struct ChatSessionSidebar: View {
     @AppStorage("openclaw.chat.sidebar.status") var sessionStatus = OpenClawChatSidebarStatus.active
     @AppStorage("openclaw.chat.sidebar.ownerFilter") var sessionOwnerFilter = ""
     @AppStorage("openclaw.chat.sidebar.emptyGroups") var emptyGroups = ChatSessionSidebarModel.EmptyGroups.filtering
-    @State private var observedOrder = ChatSessionSidebarModel.ObservedOrder()
+    @State var observedOrder = ChatSessionSidebarModel.ObservedOrder()
+    @State var batch = ChatSessionSidebarBatch()
     @State private var lastSnoozeWake = Date.distantPast
+    @State var catalogData = ChatSessionSidebarCatalogs()
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -51,18 +53,19 @@ struct ChatSessionSidebar: View {
     }
 
     private func sidebar(now: Date) -> some View {
-        let sections = self.rosterSections(now: now, observedOrder: self.observedOrder)
+        let sections = self.interactionSections(now: now)
         let nextWake = OpenClawChatSessionSnooze.nextWake(
             in: self.rosterData?.queryRows ?? self.viewModel.sessions, now: now)
         let projectedRows = sections.flatMap(\.nodes).flatMap(\.previewSessions)
         let ownership = self.ownership(for: projectedRows)
+        let rosterIDs = (self.rosterData?.rows ?? self.viewModel.sessions).map(OpenClawChatSessionSidebarData.identity)
         let previewRequest = ChatSessionSidebarPreviews.Request(
             viewModel: self.viewModel,
             sessions: projectedRows)
         let hydration = self.hydrationRequest(sections)
         let selectedTreeSession = self.selectedTreeSession
         let selectedTreeID = ChatSessionSidebarChildren.key(for: selectedTreeSession)
-        return List(selection: Self.selectionBinding(model: self.viewModel)) {
+        let list = List(selection: self.batchSelectionBinding) {
             self.newThreadButton
                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 16, trailing: 0))
                 .listRowBackground(Color.clear)
@@ -95,7 +98,10 @@ struct ChatSessionSidebar: View {
             {
                 self.childLoadState(selectedTreeSession)
             }
-            if sections.allSatisfy(\.nodes.isEmpty), self.rosterData?.isSettled != false {
+            self.catalogSections(now: now, ownership: ownership, previewRequest: previewRequest)
+            if sections.allSatisfy(\.nodes.isEmpty), self.catalogPresentation.catalogs.isEmpty,
+               self.rosterData?.isSettled != false
+            {
                 Text(self.query
                     .isEmpty ? (self.sessionStatus == .archived ? String(localized: "No archived threads") :
                         String(localized: "No threads yet")) : String(localized: "No matching threads"))
@@ -107,21 +113,37 @@ struct ChatSessionSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .modifier(ChatSidebarCatalogLifecycle(data: self.catalogData, viewModel: self.viewModel))
         .listItemTint(.monochrome)
         .sidebarAgentAvatars(owner: self.viewModel.sidebarData, transport: self.viewModel.transport)
         .searchable(
             text: self.$query,
             placement: .sidebar,
             prompt: String(localized: "Search threads"))
-        .safeAreaInset(edge: .bottom, spacing: 0) { self.connectionFooter }
-        .onChange(of: (self.rosterData?.rows ?? self.viewModel.sessions).map(\.key), initial: true) { _, keys in
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                self.batchBar
+                self.archiveUndoNotice
+                self.identityFooter(now: now)
+            }
+            .background(.bar)
+        }
+        .dropDestination(for: ChatSidebarDrag.self) { items, _ in
+            guard items.count == 1, let item = items.first else { return false }
+            return self.dropInteraction(item, section: "list", after: false)
+        }
+        .onChange(of: self.viewModel.sidebarData?.scopeRevision) { _, _ in self.batch.reset() }
+        .onChange(of: self.rosterData?.query) { _, _ in self.batch.reset(clearConnection: false) }
+        .onChange(of: self.viewModel.currentSessionTarget) { _, _ in self.batch.selection = .init() }
+        .task(id: self.viewModel.sidebarData?.scopeRevision) { await self.watchPinOrder() }
+        .onChange(of: rosterIDs, initial: true) { _, keys in
             self.observedOrder.observe(keys)
         }
         .onChange(of: self.query, initial: true) { _, value in
             self.viewModel.updateSidebarQuery(
                 search: value, showAutomation: self.showAutomationSessions, showSystem: self.showSystemSessions)
         }
-        .onChange(of: self.filterOptions, initial: true) { previous, current in
+        let filtered = list.onChange(of: self.filterOptions, initial: true) { previous, current in
             if previous.sort != current.sort || previous.grouping != current.grouping || previous.status != current
                 .status
             {
@@ -149,7 +171,7 @@ struct ChatSessionSidebar: View {
         .onChange(of: self.viewModel.sidebarData?.scopeRevision) { self.childModes = [:]
             self.agentReveal.members = [:]
         }
-        .task(id: hydration) {
+        let content = filtered.task(id: hydration) {
             await self.sidebarChildren.synchronize(model: self.viewModel, requiredParents: hydration.parents)
         }
         .onDisappear { self.sidebarChildren.invalidate() }
@@ -182,23 +204,40 @@ struct ChatSessionSidebar: View {
                 self.viewModel.refreshSessions(limit: 200)
             }
         }
-        .sheet(item: self.$menuPresentation) { self.menuSheet($0) }
-        .sheet(item: self.$agentSessionsTarget) { ChatSessionsSheet(viewModel: self.viewModel, agentID: $0.id) }
-        .sheet(item: self.$inspectedSession) { session in
-            ChatSessionInspectorSheet(viewModel: self.viewModel, session: session)
-        }
-        .alert(
-            String(localized: "Rename Thread"),
-            isPresented: self.isPresentingRenameAlert)
-        {
-            self.renameActions
-        }
-        .confirmationDialog(self.deleteDialogTitle, isPresented: self.isPresentingDeleteDialog) {
-                self.deleteAction
+        return self.presentingDialogs(content)
+    }
+
+    private func presentingDialogs(_ content: some View) -> some View {
+        content
+            .confirmationDialog(
+                String(format: String(localized: "Delete %lld threads?"), self.batch.pendingDelete.count),
+                isPresented: Binding(
+                    get: { !self.batch.pendingDelete.isEmpty },
+                    set: { if !$0 { self.batch.pendingDelete = [] } }))
+            {
+                Button(String(localized: "Delete"), role: .destructive) {
+                    self.runSidebarBatch(.delete, rows: self.batch.pendingDelete)
+                }
             } message: {
-                Text(String(localized: "The thread and its transcript are removed from the gateway."))
-                    .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
+                Text("The threads and their transcripts are removed from the gateway.")
             }
+            .sheet(item: self.$menuPresentation) { self.menuSheet($0) }
+                .sheet(item: self.$agentSessionsTarget) { ChatSessionsSheet(viewModel: self.viewModel, agentID: $0.id) }
+                .sheet(item: self.$inspectedSession) { session in
+                    ChatSessionInspectorSheet(viewModel: self.viewModel, session: session)
+                }
+                .alert(
+                    String(localized: "Rename Thread"),
+                    isPresented: self.isPresentingRenameAlert)
+                {
+                    self.renameActions
+                }
+                .confirmationDialog(self.deleteDialogTitle, isPresented: self.isPresentingDeleteDialog) {
+                        self.deleteAction
+                    } message: {
+                        Text(String(localized: "The thread and its transcript are removed from the gateway."))
+                            .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
+                    }
     }
 
     private var deleteAction: some View {
@@ -295,10 +334,16 @@ struct ChatSessionSidebar: View {
         _ nodes: [ChatSessionSidebarModel.Node],
         now: Date,
         ownership: ChatSidebarOwnership,
+        section: String = "",
         previewRequest: ChatSessionSidebarPreviews.Request) -> some View
     {
-        ForEach(nodes) { node in
+        ForEach(nodes, id: \.sidebarID) { node in
             self.treeRow(node, isChild: false, now: now, ownership: ownership, previewRequest: previewRequest)
+                .modifier(ChatSidebarSectionInteraction(
+                    sidebar: self,
+                    section: section == "pinned" ? "" : section,
+                    draggable: false))
+                .tag(self.interactionIdentity(node.session))
         }
     }
 

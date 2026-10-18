@@ -2,6 +2,7 @@ import type { z } from "zod";
 import type {
   ChannelPreviewStreamingConfigSchema,
   ChannelStreamingProgressSchema,
+  ChannelThreadBindingsSchema,
   UnifiedStreamingModeSchema,
 } from "./zod-schema.channel-messaging-common.js";
 import type {
@@ -25,10 +26,10 @@ import type { SessionSchema } from "./zod-schema.session-config.js";
 /** Typing indicator timing policy shared by channel configs. */
 export type TypingMode = z.input<typeof TypingModeSchema>;
 /** Session-key ownership model for inbound messages. */
-export type SessionScope = "per-sender" | "global";
+export type SessionScope = NonNullable<SessionConfig["scope"]>;
 /** DM session-key granularity across peers, channels, and accounts. */
-export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
-export type GroupScope = "main" | "per-group";
+export type DmScope = NonNullable<SessionConfig["dmScope"]>;
+export type GroupScope = NonNullable<SessionConfig["groupScope"]>;
 /** Which source messages outbound replies should thread or quote against. */
 export type ReplyToMode = z.input<typeof ReplyToModeSchema>;
 /** Group-chat admission policy for channels with allowlists. */
@@ -75,7 +76,7 @@ type SessionSchemaInput = NonNullable<z.input<typeof SessionSchema>>;
 export type SessionResetConfig = NonNullable<SessionSchemaInput["reset"]>;
 export type SessionResetMode = NonNullable<SessionResetConfig["mode"]>;
 
-export type SessionThreadBindingsConfig = NonNullable<SessionSchemaInput["threadBindings"]>;
+export type SessionThreadBindingsConfig = z.input<typeof ChannelThreadBindingsSchema>;
 
 export type SessionConfig = SessionSchemaInput;
 

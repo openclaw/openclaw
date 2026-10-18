@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import http, { type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { readImageProbeFromHeader } from "../media/image-ops.js";
+import { clearArtifactDownloads, createManagedArtifactDownload } from "./artifact-download-grants.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import {
   createFixture,
@@ -12,6 +14,8 @@ import {
   usePreparedManagedImageState,
 } from "./managed-image-attachments.test-support.js";
 import { resolveManagedImageThumbnail } from "./managed-image-thumbnail-cache.js";
+import { createSessionFileDownloadClient } from "./server-methods/sessions-files.test-support.js";
+import type { GatewayClient } from "./server-methods/types.js";
 
 const mocks = vi.hoisted(() => ({
   config: vi.fn(),
@@ -26,7 +30,6 @@ vi.mock("./http-utils.js", () => ({
   resolveSharedSecretHttpOperatorScopes: mocks.scopes,
   resolveOpenAiCompatibleHttpSenderIsOwner: mocks.owner,
 }));
-vi.mock("./session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: vi.fn() }));
 vi.mock("./session-transcript-readers.js", () => ({
   readSessionMessagesMatchingIdAsync: mocks.transcript,
   readSessionMessagesWithSourceAsync: vi.fn(),
@@ -43,6 +46,7 @@ describe("managed thumbnail conditional HTTP", () => {
   let stateDir: string;
   let origin: string;
   let server: http.Server;
+  const clients = new Set<GatewayClient>();
   usePreparedManagedImageState({
     prefix: "managed-thumbnail-conditional-",
     bindState: (prepared) => {
@@ -54,6 +58,7 @@ describe("managed thumbnail conditional HTTP", () => {
     cleanupRecords: cleanupManagedOutgoingMediaRecords,
     resetMocks: (prepared) => {
       vi.clearAllMocks();
+      clients.clear();
       mocks.config.mockReturnValue({ session: { store: path.join(prepared, "sessions.sqlite") } });
       mocks.authorize.mockImplementation(async ({ res }) =>
         bindHttpResponseAuthority({ authMethod: "token" }, res, () => true),
@@ -68,6 +73,7 @@ describe("managed thumbnail conditional HTTP", () => {
       void handleManagedOutgoingMediaHttpRequest(req, res, {
         auth: { mode: "none", allowTailscale: false },
         stateDir,
+        clients,
       }).catch((error: unknown) => res.destroy(error instanceof Error ? error : undefined));
     });
     await new Promise<void>((resolve) => {
@@ -75,6 +81,7 @@ describe("managed thumbnail conditional HTTP", () => {
     });
     origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
+  afterEach(() => clearArtifactDownloads());
   afterAll(async () => {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -106,37 +113,53 @@ describe("managed thumbnail conditional HTTP", () => {
     );
   }
 
-  async function prepare(ticket = false) {
-    const fixture = await createFixture(stateDir, {
-      body: createSolidPngBuffer(16, 8, { r: 24, g: 64, b: 128 }),
-    });
+  async function prepare(
+    client?: GatewayClient,
+    body = createSolidPngBuffer(16, 8, { r: 24, g: 64, b: 128 }),
+  ) {
+    const fixture = await createFixture(stateDir, { body });
     const full = `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`;
     mocks.transcript.mockResolvedValue([
       { role: "assistant", content: [{ type: "image", url: full }], __openclaw: { id: "msg-1" } },
     ]);
-    const download = ticket
+    const source = client
       ? await resolveManagedOutgoingMediaArtifactDownload({
           sessionKey: fixture.sessionKey,
           artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${fixture.attachmentId}`,
           stateDir,
         })
       : undefined;
-    if (ticket && !download) {
+    const download =
+      client && source
+        ? createManagedArtifactDownload({
+            client,
+            path: source.url,
+            assertCurrent() {},
+            release() {},
+          })
+        : undefined;
+    if (client && !download) {
       throw new Error("Missing fixture artifact ticket");
+    }
+    if (client) {
+      clients.add(client);
     }
     return { ...fixture, url: (download?.url ?? full).replace(/\/full(?=\?|$)/, "/thumbnail") };
   }
 
   it.each([false, true])("revalidates final thumbnail bytes for ticket=%s", async (ticket) => {
-    const fixture = await prepare(ticket);
+    using connection = ticket ? createSessionFileDownloadClient() : null;
+    const fixture = await prepare(connection?.client);
     const first = await request(fixture.url);
     expect(first.status).toBe(200);
+    expect(first.headers["content-type"]).toBe("image/webp");
+    expect(readImageProbeFromHeader(first.body)).toMatchObject({ format: "webp", width: 16, height: 8 });
     const etag = `"${createHash("sha256").update(first.body).digest("base64url")}"`;
     expect(first.headers.etag).toBe(etag);
     expect(first.headers["cache-control"]).toBe(
-      ticket ? "private, max-age=300, immutable" : "private, max-age=31536000, immutable",
+      ticket ? "private, no-store" : "private, max-age=31536000, immutable",
     );
-    expect(first.headers["content-disposition"]).toContain("cat-thumbnail.png");
+    expect(first.headers["content-disposition"]).toContain("cat-thumbnail.webp");
     expect(first.headers["x-content-type-options"]).toBe("nosniff");
     expect(first.headers["referrer-policy"]).toBe("no-referrer");
     const head = await request(fixture.url, "HEAD");
@@ -156,14 +179,38 @@ describe("managed thumbnail conditional HTTP", () => {
     expect(stale.body).toEqual(first.body);
   });
 
+  it("revalidates the selected rendition without reusing another width's validator", async () => {
+    const fixture = await prepare(
+      undefined,
+      createSolidPngBuffer(1600, 800, { r: 24, g: 64, b: 128 }),
+    );
+    const normal = await request(fixture.url);
+    expect(normal.status).toBe(200);
+    expect(readImageProbeFromHeader(normal.body)).toMatchObject({
+      format: "webp",
+      width: 960,
+      height: 480,
+    });
+    const smallUrl = `${fixture.url}?width=480`;
+    const small = await request(smallUrl, "GET", normal.headers.etag);
+    expect(small.status).toBe(200);
+    expect(readImageProbeFromHeader(small.body)).toMatchObject({ format: "webp", width: 480, height: 240 });
+    expect(small.headers.etag).toBe(`"${createHash("sha256").update(small.body).digest("base64url")}"`);
+    expect(small.headers.etag).not.toBe(normal.headers.etag);
+    const unchanged = await request(smallUrl, "GET", small.headers.etag);
+    expect(unchanged.status).toBe(304);
+    expect(unchanged.body).toHaveLength(0);
+    const defaultWidth = await request(`${fixture.url}?width=960`, "HEAD", normal.headers.etag);
+    expect(defaultWidth.status).toBe(304);
+    expect(defaultWidth.body).toHaveLength(0);
+  });
+
   it("keeps validators byte-stable across eviction and changes them with the rendition", async () => {
     const fixture = await prepare();
     const first = await request(fixture.url);
     expect(first.headers.etag).toBeTypeOf("string");
     for (let index = 0; index < 129; index++) {
-      await resolveManagedImageThumbnail(`conditional-eviction-${index}`, async () =>
-        Buffer.alloc(1),
-      );
+      await resolveManagedImageThumbnail(`conditional-eviction-${index}`, async () => Buffer.alloc(1));
     }
     const regenerated = await request(fixture.url);
     expect(regenerated.body).toEqual(first.body);
@@ -188,8 +235,9 @@ describe("managed thumbnail conditional HTTP", () => {
       return null;
     });
     const invalid = await request(`${fixture.url}?mediaTicket=invalid`, "GET", "*");
-    expect(invalid.status).toBe(401);
+    expect(invalid.status).toBe(404);
     expect(invalid.headers.etag).toBeUndefined();
+    expect(mocks.authorize).not.toHaveBeenCalled();
     mocks.authorize.mockImplementation(async ({ res }) =>
       bindHttpResponseAuthority({ authMethod: "device-token" }, res, () => true),
     );
@@ -200,7 +248,8 @@ describe("managed thumbnail conditional HTTP", () => {
   });
 
   it("reauthorizes the transcript before a ticketed conditional response", async () => {
-    const fixture = await prepare(true);
+    using connection = createSessionFileDownloadClient();
+    const fixture = await prepare(connection.client);
     mocks.transcript.mockResolvedValue([]);
     const missing = await request(fixture.url, "GET", "*");
     expect(missing.status).toBe(404);

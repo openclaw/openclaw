@@ -18,7 +18,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/install-cli.sh";
 const nodeExecutable = requireNodeTool("node");
 
-function fixture() {
+function fixture(preserveRuntime = false) {
   const root = tempDirs.make("openclaw-freebsd-installer-");
   const bin = join(root, "system bin");
   const prefix = join(root, "prefix");
@@ -27,7 +27,13 @@ function fixture() {
   writeFileSync(join(bin, "npm"), "#!/usr/bin/env node\nconsole.log('11.19.1');\n", {
     mode: 0o755,
   });
-  return { root, bin, prefix };
+  const oldRuntime = join(root, "old-runtime");
+  if (preserveRuntime) {
+    mkdirSync(oldRuntime);
+    mkdirSync(join(prefix, "tools"), { recursive: true });
+    symlinkSync(oldRuntime, join(prefix, "tools", "node"));
+  }
+  return { root, bin, prefix, oldRuntime };
 }
 
 function run(body: string, env: NodeJS.ProcessEnv = {}) {
@@ -76,11 +82,7 @@ describe("FreeBSD CLI runtime installation", () => {
   it.each(["missing", "unsupported", "npm", "sqlite", "requested"])(
     "rejects an unusable %s prerequisite without replacing an existing runtime",
     (failure) => {
-      const { root, bin, prefix } = fixture();
-      const oldRuntime = join(root, "old-runtime");
-      mkdirSync(oldRuntime);
-      mkdirSync(join(prefix, "tools"), { recursive: true });
-      symlinkSync(oldRuntime, join(prefix, "tools", "node"));
+      const { bin, prefix, oldRuntime } = fixture(true);
       const node = join(bin, "candidate");
       const npm = join(bin, "candidate-npm");
       writeFileSync(
@@ -138,23 +140,16 @@ describe("FreeBSD CLI runtime installation", () => {
 
 describe("FreeBSD source-install admission", () => {
   it.each([
-    { args: "--install-method git", json: false },
-    { args: "--method git", json: true },
-    { args: "--git", json: false },
-    { args: "--github", json: true },
-    { args: "--npm --git", json: true },
-    { args: "", json: false },
-  ])("refuses $args before installation side effects (JSON: $json)", ({ args, json }) => {
-    const { root, prefix } = fixture();
-    const oldRuntime = join(root, "old-runtime");
+    ["--install-method git", false],
+    ["--npm --git", true],
+    ["", false],
+  ] as const)("refuses %s before installation side effects (JSON: %s)", (args, json) => {
+    const { root, prefix, oldRuntime } = fixture(true);
     const checkout = join(root, "checkout");
     const temporary = join(root, "temporary");
-    mkdirSync(oldRuntime);
     mkdirSync(checkout);
     mkdirSync(temporary);
     mkdirSync(join(prefix, "bin"), { recursive: true });
-    mkdirSync(join(prefix, "tools"));
-    symlinkSync(oldRuntime, join(prefix, "tools", "node"));
     writeFileSync(join(prefix, "bin", "openclaw"), "preserve installed CLI");
     writeFileSync(join(checkout, "pnpm-workspace.yaml"), "preserve source allowlist");
     const result = run(
@@ -221,39 +216,35 @@ describe("FreeBSD source-install admission", () => {
     expect(result.stdout.trim()).toBe(`selected:${os}:${args === "--git" ? "git" : "npm"}`);
   });
 
-  it("keeps the FreeBSD Node-only refusal ahead of the ignored git method", () => {
-    const { root, prefix } = fixture();
-    const result = run(
-      `
-      os_detect() { printf 'freebsd\\n'; }
-      arch_detect() { printf 'x64\\n'; }
-      main --node-only --git
-      `,
-      { HOME: root, TMPDIR: root, OPENCLAW_PREFIX: prefix },
-    );
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("Private Node.js recovery is unavailable on FreeBSD");
-    expect(result.stdout).not.toContain("Source/git");
-    expect(existsSync(prefix)).toBe(false);
-  });
-
-  it.each(["main", "github:openclaw/openclaw#main"])(
-    "does not recommend git for the rejected npm source target %s",
+  it.each(["", "main", "github:openclaw/openclaw#main"])(
+    "explains the FreeBSD refusal for version %j",
     (version) => {
+      const command = version ? "install_openclaw" : "main --node-only --git";
+      const message = version
+        ? "--install-method npm"
+        : "Private Node.js recovery is unavailable on FreeBSD";
+      const forbidden = version ? "--install-method git" : "Source/git";
+      const { root, prefix } = fixture();
       const result = run(
         `
-        os_detect() { printf 'freebsd\\n'; }
-        JSON=1
-        install_openclaw
-        `,
-        { OPENCLAW_VERSION: version },
+      os_detect() { printf 'freebsd\\n'; }
+      arch_detect() { printf 'x64\\n'; }
+      JSON=${version ? "1" : "0"}
+      ${command}
+      `,
+        { HOME: root, TMPDIR: root, OPENCLAW_PREFIX: prefix, OPENCLAW_VERSION: version },
       );
       expect(result.status).toBe(1);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        event: "error",
-        message: expect.stringContaining("--install-method npm"),
-      });
-      expect(result.stdout).not.toContain("--install-method git");
+      if (version) {
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          event: "error",
+          message: expect.stringContaining(message),
+        });
+      } else {
+        expect(result.stdout).toContain(message);
+        expect(existsSync(prefix)).toBe(false);
+      }
+      expect(result.stdout).not.toContain(forbidden);
     },
   );
 });

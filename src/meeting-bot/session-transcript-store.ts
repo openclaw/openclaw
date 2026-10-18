@@ -72,7 +72,6 @@ export class MeetingTranscriptDeliveryError extends Error {
 export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord> {
   readonly #transcripts = new Map<string, RetainedTranscriptSnapshot>();
   readonly #captures = new KeyedAsyncQueue();
-  readonly #finalizing = new Set<string>();
   readonly #pendingLines = new Map<string, PendingTranscriptLine[]>();
   readonly #retired = new Set<string>();
   readonly #streamCursors = new Map<string, TranscriptStreamCursor>();
@@ -116,7 +115,7 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
     if (!Number.isSafeInteger(sinceIndex) || sinceIndex < 0) {
       throw new Error("sinceIndex must be a non-negative safe integer");
     }
-    if (session.state === "active" && !this.#finalizing.has(session.id)) {
+    if (session.state === "active") {
       await this.capture(session);
     }
     const snapshot = this.#transcripts.get(sessionId) ?? { droppedLines: 0, lines: [] };
@@ -130,14 +129,6 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
       ...(session.transcriptEvicted ? { evicted: true } : {}),
       lines: snapshot.lines.slice(startIndex - snapshot.droppedLines),
     };
-  }
-
-  startFinalizing(sessionId: string): void {
-    this.#finalizing.add(sessionId);
-  }
-
-  finishFinalizing(sessionId: string): void {
-    this.#finalizing.delete(sessionId);
   }
 
   async capture(session: TSession, options: { finalize?: boolean } = {}): Promise<void> {
@@ -196,40 +187,11 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
       const pending = this.#pendingLines.get(session.id);
       const cursor = pending?.at(-1)?.cursor ?? this.#streamCursors.get(session.id);
       const delta = this.#snapshotDelta(cursor, snapshot);
+      this.#queuePending(session.id, snapshot, delta);
       if (pendingError) {
-        if (delta.lines.length > 0) {
-          this.#queuePending(session.id, snapshot, delta, 0, delta.prefixKeys, true);
-        } else if (delta.commitEmpty) {
-          this.#queuePendingCursor(session.id, {
-            pageEpoch: snapshot.epoch,
-            pageNextIndex: snapshot.droppedLines + snapshot.lines.length,
-            tailKeys: delta.prefixKeys,
-          });
-        }
         throw pendingError;
       }
-      let tailKeys = [...delta.prefixKeys];
-      for (const [index, line] of delta.lines.entries()) {
-        try {
-          await this.options.onLines?.(session, [line]);
-        } catch (error) {
-          this.#queuePending(session.id, snapshot, delta, index, tailKeys);
-          throw new MeetingTranscriptDeliveryError(error);
-        }
-        tailKeys = [...tailKeys, transcriptLineKey(line)].slice(-TRANSCRIPT_CURSOR_TAIL);
-        this.#streamCursors.set(session.id, {
-          pageEpoch: snapshot.epoch,
-          pageNextIndex: delta.startIndex + index + 1,
-          tailKeys,
-        });
-      }
-      if (delta.lines.length === 0 && delta.commitEmpty) {
-        this.#streamCursors.set(session.id, {
-          pageEpoch: snapshot.epoch,
-          pageNextIndex: snapshot.droppedLines + snapshot.lines.length,
-          tailKeys: delta.prefixKeys,
-        });
-      }
+      await this.#flushPending(session);
     } else if (pendingError) {
       throw pendingError;
     }
@@ -261,31 +223,31 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
     sessionId: string,
     snapshot: MeetingTranscriptSnapshot,
     delta: TranscriptSnapshotDelta,
-    failedIndex: number,
-    prefixKeys: string[],
-    append = false,
   ): void {
-    let tailKeys = [...prefixKeys];
-    const pending = delta.lines.slice(failedIndex).map((line, offset) => {
+    const pending = this.#pendingLines.get(sessionId) ?? [];
+    let tailKeys = delta.prefixKeys;
+    for (const [index, line] of delta.lines.entries()) {
       tailKeys = [...tailKeys, transcriptLineKey(line)].slice(-TRANSCRIPT_CURSOR_TAIL);
-      return {
+      pending.push({
         line,
         cursor: {
           pageEpoch: snapshot.epoch,
-          pageNextIndex: delta.startIndex + failedIndex + offset + 1,
+          pageNextIndex: delta.startIndex + index + 1,
           tailKeys,
         },
-      };
-    });
-    const combined = [...(append ? (this.#pendingLines.get(sessionId) ?? []) : []), ...pending];
+      });
+    }
+    if (delta.lines.length === 0 && delta.commitEmpty) {
+      pending.push({
+        cursor: {
+          pageEpoch: snapshot.epoch,
+          pageNextIndex: snapshot.droppedLines + snapshot.lines.length,
+          tailKeys,
+        },
+      });
+    }
     // Undelivered rows are the only copy once the browser rolls its caption buffer.
     // Preserve them until durable delivery succeeds; retirement clears the queue.
-    this.#pendingLines.set(sessionId, combined);
-  }
-
-  #queuePendingCursor(sessionId: string, cursor: TranscriptStreamCursor): void {
-    const pending = this.#pendingLines.get(sessionId) ?? [];
-    pending.push({ cursor });
     this.#pendingLines.set(sessionId, pending);
   }
 
@@ -321,17 +283,13 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
     snapshot: MeetingTranscriptSnapshot,
   ): TranscriptSnapshotDelta {
     const pageNextIndex = snapshot.droppedLines + snapshot.lines.length;
-    if (!previous || previous.pageEpoch !== snapshot.epoch) {
+    if (
+      !previous ||
+      previous.pageEpoch !== snapshot.epoch ||
+      snapshot.droppedLines >= previous.pageNextIndex
+    ) {
       return {
         commitEmpty: previous !== undefined,
-        lines: snapshot.lines,
-        prefixKeys: [],
-        startIndex: snapshot.droppedLines,
-      };
-    }
-    if (snapshot.droppedLines >= previous.pageNextIndex) {
-      return {
-        commitEmpty: true,
         lines: snapshot.lines,
         prefixKeys: [],
         startIndex: snapshot.droppedLines,
@@ -380,43 +338,27 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
 
   #merge(sessionId: string, snapshot: MeetingTranscriptSnapshot): void {
     const pageNextIndex = snapshot.droppedLines + snapshot.lines.length;
-    const retained = this.#transcripts.get(sessionId);
-    if (!retained) {
-      const excess = Math.max(0, snapshot.lines.length - TRANSCRIPT_MAX_LINES);
-      // Keep the page's absolute next cursor while retaining only its bounded tail.
-      // Advancing droppedLines preserves stable indices for the retained lines.
-      this.#transcripts.set(sessionId, {
-        droppedLines: snapshot.droppedLines + excess,
-        lines: excess > 0 ? snapshot.lines.slice(excess) : snapshot.lines,
-        pageEpoch: snapshot.epoch,
-        pageNextIndex,
-      });
-      return;
-    }
+    const retained: RetainedTranscriptSnapshot = this.#transcripts.get(sessionId) ?? {
+      droppedLines: snapshot.droppedLines,
+      lines: [],
+      pageEpoch: snapshot.epoch,
+      pageNextIndex: snapshot.droppedLines,
+    };
+    this.#transcripts.set(sessionId, retained);
     const retainedNextIndex = retained.droppedLines + retained.lines.length;
-    if (retained.pageEpoch !== snapshot.epoch) {
-      if (snapshot.droppedLines > 0) {
-        // A new page epoch with an already-trimmed prefix leaves a cursor gap.
-        // Keep only its contiguous tail so older lines never move to new indices.
-        retained.droppedLines = retainedNextIndex + snapshot.droppedLines;
-        retained.lines = [...snapshot.lines];
-      } else {
-        retained.lines.push(...snapshot.lines);
-      }
-      retained.pageEpoch = snapshot.epoch;
-      retained.pageNextIndex = pageNextIndex;
-    } else if (pageNextIndex > retained.pageNextIndex) {
-      if (snapshot.droppedLines > retained.pageNextIndex) {
-        // Preserve the accumulated cross-epoch offset, but discard the stale segment
-        // before the page gap instead of shifting it under the new cursor range.
-        const pageOffset = retainedNextIndex - retained.pageNextIndex;
+    const newEpoch = retained.pageEpoch !== snapshot.epoch;
+    const previousPageIndex = newEpoch ? 0 : retained.pageNextIndex;
+    if (newEpoch || pageNextIndex > previousPageIndex) {
+      if (snapshot.droppedLines > previousPageIndex) {
+        // A missing page prefix leaves a gap. Keep its contiguous tail without
+        // shifting older lines into the new cursor range, including across epochs.
+        const pageOffset = retainedNextIndex - previousPageIndex;
         retained.droppedLines = pageOffset + snapshot.droppedLines;
         retained.lines = [...snapshot.lines];
       } else {
-        retained.lines.push(
-          ...snapshot.lines.slice(retained.pageNextIndex - snapshot.droppedLines),
-        );
+        retained.lines.push(...snapshot.lines.slice(previousPageIndex - snapshot.droppedLines));
       }
+      retained.pageEpoch = snapshot.epoch;
       retained.pageNextIndex = pageNextIndex;
     }
     const excess = retained.lines.length - TRANSCRIPT_MAX_LINES;

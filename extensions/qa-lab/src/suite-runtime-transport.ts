@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import type { QaBusMessage } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaBusState } from "./bus-state.js";
 import {
   findFailureOutboundMessage,
@@ -6,7 +7,6 @@ import {
   type QaTransportState,
 } from "./qa-transport.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
-import type { QaBusMessage } from "./runtime-api.js";
 
 type WaitForNoOutboundOptions = {
   sinceIndex?: number;

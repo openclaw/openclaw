@@ -104,6 +104,12 @@ describe("worker creation through the shipped plugin Gateway context", () => {
     await requireGit(projectPath, ["config", "user.name", "Plugin Test"]);
     await requireGit(projectPath, ["config", "user.email", "plugin@example.invalid"]);
     await fs.writeFile(path.join(projectPath, "input.txt"), "plugin project\n");
+    await fs.mkdir(path.join(projectPath, ".openclaw"));
+    await fs.writeFile(
+      path.join(projectPath, ".openclaw", "worktree-setup.sh"),
+      "#!/bin/sh\nexit 77\n",
+      { mode: 0o755 },
+    );
     await requireGit(projectPath, ["add", "."]);
     await requireGit(projectPath, ["commit", "--quiet", "-m", "fixture"]);
     type PrepareOptions = Parameters<NonNullable<WorkerProvider["prepareProvision"]>>[2];

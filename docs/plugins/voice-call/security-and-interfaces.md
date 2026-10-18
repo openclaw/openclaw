@@ -84,7 +84,13 @@ Voice Call JSONL logs are retired pre-July state. Upgrade through OpenClaw
 2026.9.7 and run `openclaw doctor --fix` to import them into SQLite before
 updating. That release preserves call data, event ordering, and the original
 log as `calls.jsonl.migrated`. Current Doctor preserves any remaining source
-and reports the intermediate upgrade; runtime reads only canonical SQLite.
+and reports the intermediate upgrade; runtime reads only the current SQLite format.
+
+Calls retain the agent selected when they were created. Changing the configured
+agent affects new calls. Older active records without an explicit `agentId` are
+not resumed automatically, even if a session key names an agent. Their stored
+rows and transcripts remain unchanged; hang up any remaining call at the provider
+and start a new call. Completed history remains readable without an agent owner.
 
 ## Agent tool
 

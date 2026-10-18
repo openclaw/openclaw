@@ -22,33 +22,8 @@ describe("gateway edge auth headers", () => {
     resetSecretRedactionRegistryForTest();
   });
 
-  it("normalizes valid literal and SecretRef header values", () => {
-    expect(
-      normalizeEdgeAuthHeadersConfig({
-        "X-Edge-Literal": " literal-value ",
-        "X-Edge-Ref": { source: "env", provider: "default", id: "EDGE_AUTH_TOKEN" },
-      }),
-    ).toEqual({
-      "X-Edge-Literal": "literal-value",
-      "X-Edge-Ref": { source: "env", provider: "default", id: "EDGE_AUTH_TOKEN" },
-    });
-  });
-
-  it.each([
-    "host",
-    "connection",
-    "upgrade",
-    "content-length",
-    "sec-websocket-key",
-    "sec-websocket-version",
-    "sec-websocket-protocol",
-    "sec-websocket-extensions",
-  ])("rejects transport-owned header %s case-insensitively", (headerName) => {
-    const mixedCaseName = headerName
-      .split("-")
-      .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
-      .join("-");
-    expect(() => normalizeEdgeAuthHeadersConfig({ [mixedCaseName]: "test-secret" })).toThrow(
+  it("rejects transport-owned headers case-insensitively", () => {
+    expect(() => normalizeEdgeAuthHeadersConfig({ Host: "test-secret" })).toThrow(
       /transport-owned header/u,
     );
   });

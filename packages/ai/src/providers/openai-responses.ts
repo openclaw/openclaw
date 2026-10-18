@@ -50,9 +50,9 @@ type OpenAIResponsesReplayOptions = SimpleStreamOptions & {
 };
 
 export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIResponsesOptions> = (
-  model: Model<"openai-responses">,
-  context: Context,
-  options?: OpenAIResponsesOptions,
+  model,
+  context,
+  options,
 ) => {
   const stream = new AssistantMessageEventStream();
   const output = createResponsesAssistantOutput(model);
@@ -66,13 +66,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-      return createClient(
-        model,
-        context,
-        apiKey,
-        resolveProviderSimpleCompletionHeaders(model, options),
-        cacheSessionId,
-      );
+      return createClient(model, context, apiKey, options, cacheSessionId);
     },
     buildParams: (_requestModel, replayMode) => buildParams(model, context, options, replayMode),
     processStreamOptions: {
@@ -88,7 +82,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 export const streamSimpleOpenAIResponses: StreamFunction<
   "openai-responses",
   SimpleStreamOptions
-> = (model: Model<"openai-responses">, context: Context, options?: SimpleStreamOptions) => {
+> = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);
@@ -106,7 +100,7 @@ function createClient(
   model: Model<"openai-responses">,
   context: Context,
   apiKey?: string,
-  optionsHeaders?: Record<string, string>,
+  options?: OpenAIResponsesOptions,
   sessionId?: string,
 ) {
   if (!apiKey) {
@@ -126,7 +120,13 @@ function createClient(
     headers["x-client-request-id"] = sessionId;
   }
 
-  return createOpenAIProviderClient(model, apiKey, headers, optionsHeaders);
+  return createOpenAIProviderClient(
+    model,
+    apiKey,
+    headers,
+    resolveProviderSimpleCompletionHeaders(model, options),
+    options?.onResponse,
+  );
 }
 
 function buildParams(

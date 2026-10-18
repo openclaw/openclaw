@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -99,7 +99,7 @@ export function managedImageRecordsEqual(
 }
 
 function readManagedImageRecordInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   attachmentId: string,
 ): ManagedImageRecord | null {
   const row = executeSqliteQueryTakeFirstSync(
@@ -114,7 +114,7 @@ function readManagedImageRecordInDatabase(
 }
 
 function listManagedImageRecordEntriesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey?: string,
 ): ManagedImageRecordEntry[] {
   const stateDb = getNodeSqliteKysely<ManagedImageRecordDatabase>(db);
@@ -133,7 +133,7 @@ function listManagedImageRecordEntriesInDatabase(
   }));
 }
 
-function listManagedImageOriginalMediaIdsInDatabase(db: DatabaseSync): string[] {
+function listManagedImageOriginalMediaIdsInDatabase(db: EngineConnection): string[] {
   return executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<ManagedImageRecordDatabase>(db)
@@ -151,7 +151,10 @@ function listManagedImageOriginalMediaIdsInDatabase(db: DatabaseSync): string[] 
   ).rows.map((row) => row.original_media_id);
 }
 
-function insertManagedImageRecordInDatabase(db: DatabaseSync, record: ManagedImageRecord): boolean {
+function insertManagedImageRecordInDatabase(
+  db: EngineConnection,
+  record: ManagedImageRecord,
+): boolean {
   executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<ManagedImageRecordDatabase>(db)
@@ -163,7 +166,7 @@ function insertManagedImageRecordInDatabase(db: DatabaseSync, record: ManagedIma
 
 /** Promote a transient record atomically so concurrent message commits cannot lose state. */
 function attachManagedImageRecordInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: ManagedImageRecordAttachment,
 ): boolean {
   const stateDb = getNodeSqliteKysely<ManagedImageRecordDatabase>(db);
@@ -204,10 +207,11 @@ function attachManagedImageRecordInDatabase(
   return true;
 }
 
-/** Claim only the exact row cleanup planned against; concurrent updates win. */
-function claimManagedImageRecordCleanupInDatabase(
-  db: DatabaseSync,
+/** Both cleanup transitions require the exact planned row; concurrent updates win. */
+function mutateManagedImageCleanupInDatabase(
+  db: EngineConnection,
   planned: ManagedImageRecord,
+  transition: "claim" | "delete",
 ): boolean {
   const stateDb = getNodeSqliteKysely<ManagedImageRecordDatabase>(db);
   const row = executeSqliteQueryTakeFirstSync(
@@ -219,51 +223,31 @@ function claimManagedImageRecordCleanupInDatabase(
   );
   if (
     !row ||
-    row.cleanup_pending === 1 ||
+    (row.cleanup_pending === 1) !== (transition === "delete") ||
     !managedImageRecordsEqual(managedImageRecordFromRow(row), planned)
   ) {
     return false;
   }
-  executeSqliteQuerySync(
-    db,
-    stateDb
-      .updateTable("managed_outgoing_image_records")
-      .set({ cleanup_pending: 1 })
-      .where("attachment_id", "=", planned.attachmentId),
-  );
-  return true;
-}
-
-/** Delete a durably claimed row only after its attachment file is gone. */
-function deleteClaimedManagedImageRecordInDatabase(
-  db: DatabaseSync,
-  planned: ManagedImageRecord,
-): boolean {
-  const stateDb = getNodeSqliteKysely<ManagedImageRecordDatabase>(db);
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("managed_outgoing_image_records")
-      .select(MANAGED_IMAGE_RECORD_COLUMNS)
-      .where("attachment_id", "=", planned.attachmentId),
-  );
-  if (
-    !row ||
-    row.cleanup_pending !== 1 ||
-    !managedImageRecordsEqual(managedImageRecordFromRow(row), planned)
-  ) {
-    return false;
+  if (transition === "delete") {
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .deleteFrom("managed_outgoing_image_records")
+        .where("attachment_id", "=", planned.attachmentId),
+    );
+  } else {
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .updateTable("managed_outgoing_image_records")
+        .set({ cleanup_pending: 1 })
+        .where("attachment_id", "=", planned.attachmentId),
+    );
   }
-  executeSqliteQuerySync(
-    db,
-    stateDb
-      .deleteFrom("managed_outgoing_image_records")
-      .where("attachment_id", "=", planned.attachmentId),
-  );
   return true;
 }
 
-function mutation<Input>(type: string, apply: (db: DatabaseSync, input: Input) => boolean) {
+function mutation<Input>(type: string, apply: (db: EngineConnection, input: Input) => boolean) {
   return (input: Input, { open }: WorkerOperationContext) =>
     runOpenClawStateWriteTransaction(
       ({ db }) => {
@@ -284,31 +268,29 @@ export const managedImageRecordOperations = {
   "managedImages.attach": mutation("managedImages.attach", attachManagedImageRecordInDatabase),
   "managedImages.claimCleanup": mutation(
     "managedImages.claimCleanup",
-    claimManagedImageRecordCleanupInDatabase,
+    (db, record: ManagedImageRecord) => mutateManagedImageCleanupInDatabase(db, record, "claim"),
   ),
   "managedImages.deleteClaimed": mutation(
     "managedImages.deleteClaimed",
-    deleteClaimedManagedImageRecordInDatabase,
+    (db, record: ManagedImageRecord) => mutateManagedImageCleanupInDatabase(db, record, "delete"),
   ),
-  "managedImages.read": ({ attachmentId }: { attachmentId: string }, { open }) =>
-    readManagedImageRecordInDatabase(open().db, attachmentId),
-  "managedImages.entries": ({ sessionKey }: { sessionKey?: string }, { open }) =>
-    listManagedImageRecordEntriesInDatabase(open().db, sessionKey),
-  "managedImages.originalMediaIds": (_input: undefined, { open }) =>
-    listManagedImageOriginalMediaIdsInDatabase(open().db),
 } satisfies WorkerOperationHandlers;
 
-export type ManagedImageRecordWorkerOperations = WorkerOperations<
-  typeof managedImageRecordOperations
->;
+export const managedImageRecordReadOperations = {
+  "managedImages.read": ({ attachmentId }: { attachmentId: string }, db) => ({
+    type: "managedImages.read" as const,
+    record: readManagedImageRecordInDatabase(db, attachmentId),
+  }),
+  "managedImages.entries": ({ sessionKey }: { sessionKey?: string }, db) => ({
+    type: "managedImages.entries" as const,
+    entries: listManagedImageRecordEntriesInDatabase(db, sessionKey),
+  }),
+  "managedImages.originalMediaIds": (_input: undefined, db) => ({
+    type: "managedImages.originalMediaIds" as const,
+    mediaIds: listManagedImageOriginalMediaIdsInDatabase(db),
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
-export type ManagedImageRecordMutation = Extract<
-  SqliteWorkerCommand<ManagedImageRecordWorkerOperations>,
-  {
-    type:
-      | "managedImages.insert"
-      | "managedImages.attach"
-      | "managedImages.claimCleanup"
-      | "managedImages.deleteClaimed";
-  }
+export type ManagedImageRecordMutation = SqliteWorkerCommand<
+  WorkerOperations<typeof managedImageRecordOperations>
 >;

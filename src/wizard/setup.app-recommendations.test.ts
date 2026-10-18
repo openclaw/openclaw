@@ -1,31 +1,114 @@
-import { describe, expect, it, vi } from "vitest";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as onboardingPlugins from "../commands/onboarding-plugin-install.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as clawHubSkills from "../infra/clawhub-skills.js";
+import * as catalog from "../plugins/official-external-plugin-catalog.js";
 import type { RuntimeEnv } from "../runtime.js";
+import * as skillLifecycle from "../skills/lifecycle/clawhub.js";
+import * as recommendationsStore from "../state/onboarding-recommendations.js";
 import {
   createOnboardingRecommendationsStore,
   type OnboardingRecommendationsRecord,
-  type OnboardingRecommendationsStore,
+  type OnboardingRecommendationsStore as Store,
 } from "../state/onboarding-recommendations.js";
+import * as recommendations from "../system-agent/setup-app-recommendations.js";
 import type {
   SetupAppRecommendationsResult,
   SetupAppScanPhase,
 } from "../system-agent/setup-app-recommendations.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { WizardPrompter } from "./prompts.js";
-import { setupAppRecommendations as setupAppRecommendationsWithOutcome } from "./setup.app-recommendations.js";
+import { setupAppRecommendations as runAppRecommendations } from "./setup.app-recommendations.js";
 
-async function setupAppRecommendations(
-  params: Partial<Parameters<typeof setupAppRecommendationsWithOutcome>[0]>,
-): Promise<OpenClawConfig> {
-  const outcome = await setupAppRecommendationsWithOutcome({
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const createStore = createOnboardingRecommendationsStore;
+afterEach(() => vi.restoreAllMocks());
+
+beforeEach(() => {
+  vi.spyOn(skillLifecycle, "resolveClawHubSkillVerificationTarget").mockResolvedValue({
+    ok: false,
+    error: "Synthetic skill is not installed",
+  });
+  vi.spyOn(catalog, "listOfficialExternalPluginCatalogEntries").mockReturnValue([
+    {
+      name: "@openclaw/chat-plugin",
+      openclaw: { plugin: { id: "chat-plugin", label: "Chat plugin" } },
+    },
+  ]);
+});
+
+type SetupFixture = Partial<Parameters<typeof runAppRecommendations>[0]> & {
+  platform?: NodeJS.Platform;
+  deps?: {
+    recommend?: (
+      onPhase?: (phase: SetupAppScanPhase) => void,
+    ) => Promise<SetupAppRecommendationsResult>;
+    ensurePlugin?: typeof onboardingPlugins.ensureOnboardingPluginInstalled;
+    installSkill?: typeof skillLifecycle.installSkillFromClawHub;
+    readStored?: Store["read"];
+    writeOffer?: Store["writeOffer"];
+    acknowledgeStored?: Store["acknowledge"];
+    updatePendingStored?: Store["updatePending"];
+    clearPendingStored?: Store["clearPending"];
+    deferOfferToBootstrap?: () => boolean;
+  };
+};
+
+async function setupAppRecommendationsWithOutcome(params: SetupFixture) {
+  const { deps = {}, platform = "darwin", ...request } = params;
+  const workspaceDir = request.workspaceDir ?? tempDirs.make("openclaw-wizard-recommendations-");
+  if (deps.deferOfferToBootstrap?.()) {
+    writeFileSync(join(workspaceDir, "BOOTSTRAP.md"), "Synthetic bootstrap");
+  }
+  if (deps.recommend) {
+    const recommend = deps.recommend;
+    vi.spyOn(recommendations, "getSetupAppRecommendations").mockImplementation(({ onPhase }) =>
+      recommend(onPhase),
+    );
+  }
+  if (deps.ensurePlugin) {
+    vi.spyOn(onboardingPlugins, "ensureOnboardingPluginInstalled").mockImplementation(
+      deps.ensurePlugin,
+    );
+  }
+  if (deps.installSkill) {
+    vi.spyOn(skillLifecycle, "installSkillFromClawHub").mockImplementation(deps.installSkill);
+  }
+  vi.spyOn(recommendationsStore, "createOnboardingRecommendationsStore").mockImplementation(
+    (options) => {
+      const store = createStore(options);
+      return {
+        ...store,
+        read: deps.readStored ?? store.read,
+        writeOffer: deps.writeOffer ?? store.writeOffer,
+        acknowledge: deps.acknowledgeStored ?? store.acknowledge,
+        updatePending: deps.updatePendingStored ?? store.updatePending,
+        clearPending: deps.clearPendingStored ?? store.clearPending,
+      };
+    },
+  );
+  const runParams = {
     config: {},
     prompter: createPrompter(),
     runtime,
-    workspaceDir: "/tmp/workspace",
     modelRouteVerified: true,
-    platform: "darwin",
-    ...params,
-  });
+    ...request,
+    workspaceDir,
+  };
+  // Override only the wizard gate; SQLite workers must keep the real OS identity.
+  const platformMock = vi.spyOn(process, "platform", "get").mockReturnValueOnce(platform);
+  try {
+    return runAppRecommendations(runParams);
+  } finally {
+    platformMock.mockRestore();
+  }
+}
+
+async function setupAppRecommendations(params: SetupFixture): Promise<OpenClawConfig> {
+  const outcome = await setupAppRecommendationsWithOutcome(params);
   await outcome.commitResult();
   return outcome.config;
 }
@@ -53,54 +136,53 @@ const runtime: RuntimeEnv = {
 function storeDeps(initial: OnboardingRecommendationsRecord | null = null) {
   let current = initial;
   let now = 0;
-  const writeOffer = vi.fn(
-    async (params: Parameters<OnboardingRecommendationsStore["writeOffer"]>[0]) => {
+  function update(
+    expected: Pick<OnboardingRecommendationsRecord, "inventoryHash" | "updatedAt"> | undefined,
+    patch: Partial<OnboardingRecommendationsRecord>,
+  ) {
+    if (
+      !current ||
+      (expected &&
+        (expected.inventoryHash !== current.inventoryHash ||
+          expected.updatedAt !== current.updatedAt))
+    ) {
+      return null;
+    }
+    current = { ...current, ...patch, updatedAt: ++now };
+    return current;
+  }
+  return {
+    readStored: vi.fn(async (): Promise<OnboardingRecommendationsRecord | null> => current),
+    writeOffer: vi.fn<Store["writeOffer"]>(async (params) => {
       now += 1;
-      current = {
-        inventoryHash: "hash",
-        matches: [...params.matches],
+      current = storedRecord([...params.matches], {
         offeredAt: now,
         acceptedAt: params.answered ? now : null,
         updatedAt: now,
-      };
+      });
       return current;
-    },
-  );
-  const acknowledgeStored = vi.fn(
-    async (params: Parameters<OnboardingRecommendationsStore["acknowledge"]>[0] = {}) => {
-      if (
-        !current ||
-        (params.expected &&
-          (params.expected.inventoryHash !== current.inventoryHash ||
-            params.expected.updatedAt !== current.updatedAt))
-      ) {
-        return null;
-      }
-      now += 1;
-      current = { ...current, acceptedAt: now, updatedAt: now };
-      return current;
-    },
-  );
-  const updatePendingStored = vi.fn(
-    async (params: Parameters<OnboardingRecommendationsStore["updatePending"]>[0]) => {
-      if (
-        !current ||
-        params.expected.inventoryHash !== current.inventoryHash ||
-        params.expected.updatedAt !== current.updatedAt
-      ) {
-        return null;
-      }
-      now += 1;
-      current = { ...current, matches: [...params.matches], updatedAt: now };
-      return current;
-    },
-  );
-  return {
-    readStored: vi.fn(async (): Promise<OnboardingRecommendationsRecord | null> => current),
-    writeOffer,
-    acknowledgeStored,
-    updatePendingStored,
+    }),
+    acknowledgeStored: vi.fn<Store["acknowledge"]>(async (params = {}) =>
+      update(params.expected, { acceptedAt: now + 1 }),
+    ),
+    updatePendingStored: vi.fn<Store["updatePending"]>(async (params) =>
+      update(params.expected, { matches: [...params.matches] }),
+    ),
     deferOfferToBootstrap: vi.fn(() => false),
+  };
+}
+
+function storedRecord(
+  matches = recommendationResult().matches,
+  overrides: Partial<OnboardingRecommendationsRecord> = {},
+): OnboardingRecommendationsRecord {
+  return {
+    inventoryHash: "hash",
+    matches,
+    offeredAt: 1,
+    acceptedAt: null,
+    updatedAt: 1,
+    ...overrides,
   };
 }
 
@@ -151,21 +233,10 @@ describe("setupAppRecommendations", () => {
       });
       const persistedBeforeInstall: string[][] = [];
       const outcome = await setupAppRecommendationsWithOutcome({
-        config: {},
         prompter,
-        runtime,
         workspaceDir: state.workspaceDir,
-        modelRouteVerified: true,
-        platform: "darwin",
         deps: {
           recommend,
-          deferOfferToBootstrap: () => false,
-          isSkillInstalled: async () => false,
-          resolveOfficialEntry: (pluginId) => ({
-            pluginId,
-            label: "Chat plugin",
-            install: { npmSpec: "@openclaw/chat-plugin" },
-          }),
           ensurePlugin: async ({ cfg }) => {
             const pending = await store.read();
             expect(pending?.acceptedAt).toBeNull();
@@ -250,19 +321,17 @@ describe("setupAppRecommendations", () => {
         recommend,
         writeOffer,
         clearPendingStored,
-        readStored: async () => ({
-          inventoryHash: "hash",
-          matches: [
-            {
-              ...legacyMatch,
-              candidateId: "chat-skill",
-              candidate: { ...legacyMatch.candidate, id: "chat-skill" },
-            },
-          ],
-          offeredAt: 1,
-          acceptedAt: 2,
-          updatedAt: 2,
-        }),
+        readStored: async () =>
+          storedRecord(
+            [
+              {
+                ...legacyMatch,
+                candidateId: "chat-skill",
+                candidate: { ...legacyMatch.candidate, id: "chat-skill" },
+              },
+            ],
+            { acceptedAt: 2, updatedAt: 2 },
+          ),
       },
     });
 
@@ -285,16 +354,9 @@ describe("setupAppRecommendations", () => {
     await setupAppRecommendations({
       deps: {
         recommend,
-        readStored: async () => ({
-          inventoryHash: "hash",
-          matches: pendingMatches,
-          offeredAt: 1,
-          acceptedAt: null,
-          updatedAt: 1,
-        }),
+        readStored: async () => storedRecord(pendingMatches),
         writeOffer: vi.fn(),
         clearPendingStored,
-        deferOfferToBootstrap: () => false,
       },
     });
 
@@ -314,13 +376,7 @@ describe("setupAppRecommendations", () => {
       deps: {
         recommend,
         writeOffer,
-        readStored: async () => ({
-          inventoryHash: "hash",
-          matches: recommendationResult().matches,
-          offeredAt: 1,
-          acceptedAt: null,
-          updatedAt: 1,
-        }),
+        readStored: async () => storedRecord(),
         deferOfferToBootstrap: () => true,
       },
     });
@@ -348,20 +404,14 @@ describe("setupAppRecommendations", () => {
       .mockResolvedValueOnce(["recommendation:0"]);
     const deps = { recommend, installSkill, ...store };
 
-    await setupAppRecommendations({
-      prompter,
-      deps,
-    });
+    await setupAppRecommendations({ prompter, deps });
 
     expect(await store.readStored()).toMatchObject({
       acceptedAt: null,
       matches: [expect.objectContaining({ candidateId: "@demo-owner/chat-skill" })],
     });
 
-    await setupAppRecommendations({
-      prompter,
-      deps,
-    });
+    await setupAppRecommendations({ prompter, deps });
 
     expect(recommend).toHaveBeenCalledOnce();
     expect(installSkill).toHaveBeenCalledTimes(2);
@@ -371,28 +421,41 @@ describe("setupAppRecommendations", () => {
 
   it("consumes an exact installed skill left pending by an interrupted run", async () => {
     const skill = recommendationResult().matches[1]!;
-    const stored: OnboardingRecommendationsRecord = {
-      inventoryHash: "hash",
-      matches: [skill],
-      offeredAt: 1,
-      acceptedAt: null,
-      updatedAt: 1,
-    };
-    const store = storeDeps(stored);
+    const store = storeDeps(storedRecord([skill]));
     const installSkill = vi.fn();
+    vi.mocked(skillLifecycle.resolveClawHubSkillVerificationTarget).mockResolvedValue({
+      ok: true,
+      slug: "chat-skill",
+      ownerHandle: "demo-owner",
+      baseUrl: "https://clawhub.ai",
+      version: "1.0.0",
+      tag: undefined,
+      resolution: {
+        source: "installed",
+        selector: "installed-version",
+        registry: "https://clawhub.ai",
+        skillDir: undefined,
+        installedVersion: "1.0.0",
+      },
+    });
+    vi.spyOn(clawHubSkills, "fetchClawHubSkillVerification").mockResolvedValue({
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      skill: null,
+      publisher: null,
+      version: null,
+      card: null,
+      artifact: null,
+      provenance: null,
+      security: null,
+      signature: null,
+    });
 
     const outcome = await setupAppRecommendationsWithOutcome({
-      config: {},
       prompter: createPrompter(["recommendation:0"]),
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
-      deps: {
-        ...store,
-        installSkill,
-        isSkillInstalled: vi.fn(async ({ skillRef }) => skillRef === skill.candidate.id),
-      },
+      deps: { ...store, installSkill },
     });
 
     expect(installSkill).not.toHaveBeenCalled();

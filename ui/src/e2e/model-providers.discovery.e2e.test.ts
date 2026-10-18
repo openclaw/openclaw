@@ -17,7 +17,7 @@ suite.define(() => {
         releaseSetup = resolve;
       });
       const setupModule = controlUiE2eBuiltModuleRequest(
-        "ui/src/pages/model-setup/model-setup-page.ts",
+        "ui/src/pages/model-setup/model-setup-page.tsx",
       );
       const setupRequested = page.waitForRequest(setupModule);
       await page.route(setupModule, async (route) => {

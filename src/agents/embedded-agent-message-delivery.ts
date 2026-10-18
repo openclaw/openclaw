@@ -1,5 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   listMessageReceiptSourceTargets,
@@ -8,7 +8,9 @@ import {
 import type { MessageReceipt } from "../channels/message/types.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import type { MessagePollResult, MessageSendResult } from "../infra/outbound/message.js";
+import { normalizeMessageDeliveryStatus } from "./embedded-agent-messaging-status.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { markFinalSourceReplyResult } from "./tool-source-reply-completion.js";
 
 type EmbeddedMessageDeliveryFact = {
   status: "settled" | "suppressed" | "dryRun" | "failed";
@@ -48,11 +50,11 @@ function deliveryId(value: unknown): string | undefined {
   return id && !NON_DELIVERY_IDS.has(id.toLowerCase()) ? id : undefined;
 }
 
-function projectReceiptIdentity(delivery?: {
+function projectReceiptDelivery(delivery?: {
   receipt?: MessageReceipt;
   messageId?: string;
   pollId?: string;
-}) {
+}): EmbeddedMessageDeliveryFact {
   const receipt = delivery?.receipt;
   const primaryPlatformMessageId = [
     receipt ? resolveMessageReceiptPrimaryId(receipt) : undefined,
@@ -66,11 +68,12 @@ function projectReceiptIdentity(delivery?: {
     receipt?.threadId,
     ...(receipt?.parts.map((part) => part.threadId) ?? []),
   ].flatMap((id) => (typeof id === "string" && id.trim() ? [id.trim()] : []));
-  return { primaryPlatformMessageId, createdThreadIds: [...new Set(createdThreadIds)] };
-}
-
-function normalizeStatus(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim().toLowerCase() : undefined;
+  return {
+    status: primaryPlatformMessageId ? "settled" : "failed",
+    ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
+    partialDelivery: false,
+    createdThreadIds: [...new Set(createdThreadIds)],
+  };
 }
 
 type PluginEnvelopePredicate = (
@@ -83,38 +86,41 @@ function visitPluginEnvelope(
   predicate: PluginEnvelopePredicate,
   depth = 0,
 ): boolean {
-  if (!value || typeof value !== "object" || depth > 4) {
+  if (depth > 4) {
     return false;
   }
   if (Array.isArray(value)) {
     return value.some((item) => visitPluginEnvelope(item, predicate, depth + 1));
   }
-  const record = asOptionalRecord(value);
-  if (!record) {
+  if (!isRecord(value)) {
     return false;
   }
-  const status = normalizeStatus(record.deliveryStatus) ?? normalizeStatus(record.status);
-  if (predicate(record, status)) {
+  const status =
+    normalizeMessageDeliveryStatus(value.deliveryStatus) ??
+    normalizeMessageDeliveryStatus(value.status);
+  if (predicate(value, status)) {
     return true;
   }
-  if (typeof record.text === "string") {
-    const parsed = safeParseJsonRecord(record.text);
+  if (typeof value.text === "string") {
+    const parsed = safeParseJsonRecord(value.text);
     if (parsed && visitPluginEnvelope(parsed, predicate, depth + 1)) {
       return true;
     }
   }
   if (
-    Array.isArray(record.content) &&
-    record.content.some((item) => visitPluginEnvelope(item, predicate, depth + 1))
+    Array.isArray(value.content) &&
+    value.content.some((item) => visitPluginEnvelope(item, predicate, depth + 1))
   ) {
     return true;
   }
-  return PLUGIN_ENVELOPE_KEYS.some((key) => visitPluginEnvelope(record[key], predicate, depth + 1));
+  return PLUGIN_ENVELOPE_KEYS.some((key) => visitPluginEnvelope(value[key], predicate, depth + 1));
 }
 
 const PLUGIN_SIGNALS = {
   dryRun: (record: Record<string, unknown>, status: string | undefined) =>
-    record.dryRun === true || status === "dry_run" || normalizeStatus(record.status) === "dry_run",
+    record.dryRun === true ||
+    status === "dry_run" ||
+    normalizeMessageDeliveryStatus(record.status) === "dry_run",
   failure: (record: Record<string, unknown>) =>
     record.ok === false ||
     record.success === false ||
@@ -123,7 +129,7 @@ const PLUGIN_SIGNALS = {
     record.complete === false ||
     Boolean(record.error) ||
     [record.status, record.deliveryStatus].some((value) => {
-      const status = normalizeStatus(value);
+      const status = normalizeMessageDeliveryStatus(value);
       return (
         status === "error" ||
         status === "incomplete" ||
@@ -144,7 +150,7 @@ const PLUGIN_SIGNALS = {
       asOptionalRecord(record.thread)?.id,
     ].some((id) => hasNonEmptyString(id) || (typeof id === "number" && Number.isFinite(id))),
   nonDelivery: (record: Record<string, unknown>, status: string | undefined) => {
-    const id = normalizeStatus(record.messageId);
+    const id = normalizeMessageDeliveryStatus(record.messageId);
     return (
       (id !== undefined && NON_DELIVERY_IDS.has(id)) ||
       (status !== undefined && NON_DELIVERY_STATUSES.has(status))
@@ -171,23 +177,23 @@ const PLUGIN_SIGNALS = {
   delivery: (record: Record<string, unknown>, status: string | undefined): boolean =>
     PLUGIN_SIGNALS.deliveryId(record) ||
     status === "sent" ||
-    normalizeStatus(record.text) === "sent",
+    normalizeMessageDeliveryStatus(record.text) === "sent",
   deliveryId: (record: Record<string, unknown>) =>
     [record.messageId, record.pollId, asOptionalRecord(record.message)?.id]
-      .map(normalizeStatus)
+      .map(normalizeMessageDeliveryStatus)
       .some((id) => Boolean(id && !NON_DELIVERY_IDS.has(id))),
   ok: (record: Record<string, unknown>) =>
-    record.ok === true || normalizeStatus(record.text) === "ok",
+    record.ok === true || normalizeMessageDeliveryStatus(record.text) === "ok",
 } satisfies Record<string, PluginEnvelopePredicate>;
 
 export function pluginEnvelopeHas(value: unknown, signal: keyof typeof PLUGIN_SIGNALS): boolean {
   return visitPluginEnvelope(value, PLUGIN_SIGNALS[signal]);
 }
 
-function readPluginDeliveryIdentity(value: unknown) {
+function readPluginDeliveryIdentity(records: readonly Record<string, unknown>[]) {
   let primaryPlatformMessageId: string | undefined;
   const deliveredTargets = new Set<string>();
-  visitPluginEnvelope(value, (record) => {
+  for (const record of records) {
     primaryPlatformMessageId ??= [
       record.messageId,
       record.pollId,
@@ -198,8 +204,7 @@ function readPluginDeliveryIdentity(value: unknown) {
     for (const target of listMessageReceiptSourceTargets(record)) {
       deliveredTargets.add(target);
     }
-    return false;
-  });
+  }
   return {
     ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
     ...(deliveredTargets.size ? { deliveredTargets: [...deliveredTargets] } : {}),
@@ -209,24 +214,31 @@ function readPluginDeliveryIdentity(value: unknown) {
 export function projectPluginMessageDeliveryFact(
   value: unknown,
 ): EmbeddedMessageDeliveryFact | undefined {
-  if (pluginEnvelopeHas(value, "dryRun")) {
+  const envelopes: Array<{ record: Record<string, unknown>; status: string | undefined }> = [];
+  visitPluginEnvelope(value, (record, status) => {
+    envelopes.push({ record, status });
+    return false;
+  });
+  const has = (signal: keyof typeof PLUGIN_SIGNALS) =>
+    envelopes.some(({ record, status }) => PLUGIN_SIGNALS[signal](record, status));
+  if (has("dryRun")) {
     return { status: "dryRun", ...EMPTY_DELIVERY_FACT };
   }
-  if (pluginEnvelopeHas(value, "partial")) {
+  if (has("partial")) {
     return { status: "settled", partialDelivery: true, createdThreadIds: [] };
   }
-  if (pluginEnvelopeHas(value, "nonDelivery")) {
+  if (has("nonDelivery")) {
     return { status: "suppressed", ...EMPTY_DELIVERY_FACT };
   }
-  if (pluginEnvelopeHas(value, "noOp") || pluginEnvelopeHas(value, "failure")) {
+  if (has("noOp") || has("failure")) {
     return { status: "failed", ...EMPTY_DELIVERY_FACT };
   }
-  if (!pluginEnvelopeHas(value, "delivery") && !pluginEnvelopeHas(value, "ok")) {
+  if (!has("delivery") && !has("ok")) {
     return undefined;
   }
   return {
     status: "settled",
-    ...readPluginDeliveryIdentity(value),
+    ...readPluginDeliveryIdentity(envelopes.map(({ record }) => record)),
     ...EMPTY_DELIVERY_FACT,
   };
 }
@@ -250,7 +262,7 @@ export function pluginBroadcastHasDelivery(value: unknown): boolean {
 
 function projectSend(result: MessageSendResult): EmbeddedMessageDeliveryFact {
   const delivery = result.result;
-  const { primaryPlatformMessageId, createdThreadIds } = projectReceiptIdentity(delivery);
+  const fact = projectReceiptDelivery(delivery);
   const partialDelivery =
     result.deliveryStatus === "partial_failed" || result.sentBeforeError === true;
   const nonDeliveryId =
@@ -262,25 +274,15 @@ function projectSend(result: MessageSendResult): EmbeddedMessageDeliveryFact {
       ? "settled"
       : result.deliveryStatus === "suppressed" || nonDeliveryId
         ? "suppressed"
-        : result.deliveryStatus === "sent" || primaryPlatformMessageId
+        : result.deliveryStatus === "sent" || fact.primaryPlatformMessageId
           ? "settled"
           : "failed";
-  return {
-    status,
-    ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
-    partialDelivery,
-    createdThreadIds,
-  };
+  return { ...fact, status, partialDelivery };
 }
 
 function projectPoll(result: MessagePollResult): EmbeddedMessageDeliveryFact {
-  const { primaryPlatformMessageId, createdThreadIds } = projectReceiptIdentity(result.result);
-  return {
-    status: result.dryRun ? "dryRun" : primaryPlatformMessageId ? "settled" : "failed",
-    ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
-    partialDelivery: false,
-    createdThreadIds,
-  };
+  const fact = projectReceiptDelivery(result.result);
+  return result.dryRun ? { ...fact, status: "dryRun" } : fact;
 }
 
 export function projectEmbeddedMessageDeliveryFact(
@@ -292,9 +294,7 @@ export function projectEmbeddedMessageDeliveryFact(
     : projectPluginMessageDeliveryFact(result.payload);
   const partialDelivery = payloadDelivery?.partialDelivery ? payloadDelivery : undefined;
   if (currentSourceReply && result.handledBy === "plugin") {
-    return result.dryRun
-      ? { status: "dryRun", ...EMPTY_DELIVERY_FACT }
-      : projectPluginMessageDeliveryFact(result.payload);
+    return result.dryRun ? { status: "dryRun", ...EMPTY_DELIVERY_FACT } : payloadDelivery;
   }
   if (result.kind === "send") {
     return result.handledBy === "core" && result.sendResult
@@ -367,7 +367,10 @@ export function attachEmbeddedMessageDeliveryFact(
     const { messageDelivery: _reserved, ...rest } = details;
     return { ...result, details: rest };
   }
-  return { ...result, details: { ...details, messageDelivery: fact } };
+  const delivered = { ...result, details: { ...details, messageDelivery: fact } };
+  return fact.sourceReplyDelivered === true && fact.status === "settled" && !fact.partialDelivery
+    ? markFinalSourceReplyResult(delivered)
+    : delivered;
 }
 
 export function isDeliveredCoreCurrentChannelWidgetResult(params: {
@@ -385,10 +388,10 @@ export function isDeliveredCoreCurrentChannelWidgetResult(params: {
   ) {
     return false;
   }
-  const details = asOptionalRecord(params.result)?.details;
-  const presentation = asOptionalRecord(asOptionalRecord(details)?.presentation);
+  const details = asOptionalRecord(asOptionalRecord(params.result)?.details);
+  const presentation = asOptionalRecord(details?.presentation);
   const receipt = asOptionalRecord(presentation?.receipt);
-  if (asOptionalRecord(details)?.kind !== "widget" || presentation?.target !== "current_channel") {
+  if (details?.kind !== "widget" || presentation?.target !== "current_channel") {
     return false;
   }
   const receiptIds = [

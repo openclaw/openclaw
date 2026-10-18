@@ -14,6 +14,8 @@ export type {
   ControlUiDashboardProps,
   ControlUiDialogProps,
 } from "./control-ui-components.js";
+export type { AgentsWorkspaceGetResult } from "@openclaw/gateway-protocol";
+export type { MemorySearchResponse } from "../../packages/memory-host-sdk/src/host/types.js";
 export type ControlUiDisposer = () => void;
 
 export type ControlUiConnection = {
@@ -42,6 +44,7 @@ export type ControlUiSessionListQuery = Readonly<
     | "configuredAgentsOnly"
     | "includeGlobal"
     | "includeUnknown"
+    | "excludeDock"
     | "includeDerivedTitles"
     | "includeLastMessage"
   >
@@ -135,14 +138,26 @@ export type ControlUiPage = {
   mount: ControlUiView;
 };
 
+type ControlUiNavigationAction = {
+  id: string;
+  label: string;
+  icon?: string;
+  destructive?: boolean;
+  run: () => void | Promise<void>;
+};
+
 export type ControlUiNavigationItem = {
   id: string;
+  /** Navigation item ID in this plugin whose active section displays this child. */
+  parent?: string;
   label: string;
   page: ControlUiPageTarget;
   icon?: string;
   order?: number;
   /** False offers the destination in the pin editor without adding it to the sidebar. */
   defaultVisible?: boolean;
+  /** Context menu actions, available by right-click or the keyboard menu shortcut. */
+  actions?: ControlUiNavigationAction[];
 };
 
 export type ControlUiPanel = {
@@ -172,7 +187,7 @@ export type ControlUiAction = {
 export type ControlUiAccessory = {
   id: string;
   placement: "session-header";
-  mount: ControlUiView<BoardGetParams & { session?: ControlUiSession }>;
+  mount: ControlUiView<BoardGetParams>;
 };
 
 export type ControlUiWidget = {
@@ -224,7 +239,14 @@ export type ControlUiHost = {
       listener: (snapshot: ControlUiSessionListSnapshot) => void,
     ) => ControlUiSessionListSubscription;
     open: (session: BoardGetParams) => void;
-    create: (params?: { agentId?: string; label?: string }) => Promise<string | null>;
+    create: (params?: {
+      agentId?: string;
+      label?: string;
+      /** Presentation title without a unique label claim. */
+      displayName?: string;
+      /** Immutable dock surface; preserves the authenticated operator's creator identity. */
+      surface?: "plugin-dock";
+    }) => Promise<string | null>;
     patch: (
       session: BoardGetParams,
       patch: { label?: string; model?: string | null },
@@ -264,6 +286,12 @@ export type ControlUiHost = {
     invalidate: () => void;
     registerPage: (page: ControlUiPage) => ControlUiDisposer;
     registerNavigation: (item: ControlUiNavigationItem) => ControlUiDisposer;
+    /** Pin an already registered navigation item once; unknown or pinned IDs are a no-op. */
+    pinNavigation: (id: string) => void;
+    /** Remove this plugin's saved navigation pin; an absent pin is a no-op. */
+    unpinNavigation: (id: string) => void;
+    /** Whether this plugin's navigation ID is in the saved sidebar entries. */
+    isNavigationPinned: (id: string) => boolean;
     registerPanel: (panel: ControlUiPanel) => ControlUiDisposer;
     /** Open an owned registered panel beside the supplied or currently selected session. */
     openPanel: (id: string, session?: BoardGetParams) => void;
@@ -284,3 +312,11 @@ export type ControlUiPlugin = {
 export function defineControlUiPlugin(plugin: ControlUiPlugin): ControlUiPlugin {
   return plugin;
 }
+export type { DoctorMemoryStatusPayload } from "../../packages/gateway-protocol/src/doctor-memory.js";
+export type {
+  ControlUiSettingsPlacement,
+  ControlUiSettingsSnapshot,
+  ControlUiSettingsComponents,
+  ControlUiSettingsContext,
+  ControlUiSettingsView,
+} from "./control-ui-settings.js";

@@ -13,6 +13,7 @@ import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-r
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadExactSessionEntry,
   loadTranscriptEventsSync,
@@ -91,7 +92,9 @@ describe("Side chat with a published Gateway runtime", () => {
         scheduler: createTestGatewayScheduler(),
         getConfig: () => cfg,
         contextReader: defaultSessionCompanionContextReader,
-        sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+        sessionObserver: {
+          getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }),
+        },
       });
       const observedTools: string[][] = [];
       const observedModels: Array<{
@@ -174,10 +177,12 @@ describe("Side chat with a published Gateway runtime", () => {
         await waitForSessionTranscriptProjection(selected);
         const retained = selectedManager.getPersistedEntries();
         // Admission must use committed Gateway policy, not the caller's stale config.
-        await refreshPreparedModelRuntimeSnapshots(
-          { ...cfg, messages: { responsePrefix: "committed" } },
-          { gatewayLifecycle: true, catalogMode: "static" },
-        );
+        const committedConfig = { ...cfg, messages: { responsePrefix: "committed" } };
+        setRuntimeConfigSnapshot(committedConfig);
+        await refreshPreparedModelRuntimeSnapshots(committedConfig, {
+          gatewayLifecycle: true,
+          catalogMode: "static",
+        });
         // Keep source-module preparation outside the RPC deadline and hydration barrier.
         await import("../agents/embedded-agent-runner/run.js");
         let connected = true;

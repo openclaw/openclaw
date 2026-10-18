@@ -1,12 +1,27 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as backoff from "../infra/backoff.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { SqliteWorkerExecutionAuthority } from "../infra/sqlite-worker-contract.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  readSqliteWorkerExecutionAuthority,
+} from "../infra/sqlite-worker-operation-admission.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { resolveSqliteBrokerWorkerCount } from "../infra/worker-pool-sizing.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+} from "./openclaw-agent-db.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
+import { readAgentDatabaseExecutionAuthority } from "./openclaw-agent-execution-authority.js";
+import type { AgentDatabaseExecutionScope } from "./openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
@@ -23,35 +38,34 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
   const preload = `
     import { DatabaseSync } from "node:sqlite";
     import { MessagePort, workerData } from "node:worker_threads";
-    // Fault 2: while enabled, the retired lease cannot be released (mimics the
-    // transient SQLITE_IOERR that made the native close fail in production).
+    // Fault 2: transient lease insertion/cleanup failures.
     const prepare = DatabaseSync.prototype.prepare;
     DatabaseSync.prototype.prepare = function (sql) {
       const statement = prepare.call(this, sql);
-      if (/insert into "?agent_database_leases"?/i.test(sql)) {
-        const run = statement.run.bind(statement);
-        statement.run = (...args) => {
-          const fault = new Int32Array(workerData.closeWedgeEnabled);
+      const faults = [
+        [/insert into "?agent_database_leases"?/i, (fault) => {
           if (Atomics.compareExchange(fault, 0, 3, 0) === 3 || Atomics.load(fault, 0) === 4) {
             Atomics.add(fault, 2, 1);
             throw Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 });
           }
-          return run(...args);
-        };
-      }
-      if (/delete from "?agent_database_leases"?/i.test(sql)) {
-        const run = statement.run.bind(statement);
-        statement.run = (...args) => {
-          Atomics.add(new Int32Array(workerData.closeWedgeEnabled), 1, 1);
-          if (Atomics.load(new Int32Array(workerData.closeWedgeEnabled), 0) === 1) {
+        }],
+        [/delete from "?agent_database_leases"?/i, (fault) => {
+          Atomics.add(fault, 1, 1);
+          if (Atomics.load(fault, 0) === 1) {
             throw Object.assign(new Error("disk I/O error"), { code: "ERR_SQLITE_ERROR", errcode: 10, errstr: "disk I/O error" });
           }
+        }],
+      ];
+      for (const [pattern, fail] of faults) {
+        if (!pattern.test(sql)) continue;
+        const run = statement.run.bind(statement);
+        statement.run = (...args) => {
+          fail(new Int32Array(workerData.closeWedgeEnabled));
           return run(...args);
         };
       }
       return statement;
     };
-    // Fault 1: the agent worker exits while handling the marked command.
     const on = MessagePort.prototype.on;
     MessagePort.prototype.on = function (event, listener) {
       if (event !== "message") {
@@ -65,7 +79,6 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
             text = input ? Buffer.from(input.buffer, input.byteOffset, input.byteLength).toString("latin1") : "";
           } catch {}
           if (text.includes(workerData.closeWedgeMarker)) {
-            // The native store disappears mid-operation (worker exit → broker fail(slot)).
             process.exit(3);
           }
         }
@@ -108,14 +121,21 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+const makeEnv = () => ({
+  OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-wedge-")),
+});
+const capture = (env: ReturnType<typeof makeEnv>, agentId = "first") =>
+  captureOpenClawAgentDatabaseExecution({ agentId, env });
+const faultState = new Int32Array(fault.enabled);
 
 it.each(["retry", "deadline", "shutdown"] as const)(
   "keeps contention recoverable while preserving the %s boundary",
   async (ending) => {
-    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-open-contention-")) };
-    const execution = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
-    const attempts = Atomics.load(new Int32Array(fault.enabled), 2);
-    Atomics.store(new Int32Array(fault.enabled), 0, ending === "deadline" ? 4 : 3);
+    const execution = capture(makeEnv());
+    const terminal = vi.fn();
+    execution.onTerminal(terminal);
+    const attempts = Atomics.load(faultState, 2);
+    Atomics.store(faultState, 0, ending === "deadline" ? 4 : 3);
     const clock = vi.spyOn(performance, "now");
     vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => {
       if (ending === "shutdown") {
@@ -131,9 +151,10 @@ it.each(["retry", "deadline", "shutdown"] as const)(
       } else {
         await expect(preparing).rejects.toThrow(ending === "shutdown" ? /closed/ : /locked/);
       }
-      expect(Atomics.load(new Int32Array(fault.enabled), 2)).toBeGreaterThan(attempts);
-      Atomics.store(new Int32Array(fault.enabled), 0, 0);
+      expect(Atomics.load(faultState, 2)).toBeGreaterThan(attempts);
+      Atomics.store(faultState, 0, 0);
       if (ending !== "shutdown") {
+        expect(terminal).not.toHaveBeenCalled();
         execution.assertCurrent();
         await execution.prepare(source);
         const operation = vi.fn(async () => "recovered");
@@ -149,112 +170,134 @@ it.each(["retry", "deadline", "shutdown"] as const)(
       }
       expect(() => execution.assertCurrent()).toThrow(/closed/);
     } finally {
-      Atomics.store(new Int32Array(fault.enabled), 0, 0);
+      Atomics.store(faultState, 0, 0);
       await execution.release();
     }
   },
 );
 
-const source: AgentDatabaseRequestExecutionSource = {
-  assertCurrent: () => undefined,
-  createAdmission(binding) {
-    return () => ({
-      nativeLocations: binding.nativeLocations,
-      admission: createSqliteWorkerOperationAdmission((request, grant) => {
+function executionSource(
+  observe?: (authority: SqliteWorkerExecutionAuthority) => void,
+): AgentDatabaseRequestExecutionSource {
+  return {
+    assertCurrent: () => undefined,
+    createAdmission: (binding) => () => {
+      const admission = createSqliteWorkerOperationAdmission((request, grant) => {
         binding.authorize(request);
+        const authority = readSqliteWorkerExecutionAuthority(admission);
+        if (authority) {
+          observe?.(authority);
+        }
         if (!grant()) {
           throw new Error("Close wedge fixture lost admission");
         }
-      }, binding.attachment),
-    });
-  },
-};
-
-async function failFirstOperation(
-  first: ReturnType<typeof captureOpenClawAgentDatabaseExecution>,
-  mode = 1,
-): Promise<unknown> {
-  Atomics.store(new Int32Array(fault.enabled), 0, mode);
-  const failure: unknown = await first
-    .runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: fault.marker } }),
-    )
-    .catch((error: unknown) => error);
-  Atomics.store(new Int32Array(fault.enabled), 0, 0);
-  return failure;
+      }, binding.attachment);
+      return { nativeLocations: binding.nativeLocations, admission };
+    },
+  };
+}
+const source = executionSource();
+function readEntries(
+  execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution>,
+  key: string | string[],
+  request = source,
+) {
+  return execution.runExisting(request, (scope) =>
+    scope.execute({
+      type: "session.entry.read",
+      input: { sessionKeys: typeof key === "string" ? [key] : key },
+    }),
+  );
 }
 
-it.each([
-  { mode: 1, close: "failed" },
-  { mode: 2, close: "successful" },
-])("recovers after a failed operation with $close native close", async ({ mode }) => {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-wedge-")) };
-  const first = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
-  await first.prepare(source);
-  expect(await first.runExisting(source, async () => "healthy")).toBe("healthy");
+it("recovers retained borrowers after native loss without replaying the failed operation", async () => {
+  const env = makeEnv();
+  const first = capture(env);
+  const sibling = capture(env);
+  try {
+    await first.prepare(source);
+    const claim = sibling.captureGenerationClaim();
+    const failed = vi.fn((scope: AgentDatabaseExecutionScope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: [fault.marker] } }),
+    );
+    Atomics.store(faultState, 0, 2);
+    await expect(first.runExisting(source, failed)).rejects.toBeInstanceOf(Error);
+    Atomics.store(faultState, 0, 0);
+    expect(failed).toHaveBeenCalledOnce();
+    expect(() => claim.assertCurrent()).toThrow();
 
-  // 1. The operation fails because the native store becomes unavailable mid-run.
-  const failure = await failFirstOperation(first, mode);
-  expect(failure).toBeInstanceOf(Error);
-  console.log(`[close-wedge] operation failure: ${formatErrorMessageWithCode(failure)}`);
-  await first.release().catch((error: unknown) => {
-    console.log(`[close-wedge] release failure: ${formatErrorMessageWithCode(error)}`);
-  });
+    // Another live chat retains this borrower while the failed command settles.
+    expect(await readEntries(sibling, "recovered")).toMatchObject({ entries: [] });
+    const replacement = sibling.capturePreparedGenerationClaim();
+    expect(replacement?.identity).toBe(claim.identity);
+    expect(replacement?.incarnation).not.toBe(claim.incarnation);
+    expect(() => claim.assertCurrent()).toThrow();
+    expect(await readEntries(first, "still-healthy")).toMatchObject({ entries: [] });
+    expect(failed).toHaveBeenCalledOnce();
+  } finally {
+    Atomics.store(faultState, 0, 0);
+    await Promise.allSettled([first.release(), sibling.release()]);
+  }
+});
 
-  // 2. The fault is gone. A fresh capture for the same agent must be admitted again;
-  //    on 2026.9.6 (and current main) it throws
-  //    "Agent database execution admission is closed" until the gateway restarts.
-  const retry = await Promise.resolve()
-    .then(async () => {
-      const execution = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
-      await execution.prepare(source);
-      return execution;
-    })
-    .catch((error: unknown) => {
-      console.log(`[close-wedge] re-admission failure: ${formatErrorMessageWithCode(error)}`);
-      throw error;
-    });
+it("reopens a native generation lost between operations before dispatch", async () => {
+  const execution = capture(makeEnv());
+  await execution.prepare(source);
+  expect(await readEntries(execution, "healthy")).toMatchObject({ entries: [] });
+  const claim = execution.captureGenerationClaim();
+  expect(() => claim.assertCurrent()).not.toThrow();
+
+  const agentWorker = [...fault.workers].at(-1);
+  expect(agentWorker).toBeDefined();
+  await agentWorker!.terminate();
+  expect(() => claim.assertCurrent()).toThrow("Agent database execution lost its native owner");
+
+  let dispatched = 0;
   expect(
-    await retry.runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } }),
-    ),
-  ).toBeUndefined();
-  await retry.release();
+    await execution.runExisting(source, (scope) => {
+      dispatched += 1;
+      return scope.execute({ type: "session.entry.read", input: { sessionKeys: ["recovered"] } });
+    }),
+  ).toMatchObject({ entries: [] });
+  expect(dispatched).toBe(1);
+  const replacement = execution.capturePreparedGenerationClaim();
+  expect(replacement?.identity).toBe(claim.identity);
+  expect(replacement?.incarnation).not.toBe(claim.incarnation);
+  expect(() => claim.assertCurrent()).toThrow("Agent database execution lost its native owner");
+  expect(await readEntries(execution, "still-healthy")).toMatchObject({ entries: [] });
+  await execution.release();
 });
 
 it("surfaces the native cleanup cause while the close still fails, then recovers once it clears", async () => {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-wedge-scope-")) };
-  const first = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
-  await first.prepare(source);
+  const env = makeEnv();
+  const first = capture(env);
+  let authority: SqliteWorkerExecutionAuthority | undefined;
+  const observed = executionSource((captured) => (authority = captured));
+  await first.prepare(observed);
+  await readEntries(first, "healthy", observed);
+  expect(authority).toBeDefined();
+  const original = authority!;
+  expect(readAgentDatabaseExecutionAuthority(original)).toBe(true);
 
-  // The fault stays enabled through the whole retry below.
-  Atomics.store(new Int32Array(fault.enabled), 0, 1);
-  const failure: unknown = await first
-    .runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: fault.marker } }),
-    )
-    .catch((error: unknown) => error);
+  Atomics.store(faultState, 0, 1);
+  const failure: unknown = await readEntries(first, fault.marker).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(Error);
   expect(formatErrorMessageWithCode(failure)).toContain("Agent operation and cleanup failed");
+  expect(readAgentDatabaseExecutionAuthority(original)).toBe(false);
   await first.release().catch(() => undefined);
 
-  // Another agent on the same state directory is not affected.
-  const second = captureOpenClawAgentDatabaseExecution({ agentId: "second", env });
+  const second = capture(env, "second");
   await second.prepare(source);
   expect(await second.runExisting(source, async () => "second usable")).toBe("second usable");
   await second.release();
 
-  // Retained borrowers share one cleanup attempt, with no replacement native owner.
   const liveWorkers = fault.workers.size;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const retries = [
-      captureOpenClawAgentDatabaseExecution({ agentId: "first", env }),
-      captureOpenClawAgentDatabaseExecution({ agentId: "first", env }),
-    ];
+    const retries = [capture(env), capture(env)];
     for (const retry of retries) {
       expect(retry.capturePreparedGenerationClaim()).toBeUndefined();
     }
-    const releases = Atomics.load(new Int32Array(fault.enabled), 1);
+    const releases = Atomics.load(faultState, 1);
     const results = await Promise.allSettled(retries.map((retry) => retry.prepare(source)));
     for (const result of results) {
       expect(result.status).toBe("rejected");
@@ -263,19 +306,86 @@ it("surfaces the native cleanup cause while the close still fails, then recovers
         expect(formatErrorMessageWithCode(result.reason)).not.toContain("admission is closed");
       }
     }
-    expect(Atomics.load(new Int32Array(fault.enabled), 1) - releases).toBe(1);
+    expect(Atomics.load(faultState, 1) - releases).toBe(1);
     await Promise.all(retries.map((retry) => retry.release()));
     expect(fault.workers.size).toBe(liveWorkers);
+    expect(readAgentDatabaseExecutionAuthority(original)).toBe(false);
   }
 
-  // Once the cause is gone the same agent recovers without a process restart.
-  Atomics.store(new Int32Array(fault.enabled), 0, 0);
-  const recovered = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
-  expect(
-    await recovered.runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } }),
-    ),
-  ).toBeUndefined();
+  Atomics.store(faultState, 0, 0);
+  const recovered = capture(env);
+  expect(await readEntries(recovered, "recovered", observed)).toMatchObject({ entries: [] });
   expect(recovered.capturePreparedGenerationClaim()).toBeDefined();
+  expect(authority!.logical.buffer).toBe(original.logical.buffer);
+  expect(authority!.native.buffer).not.toBe(original.native.buffer);
+  expect(readAgentDatabaseExecutionAuthority(authority!)).toBe(true);
+  expect(readAgentDatabaseExecutionAuthority(original)).toBe(false);
   await recovered.release();
+});
+
+it("keeps another agent's admitted database usable after a deleted agent refuses preparation", async () => {
+  const env = makeEnv();
+  const retained = capture(env, "main");
+  const initial = capture(env, "removed");
+  const peers = Array.from({ length: resolveSqliteBrokerWorkerCount() - 1 }, (_, index) =>
+    capture(env, `peer-${index}`),
+  );
+  const admitted = [retained, ...peers];
+  for (const peer of admitted) {
+    await peer.prepare(source);
+  }
+  await initial.prepare(source);
+  await initial.release();
+  await closeOpenClawAgentDatabaseByPathAsync(initial.path, "removed");
+  beginAgentDeletionJournal(
+    {
+      agentId: "removed",
+      operationId: "deletion-refusal-fixture",
+      deleteFiles: true,
+      agentDir: path.dirname(initial.path),
+      workspaceDir: path.join(env.OPENCLAW_STATE_DIR, "removed-workspace"),
+      sessionsDir: path.join(env.OPENCLAW_STATE_DIR, "removed-sessions"),
+    },
+    { env },
+  );
+  const refused = capture(env, "removed");
+  let survivors: Promise<PromiseSettledResult<unknown>[]> | undefined;
+  const observed = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (
+      !survivors &&
+      request.stage === "open" &&
+      isRecord(request.facts) &&
+      request.facts.databasePath === refused.path
+    ) {
+      survivors = Promise.allSettled(admitted.map((survivor) => readEntries(survivor, [])));
+    }
+    admit(request, grant);
+  });
+  try {
+    await expect(refused.prepare(source)).rejects.toThrow("agent removed is deleted");
+    expect(survivors).toBeDefined();
+    const results = await survivors;
+    for (const survivor of admitted) {
+      survivor.assertCurrent();
+    }
+    expect(results).toEqual(
+      admitted.map(() => ({
+        status: "fulfilled",
+        value: expect.objectContaining({ kind: "session-exact-entries", entries: [] }),
+      })),
+    );
+    const repeated = capture(env, "removed");
+    try {
+      await expect(repeated.prepare(source)).rejects.toThrow("agent removed is deleted");
+    } finally {
+      await repeated.release();
+    }
+  } finally {
+    observed.mockRestore();
+    await Promise.allSettled([
+      retained.release(),
+      refused.release(),
+      ...peers.map((peer) => peer.release()),
+    ]);
+  }
 });

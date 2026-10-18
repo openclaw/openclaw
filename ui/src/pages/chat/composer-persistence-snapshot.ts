@@ -89,7 +89,7 @@ export function loadCapturedChatComposerState(
         draft,
         ...(session.draftMentions ? { mentions: session.draftMentions } : {}),
         ...(session.goalMode ? { goalMode: session.goalMode } : {}),
-        ...(session.replyTarget ? { replyTarget: { ...session.replyTarget } } : {}),
+        ...(session.replyTarget ? { replyTarget: session.replyTarget } : {}),
         queue: (session.queue ?? [])
           .filter((item) => outboxPayloadMatchesOwner(state, item))
           .map((item) => serializeQueueItemForScope(item, captured))
@@ -116,21 +116,10 @@ export function captureChatComposerDraftSnapshot(
   const durableScope = replaced ? (previous.durable?.scope ?? null) : candidateDurableScope;
   const scope = resolveUiConversationIdentity(state, state.sessionKey);
   const text = normalizeChatComposerDraft(state.chatMessage);
-  const goalMode = state.chatGoalDraftMode ? { ...state.chatGoalDraftMode } : undefined;
-  const replyTarget = state.chatReplyTarget ? { ...state.chatReplyTarget } : undefined;
+  const goalMode = state.chatGoalDraftMode ?? undefined;
+  const replyTarget = state.chatReplyTarget ?? undefined;
   const mentions = readHumanMentions(state.chatMessage, state.chatMentions);
-  const attachments = (state.chatAttachments ?? []).map((attachment) =>
-    Object.assign(
-      {},
-      attachment,
-      attachment.browserAnnotation
-        ? { browserAnnotation: Object.assign({}, attachment.browserAnnotation) }
-        : {},
-      attachment.selectionAnnotation
-        ? { selectionAnnotation: Object.assign({}, attachment.selectionAnnotation) }
-        : {},
-    ),
-  );
+  const attachments = state.chatAttachments ?? [];
   const durable = durableScope
     ? {
         scope: durableScope,
@@ -153,7 +142,7 @@ export function captureChatComposerDraftSnapshot(
     chatMessage: text,
     ...(mentions ? { mentions } : {}),
     ...(goalMode ? { goalMode } : {}),
-    ...(replyTarget ? { replyTarget: { ...replyTarget } } : {}),
+    ...(replyTarget ? { replyTarget } : {}),
     expectedDraftRevision,
     draftRevision,
     attachments,

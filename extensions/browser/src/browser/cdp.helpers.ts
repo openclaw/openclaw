@@ -55,6 +55,24 @@ export function isDirectCdpWebSocketEndpoint(url: string): boolean {
   );
 }
 
+export async function resolveCdpWebSocketDiscovery(
+  cdpUrl: string,
+  readWebSocketUrl: (discoveryUrl: string) => Promise<string | undefined>,
+): Promise<{ url: string; discovered: boolean } | null> {
+  if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
+    return { url: cdpUrl, discovered: false };
+  }
+  const discoveryUrl = isWebSocketUrl(cdpUrl)
+    ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
+    : cdpUrl;
+  const advertisedUrl = await readWebSocketUrl(discoveryUrl);
+  if (advertisedUrl) {
+    return { url: normalizeCdpWsUrl(advertisedUrl, discoveryUrl), discovered: true };
+  }
+  // Bare WebSocket endpoints can be directly usable without HTTP discovery.
+  return isWebSocketUrl(cdpUrl) ? { url: cdpUrl, discovered: false } : null;
+}
+
 /** Restrict a trusted CDP endpoint to its configured control-plane host. */
 export function scopeCdpPolicyToConfiguredEndpoint(
   cdpUrl: string,
@@ -179,8 +197,8 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
 
 /** Normalize ws/wss and direct devtools URLs back to the HTTP JSON endpoint base. */
 export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
-  try {
-    const url = new URL(cdpUrl);
+  const url = URL.parse(cdpUrl);
+  if (url) {
     if (url.protocol === "ws:") {
       url.protocol = "http:";
     } else if (url.protocol === "wss:") {
@@ -189,15 +207,14 @@ export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
     url.pathname = url.pathname.replace(/\/devtools\/browser\/.*$/, "");
     url.pathname = url.pathname.replace(/\/cdp$/, "");
     return url.toString().replace(/\/$/, "");
-  } catch {
-    // Best-effort fallback for non-URL-ish inputs.
-    return cdpUrl
-      .replace(/^ws:/, "http:")
-      .replace(/^wss:/, "https:")
-      .replace(/\/devtools\/browser\/.*$/, "")
-      .replace(/\/cdp$/, "")
-      .replace(/\/$/, "");
   }
+  // Best-effort fallback for non-URL-ish inputs.
+  return cdpUrl
+    .replace(/^ws:/, "http:")
+    .replace(/^wss:/, "https:")
+    .replace(/\/devtools\/browser\/.*$/, "")
+    .replace(/\/cdp$/, "")
+    .replace(/\/$/, "");
 }
 
 function fingerprintCdpIdentity(value: string): string {

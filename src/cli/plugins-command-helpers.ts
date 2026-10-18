@@ -1,10 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { HOOK_INSTALL_ERROR_CODE } from "../hooks/install.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
-export { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
 export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime): {
   info: (msg: string) => void;
@@ -13,42 +11,6 @@ export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime):
   return {
     info: (msg) => runtime.log(msg),
     warn: (msg) => runtime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
-  };
-}
-
-export function createHookPackInstallLogger(runtime: RuntimeEnv = defaultRuntime): {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
-} {
-  return {
-    info: (msg) => runtime.log(msg),
-    warn: (msg) => runtime.log(theme.warn(msg)),
-  };
-}
-
-export function enableInternalHookEntries(
-  config: OpenClawConfig,
-  hookNames: string[],
-): OpenClawConfig {
-  const entries = { ...config.hooks?.internal?.entries };
-
-  for (const hookName of hookNames) {
-    entries[hookName] = {
-      ...entries[hookName],
-      enabled: true,
-    };
-  }
-
-  return {
-    ...config,
-    hooks: {
-      ...config.hooks,
-      internal: {
-        ...config.hooks?.internal,
-        enabled: true,
-        entries,
-      },
-    },
   };
 }
 
@@ -74,16 +36,10 @@ const MISSING_GIT_FOR_NPM_DEPENDENCY_HINT =
   "Git is required because one of this plugin's npm dependencies is fetched from a git URL, but `git` was not found on PATH. Install Git and rerun the install. On Windows, use `winget install --id Git.Git -e` or add a portable Git `bin` directory to PATH.";
 
 function formatPluginInstallAttemptError(error: string): string {
-  if (!isMissingGitForNpmDependencyError(error)) {
-    return error;
-  }
-  if (error.includes(MISSING_GIT_FOR_NPM_DEPENDENCY_HINT)) {
-    return error;
-  }
-  return `${error}\n\n${MISSING_GIT_FOR_NPM_DEPENDENCY_HINT}`;
-}
-
-function isMissingGitForNpmDependencyError(error: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(error);
-  return /\bspawn\s+git\b/u.test(normalized) && /\benoent\b/u.test(normalized);
+  return /\bspawn\s+git\b/u.test(normalized) &&
+    /\benoent\b/u.test(normalized) &&
+    !error.includes(MISSING_GIT_FOR_NPM_DEPENDENCY_HINT)
+    ? `${error}\n\n${MISSING_GIT_FOR_NPM_DEPENDENCY_HINT}`
+    : error;
 }

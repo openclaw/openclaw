@@ -31,14 +31,6 @@ export const DEFAULT_ACPX_TIMEOUT_SECONDS = 120;
 /** Raw MCP server command config accepted from plugin configuration. */
 export type McpServerConfig = z.output<typeof McpServerConfigSchema>;
 
-/** Normalized MCP server config emitted to the ACPX runtime process. */
-export type AcpxMcpServer = {
-  name: string;
-  command: string;
-  args: string[];
-  env: Array<{ name: string; value: string }>;
-};
-
 /** Fully resolved ACPX config consumed by the runtime service. */
 export type ResolvedAcpxPluginConfig = {
   cwd: string;

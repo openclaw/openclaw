@@ -3,7 +3,6 @@ import Foundation
 enum PlatformLabelFormatter {
     static func parse(_ raw: String) -> (prefix: String, version: String?) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return ("", nil) }
         let parts = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
         let prefix = parts.first?.lowercased() ?? ""
         let versionToken = parts.dropFirst().first

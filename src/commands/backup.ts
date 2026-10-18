@@ -1,16 +1,14 @@
+import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { createBackupArchive, type BackupCreateOptions } from "../infra/backup-create.js";
 import { resolveBackupNamespace, type BackupRetentionOptions } from "../infra/backup-retention.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { OffsiteBackupResult } from "./backup-remote.js";
 import { recordBackupOutcomeBestEffort } from "./backup-shared.js";
 import { formatBackupCreateSummary } from "./backup-summary.js";
-
-const loadBackupVerifyRuntime = createLazyPromise(() => import("./backup-verify.js"));
-const loadBackupRemoteRuntime = createLazyPromise(() => import("./backup-remote.js"));
 
 export type BackupCommandCreateOptions = BackupCreateOptions &
   BackupRetentionOptions & {
@@ -19,7 +17,6 @@ export type BackupCommandCreateOptions = BackupCreateOptions &
     claimNamespace?: boolean;
   };
 
-/** Create a backup archive, optionally verify it, and emit text or JSON output. */
 export async function backupCreateCommand(
   runtime: RuntimeEnv,
   opts: BackupCommandCreateOptions = {},
@@ -34,26 +31,31 @@ export async function backupCreateCommand(
   }
   let archivePath = opts.output ?? (opts.to === undefined ? process.cwd() : `storage://${opts.to}`);
   const releaseCustody = opts.dryRun ? undefined : beginLifecycleWriteCustody("backup");
+  const finished = createDeferredCore();
+  let stopArchive: (() => void) | undefined;
+  // In-process tar/gzip must stop and join before CLI shutdown releases custody.
+  const releaseExitGate = registerSignalExitGate(finished.promise, () => stopArchive?.());
   let failure: unknown;
   let namespace = opts.namespace;
   try {
     if (opts.to !== undefined) {
       namespace = resolveBackupNamespace(opts.namespace);
     }
-    const result: OffsiteBackupResult = await withCommandProcessScope(async () => {
+    const result: OffsiteBackupResult = await withCommandProcessScope(async (stop) => {
+      stopArchive = stop;
       const options = {
         ...opts,
         log: opts.log ?? (opts.json ? undefined : (message: string) => runtime.log(message)),
       };
       if (opts.to !== undefined) {
-        const { createOffsiteBackupArchive } = await loadBackupRemoteRuntime();
+        const { createOffsiteBackupArchive } = await import("./backup-remote.js");
         return await createOffsiteBackupArchive({ ...options, to: opts.to, namespace });
       }
       return await createBackupArchive(options);
     });
     archivePath = result.archivePath;
     if (opts.verify && !opts.dryRun && !result.verified) {
-      const { verifyBackupArchive } = await loadBackupVerifyRuntime();
+      const { verifyBackupArchive } = await import("./backup-verify.js");
       await verifyBackupArchive(result.archivePath);
       result.verified = true;
     }
@@ -103,5 +105,7 @@ export async function backupCreateCommand(
     throw error;
   } finally {
     releaseCustody?.(failure);
+    finished.resolve();
+    releaseExitGate();
   }
 }

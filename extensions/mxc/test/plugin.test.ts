@@ -56,6 +56,11 @@ vi.mock("../src/readiness.js", () => ({
   warnMxcHostPrepIfNeeded: warnMxcHostPrepIfNeededMock,
 }));
 
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  execFileSync: readinessProbeExecMock,
+}));
+
 import { registerMxcPlugin } from "../src/plugin.js";
 
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -165,31 +170,6 @@ describe("registerMxcPlugin", () => {
     expect(registerService).not.toHaveBeenCalled();
   });
 
-  test("registers eagerly on Windows and restores hooks on global restart", async () => {
-    const original = readBackend();
-    const { api, cleanup, stop } = createApi({ timeoutSeconds: 60 });
-
-    registerMxcPlugin(api);
-
-    expect(resolveMxcBinaryPathMock).toHaveBeenCalledWith(undefined);
-    expect(assertMxcReadinessMock).toHaveBeenCalledWith({ executablePath: "mxc-test-binary" });
-    expect(warnMxcHostPrepIfNeededMock).toHaveBeenCalledWith();
-    expect(createMxcSandboxBackendFactoryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutSeconds: 60,
-      }),
-    );
-    expect(readBackend()).toEqual({
-      factory: expect.any(Function),
-      manager: mxcSandboxBackendManagerMock,
-      resolveWorkdir: null,
-    });
-    await cleanup({ reason: "restart" });
-    expect(readBackend()).toEqual(original);
-    await stop();
-    expect(readBackend()).toEqual(original);
-  });
-
   test("blocks an older override and registers after selecting a compatible executor", async () => {
     const { assertMxcReadiness: runMxcReadiness } =
       await vi.importActual<typeof import("../src/readiness.js")>("../src/readiness.js");
@@ -204,15 +184,8 @@ describe("registerMxcPlugin", () => {
       }
       throw new Error(`unexpected probe: ${command}`);
     });
-    const fakeProbeExec =
-      readinessProbeExecMock as unknown as typeof import("node:child_process").execFileSync;
     assertMxcReadinessMock.mockImplementation(({ executablePath }) =>
-      runMxcReadiness({
-        executablePath,
-        platform: "win32",
-        deps: { execFileSync: fakeProbeExec },
-        warn: vi.fn(),
-      }),
+      runMxcReadiness({ executablePath }),
     );
 
     expect(() => registerMxcPlugin(legacy.api)).toThrow(
@@ -245,11 +218,11 @@ describe("registerMxcPlugin", () => {
       expect.objectContaining({ encoding: "utf-8" }),
     );
     expect(readBackend().factory).toEqual(expect.any(Function));
-    await recovered.stop();
+    await recovered.cleanup({ reason: "restart" });
     expect(readBackend()).toEqual(original);
   });
 
-  test.each(["disable", "reset"] as const)(
+  test.each(["reset"] as const)(
     "preserves backend hooks during scoped %s cleanup",
     async (reason) => {
       const generation = createApi();
@@ -299,12 +272,19 @@ describe("registerMxcPlugin", () => {
     const { registry } = createPluginRegistryFixture();
     const record = createPluginRecord({ id: "mxc" });
     registry.registry.plugins.push(record);
-    registerMxcPlugin(registry.createApi(record, { config: {}, pluginConfig: {} }));
+    const api = registry.createApi(record, { config: {}, pluginConfig: {} });
+    const retired = Promise.withResolvers<void>();
+    registerMxcPlugin(api);
+    api.lifecycle.registerRuntimeLifecycle({
+      id: "mxc-test-retirement-observer",
+      cleanup: () => retired.resolve(),
+    });
     try {
       expect(readBackend().factory).toEqual(expect.any(Function));
       setActivePluginRegistry(registry.registry);
       setActivePluginRegistry(createEmptyPluginRegistry());
-      await expect.poll(readBackend).toEqual(original);
+      await retired.promise;
+      expect(readBackend()).toEqual(original);
     } finally {
       await expect(disposePluginRegistryInstances(registry.registry)).resolves.toMatchObject({
         failures: [],

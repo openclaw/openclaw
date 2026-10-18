@@ -18,10 +18,7 @@ import {
   resolveSubagentRegistryContextEngine,
 } from "./subagent-registry-deps.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
-import {
-  buildSafeLifecycleErrorMeta,
-  maskLifecycleIdentifier,
-} from "./subagent-registry-lifecycle-log.js";
+import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteOutcomeKnown,
@@ -36,7 +33,7 @@ import type {
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export function createSubagentRegistryContextCleanup(config: {
-  isEndedHookOwnerCurrent: (runId: string, entry: SubagentRunRecord) => boolean;
+  isEndedHookOwnerCurrent: (entry: SubagentRunRecord) => boolean;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const { warn } = config;
@@ -88,7 +85,7 @@ export function createSubagentRegistryContextCleanup(config: {
     } catch (err) {
       warn(warning, {
         error: buildSafeLifecycleErrorMeta(err),
-        childSessionKey: maskLifecycleIdentifier(params.childSessionKey, "session"),
+        childSessionKey: params.childSessionKey,
         reason: params.reason,
       });
       return false;
@@ -187,13 +184,6 @@ export function createSubagentRegistryContextCleanup(config: {
     return internalEffectsRemoved && attachmentsRemoved && contextEnded && isCurrent();
   }
 
-  function shouldEmitEndedHookForRun(params: {
-    entry: SubagentRunRecord;
-    reason: SubagentLifecycleEndedReason;
-  }) {
-    return params.reason === SUBAGENT_ENDED_REASON_KILLED || params.entry.spawnMode !== "session";
-  }
-
   async function emitSubagentEndedHookForRun(params: {
     entry: SubagentRunRecord;
     reason?: SubagentLifecycleEndedReason;
@@ -210,7 +200,6 @@ export function createSubagentRegistryContextCleanup(config: {
     // Loading and entering plugin scope are part of the best-effort hook boundary.
     try {
       const stateContext = captureOpenClawStateWorkerContext();
-      const generation = params.entry.generation;
       const assertCurrent = () => {
         assertSubagentRegistryWriteSourceCurrent(stateContext);
         const current = getCurrentSubagentRunOwner(subagentRuns, params.entry);
@@ -218,11 +207,7 @@ export function createSubagentRegistryContextCleanup(config: {
           [current?.runId ?? entry.runId],
           stateContext.admission,
         );
-        if (
-          params.entry.generation !== generation ||
-          !config.isEndedHookOwnerCurrent(params.entry.runId, params.entry) ||
-          params.isCurrent?.() === false
-        ) {
+        if (!config.isEndedHookOwnerCurrent(params.entry) || params.isCurrent?.() === false) {
           throw new Error("Subagent ended hook lost its original owner");
         }
         if (!current && subagentRuns.has(entry.runId)) {
@@ -317,7 +302,10 @@ export function createSubagentRegistryContextCleanup(config: {
     cleanupCollectorLaunchResources,
     suppressAnnounceForSteerRestart: (entry?: SubagentRunRecord) =>
       entry?.suppressAnnounceReason === "steer-restart",
-    shouldEmitEndedHookForRun,
+    shouldEmitEndedHookForRun: (params: {
+      entry: SubagentRunRecord;
+      reason: SubagentLifecycleEndedReason;
+    }) => params.reason === SUBAGENT_ENDED_REASON_KILLED || params.entry.spawnMode !== "session",
     emitSubagentEndedHookForRun,
     reset: () => {
       endedHookInFlightOwners.clear();

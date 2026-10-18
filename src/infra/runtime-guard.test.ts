@@ -1,5 +1,5 @@
 // Covers runtime detection and version support checks.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   assertSupportedRuntime,
   isSupportedBunVersion,
@@ -12,7 +12,6 @@ const state = vi.hoisted(() => ({
   version: "24.16.0",
   error: vi.fn(),
   run: vi.fn(),
-  drain: vi.fn(),
   diagnosticLoads: 0,
   lossless: true,
   initializeSqlite: vi.fn(),
@@ -42,9 +41,6 @@ vi.mock("node:process", async (importOriginal) => {
         return { ...actual.versions, node: state.version, bun: undefined };
       },
       stderr: { write: state.error },
-      exit: (code: number) => {
-        throw new Error(`runtime exit ${code}`);
-      },
     },
   };
 });
@@ -53,7 +49,6 @@ vi.mock("../logging/json-console-line.js", async (importOriginal) => {
   return await importOriginal<typeof import("../logging/json-console-line.js")>();
 });
 vi.mock("../worker/worker-deploy-runtime.js", () => ({}));
-vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: state.drain }));
 vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
 vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
 
@@ -262,8 +257,11 @@ describe("runtime-guard", () => {
   });
 
   it.each([
-    ["1.4.0", true],
-    ["1.4.1", true],
+    ["1.4.0", false],
+    ["1.4.1", false],
+    ["1.4.2", false],
+    ["1.4.3", true],
+    ["1.4.3-canary.1+65d94e715", true],
     ["2.0.0", true],
     ["1.3.14", false],
     [null, false],
@@ -322,7 +320,7 @@ describe("runtime-guard", () => {
     };
     const details = {
       kind: "bun" as const,
-      version: "1.4.0",
+      version: "1.4.3",
       execPath: "/usr/bin/bun",
       pathEnv: "/usr/bin",
       hasNodeSqlite: true,
@@ -340,7 +338,7 @@ describe("runtime-guard", () => {
       "Fix or unset OPENCLAW_SQLITE_LIBRARY; install a supported library with brew install sqlite.";
     await assertSupportedRuntime(runtime, {
       kind: "bun",
-      version: "1.4.2",
+      version: "1.4.3",
       execPath: "/usr/bin/bun",
       pathEnv: "/usr/bin",
       hasNodeSqlite: true,
@@ -348,7 +346,7 @@ describe("runtime-guard", () => {
       sqliteSelectionError,
     });
     expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
-      `${sqliteSelectionError}\nDetected: bun 1.4.2 (exec: /usr/bin/bun).`,
+      `${sqliteSelectionError}\nDetected: bun 1.4.3 (exec: /usr/bin/bun).`,
     );
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
@@ -368,7 +366,7 @@ describe("runtime-guard", () => {
     await expect(assertSupportedRuntime(runtime, details)).rejects.toThrow("exit");
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Bun 1.4 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release).",
+        "openclaw requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release).",
         "Detected: bun 1.3.14 (exec: /usr/bin/bun).",
         "Detected SQLite: unavailable.",
         "PATH searched: /usr/bin",
@@ -378,20 +376,23 @@ describe("runtime-guard", () => {
     );
   });
 
-  it("rejects Bun below 1.4 even when node:sqlite is available", async () => {
-    const runtime = createExitingRuntime();
+  it.each(["1.4.0", "1.4.1", "1.4.2"])(
+    "rejects Bun below 1.4.3 even when node:sqlite is available: %s",
+    async (version) => {
+      const runtime = createExitingRuntime();
 
-    await expect(
-      assertSupportedRuntime(runtime, {
-        kind: "bun",
-        version: "1.3.14",
-        execPath: "/usr/bin/bun",
-        pathEnv: "/usr/bin",
-        hasNodeSqlite: true,
-        sqliteVersion: "3.53.2",
-      }),
-    ).rejects.toThrow("exit");
-  });
+      await expect(
+        assertSupportedRuntime(runtime, {
+          kind: "bun",
+          version,
+          execPath: "/usr/bin/bun",
+          pathEnv: "/usr/bin",
+          hasNodeSqlite: true,
+          sqliteVersion: "3.53.2",
+        }),
+      ).rejects.toThrow("exit");
+    },
+  );
 
   it("rejects Bun when its node:sqlite version is not WAL-reset-safe", async () => {
     const runtime = createExitingRuntime();
@@ -399,7 +400,7 @@ describe("runtime-guard", () => {
     await expect(
       assertSupportedRuntime(runtime, {
         kind: "bun",
-        version: "1.4.0",
+        version: "1.4.3",
         execPath: "/usr/bin/bun",
         pathEnv: "/usr/bin",
         hasNodeSqlite: true,
@@ -452,7 +453,7 @@ describe("runtime failure diagnostics", () => {
           hasNodeSqlite: false,
           sqliteVersion: null,
         }),
-      ).rejects.toThrow("runtime exit 1");
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
       const output = String(state.error.mock.lastCall?.[0]);
       expect(JSON.parse(output)).toMatchObject({
         level: "error",
@@ -466,15 +467,19 @@ describe("runtime failure diagnostics", () => {
 });
 
 describe("sealed worker runtime", () => {
+  let destroyStdin: MockInstance<typeof process.stdin.destroy>;
+  let disconnect: MockInstance<NonNullable<typeof process.disconnect>>;
   const originalArgv = process.argv;
   const originalExitCode = process.exitCode;
   beforeEach(() => {
     vi.resetModules();
     state.error.mockClear();
     state.run.mockClear();
-    state.drain.mockClear();
     process.argv = [process.execPath, "worker.mjs"];
     process.exitCode = undefined;
+    // The executable owns stdin and IPC, not the test runner's real transports.
+    destroyStdin = vi.spyOn(process.stdin, "destroy").mockReturnThis();
+    disconnect = vi.spyOn(process, "disconnect").mockImplementation(() => {});
     vi.stubEnv("OPENCLAW_DEBUG", undefined);
   });
   afterEach(() => {
@@ -494,8 +499,9 @@ describe("sealed worker runtime", () => {
       await expect(import("../worker/worker-deploy-entry.js")).resolves.toBeDefined();
 
       expect(process.exitCode).toBe(1);
-      expect(stderr).toHaveBeenCalledExactlyOnceWith("runtime exit 1\n");
-      expect(state.drain).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
+      expect(stderr).toHaveBeenCalledExactlyOnceWith("exit 1\n");
+      expect(destroyStdin).toHaveBeenCalledOnce();
+      expect(disconnect).toHaveBeenCalledOnce();
       expect(state.run).not.toHaveBeenCalled();
       expect(state.error).toHaveBeenCalledWith(expect.stringContaining("Upgrade Node"));
     },
@@ -506,7 +512,8 @@ describe("sealed worker runtime", () => {
     state.lossless = true;
     await import("../worker/worker-deploy-entry.js");
     expect(process.exitCode).toBeUndefined();
-    expect(state.drain).not.toHaveBeenCalled();
+    expect(destroyStdin).toHaveBeenCalledOnce();
+    expect(disconnect).toHaveBeenCalledOnce();
     expect(state.run).toHaveBeenCalledOnce();
     expect(state.error).not.toHaveBeenCalled();
   });

@@ -44,7 +44,7 @@ if (!process.versions.bun || fs.realpathSync(process.execPath) !== bun) {
 }
 
 const pin = JSON.parse(
-  fs.readFileSync(new URL("./lib/openclaw-bun-macos.json", import.meta.url), "utf8"),
+  fs.readFileSync(new URL("./lib/openclaw-bun.json", import.meta.url), "utf8"),
 );
 const revision = execFileSync(bun, ["--revision"], { encoding: "utf8" }).trim();
 assert.equal(revision, pin.revision, "Bundled Bun revision does not match the pinned fork");

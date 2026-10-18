@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createPluginContractTestShards } from "../../scripts/lib/plugin-contract-test-plan.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
+import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
 
 function listContractTests(rootDir = "src/plugins/contracts"): string[] {
   const files = listGitTrackedFiles({ pathspecs: rootDir });
@@ -47,10 +48,11 @@ describe("scripts/lib/plugin-contract-test-plan.mts", () => {
     );
   });
 
-  it("covers every plugin contract test exactly once", () => {
-    const actual = createPluginContractTestShards()
-      .flatMap((shard) => shard.includePatterns)
-      .toSorted((a, b) => a.localeCompare(b));
+  it("covers every plugin contract test exactly once across contract and database worker lanes", () => {
+    const actual = [
+      ...createPluginContractTestShards().flatMap((shard) => shard.includePatterns),
+      ...databaseWorkerCoreTestFiles.filter((file) => file.startsWith("src/plugins/contracts/")),
+    ].toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(listContractTests());
     expect(new Set(actual).size).toBe(actual.length);

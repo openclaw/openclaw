@@ -3,6 +3,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { validateReleaseManifestAdvisoryJobs } from "./full-release-validation-policy.mjs";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.runtime.mjs";
 import { changelogFormat, findReleaseChangelog } from "./lib/release-changelog.mjs";
 import {
   compactReleaseNotes,
@@ -83,21 +84,16 @@ function joinBody(notes: string, tail: string | undefined) {
   return normalizedTail ? `${normalizedNotes}\n\n${normalizedTail}` : normalizedNotes;
 }
 
-function verificationWithAdvisories(verification: string, manifest: unknown) {
+function normalizeVerification(verification: string, manifest: unknown) {
   if (manifest === undefined) {
     return normalizeTail(verification);
   }
-  const escape = (value: string) => value.replace(/[\\`*_{}[\]()<>!#|]/gu, "\\$&");
-  const lines = validateReleaseManifestAdvisoryJobs(manifest).map(
-    (job) =>
-      `${ADVISORY_LINE_PREFIX}${job.class}): ${escape(job.child)} / ${escape(job.job)} (${job.conclusion}): ${job.url}`,
-  );
-  const proof = normalizeTail(verification)
+  validateReleaseManifestAdvisoryJobs(manifest);
+  return normalizeTail(verification)
     .split("\n")
     .filter((line) => !line.startsWith(ADVISORY_LINE_PREFIX))
     .join("\n")
     .trimEnd();
-  return lines.length > 0 ? [proof || RELEASE_VERIFICATION_HEADING, ...lines].join("\n") : proof;
 }
 
 function extendedStableReleaseNotice({
@@ -333,21 +329,15 @@ export function parseShippedBaselineExclusions(section: string) {
 }
 
 export function dedicatedSectionVersionForTag(tag: unknown) {
-  // Correction (vX-N) and alpha tags may carry their own exact changelog
-  // heading; beta and stable bodies must come from the stable base section.
+  // Exact beta sections freeze the npm-channel delta. Base-section fallback
+  // remains readable for immutable historical tags that shipped that layout.
   assertString(tag, "tag");
   const taggedVersion = tag.replace(/^v/u, "");
-  if (/-beta\.[1-9][0-9]*$/u.test(taggedVersion)) {
-    return undefined;
-  }
-  return /-(?:alpha\.)?[1-9][0-9]*$/u.test(taggedVersion) ? taggedVersion : undefined;
+  return /-(?:(?:alpha|beta)\.)?[1-9][0-9]*$/u.test(taggedVersion) ? taggedVersion : undefined;
 }
 
-function releaseNotesSectionForTag(changelog: unknown, version: unknown, tag: unknown) {
-  // Alpha and correction tags prefer their own exact heading when the
-  // changelog carries one; otherwise they fall back to the base version.
-  assertString(tag, "tag");
-  assertString(version, "version");
+function releaseNotesSectionForTag(changelog: string, version: string, tag: string) {
+  // Prefer frozen tag-specific notes; historical tags may use the base section.
   const dedicatedVersion = dedicatedSectionVersionForTag(tag);
   if (dedicatedVersion && dedicatedVersion !== version) {
     try {
@@ -390,9 +380,6 @@ export function loadReleaseNotesForTag({
   for (const selectedVersion of new Set(versions)) {
     const source = findReleaseChangelog({ rootDir, ref, version: selectedVersion });
     if (source) {
-      if (source.format !== "initial") {
-        fail("docs-mirrored release notes require the docs-publication renderer");
-      }
       return source;
     }
   }
@@ -413,9 +400,8 @@ export function renderGithubReleaseNotes({
   assertString(tag, "tag");
   assertString(version, "version");
   validateRepository(repository);
-  validateTag(tag);
   const tagVersion = releaseNotesVersionForTag(tag);
-  if (tagVersion !== version) {
+  if (tagVersion !== version && dedicatedSectionVersionForTag(tag) !== version) {
     fail(`release tag ${tag} requires CHANGELOG.md version ${tagVersion}, got ${version}`);
   }
   assertString(changelog, "changelog");
@@ -442,17 +428,10 @@ export function renderGithubReleaseNotes({
       `compacted release notes are still too large for GitHub: ${size.characters} characters, ${size.bytes} bytes`,
     );
   }
-  const normalizedVerification = verificationWithAdvisories(verification, validationManifest);
+  const normalizedVerification = normalizeVerification(verification, validationManifest);
   const bodyWithVerification = joinBody(baseBody, normalizedVerification);
   const verificationIncluded =
     normalizedVerification !== "" && fitsGithubReleaseBody(bodyWithVerification);
-  if (
-    !verificationIncluded &&
-    validationManifest !== undefined &&
-    validateReleaseManifestAdvisoryJobs(validationManifest).length > 0
-  ) {
-    fail("release notes exceed GitHub's body limit with required advisory evidence");
-  }
   const body = verificationIncluded ? bodyWithVerification : baseBody;
   return {
     body,
@@ -511,24 +490,17 @@ function parseArgs(argv: string[]) {
   ] as const satisfies ReadonlyArray<readonly [string, string]>;
   type ValueOption = (typeof valueOptions)[number][1];
   const options: Partial<Record<ValueOption, string>> & { help?: true } = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--help" || arg === "-h") {
-      options.help = true;
-      continue;
-    }
-    const option = valueOptions.find(([flag]) => flag === arg);
-    if (option) {
-      const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
-        fail(`${arg} requires a value`);
-      }
-      options[option[1]] = value;
-      index += 1;
-      continue;
-    }
-    fail(`unknown argument: ${arg}`);
-  }
+  parseFlagArgs(
+    argv,
+    options,
+    [
+      ...valueOptions.map(([flag, key]) =>
+        stringFlag(flag, key, { allowInline: false, repeatable: true }),
+      ),
+      ...["--help", "-h"].map((flag) => booleanFlag(flag, "help", true, { repeatable: true })),
+    ],
+    { ignoreDoubleDash: false, onUnhandledArg: (arg) => fail(`unknown argument: ${arg}`) },
+  );
   if (!options.help) {
     for (const name of ["tag", "repository"] as const) {
       if (!options[name]) {
@@ -573,6 +545,9 @@ function main() {
     : changelogPath
       ? readFileSync(changelogPath, "utf8")
       : fail("release notes source was not validated");
+  const validationManifest: unknown = options.validationManifest
+    ? JSON.parse(readFileSync(options.validationManifest, "utf8"))
+    : undefined;
   const target = {
     changelog,
     version,
@@ -580,9 +555,7 @@ function main() {
     repository,
     regularStableVersion: options.regularStableVersion,
     contributionRecordPath: source?.recordPath ?? undefined,
-    validationManifest: options.validationManifest
-      ? JSON.parse(readFileSync(options.validationManifest, "utf8"))
-      : undefined,
+    validationManifest,
   };
   if (options.verifyBody) {
     const result = verifyGithubReleaseNotes({

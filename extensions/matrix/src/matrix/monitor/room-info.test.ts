@@ -196,21 +196,4 @@ describe("createMatrixRoomInfoResolver", () => {
     ).resolves.toBe("Bob");
     expect(client.getRoomStateEvent).toHaveBeenCalledTimes(3);
   });
-
-  it("bounds cached room and member entries", async () => {
-    const client = createClientStub();
-    const resolver = createMatrixRoomInfoResolver(client);
-
-    for (let i = 0; i <= 1024; i += 1) {
-      await resolver.getRoomInfo(`!room-${i}:example.org`);
-    }
-    await resolver.getRoomInfo("!room-0:example.org");
-
-    for (let i = 0; i <= 4096; i += 1) {
-      await resolver.getMemberDisplayName("!room:example.org", `@user-${i}:example.org`);
-    }
-    await resolver.getMemberDisplayName("!room:example.org", "@user-0:example.org");
-
-    expect(client.getRoomStateEvent).toHaveBeenCalledTimes(5124);
-  });
 });

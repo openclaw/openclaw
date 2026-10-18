@@ -2,7 +2,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_MODES } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
@@ -15,7 +15,7 @@ import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js
 import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swarm-output-schema.js";
 import { getSwarmRunExecutionLane } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -30,47 +30,23 @@ import {
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
-import {
-  resolveExpectedExistingSessionConstraint,
-  type ExpectedExistingSessionConstraint,
-} from "../server-methods/agent-expected-session.js";
+import { resolveExpectedExistingSessionConstraint } from "../server-methods/agent-expected-session.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
+import { withGatewaySessionStoreTarget } from "../session-utils-store-lookup.js";
 import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
-export type AgentRequestPreflight = {
-  request: AgentRunRequest;
-  cfg: ReturnType<AgentTurnContext["getRuntimeConfig"]>;
-  runId: string;
-  allowModelOverride: boolean;
-  canUseInternalRuntimeHandoff: boolean;
-  canUseCronRunContinuation: boolean;
-  expectedSession?: ExpectedExistingSessionConstraint;
-  expectedExistingSessionId?: string;
-  providerOverride?: string;
-  modelOverride?: string;
-  execApprovalFollowupApprovalId?: string;
-  normalizedSpawned: ReturnType<typeof normalizeSpawnedRunMetadata>;
-  inputProvenance: ReturnType<typeof normalizeInputProvenance>;
-  isRestartRecoveryResumeRun: boolean;
-  preserveUserFacingSessionModelState: boolean;
-  sessionEffects?: "visible" | "internal";
-  suppressVisibleSessionEffects: boolean;
-  requestedPromptPersistenceSuppression: boolean;
-  isOneShotModelRun: boolean;
-  isRawModelRun: boolean;
-  agentDedupeKeys: string[];
-  swarmExecutionLane?: CommandLaneConfiguration;
-};
+export type AgentRequestPreflight = NonNullable<
+  Awaited<ReturnType<typeof prepareAgentRequestPreflight>>
+>;
 
-export function prepareAgentRequestPreflight(params: {
+export async function prepareAgentRequestPreflight(params: {
   request: AgentRunRequest;
   context: AgentTurnContext;
   client: AgentTurnPrincipal | null;
   io: AgentTurnIo;
-}): AgentRequestPreflight | undefined {
+}) {
   const { request } = params;
   const rejectInvalidRequest = (message: string): undefined => {
     params.io.emitAcceptance([false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message)]);
@@ -108,13 +84,15 @@ export function prepareAgentRequestPreflight(params: {
   // freshly restarted gateway whose in-memory registry has not reloaded yet.
   const persistedCollectorSession =
     !collectorSession && requestSessionKey && isSubagentSessionKey(requestSessionKey)
-      ? loadSessionEntry({
-          ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
-          storePath: resolveSessionStorePathCore(cfg.session?.store, {
-            agentId: selectedAgentId,
-          }),
-          sessionKey: requestSessionKey,
-        })?.swarmCollector === true
+      ? (
+          await readSessionEntryReadOnlyInWorker({
+            ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
+            storePath: resolveSessionStorePathCore(cfg.session?.store, {
+              agentId: selectedAgentId,
+            }),
+            sessionKey: requestSessionKey,
+          })
+        )?.swarmCollector === true
       : false;
   if (
     collectorSession ||
@@ -223,15 +201,10 @@ export function prepareAgentRequestPreflight(params: {
     const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
     const sourceTarget =
       sourceSessionKey && sourceAgentId
-        ? resolveGatewaySessionStoreTargetWithStore({
-            cfg,
-            key: sourceSessionKey,
-            agentId: sourceAgentId,
-            readOnly: true,
-            exactRead: true,
-            clone: false,
-            projection: "full",
-          })
+        ? await withGatewaySessionStoreTarget(
+            { cfg, key: sourceSessionKey, agentId: sourceAgentId, projection: "full" },
+            (target) => target,
+          )
         : undefined;
     const sourceEntry = sourceTarget ? sourceTarget.store[sourceTarget.canonicalKey] : undefined;
     let sourceIsSubagent = Boolean(
@@ -243,15 +216,20 @@ export function prepareAgentRequestPreflight(params: {
       sourceEntry &&
       (sourceEntry.parentSessionKey || sourceEntry.spawnedBy)
     ) {
+      const [sourceAcp] = await readAcpSessionMetaForEntries({
+        entries: [
+          {
+            sessionKey: sourceTarget.canonicalKey,
+            agentId: sourceTarget.agentId,
+            entry: sourceEntry,
+          },
+        ],
+        cfg,
+      });
       sourceIsSubagent = isSubagentSessionFromEntry(
         sourceTarget.canonicalKey,
         sourceEntry,
-        readAcpSessionMetaForEntry({
-          sessionKey: sourceTarget.canonicalKey,
-          agentId: sourceTarget.agentId,
-          cfg,
-          entry: sourceEntry,
-        }),
+        sourceAcp,
       );
     }
     if (sourceIsSubagent) {

@@ -1,8 +1,9 @@
+import { setImmediate as yieldToGateway } from "node:timers/promises";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type ContextWindowCacheState, providerContextTokenCacheKey } from "./context-cache.js";
 import { type ModelsConfig, resolveAnthropicFixedContextWindow } from "./context-resolution.js";
-import { normalizeProviderId } from "./model-selection.js";
 
 const CONTEXT_PROJECTION_BATCH_SIZE = 512;
 
@@ -28,11 +29,26 @@ function cacheMinimum(cache: Map<string, number>, key: string, contextTokens: nu
   }
 }
 
+function contextModelKeys(modelId: string, provider?: string): string[] {
+  const keys = [modelId];
+  if (provider === undefined) {
+    return keys;
+  }
+  keys.push(providerContextTokenCacheKey(provider, modelId));
+  const slash = modelId.indexOf("/");
+  const prefixedProvider = slash > 0 ? normalizeProviderId(modelId.slice(0, slash)) : "";
+  const bareModelId = slash > 0 ? modelId.slice(slash + 1).trim() : "";
+  if (provider && prefixedProvider === provider && bareModelId) {
+    keys.push(providerContextTokenCacheKey(provider, bareModelId));
+  }
+  return keys;
+}
+
 function applyDiscoveredContextWindow(
   cache: Map<string, number>,
   model: ContextWindowModelEntry,
 ): void {
-  if (!model?.id) {
+  if (!model.id) {
     return;
   }
   const discoveredContextTokens =
@@ -47,29 +63,17 @@ function applyDiscoveredContextWindow(
     return;
   }
 
-  cacheMinimum(cache, model.id, contextTokens);
-  if (typeof model.provider !== "string") {
-    return;
-  }
-  const provider = normalizeProviderId(model.provider);
-  if (!provider) {
-    return;
-  }
-  cacheMinimum(cache, providerContextTokenCacheKey(provider, model.id), contextTokens);
-  const slash = model.id.indexOf("/");
-  const prefixedProvider = slash > 0 ? normalizeProviderId(model.id.slice(0, slash)) : "";
-  const bareModelId = slash > 0 ? model.id.slice(slash + 1).trim() : "";
-  if (prefixedProvider === provider && bareModelId) {
-    cacheMinimum(cache, providerContextTokenCacheKey(provider, bareModelId), contextTokens);
+  const provider = model.provider ? normalizeProviderId(model.provider) : "";
+  for (const key of contextModelKeys(model.id, provider || undefined)) {
+    cacheMinimum(cache, key, contextTokens);
   }
 }
 
-export function applyDiscoveredContextWindows(params: {
-  cache: Map<string, number>;
-  models: ContextWindowModelEntry[];
-}): void {
-  for (const model of params.models) {
-    applyDiscoveredContextWindow(params.cache, model);
+function* configuredModels(modelsConfig: ModelsConfig | undefined) {
+  for (const [providerId, provider] of Object.entries(modelsConfig?.providers ?? {})) {
+    for (const model of provider?.models ?? []) {
+      yield { providerId, model };
+    }
   }
 }
 
@@ -78,22 +82,8 @@ export function applyConfiguredContextWindows(params: {
   windowCache: Map<string, number>;
   modelsConfig: ModelsConfig | undefined;
 }): void {
-  const providers = params.modelsConfig?.providers;
-  if (!providers || typeof providers !== "object") {
-    return;
-  }
-  for (const [providerId, provider] of Object.entries(providers)) {
-    if (!Array.isArray(provider?.models)) {
-      continue;
-    }
-    for (const model of provider.models) {
-      applyConfiguredContextWindow({
-        cache: params.cache,
-        windowCache: params.windowCache,
-        providerId,
-        model,
-      });
-    }
+  for (const model of configuredModels(params.modelsConfig)) {
+    applyConfiguredContextWindow({ ...params, ...model });
   }
 }
 
@@ -103,11 +93,7 @@ function applyConfiguredContextWindow(params: {
   providerId: string;
   model: ConfiguredModel;
 }): void {
-  const modelId = typeof params.model?.id === "string" ? params.model.id : undefined;
-  const contextTokens =
-    typeof params.model?.contextTokens === "number" ? params.model.contextTokens : undefined;
-  const contextWindow =
-    typeof params.model?.contextWindow === "number" ? params.model.contextWindow : undefined;
+  const { id: modelId, contextTokens, contextWindow } = params.model;
   const configuredValue =
     contextTokens && contextTokens > 0
       ? { cache: params.cache, value: contextTokens }
@@ -117,25 +103,15 @@ function applyConfiguredContextWindow(params: {
   if (!modelId || !configuredValue) {
     return;
   }
-  const provider = normalizeProviderId(params.providerId);
-  configuredValue.cache.set(modelId, configuredValue.value);
-  configuredValue.cache.set(providerContextTokenCacheKey(provider, modelId), configuredValue.value);
-  const slash = modelId.indexOf("/");
-  const prefixedProvider = slash > 0 ? normalizeProviderId(modelId.slice(0, slash)) : "";
-  const bareModelId = slash > 0 ? modelId.slice(slash + 1).trim() : "";
-  if (provider && prefixedProvider === provider && bareModelId) {
-    configuredValue.cache.set(
-      providerContextTokenCacheKey(provider, bareModelId),
-      configuredValue.value,
-    );
+  for (const key of contextModelKeys(modelId, normalizeProviderId(params.providerId))) {
+    configuredValue.cache.set(key, configuredValue.value);
   }
 }
 
 function resolveDiscoveredAnthropicFixedContextWindow(
   model: ContextWindowModelEntry,
 ): number | undefined {
-  const provider =
-    typeof model.provider === "string" ? normalizeProviderId(model.provider) : undefined;
+  const provider = model.provider ? normalizeProviderId(model.provider) : undefined;
   if (provider) {
     return resolveAnthropicFixedContextWindow(provider, model.id);
   }
@@ -151,17 +127,10 @@ function resolveDiscoveredAnthropicFixedContextWindow(
     : undefined;
 }
 
-function yieldToGateway(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
 async function projectModels(params: {
   cache: Map<string, number>;
   modelCatalog: ContextWindowCatalog;
   processed: number;
-  assertCurrent?: () => void;
 }): Promise<void> {
   let processed = params.processed;
   for (const models of [params.modelCatalog.entries, params.modelCatalog.staticEntries ?? []]) {
@@ -170,7 +139,6 @@ async function projectModels(params: {
       processed += 1;
       if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
         await yieldToGateway();
-        params.assertCurrent?.();
       }
     }
   }
@@ -179,7 +147,6 @@ async function projectModels(params: {
 export async function prepareContextWindowCaches(params: {
   config: OpenClawConfig;
   modelCatalog: ContextWindowCatalog;
-  assertCurrent?: () => void;
 }): Promise<ContextWindowCacheState> {
   const caches: ContextWindowCacheState = {
     configuredTokenCache: new Map(),
@@ -187,48 +154,33 @@ export async function prepareContextWindowCaches(params: {
     contextWindowCache: new Map(),
   };
   let processed = 0;
-  const providers = params.config.models?.providers;
-  if (providers && typeof providers === "object") {
-    for (const [providerId, provider] of Object.entries(providers)) {
-      if (!Array.isArray(provider?.models)) {
-        continue;
-      }
-      for (const model of provider.models) {
-        applyConfiguredContextWindow({
-          cache: caches.configuredTokenCache,
-          windowCache: caches.contextWindowCache,
-          providerId,
-          model,
-        });
-        processed += 1;
-        if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
-          await yieldToGateway();
-          params.assertCurrent?.();
-        }
-      }
+  for (const model of configuredModels(params.config.models)) {
+    applyConfiguredContextWindow({
+      cache: caches.configuredTokenCache,
+      windowCache: caches.contextWindowCache,
+      ...model,
+    });
+    processed += 1;
+    if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
+      await yieldToGateway();
     }
   }
   await projectModels({
     cache: caches.discoveredTokenCache,
     modelCatalog: params.modelCatalog,
     processed,
-    assertCurrent: params.assertCurrent,
   });
-  params.assertCurrent?.();
   return caches;
 }
 
 export async function prepareDiscoveredContextTokenCache(params: {
   modelCatalog: ContextWindowCatalog;
-  assertCurrent?: () => void;
 }): Promise<Map<string, number>> {
   const cache = new Map<string, number>();
   await projectModels({
     cache,
     modelCatalog: params.modelCatalog,
     processed: 0,
-    assertCurrent: params.assertCurrent,
   });
-  params.assertCurrent?.();
   return cache;
 }

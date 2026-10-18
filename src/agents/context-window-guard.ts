@@ -30,6 +30,9 @@ export function resolveContextWindowInfo(params: {
   modelId: string;
   modelContextTokens?: number;
   modelContextWindow?: number;
+  /** Positively observed same-route serving limit, never a static catalog default. */
+  modelServingContextWindow?: number;
+  modelContextWindowSource?: "synthetic";
   defaultTokens: number;
 }): ContextWindowInfo {
   const configured = resolveConfiguredContextTokenLimits(
@@ -38,16 +41,31 @@ export function resolveContextWindowInfo(params: {
   );
   const fromModelsConfig =
     configured.effectiveConfiguredTokens ?? configured.configuredContextWindow;
+  const reportedTokens = normalizePositiveInt(params.modelContextTokens);
+  const nativeWindow =
+    normalizePositiveInt(configured.fixedContextWindow) ??
+    (params.modelContextWindowSource === "synthetic"
+      ? null
+      : normalizePositiveInt(params.modelContextWindow));
   const fromModel =
-    normalizePositiveInt(params.modelContextTokens) ??
-    normalizePositiveInt(params.modelContextWindow);
+    reportedTokens && nativeWindow
+      ? Math.min(reportedTokens, nativeWindow)
+      : (reportedTokens ?? nativeWindow);
+  const estimate =
+    params.modelContextWindowSource === "synthetic"
+      ? normalizePositiveInt(params.modelContextWindow)
+      : null;
   const defaultTokens =
     normalizePositiveInt(params.defaultTokens) ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS;
-  return fromModelsConfig
+  const resolved: ContextWindowInfo = fromModelsConfig
     ? { tokens: fromModelsConfig, source: "modelsConfig" }
     : fromModel
       ? { tokens: fromModel, source: "model" }
-      : { tokens: defaultTokens, source: "default" };
+      : { tokens: estimate ?? defaultTokens, source: "default" };
+  const servingWindow = params.modelServingContextWindow;
+  return servingWindow !== undefined && servingWindow <= resolved.tokens
+    ? { tokens: servingWindow, source: "model" }
+    : resolved;
 }
 
 type ContextWindowGuardResult = ContextWindowInfo & {

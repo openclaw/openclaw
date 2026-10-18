@@ -11,12 +11,12 @@ import {
 import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
-function mask(s: string, keep = 6): string {
+function mask(s: string): string {
   const trimmed = s.trim();
-  if (trimmed.length <= keep) {
+  if (trimmed.length <= 6) {
     return "***";
   }
-  return `${trimmed.slice(0, keep)}…`;
+  return `${trimmed.slice(0, 6)}…`;
 }
 
 function isLikelyVoiceId(value: string): boolean {

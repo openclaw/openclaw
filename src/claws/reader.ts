@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
+import { assertNoSymlinkParents, readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
@@ -9,6 +9,7 @@ import { digestClawBytes } from "./digest.js";
 import { readClawOpenClawProfile } from "./openclaw-profile.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
 import { clawManifestWorkspaceConflictsWithPath, parseClawManifest } from "./schema.js";
+import { clawWorkspaceSourceFailure } from "./source-diagnostics.js";
 import {
   MAX_CLAW_MANIFEST_BYTES,
   MAX_MANAGED_FILE_BYTES,
@@ -70,29 +71,8 @@ function updateSnapshotHash(
 }
 
 function workspaceSourceDiagnostic(error: unknown, sourcePath: string): ClawDiagnostic {
-  if (error instanceof FsSafeError && error.code === "too-large") {
-    return fileDiagnostic(
-      "workspace_source_too_large",
-      `Workspace source ${JSON.stringify(sourcePath)} exceeds ${MAX_MANAGED_FILE_BYTES} bytes.`,
-      "$.workspace",
-    );
-  }
-  if (
-    (error instanceof FsSafeError &&
-      (error.code === "symlink" || error.code === "hardlink" || error.code === "path-mismatch")) ||
-    (error instanceof Error && error.message.includes("symlinked directory"))
-  ) {
-    return fileDiagnostic(
-      "workspace_source_unsafe",
-      `Workspace source ${JSON.stringify(sourcePath)} must be a regular, non-symlinked, non-hardlinked file.`,
-      "$.workspace",
-    );
-  }
-  return fileDiagnostic(
-    "workspace_source_invalid",
-    `Workspace source ${JSON.stringify(sourcePath)} must resolve inside the Claw source.`,
-    "$.workspace",
-  );
+  const { code, message } = clawWorkspaceSourceFailure(error, sourcePath, "source");
+  return fileDiagnostic(code, message, "$.workspace");
 }
 
 async function buildDevelopmentSnapshot(params: {
@@ -227,17 +207,14 @@ async function buildDevelopmentSnapshot(params: {
 
     let readWorkspaceByteLength = 0;
     for (const { sourcePath, opened } of openedSources) {
-      const bytes = await opened.handle.readFile();
-      if (bytes.byteLength > MAX_MANAGED_FILE_BYTES) {
-        return {
-          ok: false,
-          diagnostics: [
-            workspaceSourceDiagnostic(
-              new FsSafeError("too-large", "workspace source grew while reading"),
-              sourcePath,
-            ),
-          ],
-        };
+      let bytes: Buffer;
+      try {
+        bytes = await readFileHandleBounded(opened.handle, MAX_MANAGED_FILE_BYTES);
+      } catch (error) {
+        if (error instanceof FsSafeError && error.code === "too-large") {
+          return { ok: false, diagnostics: [workspaceSourceDiagnostic(error, sourcePath)] };
+        }
+        throw error;
       }
       readWorkspaceByteLength += bytes.byteLength;
       if (readWorkspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
@@ -247,11 +224,10 @@ async function buildDevelopmentSnapshot(params: {
           "$.workspace",
         );
       }
-      const normalizedSourcePath = sourcePath.replaceAll("\\", "/");
       const digest = digestClawBytes(bytes);
-      add(`workspace:${sourcePath.replaceAll("\\", "/")}`, bytes);
+      add(`workspace:${sourcePath}`, bytes);
       workspaceSources.push({
-        sourcePath: normalizedSourcePath,
+        sourcePath,
         realPath: opened.realPath,
         byteLength: bytes.byteLength,
         digest,
@@ -457,6 +433,13 @@ export async function readClawManifestFile(
   path: string,
   options: {
     allowLegacyDynamicToolProfile?: boolean;
+    authorizeLegacyLocalUpdateHostSettings?: (params: {
+      manifest: ClawManifest;
+      source: Pick<
+        ClawSourceIdentity,
+        "kind" | "name" | "version" | "packageRoot" | "manifestPath"
+      >;
+    }) => boolean | Promise<boolean>;
     authorizeLegacyDynamicToolProfile?: (params: {
       manifest: ClawManifest;
       source: Pick<
@@ -492,24 +475,29 @@ export async function readClawManifestFile(
       "$.workspace",
     );
   }
+  const legacyAuthorizationContext = {
+    manifest: parsed.manifest,
+    source: {
+      kind: sourceResult.source.kind,
+      name: sourceResult.source.name,
+      version: sourceResult.source.version,
+      packageRoot: sourceResult.source.packageRoot,
+      manifestPath: sourceResult.source.manifestPath,
+    },
+  };
   const allowLegacyDynamicToolProfile =
     options.allowLegacyDynamicToolProfile === true ||
     (options.authorizeLegacyDynamicToolProfile
-      ? await options.authorizeLegacyDynamicToolProfile({
-          manifest: parsed.manifest,
-          source: {
-            kind: sourceResult.source.kind,
-            name: sourceResult.source.name,
-            version: sourceResult.source.version,
-            packageRoot: sourceResult.source.packageRoot,
-            manifestPath: sourceResult.source.manifestPath,
-          },
-        })
+      ? await options.authorizeLegacyDynamicToolProfile(legacyAuthorizationContext)
       : false);
+  const allowLegacyLocalUpdateHostSettings = options.authorizeLegacyLocalUpdateHostSettings
+    ? await options.authorizeLegacyLocalUpdateHostSettings(legacyAuthorizationContext)
+    : false;
   const profile = await readClawOpenClawProfile({
     packageRoot: sourceResult.source.packageRoot,
     metadata: parsed.manifest.metadata,
     ...(allowLegacyDynamicToolProfile ? { allowLegacyDynamicToolProfile: true } : {}),
+    ...(allowLegacyLocalUpdateHostSettings ? { allowLegacyLocalUpdateHostSettings: true } : {}),
   });
   if (!profile.ok) {
     return profile;

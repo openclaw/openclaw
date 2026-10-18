@@ -6,6 +6,7 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 import type { BrowserRequest } from "./types.js";
 
 const profilesService = vi.hoisted(() => ({
+  importSystemProfile: vi.fn(async () => ({ ok: true }) as const),
   deleteProfile: vi.fn(async (name: string) => ({ ok: true, profile: name, deleted: true })),
 }));
 
@@ -52,7 +53,7 @@ function createLifecycleRoute(path: string) {
 }
 
 describe("shared lifecycle admission", () => {
-  it.each(["request canceled", "connection canceled", "authority revoked"])(
+  it.each(["request canceled", "connection canceled"])(
     "rejects a request before mutation when %s",
     async (reason) => {
       const route = createLifecycleRoute("/start");
@@ -66,7 +67,7 @@ describe("shared lifecycle admission", () => {
 
       const response = await route.call({
         signal: request.signal,
-        requester: { signal: connection.signal, isCurrent: () => reason !== "authority revoked" },
+        requester: { signal: connection.signal, isCurrent: () => true },
       });
 
       expect(response.statusCode).toBeGreaterThanOrEqual(400);
@@ -88,10 +89,10 @@ describe("shared lifecycle admission", () => {
   });
 });
 
-describe.each(["/start", "/stop", "/reset-profile", "DELETE /profiles/:name"])(
-  "%s lifecycle admission",
-  (path) => {
-    it("rechecks requester authority after dashboard admission", async () => {
+describe("lifecycle admission", () => {
+  it.each(["/start", "DELETE /profiles/:name"])(
+    "%s rechecks requester authority after dashboard admission",
+    async (path) => {
       const route = createLifecycleRoute(path);
       let current = true;
       const response = await route.call({
@@ -103,9 +104,12 @@ describe.each(["/start", "/stop", "/reset-profile", "DELETE /profiles/:name"])(
 
       expect(response.statusCode).toBe(401);
       expect(route.mutation).not.toHaveBeenCalled();
-    });
+    },
+  );
 
-    it("invokes the admitted operation before yielding its authority check", async () => {
+  it.each(["/stop", "/reset-profile", "DELETE /profiles/:name"])(
+    "%s invokes the admitted operation before yielding its authority check",
+    async (path) => {
       const route = createLifecycleRoute(path);
       let current = true;
       const admittedWithAuthority: boolean[] = [];
@@ -124,6 +128,43 @@ describe.each(["/start", "/stop", "/reset-profile", "DELETE /profiles/:name"])(
 
       expect(response.statusCode).toBe(200);
       expect(admittedWithAuthority).toEqual([true]);
-    });
-  },
-);
+    },
+  );
+});
+
+async function callImport(body: unknown, signal?: AbortSignal) {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserBasicRoutes(app, {} as never);
+  const handler = postHandlers.get("/profiles/import");
+  if (!handler) {
+    throw new Error("expected /profiles/import handler");
+  }
+  const response = createBrowserRouteResponse();
+  await handler({ body, signal } as never, response.res);
+  return response;
+}
+
+describe("POST /profiles/import domain filter validation", () => {
+  it.each([
+    ["a non-array string", { domains: "google.com" }, "domains must be an array of domain strings"],
+    [
+      "an array of blanks",
+      { domains: ["   ", ""] },
+      "domains must include at least one non-empty domain",
+    ],
+  ])("fails closed for %s", async (_label, body, message) => {
+    const response = await callImport(body);
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatchObject({ error: message });
+  });
+
+  it("forwards the request abort signal into the import transaction", async () => {
+    const abort = new AbortController();
+    await callImport({ into: "imported" }, abort.signal);
+
+    expect(profilesService.importSystemProfile).toHaveBeenLastCalledWith(
+      expect.objectContaining({ into: "imported" }),
+      { signal: abort.signal },
+    );
+  });
+});

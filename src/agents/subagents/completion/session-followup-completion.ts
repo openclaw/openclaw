@@ -1,5 +1,6 @@
 /** Same-process custody for a followup's result across committed yield cohorts. */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { raceWithTimeout } from "@openclaw/retry";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
@@ -67,7 +68,6 @@ export function withFollowupSuccessor<T>(successor: FollowupSuccessor, run: () =
 }
 
 export class SessionFollowupCompletion implements FollowupCompletionOwner {
-  readonly request: FollowupRequest;
   private readonly lifetime = new AbortController();
   readonly signal = this.lifetime.signal;
   private readonly lifecycleGeneration = getAgentRunLifecycleGeneration();
@@ -85,8 +85,7 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
   private consumed = false;
   private readonly revoked: () => void;
 
-  private constructor(request: FollowupRequest) {
-    this.request = request;
+  private constructor(readonly request: FollowupRequest) {
     this.execution = { runId: request.runId, settled: createDeferredCore(), yielded: false };
     this.revoked = () => this.close(new Error("Followup completion authority was revoked."));
     void this.result.promise.catch(() => {});
@@ -154,20 +153,10 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
   }
   promoteYield(runId: string, entries: readonly SubagentRunRecord[], generation: number) {
     this.assertCurrent();
-    if (
-      this.execution.runId !== runId ||
-      this.terminal ||
-      entries.length === 0 ||
-      entries.some(
-        (entry) =>
-          entry.requesterSessionKey !== this.request.targetSessionKey ||
-          entry.requesterSettleWake?.rearmGeneration !== generation ||
-          entry.requesterSettleWake.requesterYieldBatch !== true,
-      )
-    ) {
+    if (this.execution.runId !== runId || this.terminal || entries.length === 0) {
       throw new Error("Followup yield does not own the committed completion cohort.");
     }
-    this.cohort = { entries: [...entries], generation };
+    this.cohort = { entries, generation };
     for (const entry of entries) {
       bindFollowupCohortOwner(entry, this);
     }
@@ -270,24 +259,17 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
       throw new Error("Followup result already has a consumer.");
     }
     this.taking = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const reply =
         timeoutMs === undefined
           ? await this.result.promise
-          : await Promise.race([
-              this.result.promise,
-              new Promise<undefined>((resolve) => {
-                timer = setTimeout(() => resolve(undefined), timeoutMs);
-              }),
-            ]);
+          : await raceWithTimeout(this.result.promise, timeoutMs, () => undefined);
       this.assertCurrent();
       if (reply) {
         this.consumed = true;
       }
       return reply;
     } finally {
-      clearTimeout(timer);
       this.taking = false;
     }
   }

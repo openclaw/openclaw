@@ -1,7 +1,7 @@
 // Claw banner tests: static/animated gating and the final-frame invariant.
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { printClawBanner } from "./claw-banner.js";
 
 const runtimeStub = () => {
@@ -34,35 +34,7 @@ async function runStatic() {
     .filter((row) => row.length > 0);
 }
 
-const EXPECTED_MASCOT = [
-  " •●●:.        .:●●•",
-  ":●●●●:        :●●●●:",
-  ".●●●●:.:•●●•:.:●●●●.",
-  " .●●●: •●●●●• :●●●.",
-  " ..:••●●●●●●●●••:..",
-  ".::••••●●●●●●••••::.",
-  " . .:  •●●●●•  :. .",
-  "    .  :●●●●:  .",
-  "      .●●●●●●.",
-  "       :••••:",
-] as const;
-
 describe("printClawBanner", () => {
-  it("prints the static banner when not animatable", async () => {
-    const { runtime, log } = runtimeStub();
-    await printClawBanner(runtime, { columns: 120, isTty: false, env: {} });
-    const output = stripAnsi(String(log.mock.calls[0]?.[0]));
-    const rows = output.split("\n").filter((row) => row.length > 0);
-    expect(rows.map((row) => row.slice(0, 20).trimEnd())).toEqual(EXPECTED_MASCOT);
-    expect(output).toContain("█▀▀▀█ █▀▀▀█ █▀▀▀▀ █▄  █");
-  });
-
-  it("stays static under CI even on a rich TTY", async () => {
-    const { runtime, log } = runtimeStub();
-    await printClawBanner(runtime, { columns: 120, isTty: true, rich: true, env: { CI: "1" } });
-    expect(log).toHaveBeenCalledTimes(1);
-  });
-
   it("falls back to the plain title on narrow terminals", async () => {
     const { runtime, log } = runtimeStub();
     await printClawBanner(runtime, { columns: 50, isTty: true, rich: true, env: {} });
@@ -117,6 +89,43 @@ describe("printClawBanner", () => {
     expect(duringSigterm).toBe(beforeSigterm + 1);
     expect(process.listenerCount("SIGINT")).toBe(before);
     expect(process.listenerCount("SIGTERM")).toBe(beforeSigterm);
+  });
+
+  it.each([
+    { signal: "SIGINT" as const, code: 130 },
+    { signal: "SIGTERM" as const, code: 143 },
+  ])("unwinds $signal after restoring its cursor and listeners", async ({ signal, code }) => {
+    const previous = process.listeners(signal);
+    const chunks: string[] = [];
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("forced native exit");
+    });
+    const { runtime } = runtimeStub();
+    try {
+      await expect(
+        printClawBanner(runtime, {
+          columns: 120,
+          isTty: true,
+          rich: true,
+          env: {},
+          sleep: async () => {
+            const handler = process
+              .listeners(signal)
+              .find((listener) => !previous.includes(listener));
+            if (!handler) {
+              throw new Error("banner signal owner missing");
+            }
+            handler(signal);
+          },
+          write: (chunk) => chunks.push(chunk),
+        }),
+      ).rejects.toEqual(new ExitError(code));
+      expect(exit).not.toHaveBeenCalled();
+      expect(chunks.at(-1)).toBe("\x1b[?25h");
+      expect(process.listeners(signal)).toEqual(previous);
+    } finally {
+      exit.mockRestore();
+    }
   });
 
   it("settles on the static frame when parallel work finishes first", async () => {

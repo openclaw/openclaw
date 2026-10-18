@@ -116,17 +116,20 @@ export const presenceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const summarize = (query: typeof params, locations?: ReadonlyMap<string, PresenceLocation>) =>
+      buildPresenceSummary({
+        params: query,
+        presence: context.getPresenceSnapshot(),
+        nodes: context.nodeRegistry.listCurrentConnectedSync(),
+        requesterKey: requesterKey(client),
+        observedAt: Date.now(),
+        locations,
+      });
     const locations = params.include?.includes("location")
       ? await lookupLocations(
-          buildPresenceSummary({
-            params: {
-              ...params,
-              include: [...new Set([...(params.include ?? []), "network" as const])],
-            },
-            presence: context.getPresenceSnapshot(),
-            nodes: context.nodeRegistry.listCurrentConnectedSync(),
-            requesterKey: requesterKey(client),
-            observedAt: Date.now(),
+          summarize({
+            ...params,
+            include: [...new Set([...(params.include ?? []), "network" as const])],
           }),
           options,
         )
@@ -134,17 +137,6 @@ export const presenceHandlers: GatewayRequestHandlers = {
     readGatewayRequestMutationAuthority(options).assertCurrent();
     // Optional enrichment yields. Re-read live observations so disconnects and
     // identity changes during a database lookup cannot survive in the response.
-    respond(
-      true,
-      buildPresenceSummary({
-        params,
-        presence: context.getPresenceSnapshot(),
-        nodes: context.nodeRegistry.listCurrentConnectedSync(),
-        requesterKey: requesterKey(client),
-        observedAt: Date.now(),
-        locations,
-      }),
-      undefined,
-    );
+    respond(true, summarize(params, locations), undefined);
   },
 };

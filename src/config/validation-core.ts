@@ -15,12 +15,15 @@ import { LEGACY_AGENT_ROSTER_RULES } from "../commands/doctor/shared/legacy-conf
 import { collectLegacyToolsBySenderIssues } from "../commands/doctor/shared/legacy-tools-by-sender.js";
 import { getContainerEnvFileEntryIssue } from "../infra/container-env-file.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { LINEAR_MATCHER_SOURCES } from "../logging/redact-linear-matchers.js";
+import { parseRedactPatternSource } from "../logging/redact-pattern-runtime.js";
+import { PEM_REDACT_PATTERN_SOURCE } from "../logging/redact-pem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { compileConfigRegex } from "../security/config-regex.js";
 import {
-  hasAvatarUriScheme,
   isAvatarDataUrl,
   isAvatarHttpUrl,
-  isWindowsAbsolutePath,
+  isAvatarWorkspacePath,
 } from "../shared/avatar-policy.js";
 import {
   formatUnsafeGatewayTailscaleNoAuthMessage,
@@ -65,6 +68,34 @@ export function collectHeartbeatOwnerWarnings(config: OpenClawConfig): ConfigVal
         },
       ]
     : [];
+}
+
+// The schema accepts any string, but log redaction drops entries the safe-regex compiler
+// rejects; warn so operators do not rely on a mask that never applies.
+export function collectRedactPatternWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
+  const patterns = config.logging?.redactPatterns;
+  if (!Array.isArray(patterns)) {
+    return [];
+  }
+  const warnings: ConfigValidationIssue[] = [];
+  patterns.forEach((raw, index) => {
+    // Built-in sources resolve to their own matchers before regex compilation.
+    if (raw === PEM_REDACT_PATTERN_SOURCE || LINEAR_MATCHER_SOURCES.has(raw)) {
+      return;
+    }
+    const compiled = compileConfigRegex(...parseRedactPatternSource(raw));
+    if (compiled?.reason) {
+      const repair =
+        compiled.reason === "invalid-regex"
+          ? "Fix the regex syntax"
+          : "Rewrite the nested repetition, for example (a+)+ as a+";
+      warnings.push({
+        path: `logging.redactPatterns.${index}`,
+        message: `Redaction pattern is ignored (${compiled.reason}); values it should mask stay visible in logs and diagnostics. ${repair}, then run openclaw config validate again.`,
+      });
+    }
+  });
+  return warnings;
 }
 
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {
@@ -178,7 +209,7 @@ function validateIdentityAvatar(
     if (!avatar || isAvatarDataUrl(avatar) || isAvatarHttpUrl(avatar)) {
       continue;
     }
-    if (avatar.startsWith("~") || (hasAvatarUriScheme(avatar) && !isWindowsAbsolutePath(avatar))) {
+    if (!isAvatarWorkspacePath(avatar)) {
       issues.push(
         createIdentityAvatarIssue(
           source,

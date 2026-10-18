@@ -1,4 +1,3 @@
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
@@ -117,27 +116,12 @@ export function hasAsyncActivity(toolMetas?: readonly { asyncStarted?: boolean }
 
 type AcceptedSessionSpawnContinuationAttempt = Pick<
   EmbeddedRunAttemptResult,
-  | "acceptedSessionSpawns"
+  | Exclude<keyof TerminalAttemptState, "hasToolMediaBlockReply">
   | "assistantTexts"
-  | "clientToolCalls"
-  | "didDeliverSourceReplyViaMessageTool"
-  | "didSendDeterministicApprovalPrompt"
-  | "didSendViaMessagingTool"
-  | "heartbeatToolResponse"
-  | "lastToolError"
-  | "messagingToolSentMediaUrls"
-  | "messagingToolSentTargets"
-  | "messagingToolSentTexts"
-  | "messagingToolSourceReplyPayloads"
-  | "successfulCronAdds"
   | "terminal"
-  | "toolAudioAsVoice"
-  | "toolMediaUrls"
-  | "toolTrustedLocalMedia"
-  | "toolMetas"
   | "sourceReplyDelivered"
+  | "preparedTerminalReply"
   | "sourceReplyDeliveryState"
-  | "yieldDetected"
 >;
 
 type AcceptedSessionSpawnContinuationRun = Pick<
@@ -175,11 +159,7 @@ export function shouldContinueInteractiveAcceptedSessionSpawns(params: {
   ) {
     return false;
   }
-  if (
-    attempt.assistantTexts.some(
-      (text) => text.trim().length > 0 && !isSilentReplyText(text, SILENT_REPLY_TOKEN),
-    )
-  ) {
+  if (attempt.preparedTerminalReply?.terminalReply.disposition === "visible") {
     return false;
   }
   // The media run delivers the result, so progress sends do not replace the owed reply.

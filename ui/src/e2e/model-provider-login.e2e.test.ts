@@ -165,9 +165,9 @@ suite.define(() => {
         await expect
           .poll(() => keyInput.evaluate((element) => document.activeElement === element))
           .toBe(true);
-        expect(
-          await page.locator('.model-setup-provider-select [slot="trigger"]').textContent(),
-        ).toContain("Anthropic API key");
+        expect(await page.locator(".model-setup-provider-select__trigger").textContent()).toContain(
+          "Anthropic API key",
+        );
         expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
         await captureProviderProof("first-run-anthropic-key-form.png", keyInput);
         await keyInput.fill("synthetic-anthropic-api-key");
@@ -357,7 +357,10 @@ suite.define(() => {
         expect(await dialog.getByRole("button", { name: "Cancel", exact: true }).isEnabled()).toBe(
           true,
         );
-        await dialog.getByRole("status").filter({ hasText: "Waiting for sign-in" }).waitFor();
+        await dialog
+          .getByRole("status")
+          .filter({ hasText: "Waiting for approval in your browser…" })
+          .waitFor();
         expect(await dialog.getByRole("button", { name: "Continue", exact: true }).count()).toBe(0);
         expect(await dialog.locator('input[name="wizard-text"]').count()).toBe(0);
         const [signInPage] = await Promise.all([context.waitForEvent("page"), openSignIn.click()]);
@@ -380,16 +383,18 @@ suite.define(() => {
         await gateway.resolveDeferred("wizard.next", { done: true, status: "done" });
         const saved = page.getByRole("status").filter({ hasText: "Provider credentials saved." });
         await saved.waitFor();
+        await captureProviderProof("login-browser-callback-completed.png", dialog);
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await dialog.waitFor({ state: "detached" });
         await page.locator('[data-provider-id="example"]').waitFor();
-        await captureProviderProof("login-browser-callback-completed.png", saved);
       },
     );
   });
   it.each([
-    { value: "all", label: "Show all Example models" },
-    { value: "keep", label: "Keep current restrictions" },
-  ])("keeps the default after $value model access", async (modelAccess) => {
+    { value: "all", label: "Show all Example models", native: false },
+    { value: "keep", label: "Keep current restrictions", native: false },
+    { value: "all", label: "Show all Example models", native: true },
+  ])("keeps the default after $value model access (native: $native)", async (modelAccess) => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -412,6 +417,7 @@ suite.define(() => {
                 label: "Example device sign-in",
                 kind: "device-code",
                 featured: true,
+                requiresSetup: modelAccess.native,
               },
             ],
           },
@@ -452,13 +458,18 @@ suite.define(() => {
         const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
         await expect.poll(() => modelPickerValue(primary)).toBe("example/existing");
         await captureProviderProof(`login-models-before-${modelAccess.value}.png`, primary);
-        await page.locator("[data-models-connect]").click();
+        await page
+          .locator(modelAccess.native ? "[data-model-readiness] button" : "[data-models-connect]")
+          .click();
         expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
         await page.locator('[data-models-login-provider="example"]').click();
         const signIn = page.getByRole("button", { name: "Example device sign-in", exact: true });
         await signIn.waitFor();
         expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
-        await captureProviderProof(`login-before-choice-${modelAccess.value}.png`, signIn);
+        await captureProviderProof(
+          `login-before-choice-${modelAccess.value}-${modelAccess.native}.png`,
+          signIn,
+        );
         await signIn.click();
         const login = await gateway.waitForRequest("models.authLogin");
         const loginParams = login.params;
@@ -505,16 +516,28 @@ suite.define(() => {
           step: {
             id: "model-access",
             type: "select",
-            message: "Credentials saved. Your current model restrictions may hide Example models.",
-            initialValue: "keep",
-            options: [
-              { value: "all", label: "Show all Example models" },
-              { value: "keep", label: "Keep current restrictions" },
-            ],
+            message: modelAccess.native
+              ? "Use Example Code’s native permissions?"
+              : "Credentials saved. Your current model restrictions may hide Example models.",
+            initialValue: modelAccess.native ? "all" : "keep",
+            options: modelAccess.native
+              ? [{ value: "all", label: "Continue" }]
+              : [
+                  { value: "all", label: "Show all Example models" },
+                  { value: "keep", label: "Keep current restrictions" },
+                ],
           },
         });
         await dialog.getByRole("button", { name: "Continue", exact: true }).click();
-        const keep = dialog.getByRole("button", { name: "Keep current restrictions", exact: true });
+        if (modelAccess.native) {
+          await dialog
+            .getByText("Use Example Code’s native permissions?", { exact: true })
+            .waitFor();
+        }
+        const keep = dialog.getByRole("button", {
+          name: modelAccess.native ? "Continue" : "Keep current restrictions",
+          exact: true,
+        });
         await keep.waitFor();
         expect(await keep.isEnabled()).toBe(true);
         expect((await gateway.getRequests("wizard.next")).at(-1)?.params).toEqual({
@@ -522,8 +545,17 @@ suite.define(() => {
           answer: { stepId: "device" },
         });
         await captureProviderProof(`login-model-access-${modelAccess.value}.png`, dialog);
-        await gateway.setMethodResponse("wizard.next", { done: true, status: "done" });
-        await dialog.getByRole("button", { name: modelAccess.label, exact: true }).click();
+        await gateway.setMethodResponse("wizard.next", {
+          done: true,
+          status: "done",
+          ...(modelAccess.native ? { modelActivation: { modelRef: "example/native" } } : {}),
+        });
+        await dialog
+          .getByRole("button", {
+            name: modelAccess.native ? "Continue" : modelAccess.label,
+            exact: true,
+          })
+          .click();
         await expect
           .poll(async () => {
             const requests = await gateway.getRequests("wizard.next");
@@ -533,8 +565,14 @@ suite.define(() => {
             sessionId: loginParams.sessionId,
             answer: { stepId: "model-access", value: modelAccess.value },
           });
-        const saved = page.getByRole("status").filter({ hasText: "Provider credentials saved." });
+        const saved = page.getByRole("status").filter({
+          hasText: modelAccess.native
+            ? "Provider enabled. The active model has not changed."
+            : "Provider credentials saved.",
+        });
         await saved.waitFor();
+        await captureProviderProof(`login-after-saved-${modelAccess.value}.png`, dialog);
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await page.getByText("signed-in@example.invalid", { exact: true }).waitFor();
         await expect
           .poll(async () => (await gateway.getRequests("models.authStatus")).length)
@@ -543,7 +581,6 @@ suite.define(() => {
         expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
-        await captureProviderProof(`login-after-saved-${modelAccess.value}.png`, saved);
       },
     );
   });
@@ -727,6 +764,7 @@ suite.define(() => {
         expect(await dialog.textContent()).not.toContain(signInUrl);
         await captureProviderProof("login-browser-waiting.png", dialog);
         await gateway.resolveDeferred("wizard.next");
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
         await popup.close();
       },

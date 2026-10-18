@@ -39,8 +39,16 @@ A logical result's receipt takes precedence over its legacy message IDs.
 The result carries a receipt, `messageIds` (including an empty array), and
 `visibleReplySent: true`; routing fields stay in the receipt. Optional `content`
 is passed through, and `kind` and `replyToId` use the receipt builder's rules.
-Keep acceptance side effects, content joining,
-suppression, and whether an identityless outcome needs a receipt in the adapter.
+For batches that join accepted text with newlines, use
+`createChannelDeliveryAccumulator({ kind?, replyToId? })` from
+`openclaw/plugin-sdk/channel-outbound`.
+Call `add(source, acceptedText?)` only after each physical send succeeds. `size`
+counts accepted sends, and `result()` returns their combined receipt and nonempty
+text, or a `no_visible_result` suppression for an empty batch. On failure, throw
+`partialError(error)` to retain earlier sends and a nested partial-delivery
+error's accepted subset; failures before any acceptance pass through unchanged.
+Keep transport acceptance side effects, other content-joining rules, and whether
+an identityless outcome needs a receipt in the adapter.
 
 Channel actions and adapter capabilities come from the selected plugin
 registration. An omitted `actions`, `message`, or `outbound` surface is not
@@ -105,6 +113,18 @@ patch callbacks retain diagnostic bookkeeping without adding duplicate rows.
 Omit this option for existing plugins that use raw callbacks. Their arguments,
 detail mode, custom line builder, and terminal command/patch rendering remain
 supported. This is an adapter capability, not a user configuration setting.
+
+Telegram and Discord additionally pass `showWorkStatus: true`. With the detailed
+tool log hidden, the compositor keeps one current-operation status and bounded
+subagent status rows from prepared items. This projection excludes arguments,
+command titles, output, and private child prose; it retains the real item IDs
+for updates and retractions. Other adapters keep their existing presentation
+unless they opt into this capability.
+
+For default-on drafts, pass `progressRequiresReply: true` in reply options.
+Dispatch uses its already-admitted reply expectation to keep optional quiet
+turns private; queued turns use their own expectation, not the preceding turn’s.
+This does not suppress required durable tool results such as approvals or media.
 
 ### Quiet acknowledgement and coalesced progress
 

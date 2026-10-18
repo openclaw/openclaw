@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readConnectPairingRequiredMessage } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -91,13 +91,11 @@ const NodesToolSchema = Type.Object({
     }),
   ),
   requestId: Type.Optional(Type.String()),
-  // notify
   title: Type.Optional(Type.String()),
   body: Type.Optional(Type.String()),
   sound: Type.Optional(Type.String()),
   priority: optionalStringEnum(NOTIFY_PRIORITIES),
   delivery: optionalStringEnum(NOTIFY_DELIVERIES),
-  // camera_snap / camera_clip / photos_latest / screen_snapshot
   facing: optionalStringEnum(CAMERA_FACING, {
     description: "camera_snap: front/back/both; camera_clip: front/back only.",
   }),
@@ -110,7 +108,6 @@ const NodesToolSchema = Type.Object({
         "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
     }),
   ),
-  // camera_ptz
   ptzOperation: optionalStringEnum(CAMERA_PTZ_OPERATIONS, {
     description:
       "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
@@ -131,19 +128,15 @@ const NodesToolSchema = Type.Object({
   duration: Type.Optional(Type.String()),
   durationMs: optionalPositiveIntegerSchema({ maximum: 300_000 }),
   includeAudio: Type.Optional(Type.Boolean()),
-  // screen_record
   fps: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
   screenIndex: optionalNonNegativeIntegerSchema(),
   outPath: Type.Optional(Type.String()),
-  // location_get
   maxAgeMs: optionalNonNegativeIntegerSchema(),
   locationTimeoutMs: optionalPositiveIntegerSchema(),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
-  // notifications_action
   notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
   notificationKey: Type.Optional(Type.String()),
   notificationReplyText: Type.Optional(Type.String()),
-  // which
   bins: Type.Optional(
     Type.Array(Type.String({ minLength: 1 }), {
       minItems: 1,
@@ -151,8 +144,11 @@ const NodesToolSchema = Type.Object({
       description: "which: executable names to resolve on the selected node.",
     }),
   ),
-  // invoke
-  invokeCommand: Type.Optional(Type.String()),
+  invokeCommand: Type.Optional(
+    Type.String({
+      description: "Node command to relay. fs.listDir returns sub-directories only.",
+    }),
+  ),
   invokeParamsJson: Type.Optional(Type.String()),
   invokeTimeoutMs: optionalPositiveIntegerSchema(),
 });
@@ -160,10 +156,6 @@ const NodesToolSchema = Type.Object({
 export function createNodesTool(options?: {
   agentSessionKey?: string;
   agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string | number;
   config?: OpenClawConfig;
   modelHasVision?: boolean;
   allowMediaInvokeCommands?: boolean;
@@ -178,7 +170,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. File transfer is a separate capability.",
+      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke (fs.listDir returns sub-directories only). File transfer is a separate capability.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -201,30 +193,22 @@ export function createNodesTool(options?: {
           }
           case "pending":
             return jsonResult(await callGatewayTool("node.pair.list", gatewayOpts, {}));
-          case "approve": {
-            const requestId = readToolStringParam(params, "requestId", {
-              required: true,
-            });
-            const scopes = await resolveNodePairApproveScopes(gatewayOpts, requestId);
-            return jsonResult(
-              await callGatewayTool(
-                "node.pair.approve",
-                gatewayOpts,
-                {
-                  requestId,
-                },
-                { scopes },
-              ),
-            );
-          }
+          case "approve":
           case "reject": {
             const requestId = readToolStringParam(params, "requestId", {
               required: true,
             });
+            const approvalOptions =
+              action === "approve"
+                ? { scopes: await resolveNodePairApproveScopes(gatewayOpts, requestId) }
+                : undefined;
             return jsonResult(
-              await callGatewayTool("node.pair.reject", gatewayOpts, {
-                requestId,
-              }),
+              await callGatewayTool(
+                `node.pair.${action}`,
+                gatewayOpts,
+                { requestId },
+                approvalOptions,
+              ),
             );
           }
           case "notify": {

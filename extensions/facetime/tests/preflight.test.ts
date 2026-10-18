@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/realtime-voice")>()),
-  resolveConfiguredRealtimeVoiceProvider: vi.fn(
+  resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(
     ({ providerConfigs }: { providerConfigs?: Record<string, Record<string, unknown>> }) => {
       const selected = Object.entries(providerConfigs ?? {}).find(
         ([, config]) => typeof config.apiKey === "string" && config.apiKey.length > 0,
@@ -29,7 +29,9 @@ const defaults = {
 
 function preflight({
   output = defaults.output,
-  profiler = "        OpenClaw-Mic:\n        OpenClaw-Feed:\n",
+  profiler = JSON.stringify({
+    SPAudioDataType: [{ _items: [{ _name: "OpenClaw-Mic" }, { _name: "OpenClaw-Feed" }] }],
+  }),
   ...overrides
 }: Partial<Parameters<typeof runFaceTimePreflight>[0]> & {
   output?: typeof defaults.output;
@@ -88,52 +90,45 @@ describe("FaceTime preflight", () => {
     ]);
   });
 
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each(["{invalid", "        OpenClaw-Mic:\n        OpenClaw-Feed:\n"])(
+    "reports missing driver devices when system_profiler violates its JSON contract: %s",
+    async (profiler) => {
+      const result = await preflight({ profiler });
+      expect(result.ok).toBe(false);
+      expect(result.checks.filter((check) => check.id.startsWith("paired-driver-"))).toEqual([
+        expect.objectContaining({ id: "paired-driver-mic", ok: false }),
+        expect.objectContaining({ id: "paired-driver-feed", ok: false }),
+      ]);
+    },
+  );
+
   it("fails provider readiness for an unresolved configured SecretRef", async () => {
     const missingKey = "OPENCLAW_FACETIME_TEST_MISSING_KEY";
-    const previous = process.env[missingKey];
-    delete process.env[missingKey];
-    try {
-      const result = await preflight({
-        config: resolveFaceTimeConfig({
-          ownerHandles: ["omar@example.com"],
-          realtime: {
-            providers: {
-              openai: {
-                apiKey: { source: "env", provider: "default", id: missingKey },
-              },
-            },
-          },
-        }),
-        fullConfig: {
-          secrets: { providers: { default: { source: "env" } } },
+    vi.stubEnv(missingKey, undefined);
+    const result = await preflight({
+      config: resolveFaceTimeConfig({
+        ownerHandles: ["omar@example.com"],
+        realtime: {
+          providers: { openai: { apiKey: { source: "env", provider: "default", id: missingKey } } },
         },
-      });
-
-      expect(result.checks.find((check) => check.id === "realtime-provider")?.ok).toBe(false);
-      expect(result.ok).toBe(false);
-    } finally {
-      if (previous === undefined) {
-        delete process.env[missingKey];
-      } else {
-        process.env[missingKey] = previous;
-      }
-    }
+      }),
+      fullConfig: { secrets: { providers: { default: { source: "env" } } } },
+    });
+    expect(result.checks.find((check) => check.id === "realtime-provider")?.ok).toBe(false);
+    expect(result.ok).toBe(false);
   });
 
   it("reports actionable readiness failures", async () => {
-    const runCommandWithTimeout = vi.fn().mockResolvedValue({
-      code: 1,
-      stdout: "",
-      stderr: "ENOENT",
-    });
-
     const result = await preflight({
       config: resolveFaceTimeConfig({ ownerHandles: ["omar@example.com"] }),
-      runtime: runtimeWithCommands(runCommandWithTimeout),
+      runtime: runtimeWithCommands(
+        vi.fn().mockResolvedValue({ code: 1, stdout: "", stderr: "ENOENT" }),
+      ),
       helperConnected: false,
       captureBinary: "/missing/capture",
     });
-
     expect(result.ok).toBe(false);
     expect(
       result.checks.filter((check) => check.required && !check.ok).map((check) => check.id),
@@ -177,20 +172,10 @@ describe("FaceTime preflight", () => {
         SPAudioDataType: [
           {
             _name: "coreaudio_device",
-            _items: [
-              {
-                _name: "OpenClaw-Mic",
-                coreaudio_device_transport: "coreaudio_device_type_virtual",
-              },
-              {
-                _name: "OpenClaw-Feed",
-                coreaudio_device_transport: "coreaudio_device_type_virtual",
-              },
-              {
-                _name: output.name,
-                coreaudio_device_transport: "coreaudio_device_type_virtual",
-              },
-            ],
+            _items: ["OpenClaw-Mic", "OpenClaw-Feed", output.name].map((_name) => ({
+              _name,
+              coreaudio_device_transport: "coreaudio_device_type_virtual",
+            })),
           },
         ],
       }),

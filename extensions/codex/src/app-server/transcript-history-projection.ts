@@ -143,7 +143,6 @@ function projectCodexThreadHistory(params: {
   turns: CodexTurn[];
   importedAt: number;
   modelProvider?: string;
-  includeErrorOnlyTurns?: boolean;
 }): ProjectedCodexHistoryMessage[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
   const assistantFields = {
@@ -234,12 +233,7 @@ function projectCodexThreadHistory(params: {
           : attachCodexMirrorIdentity({ role, content: text, timestamp }, identity);
       projected.push(projectCodexHistoryMessage(message, text));
     }
-    if (
-      params.includeErrorOnlyTurns &&
-      !hasAssistantMessage &&
-      turn.status === "failed" &&
-      turn.error?.message
-    ) {
+    if (!hasAssistantMessage && turn.status === "failed" && turn.error?.message) {
       const timestamp = (turn.completedAt ?? turn.startedAt ?? threadTimestamp / 1000) * 1000;
       const text = normalizeImportedHistoryText(turn.error.message) ?? "Codex turn failed.";
       const message: AssistantMessage = attachCodexMirrorIdentity(
@@ -293,7 +287,6 @@ export function projectBoundedCodexThreadHistory(params: {
     thread: params.thread,
     turns: selectTurnsThroughBoundary(params.thread, params.throughTurnId),
     importedAt: params.importedAt,
-    includeErrorOnlyTurns: true,
     ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
   });
   const selected = selectBoundedCodexHistoryTail(projected);

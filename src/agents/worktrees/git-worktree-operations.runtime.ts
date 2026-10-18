@@ -1,17 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import {
   estimateCheckoutObjectBytes,
   estimateCheckoutTransitionBytes,
   measureDirectoryTreeBytes,
 } from "./capacity.runtime.js";
+import {
+  classifyWorktreeEvictions,
+  prepareWorktreeEvictionRepositories,
+  purgeWorktreeCheckout,
+  readWorktreeSourceDependencies,
+} from "./eviction.runtime.js";
+import { readWorktreeCleanupFingerprint } from "./gc-fingerprint.runtime.js";
 import { gitPathspecBatches, splitNullBuffer } from "./git-path-inventory.js";
 import type {
   GitWorktreeOperation,
   GitWorktreeOperationResult,
   GitWorktreeOperations,
 } from "./git-worktree-operations.js";
-import { lstatIfExists, requireGitBuffer, worktreePathExists } from "./git.js";
+import { requireGitBuffer, worktreePathExists } from "./git.js";
 import {
   hasSafeParentDirectories,
   hasUnsnapshotableProvisionedFiles,
@@ -65,7 +73,7 @@ async function inspectProvisioning(
     if (!normalized || !(await hasSafeParentDirectories(sourceRoot, normalized))) {
       continue;
     }
-    const stat = await lstatIfExists(resolveGitPath(sourceRoot, normalized));
+    const stat = await lstatIfExists(resolveGitPath(sourceRoot, normalized), "ENOENT");
     if (stat?.isFile()) {
       estimatedBytes += Math.max(4096, stat.size);
     }
@@ -119,6 +127,16 @@ export async function executeGitWorktreeOperation(
   operation: GitWorktreeOperation,
 ): Promise<GitWorktreeOperationResult> {
   switch (operation.type) {
+    case "worktree.eviction-source":
+      return readWorktreeSourceDependencies(operation.input);
+    case "worktree.eviction-repositories":
+      return await prepareWorktreeEvictionRepositories(operation.input.repoRoots);
+    case "worktree.eviction-classify":
+      return await classifyWorktreeEvictions(operation.input.records);
+    case "worktree.eviction-purge":
+      return await purgeWorktreeCheckout(operation.input.record, operation.input.live);
+    case "worktree.cleanup-fingerprint":
+      return await readWorktreeCleanupFingerprint(operation.input.checkoutPath);
     case "worktree.snapshot-verify-exact":
       return await verifyExactStateSnapshot(operation.input);
     case "worktree.snapshot":
@@ -132,6 +150,7 @@ export async function executeGitWorktreeOperation(
         operation.input.repoRoot,
         operation.input.ref,
         operation.input.replacementRefBase,
+        operation.input.preparationKey,
       );
     case "worktree.checkout-transition-size":
       return await estimateCheckoutTransitionBytes(

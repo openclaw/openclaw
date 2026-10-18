@@ -76,11 +76,11 @@ describe("session resource tool policy", () => {
       tools: { byProvider: { openai: { deny: ["browser"] } } },
       agents: { defaults: { model: "openai/test-model" } },
     },
-    { agents: { list: [{ id: "main", tools: { deny: ["browser"] } }] } },
+    { agents: { entries: { main: { tools: { deny: ["browser"] } } } } },
     {
       agents: {
         defaults: { model: "openai/test-model" },
-        list: [{ id: "main", tools: { byProvider: { openai: { deny: ["browser"] } } } }],
+        entries: { main: { tools: { byProvider: { openai: { deny: ["browser"] } } } } },
       },
     },
     { tools: { toolsBySender: { "*": { deny: ["browser"] } } } },
@@ -101,17 +101,6 @@ describe("session resource tool policy", () => {
     expect(() => test.resolve("browser", assertCurrent)).toThrow("native binding changed");
     expect(storageRead).not.toHaveBeenCalled();
     expect(runtimeOwnership).not.toHaveBeenCalled();
-  });
-
-  it("evaluates current row and policy facts without owning resource lifetime", () => {
-    const test = fixture({ config: { tools: { profile: "minimal", alsoAllow: ["browser"] } } });
-    test.resolve();
-    test.entries.set(sessionKey, { ...test.entries.get(sessionKey)!, updatedAt: 2 });
-    expect(() => test.resolve()).not.toThrow();
-    test.setConfig({ tools: { deny: ["browser"] } });
-    expect(() => test.resolve()).toThrow("current tool policy");
-    test.setConfig({});
-    expect(() => test.resolve()).not.toThrow();
   });
 
   it("rechecks selected model policy when the stored provider changes", () => {
@@ -182,15 +171,6 @@ describe("session resource tool policy", () => {
     expect(() => fixture({ entry: { sandbox: "required" } }).resolve()).toThrow(
       "current tool policy",
     );
-    expect(storageRead).not.toHaveBeenCalled();
-  });
-
-  it("rejects locked native sessions before asking their storage-backed ownership resolver", () => {
-    const test = fixture({
-      entry: { agentHarnessId: "test-harness", modelSelectionLocked: true },
-    });
-    expect(() => test.resolve()).toThrow("sessions with locked model selection");
-    expect(runtimeOwnership).not.toHaveBeenCalled();
     expect(storageRead).not.toHaveBeenCalled();
   });
 

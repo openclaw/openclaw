@@ -1,20 +1,9 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it, vi } from "vitest";
-import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
-import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { stripHeartbeatToken } from "../heartbeat.js";
-import { appendReplyMediaFailures } from "../reply-payload.js";
-import {
-  HEARTBEAT_TOKEN,
-  isSilentReplyPrefixText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-} from "../tokens.js";
-import type { ReplyPayload } from "../types.js";
+import { appendReplyMediaFailures, setReplyPayloadMetadata } from "../reply-payload.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -23,48 +12,15 @@ import { createReplyOperation } from "./reply-run-registry.operation.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import { createTypingController } from "./typing.js";
 
-function normalizeStreamingTextReference(
-  payload: ReplyPayload,
-  options: { isHeartbeat?: boolean; silentExpected?: boolean } = {},
-): { text?: string; skip: boolean } {
-  let text = payload.text;
-  const reply = resolveSendableOutboundReplyParts(payload);
-  if (options.silentExpected || text?.trim() === "N") {
-    return { skip: true };
-  }
-  if (!options.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
-    const stripped = stripHeartbeatToken(text, { mode: "message" });
-    if (stripped.shouldSkip && !reply.hasMedia) {
-      return { skip: true };
-    }
-    text = stripped.text;
-  }
-  if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
-    return { skip: true };
-  }
-  if (
-    isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
-    isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
-  ) {
-    return { skip: true };
-  }
-  if (text && startsWithSilentToken(text, SILENT_REPLY_TOKEN)) {
-    text = stripLeadingSilentToken(text, SILENT_REPLY_TOKEN);
-  }
-  if (!text) {
-    return reply.hasMedia ? { text: undefined, skip: false } : { skip: true };
-  }
-  const sanitized = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
-  return sanitized.trim() ? { text: sanitized, skip: false } : { skip: true };
-}
-
 function createPresentation(
   options: {
     isHeartbeat?: boolean;
     silentExpected?: boolean;
     conversationContext?: string;
+    onPartialReply?: GetReplyOptions["onPartialReply"];
     normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
     replyOperation?: AgentTurnParams["replyOperation"];
+    typingSignals?: AgentTurnParams["typingSignals"];
     delivery?: Pick<
       AgentTurnParams,
       "opts" | "typingSignals" | "blockStreamingEnabled" | "blockReplyPipeline" | "applyReplyToMode"
@@ -75,7 +31,14 @@ function createPresentation(
     followupRun: { run: { silentExpected: options.silentExpected === true } },
     isHeartbeat: options.isHeartbeat === true,
     sessionCtx: { agentText: options.conversationContext },
-    opts: undefined,
+    opts: { onPartialReply: options.onPartialReply },
+    typingSignals:
+      options.typingSignals ??
+      createTypingSignaler({
+        typing: createTypingController({}),
+        mode: "never",
+        isHeartbeat: options.isHeartbeat === true,
+      }),
     replyOperation: options.replyOperation,
     ...options.delivery,
   } as unknown as AgentTurnParams;
@@ -85,26 +48,59 @@ function createPresentation(
       normalizePayload: options.normalizeMediaPaths ?? (async (payload) => payload),
     },
     directBlockDeliveries: [],
-    heartbeatState: { didLogStrip: false },
   });
 }
 
-function cumulativePrefixes(text: string, seed: number): string[] {
-  const prefixes: string[] = [];
-  let offset = 0;
-  let random = seed >>> 0;
-  while (offset < text.length) {
-    random = (random * 1_664_525 + 1_013_904_223) >>> 0;
-    offset = Math.min(text.length, offset + 1 + (random % 7));
-    prefixes.push(text.slice(0, offset));
-  }
-  return prefixes;
-}
-
 describe("agent runner streaming presentation", () => {
+  it("refreshes typing for whitespace appended while typing sends are failing", async () => {
+    vi.useFakeTimers();
+    const onCleanup = vi.fn();
+    const onReplyStart = vi
+      .fn<() => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new Error("temporary typing send failure"));
+    const typing = createTypingController({ onReplyStart, onCleanup });
+    const presentation = createPresentation({
+      typingSignals: createTypingSignaler({ typing, mode: "message", isHeartbeat: false }),
+    });
+    try {
+      await presentation.presentPartialReply({ text: "answer", delta: "answer" }, "embedded");
+      await vi.advanceTimersByTimeAsync(119_000);
+      await presentation.presentPartialReply({ text: "answer ", delta: " " }, "embedded");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(typing.isActive()).toBe(true);
+      expect(onCleanup).not.toHaveBeenCalled();
+    } finally {
+      typing.cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("strips split heartbeat tokens and preserves replacement partials", async () => {
+    const texts: Array<string | undefined> = [];
+    const presentation = createPresentation({
+      onPartialReply: (payload) => {
+        texts.push(payload.text);
+      },
+    });
+    await presentation.presentPartialReply({ text: "HEARTBEAT_", delta: "HEARTBEAT_" }, "embedded");
+    await presentation.presentPartialReply({ text: "HEARTBEAT_OK", delta: "OK" }, "embedded");
+    await presentation.presentPartialReply(
+      { text: "HEARTBEAT_OK details", delta: " details" },
+      "embedded",
+    );
+    await presentation.presentPartialReply(
+      { text: "replacement", delta: "", replace: true },
+      "embedded",
+    );
+    expect(texts).toEqual(["HEARTBEAT_", "details", "replacement"]);
+  });
+
   it.each([
-    { name: "cleaned silent token", caption: "NO_REPLY", silent: true },
-    { name: "cleaned silent envelope", caption: '{"action":"NO_REPLY"}', silent: true },
+    { name: "recorded silent caption", caption: "NO_REPLY", silent: true },
+    { name: "JSON action caption", caption: '{"action":"NO_REPLY"}', silent: false },
+    { name: "quoted token caption", caption: '"NO_REPLY"', silent: false },
+    { name: "punctuated token caption", caption: "NO_REPLY.", silent: false },
     { name: "ordinary code-literal caption", caption: "Use `NO_REPLY` literally.", silent: false },
   ])("preserves $name policy across attachment normalization", async ({ caption, silent }) => {
     const retainedMedia = "https://example.invalid/retained.png";
@@ -132,14 +128,17 @@ describe("agent runner streaming presentation", () => {
       throw new Error("expected the prepared block delivery handler");
     }
     try {
-      await handler({
-        text: `[tool calls omitted]\n${caption}`,
-        mediaUrls: ["https://example.invalid/failed.png", retainedMedia],
-      });
+      await handler(
+        setReplyPayloadMetadata(
+          {
+            text: `[tool calls omitted]\n${caption}`,
+            mediaUrls: ["https://example.invalid/failed.png", retainedMedia],
+          },
+          silent ? { silentReply: true } : {},
+        ),
+      );
       expect(delivered.mock.calls.map(([payload]) => payload.text)).toEqual([
-        silent
-          ? ""
-          : "Use `NO_REPLY` literally.\n⚠️ Example: Delivery failed. Try sending this file again.",
+        silent ? "" : `${caption}\n⚠️ Example: Delivery failed. Try sending this file again.`,
       ]);
       expect(
         delivered.mock.calls.map(
@@ -151,11 +150,28 @@ describe("agent runner streaming presentation", () => {
     }
   });
 
-  it.each(["NO_REPLY", '{"action":"NO_REPLY"}'])(
-    "suppresses cleaned silent blocks before coalesced prepared delivery: %s",
-    async (silentText) => {
-      const { createSubscribedSessionHarness } =
-        await import("../../agents/embedded-agent-subscribe.e2e-harness.js");
+  it.each([
+    {
+      name: "producer-authored silence",
+      text: "NO_REPLY",
+      silent: true,
+      expected: "First.\n\nLast.",
+    },
+    {
+      name: "prepared literal suffix",
+      text: "NO_REPLY",
+      silent: false,
+      expected: "First.\n\nNO_REPLY\n\nLast.",
+    },
+    {
+      name: "directive-stripped literal",
+      text: "[tool calls omitted]\nNO_REPLY",
+      silent: false,
+      expected: "First.\n\nNO_REPLY\n\nLast.",
+    },
+  ])(
+    "preserves $name policy through coalesced prepared delivery",
+    async ({ text, silent, expected }) => {
       const delivered = vi.fn(async (_payload: ReplyPayload) => {});
       const dispatcher = createReplyDispatcher({
         deliver: delivered,
@@ -190,59 +206,16 @@ describe("agent runner streaming presentation", () => {
       if (!handler) {
         throw new Error("expected the prepared block delivery handler");
       }
-      const blocks: string[] = [];
-      const { emit, subscription } = createSubscribedSessionHarness({
-        runId: "run-cleaned-silence",
-        onBlockReply: async (payload) => {
-          blocks.push(payload.text ?? "");
-          await handler(payload);
-        },
-        blockReplyBreak: "text_end",
-        blockReplyChunking: {
-          minChars: 1,
-          maxChars: 1200,
-          breakPreference: "paragraph",
-          flushOnParagraph: true,
-        },
-      });
-      const source = `First.\n\n[tool calls omitted]\n${silentText}\n\nLast.\n\n`;
-      const message = makeAgentAssistantMessage({
-        api: "google-generative-ai",
-        provider: "google",
-        model: "gemini-2.5-flash",
-        content: [{ type: "text", text: source }],
-      });
+      const middle = setReplyPayloadMetadata({ text }, silent ? { silentReply: true } : {});
       try {
-        emit({ type: "message_start", message: { ...message, content: [] } });
-        emit({
-          type: "message_update",
-          message,
-          assistantMessageEvent: {
-            type: "text_delta",
-            contentIndex: 0,
-            delta: source,
-            partial: message,
-          },
-        });
-        emit({
-          type: "message_update",
-          message,
-          assistantMessageEvent: {
-            type: "text_end",
-            contentIndex: 0,
-            content: source,
-            partial: message,
-          },
-        });
-        emit({ type: "message_end", message });
-        await subscription.waitForPendingEvents();
+        await handler({ text: "First." });
+        await handler(middle);
+        await handler({ text: "Last." });
         await pipeline.flush({ force: true });
         await dispatcher.waitForIdle();
 
-        expect(blocks).toEqual(["First.", `[tool calls omitted]\n${silentText}`, "Last."]);
-        expect(delivered.mock.calls.map(([payload]) => payload.text)).toEqual(["First.\n\nLast."]);
+        expect(delivered.mock.calls.map(([payload]) => payload.text)).toEqual([expected]);
       } finally {
-        subscription.unsubscribe();
         pipeline.stop();
         typing.cleanup();
         dispatcher.markComplete();
@@ -283,330 +256,251 @@ describe("agent runner streaming presentation", () => {
     },
   );
 
-  it("redacts copied inbound prompts before streamed XML cleanup", () => {
-    const conversationContext = [
-      "[Chat messages since your last reply - for context]",
-      "Alice: private history",
-      "",
-      "[Current message - respond to this]",
-      '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
-      "private inbound paragraph",
-    ].join("\n");
-    const presentation = createPresentation({ conversationContext });
+  const marker = "[Current message - respond to this]";
+  const currentContext = `${marker}\nprivate inbound paragraph`;
+  const historyContext = `[Chat messages since your last reply - for context]\nAlice: private history\n\n${currentContext}`;
+  const wrap = (text: string, prefix: string, continuation = prefix) =>
+    text
+      .split("\n")
+      .map((line, index) => `${index === 0 ? prefix : continuation}${line}`)
+      .join("\n");
+  const repeatedContext = `${marker}\nprivate first paragraph\n${marker}\nprivate final paragraph`;
 
-    expect(
-      presentation.normalizeStreamingText({
-        text: `${conversationContext}\n\nVisible streamed answer.`,
-      }),
-    ).toEqual({ text: "Visible streamed answer.", skip: false });
-  });
-
-  it("withholds cumulative copied-prompt prefixes before any private stream text is visible", () => {
-    const conversationContext = [
-      "[Chat messages since your last reply - for context]",
-      "Alice: private history",
-      "",
-      "[Current message - respond to this]",
-      "private inbound paragraph",
-    ].join("\n");
-    const presentation = createPresentation({ conversationContext });
-
-    for (const length of [1, 9, 50, 74, conversationContext.length - 1]) {
-      expect(
-        presentation.normalizeStreamingText({ text: conversationContext.slice(0, length) }),
-      ).toEqual({
-        skip: true,
-      });
-    }
-
-    expect(
-      presentation.normalizeStreamingText({
-        text: `${conversationContext}\n\nVisible streamed answer.`,
-      }),
-    ).toEqual({ text: "Visible streamed answer.", skip: false });
-  });
-
-  it.each([
-    { name: "standard", prefix: "> " },
-    { name: "indented", prefix: "  > " },
-    { name: "nested", prefix: ">> " },
-    { name: "spaced nested", prefix: "> > " },
-    { name: "four-space code", prefix: "    " },
-    { name: "tab-indented code", prefix: "\t" },
-    { name: "bulleted list", prefix: "- " },
-    { name: "numbered list", prefix: "1. " },
-    { name: "heading", prefix: "# " },
-    { name: "deep heading", prefix: "###### " },
-    { name: "quoted heading", prefix: "> ## " },
-    { name: "multiline list item", prefix: "- ", continuation: "  " },
-    { name: "widely indented list item", prefix: "- ", continuation: "    " },
-    { name: "varying quote depth", prefix: "> ", continuation: ">> " },
-    { name: "quoted list continuation", prefix: "> - ", continuation: ">   " },
-    { name: "mixed code indentation", prefix: "    ", continuation: "\t" },
-    { name: "quoted continuation after an unwrapped marker", prefix: "", continuation: "> " },
-    { name: "very wide list continuation", prefix: "- ", continuation: " ".repeat(320) },
-    { name: "deeply nested quote", prefix: "> ", continuation: `${">".repeat(320)} ` },
-  ])(
-    "withholds $name Markdown prompt bytes before private stream text is visible",
-    ({ prefix, continuation }) => {
-      const conversationContext = [
-        "[Chat messages since your last reply - for context]",
-        "Alice: private history",
-        "",
-        "[Current message - respond to this]",
+  const promptCases: Array<{
+    name: string;
+    context: string;
+    copied: string;
+    answer?: string;
+    skippedLengths?: number[];
+  }> = [
+    ...(
+      [
+        ["standard", "> "],
+        ["indented", "  > "],
+        ["nested", ">> "],
+        ["spaced nested", "> > "],
+        ["four-space code", "    "],
+        ["tab-indented code", "\t"],
+        ["bulleted list", "- "],
+        ["numbered list", "1. "],
+        ["heading", "# "],
+        ["deep heading", "###### "],
+        ["quoted heading", "> ## "],
+        ["multiline list", "- ", "  "],
+        ["wide list", "- ", "    "],
+        ["varying quote depth", "> ", ">> "],
+        ["quoted list", "> - ", ">   "],
+        ["mixed code indentation", "    ", "\t"],
+        ["unwrapped marker", "", "> "],
+        ["very wide list", "- ", " ".repeat(320)],
+        ["deep quote", "> ", `${">".repeat(320)} `],
+      ] satisfies Array<[string, string, string?]>
+    ).map(([name, prefix, continuation]) => ({
+      name,
+      context: historyContext,
+      copied: wrap(historyContext, prefix, continuation),
+      answer: "Visible streamed answer.",
+    })),
+    ...(
+      [
+        ["bulleted", "- ", "- ", "- "],
+        ["quoted", "> ", "> ", "> "],
+        ["indented", "    ", "    ", "    "],
+        ["indented list", "- ", "    ", "    "],
+        ["prompt-owned bullet", "- ", "    ", "- "],
+        ["prompt-owned quote", "> ", ">> ", "> "],
+      ] satisfies Array<[string, string, string, string]>
+    ).map(([name, prefix, continuation, sourcePrefix]) => {
+      const context = `${marker}\n${sourcePrefix}private inbound paragraph`;
+      return { name, context, copied: wrap(context, prefix, continuation) };
+    }),
+    {
+      name: "same-line answer",
+      context: currentContext,
+      copied: wrap(currentContext, "Visible answer: ", "> "),
+    },
+    {
+      name: "carriage returns",
+      context: currentContext,
+      copied: currentContext.replace(/\n/g, "\r"),
+      answer: "Visible answer.",
+    },
+    {
+      name: "repeated source marker",
+      context: repeatedContext,
+      copied: wrap(repeatedContext, "- ", " ".repeat(320)),
+    },
+    {
+      name: "unwrapped history",
+      context: historyContext,
+      copied: historyContext,
+      answer: "Visible streamed answer.",
+      skippedLengths: [1, 9, 50, 74, historyContext.length - 1],
+    },
+    ...["private", "private inbound"].map((privatePrefix) => ({
+      name: `marker flood: ${privatePrefix}`,
+      context: currentContext,
+      copied: `${marker}\n`.repeat(32) + privatePrefix,
+    })),
+    ...['<function_calls><invoke name="exec">private XML</invoke></function_calls>'].map((xml) => {
+      const context = historyContext.replace(
         "private inbound paragraph",
-      ].join("\n");
-      const quotedContext = conversationContext
-        .split("\n")
-        .map((line, index) => `${index === 0 ? prefix : (continuation ?? prefix)}${line}`)
-        .join("\n");
-      const presentation = createPresentation({ conversationContext });
-
-      for (let length = 1; length <= quotedContext.length; length += 1) {
+        `${xml}\nprivate inbound paragraph`,
+      );
+      return { name: "XML cleanup", context, copied: context, answer: "Visible streamed answer." };
+    }),
+  ];
+  it.each(promptCases)(
+    "withholds private prompt bytes: $name",
+    ({ context, copied, answer, skippedLengths }) => {
+      const presentation = createPresentation({ conversationContext: context });
+      for (let length = 1; length <= copied.length; length += 1) {
         const visibleText =
-          presentation.normalizeStreamingText({ text: quotedContext.slice(0, length) }).text ?? "";
-
+          presentation.normalizeStreamingText({ text: copied.slice(0, length) }).text ?? "";
         expect(visibleText).not.toContain("Alice");
-        expect(visibleText).not.toContain("private inbound");
-      }
-
-      expect(
-        presentation.normalizeStreamingText({
-          text: `${quotedContext}\n\nVisible streamed answer.`,
-        }),
-      ).toEqual({ text: "Visible streamed answer.", skip: false });
-    },
-  );
-
-  it("withholds decorated prompt continuations after safe same-line reply text", () => {
-    const conversationContext = [
-      "[Current message - respond to this]",
-      "private inbound paragraph",
-    ].join("\n");
-    const wrappedContext = conversationContext
-      .split("\n")
-      .map((line, index) => `${index === 0 ? "Visible answer: " : "> "}${line}`)
-      .join("\n");
-    const presentation = createPresentation({ conversationContext });
-
-    for (let length = 1; length <= wrappedContext.length; length += 1) {
-      const visibleText =
-        presentation.normalizeStreamingText({ text: wrappedContext.slice(0, length) }).text ?? "";
-
-      expect(visibleText).not.toContain("private");
-    }
-  });
-
-  it("withholds every copied prompt prefix with bare carriage-return separators", () => {
-    const conversationContext = [
-      "[Current message - respond to this]",
-      "private inbound paragraph",
-    ].join("\n");
-    const copiedContext = conversationContext.replace(/\n/g, "\r");
-    const presentation = createPresentation({ conversationContext });
-
-    for (let length = 1; length <= copiedContext.length; length += 1) {
-      const visibleText =
-        presentation.normalizeStreamingText({ text: copiedContext.slice(0, length) }).text ?? "";
-
-      expect(visibleText).not.toContain("private");
-    }
-
-    expect(
-      presentation.normalizeStreamingText({ text: `${copiedContext}\n\nVisible answer.` }),
-    ).toEqual({ text: "Visible answer.", skip: false });
-  });
-
-  it("keeps the original prompt anchor when private context repeats its first marker", () => {
-    const marker = "[Current message - respond to this]";
-    const conversationContext = [
-      marker,
-      "private first paragraph",
-      marker,
-      "private final paragraph",
-    ].join("\n");
-    const wrappedContext = conversationContext
-      .split("\n")
-      .map((line, index) => `${index === 0 ? "- " : " ".repeat(320)}${line}`)
-      .join("\n");
-    const presentation = createPresentation({ conversationContext });
-
-    for (let length = 1; length <= wrappedContext.length; length += 1) {
-      const visibleText =
-        presentation.normalizeStreamingText({ text: wrappedContext.slice(0, length) }).text ?? "";
-
-      expect(visibleText).not.toContain("private");
-    }
-  });
-
-  it("preserves bracket-heavy streamed text without treating every bracket as a prompt", () => {
-    const marker = "[Current message - respond to this]";
-    const conversationContext = `${marker}\nprivate inbound paragraph`;
-    const visibleText = `${marker}${"[".repeat(40_000)}`;
-    const presentation = createPresentation({ conversationContext });
-
-    const result = presentation.normalizeStreamingText({ text: visibleText });
-
-    expect(result.skip).toBe(false);
-    expect(result.text?.length).toBe(visibleText.length - 1);
-    expect(result.text?.startsWith(marker)).toBe(true);
-  });
-
-  it("withholds repeated prompt markers before their private streaming continuation", () => {
-    const marker = "[Current message - respond to this]";
-    const conversationContext = `${marker}\nprivate inbound paragraph`;
-    const presentation = createPresentation({ conversationContext });
-    const repeatedMarkers = `${marker}\n`.repeat(32);
-
-    for (const privatePrefix of ["private", "private inbound"]) {
-      const visibleText =
-        presentation.normalizeStreamingText({ text: `${repeatedMarkers}${privatePrefix}` }).text ??
-        "";
-
-      expect(visibleText).not.toContain("private");
-    }
-  });
-
-  it.each([
-    { name: "bulleted", prefix: "- ", sourcePrefix: "- " },
-    { name: "quoted", prefix: "> ", sourcePrefix: "> " },
-    { name: "indented", prefix: "    ", sourcePrefix: "    " },
-    {
-      name: "list continuation with prompt indentation",
-      prefix: "- ",
-      continuation: "    ",
-      sourcePrefix: "    ",
-    },
-    {
-      name: "list continuation with a prompt-owned bullet",
-      prefix: "- ",
-      continuation: "    ",
-      sourcePrefix: "- ",
-    },
-    {
-      name: "varying quote depth with a prompt-owned quote",
-      prefix: "> ",
-      continuation: ">> ",
-      sourcePrefix: "> ",
-    },
-  ])(
-    "withholds $name wrappers without consuming prompt-owned Markdown",
-    ({ prefix, continuation, sourcePrefix }) => {
-      const conversationContext = [
-        "[Current message - respond to this]",
-        `${sourcePrefix}private inbound paragraph`,
-      ].join("\n");
-      const wrappedContext = conversationContext
-        .split("\n")
-        .map((line, index) => `${index === 0 ? prefix : (continuation ?? prefix)}${line}`)
-        .join("\n");
-      const presentation = createPresentation({ conversationContext });
-
-      for (let length = 1; length <= wrappedContext.length; length += 1) {
-        const visibleText =
-          presentation.normalizeStreamingText({ text: wrappedContext.slice(0, length) }).text ?? "";
-
         expect(visibleText).not.toContain("private");
       }
+      for (const length of skippedLengths ?? []) {
+        expect(presentation.normalizeStreamingText({ text: copied.slice(0, length) })).toEqual({
+          skip: true,
+        });
+      }
+      if (answer) {
+        expect(presentation.normalizeStreamingText({ text: `${copied}\n\n${answer}` })).toEqual({
+          text: answer,
+          skip: false,
+        });
+      }
     },
   );
 
-  it("withholds a trailing copied-prompt prefix without hiding safe preceding streamed text", () => {
-    const conversationContext = [
-      "[Current message - respond to this]",
-      "private inbound paragraph",
-    ].join("\n");
-    const presentation = createPresentation({ conversationContext });
-
-    expect(
-      presentation.normalizeStreamingText({
-        text: `Safe introductory answer.\n${conversationContext.slice(0, 12)}`,
-      }),
-    ).toEqual({ text: "Safe introductory answer.\n", skip: false });
-
-    expect(
-      presentation.normalizeStreamingText({
-        text: `Safe introductory answer: ${conversationContext.slice(0, 12)}`,
-      }),
-    ).toEqual({ text: "Safe introductory answer: ", skip: false });
-
-    expect(
-      presentation.normalizeStreamingText({
-        text: `\`\`\`text\n${conversationContext.slice(0, 12)}`,
-      }),
-    ).toEqual({ text: "```text\n", skip: false });
-  });
-
-  it("keeps long newline-heavy answers visible without copying every remaining line suffix", () => {
-    const conversationContext = [
-      "[Current message - respond to this]",
-      "private inbound paragraph",
-    ].join("\n");
-    const visibleAnswer = Array.from({ length: 2_000 }, (_, index) => `Visible line ${index}`).join(
-      "\n",
-    );
-    const presentation = createPresentation({ conversationContext });
-
-    expect(presentation.normalizeStreamingText({ text: visibleAnswer })).toEqual({
-      text: visibleAnswer,
+  it.each([
+    ...["Safe introductory answer.\n", "Safe introductory answer: ", "```text\n"].map((prefix) => ({
+      name: `safe prefix ${JSON.stringify(prefix)}`,
+      text: prefix + currentContext.slice(0, 12),
+      expected: prefix,
+    })),
+    {
+      name: "newline-heavy answer",
+      expected: undefined,
+      text: Array.from({ length: 2_000 }, (_, index) => `Visible line ${index}`).join("\n"),
+    },
+    {
+      name: "bracket-heavy answer",
+      text: `${marker}${"[".repeat(40_000)}`,
+      expected: `${marker}${"[".repeat(39_999)}`,
+    },
+  ])("preserves $name around prompt filtering", ({ text, expected }) => {
+    const presentation = createPresentation({ conversationContext: currentContext });
+    expect(presentation.normalizeStreamingText({ text })).toEqual({
+      text: expected ?? text,
       skip: false,
     });
   });
 
-  it("keeps split classification and sanitization equivalent to the eager path", () => {
-    const presentation = createPresentation();
-    const randomSequences = Array.from({ length: 16 }, (_, index) =>
-      cumulativePrefixes(
-        `Randomized answer ${index + 1}: alpha beta gamma delta epsilon.`,
-        0xc0ffee + index,
-      ).map((text) => ({ text })),
-    );
-    const sequences: ReplyPayload[][] = [
-      ...randomSequences,
-      cumulativePrefixes("HEARTBEAT_OK visible after heartbeat", 41).map((text) => ({ text })),
-      ["N", "NO_", "NO_REPLY"].map((text) => ({ text })),
-      [{ text: "NO_REPLYVisible" }, { text: "NO_REPLYVisible answer" }],
-      [" ", "  ", "  \n"].map((text) => ({ text })),
-      [{ text: "[tool calls omitted]" }],
-      [{ mediaUrls: ["https://example.invalid/image.png"] }],
+  it("presents streaming control tokens without changing final text", async () => {
+    const cases: Array<{
+      payload: ReplyPayload;
+      options?: Parameters<typeof createPresentation>[0];
+      expected: { text?: string; skip: boolean };
+    }> = [
+      { payload: { text: "visible answer" }, expected: { text: "visible answer", skip: false } },
+      { payload: { text: "H" }, expected: { text: "H", skip: false } },
+      {
+        payload: { text: "HEARTBEAT_OK visible after heartbeat" },
+        expected: { text: "visible after heartbeat", skip: false },
+      },
+      ...[
+        "N",
+        "NO_",
+        "NO_REPLY",
+        "NO_REPLY.",
+        '"NO_REPLY"',
+        '{"action":"NO_REPLY"}',
+        "HEARTBEAT_",
+      ].map((text) => ({ payload: { text }, expected: { text, skip: false } })),
+      ...["HEARTBEAT_OK", " ", "  ", "  \n", "[tool calls omitted]"].map((text) => ({
+        payload: { text },
+        expected: { skip: true },
+      })),
+      {
+        payload: { text: "NO_REPLYVisible" },
+        expected: { text: "NO_REPLYVisible", skip: false },
+      },
+      {
+        payload: { text: "NO_REPLYVisible answer" },
+        expected: { text: "NO_REPLYVisible answer", skip: false },
+      },
+      {
+        payload: { text: "NO_REPLY\nVisible answer" },
+        expected: { text: "NO_REPLY\nVisible answer", skip: false },
+      },
+      {
+        payload: { mediaUrls: ["https://example.invalid/image.png"] },
+        expected: { text: undefined, skip: false },
+      },
+      { payload: { text: "visible" }, options: { silentExpected: true }, expected: { skip: true } },
+      {
+        payload: { text: "HEARTBEAT_OK details" },
+        options: { isHeartbeat: true },
+        expected: { text: "HEARTBEAT_OK details", skip: false },
+      },
+      {
+        payload: { text: "No, that is wrong." },
+        expected: { text: "No, that is wrong.", skip: false },
+      },
     ];
-
-    for (const partials of sequences) {
-      for (const payload of partials) {
-        const expected = normalizeStreamingTextReference(payload);
-        const classified = presentation.classifyStreamingPartial(payload);
-        const actual =
-          classified.skip || !classified.text
-            ? classified
-            : presentation.sanitizeStreamingText(classified.text, Boolean(payload.isError));
-        expect(actual).toEqual(expected);
+    for (const { payload, options, expected } of cases) {
+      const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>();
+      const presentation = createPresentation({ ...options, onPartialReply });
+      await presentation.presentPartialReply(payload, "cli");
+      if (expected.skip || !expected.text) {
+        expect(onPartialReply).not.toHaveBeenCalled();
+      } else {
+        expect(onPartialReply).toHaveBeenCalledExactlyOnceWith({ text: expected.text });
+      }
+      if (payload.mediaUrls) {
+        expect(presentation.normalizeStreamingText(payload)).toEqual(expected);
+      }
+      if (payload.text === "N") {
+        // Final text is not an incomplete cumulative preview (#122476).
+        expect(presentation.normalizeStreamingText(payload)).toEqual({ text: "N", skip: false });
       }
     }
   });
 
-  it("holds a lone N preview until it diverges from NO_REPLY (#122476)", () => {
-    const presentation = createPresentation();
+  it("forwards prepared punctuation-prefixed text without control buffering", async () => {
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>();
+    const presentation = createPresentation({ onPartialReply });
 
-    expect(presentation.classifyStreamingPartial({ text: "N" })).toEqual({ skip: true });
-    expect(presentation.classifyStreamingPartial({ text: "No, that is wrong." })).toEqual({
-      text: "No, that is wrong.",
-      skip: false,
-    });
-    expect(presentation.normalizeStreamingText({ text: "N" })).toEqual({ text: "N", skip: false });
+    for (const text of [".N", ". N", "- N", ".NO", ".NO_", ".NO_REPL", "*NO_", '"NO_', "（NO_"]) {
+      await presentation.presentPartialReply({ text }, "cli");
+    }
+    expect(onPartialReply).toHaveBeenCalledTimes(9);
+    for (const text of [
+      ".NOTE: real content",
+      "- Note: real content",
+      ".No, that is wrong.",
+      "💬NO_REPLY",
+      "NO_REPLY👍",
+      ".NO_REPLY: explanation",
+      ".",
+      "*",
+    ]) {
+      await presentation.presentPartialReply({ text }, "cli");
+      expect(onPartialReply).toHaveBeenLastCalledWith({ text });
+    }
+    for (const text of [".NO", ".N", ". N", "- N", "*NO_", '"NO_', "（NO_", ".", "*"]) {
+      expect(presentation.normalizeStreamingText({ text })).toEqual({ text, skip: false });
+    }
   });
 
-  it("keeps silent-expected and heartbeat-run classification eager", () => {
-    const silentPresentation = createPresentation({ silentExpected: true });
-    expect(silentPresentation.classifyStreamingPartial({ text: "visible" })).toEqual({
-      skip: true,
-    });
+  it("keeps large ordinary previews visible after a punctuation prefix", async () => {
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>();
+    const presentation = createPresentation({ onPartialReply });
+    const text = `.NOTE: ${"ordinary text ".repeat(10_000)}`;
 
-    const heartbeatPresentation = createPresentation({ isHeartbeat: true });
-    expect(
-      heartbeatPresentation.classifyStreamingPartial({ text: "HEARTBEAT_OK details" }),
-    ).toEqual({
-      text: "HEARTBEAT_OK details",
-      skip: false,
-    });
+    await presentation.presentPartialReply({ text }, "cli");
+    expect(onPartialReply).toHaveBeenCalledExactlyOnceWith({ text });
   });
 });

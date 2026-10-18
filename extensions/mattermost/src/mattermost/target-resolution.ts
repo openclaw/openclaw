@@ -1,5 +1,4 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -147,7 +146,7 @@ export async function resolveMattermostOpaqueTarget(
     client = createMattermostClient({
       baseUrl,
       botToken: token,
-      allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+      allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
     });
   }
 

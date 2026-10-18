@@ -1,12 +1,15 @@
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../../config/sessions/activity-summary.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { withSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseReadOnly from "../../state/openclaw-agent-db-readonly.js";
@@ -37,21 +40,24 @@ afterEach(() => vi.restoreAllMocks());
 
 it("prepares current placement facts off the host thread and retries failed refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: { model: "unit-test/model", utilityModel: "" },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     const identity = {
       agentId: "main",
       sessionKey: "agent:main:placement-read",
       sessionId: "placement-read",
     };
-    replaceSessionEntrySync(identity, { sessionId: identity.sessionId, updatedAt: 1 });
+    replaceSessionEntrySync(identity, { sessionId: " placement-read ", updatedAt: 1 });
+    expect(loadSessionEntryReadOnly(identity)?.sessionId).toBe(" placement-read ");
     const placements = createWorkerSessionPlacementStore();
     await placements.startDispatch(identity);
     const options = {
-      cfg: {
-        agents: {
-          list: [{ id: "main", default: true }],
-          defaults: { model: "unit-test/model", utilityModel: "" },
-        },
-      },
+      cfg,
       modelCatalog: [],
       placementFactsReader: placements,
     };
@@ -88,7 +94,7 @@ it("prepares current placement facts off the host thread and retries failed refr
     try {
       await projection.ensureMaterialized();
       expect(await refresh()).toMatchObject({ state: "requested" });
-      placements.fail({ sessionId: identity.sessionId, recoveryError: "Current failure" });
+      await placements.fail({ sessionId: identity.sessionId, recoveryError: "Current failure" });
       expect(await refresh()).toMatchObject({ state: "failed" });
       const refused = vi
         .spyOn(placements, "readProjection")
@@ -115,7 +121,7 @@ it("prepares current placement facts off the host thread and retries failed refr
         sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
         const refreshed = projection.ensureMaterialized();
         await captured.promise;
-        placements.fail({
+        await placements.fail({
           sessionId: identity.sessionId,
           recoveryError: "Changed during preparation",
         });
@@ -138,6 +144,7 @@ it("prepares current placement facts off the host thread and retries failed refr
 
 it("refreshes selected placement/environment facts by revision and reuses them without SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const identity = {
       agentId: "main",
       sessionKey: "agent:main:row-facts",
@@ -168,7 +175,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       },
       { to: "active", patch: { activeOwnerEpoch: 7 } },
     ] as const) {
-      placement = placements.transition({
+      placement = await placements.transition({
         sessionId: identity.sessionId,
         from: placement.state,
         expectedGeneration: placement.generation,
@@ -241,6 +248,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       entry: loadSessionEntryReadOnly(identity)!,
       context,
       placementFactsReader: preparedPlacements,
+      databaseFacts: { hasBoard: false },
     });
     const reads = observeMainThreadReads();
     const finishPermissionChange = beginSessionPermissionChange(identity.sessionId);
@@ -305,7 +313,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       });
       expect(facts.present().placement).not.toHaveProperty("workerRuntimeInstall");
       expect(placementReads).toHaveBeenCalledTimes(1);
-      const move = placements.beginPlacementMove({
+      const move = await placements.beginPlacementMove({
         sessionId: identity.sessionId,
         source: {
           generation: placement.generation,
@@ -320,13 +328,13 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         placement: { state: "draining" },
         placementMove: { target: { kind: "gateway" } },
       });
-      const reconciling = placements.startReconcile({
+      const reconciling = await placements.startReconcile({
         sessionId: identity.sessionId,
         environmentId: "row-environment",
         ownerEpoch: 7,
         expectedGeneration: move.placement.generation,
       });
-      placements.fail({
+      await placements.fail({
         sessionId: identity.sessionId,
         expectedGeneration: reconciling.generation,
         recoveryError: "Worker stopped",
@@ -340,13 +348,15 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       expect(rowReads).not.toHaveBeenCalled();
       expect(summaryReads).not.toHaveBeenCalled();
       const release = retainSessionListForegroundWork();
-      const projection = await createSessionRowProjection({
-        cfg: {
-          agents: {
-            list: [{ id: "main", default: true }],
-            defaults: { model: "unit-test/model", utilityModel: "" },
-          },
+      const cfg = {
+        agents: {
+          entries: { main: {} },
+          defaults: { model: "unit-test/model", utilityModel: "" },
         },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const projection = await createSessionRowProjection({
+        cfg,
         modelCatalog: [],
         context,
         placementFactsReader: placements,
@@ -363,7 +373,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         const entryReads = vi.spyOn(rowMaterialization, "readSessionRowEntry");
         try {
           expect(
-            placements.recordPlacementMoveError({
+            await placements.recordPlacementMoveError({
               operationId: move.intent.operationId,
               sessionId: identity.sessionId,
               error: "Current move failure",
@@ -416,9 +426,10 @@ it("prepares board membership and recap freshness from the physical target and r
     const cfg = {
       agents: {
         defaults: { utilityModel: "test/utility" },
-        list: [{ id: "main" }, { id: "work" }],
+        entries: { main: {}, work: {} },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     const storePath = openOpenClawAgentDatabase({ agentId: "main" }).path;
     const otherPath = openOpenClawAgentDatabase({ agentId: "other" }).path;
     const scope = { agentId: "main", sessionKey: "global", sessionId: "row-recap", storePath };
@@ -451,13 +462,24 @@ it("prepares board membership and recap freshness from the physical target and r
     ]);
     const target = { key: "global", agentId: "work", storeTarget: { agentId: "main", storePath } };
     const entry = loadSessionEntryReadOnly(scope)!;
-    const facts = readSessionRowFacts({ cfg, target, entry });
+    const prepareDatabaseFacts = (agentId: string, path: string) =>
+      withSessionHistoryWorkerDatabase({ agentId, path }, async (reader) => {
+        const result = await reader.readRowFacts({ env: process.env, sessionKeys: [target.key] });
+        return result.rows[0]!;
+      });
+    const databaseFacts = await prepareDatabaseFacts("main", storePath);
+    const otherDatabaseFacts = await prepareDatabaseFacts("other", otherPath);
+    const membershipReads = observeSqliteReadSql(StatementSync.prototype);
+    const facts = readSessionRowFacts({ cfg, target, entry, databaseFacts });
+    membershipReads.restore();
+    expect(membershipReads.queries.filter((sql) => /from "board_tabs"/iu.test(sql))).toEqual([]);
     expect(facts.hasBoard).toBe(true);
     expect(
       readSessionRowFacts({
         cfg,
         target: { ...target, storeTarget: { agentId: "other", storePath: otherPath } },
         entry: { sessionId: "other-row", updatedAt: 1 },
+        databaseFacts: otherDatabaseFacts,
       }).hasBoard,
     ).toBe(false);
     const reads = observeMainThreadReads();
@@ -487,7 +509,12 @@ it("prepares board membership and recap freshness from the physical target and r
       touchSessionEntry: false,
     });
     await board.applyOps({ sessionKey: "global" }, [{ kind: "tab_delete", tabId: "main" }]);
-    const refreshed = readSessionRowFacts({ cfg, target, entry });
+    const refreshed = readSessionRowFacts({
+      cfg,
+      target,
+      entry,
+      databaseFacts: await prepareDatabaseFacts("main", storePath),
+    });
     expect(refreshed.hasBoard).toBe(false);
     expect(refreshed.present().activitySummary?.state).toBe("stale");
   });

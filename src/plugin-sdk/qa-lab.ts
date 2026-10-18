@@ -13,16 +13,6 @@ function loadFacadeModule(): FacadeModule {
   });
 }
 
-function isMissingQaLabFacadeError(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  return (
-    err.message === "Unable to resolve bundled plugin public surface qa-lab/cli.js" ||
-    err.message.startsWith("Unable to open bundled plugin public surface ")
-  );
-}
-
 /** Register QA Lab CLI commands when the bundled QA Lab facade is present. */
 export const registerQaLabCli: FacadeModule["registerQaLabCli"] = (...args) =>
   loadFacadeModule().registerQaLabCli(...args);
@@ -32,7 +22,11 @@ export const isQaLabCliAvailable: FacadeModule["isQaLabCliAvailable"] = () => {
   try {
     return loadFacadeModule().isQaLabCliAvailable();
   } catch (err) {
-    if (isMissingQaLabFacadeError(err)) {
+    if (
+      err instanceof Error &&
+      (err.message === "Unable to resolve bundled plugin public surface qa-lab/cli.js" ||
+        err.message.startsWith("Unable to open bundled plugin public surface "))
+    ) {
       return false;
     }
     throw err;

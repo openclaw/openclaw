@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applyChatFontSmoothing,
   applyTypefaceOverrides,
   loadTypefaceSpecimens,
+  loadTypefaceStylesheet,
   normalizeTypefaceOverride,
   resolveTypefaces,
   syncTypefaceStylesheets,
@@ -15,13 +16,25 @@ const fontLinks = () => [
 const hrefs = () => fontLinks().map((link) => link.getAttribute("href"));
 
 describe("typeface presentation", () => {
-  afterEach(() => {
+  it("removes a failed stylesheet so a later selection can retry", () => {
+    const failed = loadTypefaceStylesheet("geist");
+    failed?.dispatchEvent(new Event("error"));
+    expect(failed?.isConnected).toBe(false);
+    const retried = loadTypefaceStylesheet("geist");
+    expect(retried?.isConnected).toBe(true);
+    expect(retried).not.toBe(failed);
+  });
+  function resetTypefacePresentation() {
     for (const link of fontLinks()) {
       link.remove();
     }
     applyTypefaceOverrides();
     applyChatFontSmoothing("system");
-  });
+  }
+
+  // Shared UI workers preserve document.head between files.
+  beforeEach(resetTypefacePresentation);
+  afterEach(resetTypefacePresentation);
 
   it.each([
     ["claw", ["instrument-sans", "instrument-sans"]],

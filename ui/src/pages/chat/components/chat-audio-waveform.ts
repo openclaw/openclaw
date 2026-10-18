@@ -2,6 +2,8 @@ export const CHAT_AUDIO_WAVEFORM_MAX_BYTES = 8 * 1024 * 1024;
 export const CHAT_AUDIO_WAVEFORM_SAMPLE_RATE = 16_000;
 const CHAT_AUDIO_WAVEFORM_MAX_DURATION_SECONDS = 5 * 60;
 const CHAT_AUDIO_WAVEFORM_BUCKET_COUNT = 96;
+const WAVEFORM_MIN_BAR_WIDTH_PX = 2.5;
+const WAVEFORM_MIN_GAP_PX = 2.5;
 
 type ChatAudioBufferLike = {
   length: number;
@@ -63,6 +65,27 @@ export function computeChatAudioWaveformPeaks(
   }
   const maximum = Math.max(...peaks);
   return maximum > 0 ? peaks.map((peak) => peak / maximum) : peaks;
+}
+
+export function resampleChatAudioWaveformPeaks(
+  peaks: readonly number[] | null,
+  width: number,
+): number[] {
+  if (!peaks) {
+    return [];
+  }
+  const bucketWidth = WAVEFORM_MIN_BAR_WIDTH_PX + WAVEFORM_MIN_GAP_PX;
+  const count =
+    width > 0 ? Math.max(1, Math.min(peaks.length, Math.floor(width / bucketWidth))) : peaks.length;
+  return Array.from({ length: count }, (_, index) => {
+    const start = Math.floor((index * peaks.length) / count);
+    const end = Math.max(start + 1, Math.floor(((index + 1) * peaks.length) / count));
+    let total = 0;
+    for (let sourceIndex = start; sourceIndex < end; sourceIndex += 1) {
+      total += peaks[sourceIndex] ?? 0;
+    }
+    return Math.min(1, Math.max(0, total / Math.max(1, end - start)));
+  });
 }
 
 function makeRoomForChatAudioBlob(sizeBytes: number): boolean {

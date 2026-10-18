@@ -2,6 +2,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, vi } from "vitest";
 import type { CodexComputerUseRequest } from "./computer-use-readiness.js";
 import type { CodexComputerUseStatus } from "./computer-use.js";
+import type { CodexListMcpServerStatusResponse } from "./protocol-mcp.js";
 
 export function expectStatusFields(
   status: CodexComputerUseStatus,
@@ -27,7 +28,7 @@ export async function expectSetupErrorStatus(
   expectStatusFields(status, fields);
 }
 
-export const requireRecord = createRequireRecord("object", "label-not-object");
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 export function requestCalls(
   request: CodexComputerUseRequest,
@@ -48,6 +49,7 @@ export function createComputerUseRequest(params: {
   pluginName?: string;
   mcpServerName?: string;
   mcpTools?: readonly string[];
+  mcpStatusPages?: readonly CodexListMcpServerStatusResponse[];
   nativePluginsEnabled?: boolean | "absent";
   marketplaceAvailableAfterListCalls?: number;
   liveTestFailures?: number;
@@ -63,6 +65,7 @@ export function createComputerUseRequest(params: {
   let installed = params.installed;
   let enabled = params.enabled ?? installed;
   let pluginListCalls = 0;
+  let mcpStatusPage = 0;
   let liveTestFailures = params.liveTestFailures ?? 0;
   let liveTestResultErrors = params.liveTestResultErrors ?? 0;
   let reloadFailures = params.reloadFailures ?? 0;
@@ -168,6 +171,13 @@ export function createComputerUseRequest(params: {
       return undefined;
     }
     if (method === "mcpServerStatus/list") {
+      if (params.mcpStatusPages) {
+        const page = params.mcpStatusPages[mcpStatusPage++];
+        if (!page) {
+          throw new Error("The later inventory page is unavailable");
+        }
+        return page;
+      }
       return {
         data:
           installed && enabled

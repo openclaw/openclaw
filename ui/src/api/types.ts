@@ -1,3 +1,4 @@
+import type { ChannelsStatusResult } from "@openclaw/gateway-client/browser";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   ArtifactSummary as ProtocolArtifactSummary,
@@ -8,7 +9,6 @@ import type {
   ErrorShape,
   SessionsFilesListResult as ProtocolSessionsFilesListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type {
   SessionEntryArchiveReason,
   SessionRow,
@@ -112,71 +112,8 @@ export type WhatsAppStatus = {
   lastError?: string | null;
 };
 
-type ChannelProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-};
-
-type ChannelStatus<Probe = ChannelProbe> = {
-  configured: boolean;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: Probe | null;
-  lastProbeAt?: number | null;
-};
-
-type TelegramProbe = ChannelProbe & {
-  bot?: { id?: number | null; username?: string | null } | null;
-  webhook?: { url?: string | null; hasCustomCert?: boolean | null } | null;
-};
-
-export type TelegramStatus = ChannelStatus<TelegramProbe> & {
-  tokenSource?: string | null;
-  mode?: string | null;
-};
-
-type DiscordProbe = ChannelProbe & {
-  bot?: { id?: string | null; username?: string | null } | null;
-};
-
-export type DiscordStatus = ChannelStatus<DiscordProbe> & {
-  tokenSource?: string | null;
-};
-
-export type GoogleChatStatus = ChannelStatus & {
-  credentialSource?: string | null;
-  audienceType?: string | null;
-  audience?: string | null;
-  webhookPath?: string | null;
-  webhookUrl?: string | null;
-};
-
-type SlackIdentity = {
-  id?: string | null;
-  name?: string | null;
-};
-
-type SlackProbe = ChannelProbe & {
-  bot?: SlackIdentity | null;
-  team?: SlackIdentity | null;
-};
-
-export type SlackStatus = ChannelStatus<SlackProbe> & {
-  botTokenSource?: string | null;
-  appTokenSource?: string | null;
-};
-
-export type SignalStatus = ChannelStatus<ChannelProbe & { version?: string | null }> & {
-  baseUrl: string;
-};
-
-export type IMessageStatus = ChannelStatus<Pick<ChannelProbe, "ok" | "error">> & {
-  cliPath?: string | null;
-  dbPath?: string | null;
+export type ChannelStatus = Omit<ChannelAccountSnapshot, "accountId" | "probe"> & {
+  probe?: { ok?: boolean; status?: number | string | null; error?: string | null } | null;
 };
 
 export type NostrProfile = {

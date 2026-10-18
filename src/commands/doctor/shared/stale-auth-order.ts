@@ -8,9 +8,9 @@ import {
   resolveAuthProfileOrder,
 } from "../../../agents/auth-profiles/order.js";
 import {
-  resolveSharedAuthStoreOwnership,
-  resolveSharedAuthStorePath,
-} from "../../../agents/auth-profiles/path-resolve.js";
+  prepareSharedAuthStoreOwnershipForNative as resolveSharedAuthStoreOwnership,
+  resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath,
+} from "../../../agents/auth-profiles/path-resolve.native.js";
 import { mergeAuthProfileStores } from "../../../agents/auth-profiles/persisted.js";
 import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
 import {
@@ -57,10 +57,6 @@ const AUTH_PROFILE_MODES = new Set(["api_key", "aws-sdk", "oauth", "token"]);
 const INVALID_SQLITE_STORE_WARNING =
   "- Skipped auth.order repair because a SQLite auth profile store is unreadable, unavailable, or contains invalid credentials; repair or re-import that agent's auth store, then rerun doctor.";
 
-function isProfileIdList(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((profileId) => typeof profileId === "string");
-}
-
 function readValidConfiguredAuthOrder(cfg: OpenClawConfig): Record<string, string[]> | undefined {
   const order: unknown = cfg.auth?.order;
   if (!isRecord(order)) {
@@ -68,7 +64,7 @@ function readValidConfiguredAuthOrder(cfg: OpenClawConfig): Record<string, strin
   }
   const result: Record<string, string[]> = {};
   for (const [provider, profileIds] of Object.entries(order)) {
-    if (!isProfileIdList(profileIds)) {
+    if (!Array.isArray(profileIds) || !profileIds.every((id) => typeof id === "string")) {
       return undefined;
     }
     result[provider] = profileIds;
@@ -204,7 +200,7 @@ function loadConfiguredAgentAuthStores(
     const expectedAgentIds = expectedAgentIdsByDir.get(mainAgentDir);
     const owner =
       availability === "present"
-        ? inspectOpenClawAgentDatabaseOwner(sharedDatabasePath)
+        ? inspectOpenClawAgentDatabaseOwner(sharedDatabasePath, { revalidateSchema: true })
         : undefined;
     if (
       availability === "unreadable" ||
@@ -241,20 +237,17 @@ function loadConfiguredAgentAuthStores(
       return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
     }
     const owner =
-      availability === "present" ? inspectOpenClawAgentDatabaseOwner(databasePath) : undefined;
-    if (owner) {
-      if (
-        owner.status === "unreadable" ||
-        (expectedAgentIds && owner.status === "owned" && !expectedAgentIds.has(owner.agentId))
-      ) {
-        return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
-      }
-    }
-    const loaded = loadCompletePersistedStore(agentDir);
-    if (loaded.status === "invalid") {
+      availability === "present"
+        ? inspectOpenClawAgentDatabaseOwner(databasePath, { revalidateSchema: true })
+        : undefined;
+    if (
+      owner?.status === "unreadable" ||
+      (expectedAgentIds && owner?.status === "owned" && !expectedAgentIds.has(owner.agentId))
+    ) {
       return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
     }
-    if (owner?.status === "unowned" && loaded.hasAuthTables) {
+    const loaded = loadCompletePersistedStore(agentDir);
+    if (loaded.status === "invalid" || (owner?.status === "unowned" && loaded.hasAuthTables)) {
       return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
     }
     entries.push({ agentDir, databasePath, store: loaded.store, isShared: false });
@@ -306,7 +299,7 @@ function loadConfiguredAgentAuthStores(
     if (availability === "unreadable") {
       return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
     }
-    const owner = inspectOpenClawAgentDatabaseOwner(databasePath);
+    const owner = inspectOpenClawAgentDatabaseOwner(databasePath, { revalidateSchema: true });
     if (owner.status !== "owned" || !owners.has(owner.agentId)) {
       return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
     }
@@ -431,24 +424,23 @@ function scanUndeclaredConfiguredAuthOrders(
   });
 }
 
+function formatAmbiguousAuthOrderWarning(hit: UndeclaredConfiguredAuthOrder): string {
+  const candidates = hit.declaredProviderProfileIds.join(", ") || "none";
+  return `- auth.order.${hit.provider} references undeclared ${hit.undeclaredProfileIds.join(", ")}; declared profiles for this provider are ambiguous (${candidates}). Set auth.order.${hit.provider} explicitly.`;
+}
+
 function repairUndeclaredConfiguredAuthOrders(
   cfg: OpenClawConfig,
   loaded?: Extract<LoadedAuthStores, { status: "ready" }>,
 ): {
   config: OpenClawConfig;
   changes: string[];
-  warnings: string[];
 } {
   const hits = scanUndeclaredConfiguredAuthOrders(cfg, loaded);
   const order = readValidConfiguredAuthOrder(cfg) ?? {};
   const changes: string[] = [];
-  const warnings: string[] = [];
   for (const hit of hits) {
     if (hit.declaredProviderProfileIds.length !== 1) {
-      const candidates = hit.declaredProviderProfileIds.join(", ") || "none";
-      warnings.push(
-        `- auth.order.${hit.provider} references undeclared ${hit.undeclaredProfileIds.join(", ")}; declared profiles for this provider are ambiguous (${candidates}). Set auth.order.${hit.provider} explicitly.`,
-      );
       continue;
     }
     const replacement = hit.declaredProviderProfileIds[0];
@@ -479,7 +471,6 @@ function repairUndeclaredConfiguredAuthOrders(
             },
           },
     changes,
-    warnings,
   };
 }
 
@@ -528,16 +519,14 @@ function scanStaleConfiguredAuthOrders(params: {
     const fallbackStores = params.activeStores ?? params.stores;
     const hasAutomaticFallback =
       fallbackStores.length > 0 &&
-      fallbackStores.every((store) => {
-        const selectionStore = structuredClone(store);
-        return (
+      fallbackStores.every(
+        (store) =>
           resolveAuthProfileOrder({
             cfg: cfgWithoutStaleOrder,
-            store: selectionStore,
+            store: structuredClone(store),
             provider: canonicalProvider,
-          }).length > 0
-        );
-      });
+          }).length > 0,
+      );
     if (hasAutomaticFallback) {
       hits.push(...staleEntries);
     }
@@ -546,12 +535,9 @@ function scanStaleConfiguredAuthOrders(params: {
 }
 
 /** Remove provably stale config orders and restore per-agent automatic selection. */
-function repairStaleConfiguredAuthOrders(params: {
-  cfg: OpenClawConfig;
-  stores: readonly AuthProfileStore[];
-  activeStores?: readonly AuthProfileStore[];
-  runtimeProfileIds?: ReadonlySet<string>;
-}): { config: OpenClawConfig; changes: string[] } {
+function repairStaleConfiguredAuthOrders(
+  params: Parameters<typeof scanStaleConfiguredAuthOrders>[0],
+): { config: OpenClawConfig; changes: string[] } {
   const hits = scanStaleConfiguredAuthOrders(params);
   if (hits.length === 0) {
     return { config: params.cfg, changes: [] };
@@ -581,12 +567,16 @@ export function maybeRepairStaleConfiguredAuthOrders(params: {
     return { config: params.cfg, changes: [], warnings: initialLoaded.warnings };
   }
   const declaredRepair = repairUndeclaredConfiguredAuthOrders(params.cfg, initialLoaded);
-  const cfg = declaredRepair.config;
-  const staleRepair = repairStaleConfiguredAuthOrders({ cfg, ...initialLoaded });
-  const remainingDeclaredWarnings = repairUndeclaredConfiguredAuthOrders(
+  const staleRepair = repairStaleConfiguredAuthOrders({
+    cfg: declaredRepair.config,
+    ...initialLoaded,
+  });
+  const remainingDeclaredWarnings = scanUndeclaredConfiguredAuthOrders(
     staleRepair.config,
     initialLoaded,
-  ).warnings;
+  )
+    .filter((hit) => hit.declaredProviderProfileIds.length !== 1)
+    .map(formatAmbiguousAuthOrderWarning);
   return {
     config: staleRepair.config,
     changes: [...declaredRepair.changes, ...staleRepair.changes],
@@ -614,8 +604,7 @@ export function collectStaleConfiguredAuthOrderWarnings(params: {
     if (hit.declaredProviderProfileIds.length === 1) {
       return `- auth.order.${hit.provider} references undeclared ${hit.undeclaredProfileIds.join(", ")}; run ${params.doctorFixCommand} to replace it with ${hit.declaredProviderProfileIds[0]}.`;
     }
-    const candidates = hit.declaredProviderProfileIds.join(", ") || "none";
-    return `- auth.order.${hit.provider} references undeclared ${hit.undeclaredProfileIds.join(", ")}; declared profiles for this provider are ambiguous (${candidates}). Set auth.order.${hit.provider} explicitly.`;
+    return formatAmbiguousAuthOrderWarning(hit);
   });
   return [
     ...declaredWarnings,
@@ -624,10 +613,4 @@ export function collectStaleConfiguredAuthOrderWarnings(params: {
         `- auth.order.${hit.provider} references only missing profiles while compatible stored credentials exist; run ${params.doctorFixCommand} to remove the stale override and restore automatic selection.`,
     ),
   ];
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.staleAuthOrderTestApi")] = {
-    repairStaleConfiguredAuthOrders,
-  };
 }

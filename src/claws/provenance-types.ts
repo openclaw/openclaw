@@ -1,18 +1,16 @@
+import type { ClawStatusEntry } from "../../packages/gateway-protocol/src/schema/claws.js";
+import type { CLAW_SCHEMA_VERSION, ClawSourceIdentity } from "./manifest-contract.js";
 import type { ClawAgentOrigin } from "./provenance-agent-origin.js";
 import type { parseClawInstallRecordSchemaVersion } from "./provenance-schema-version.js";
-import type { ClawAddPlan } from "./types.js";
 
-export type ClawInstallStatus =
-  | "pending"
-  | "workspace_ready"
-  | "config_committed"
-  | "complete"
-  | "partial";
+export type ClawOrphanWorkspace = { workspace: string; updatedAtMs: number };
+
+type ClawInstallStatus = ClawStatusEntry["status"];
 
 export type PersistedClawInstall = {
   schemaVersion: ReturnType<typeof parseClawInstallRecordSchemaVersion>;
-  claw: ClawAddPlan["claw"];
-  manifestSchemaVersion: ClawAddPlan["manifestSchemaVersion"];
+  claw: ClawSourceIdentity;
+  manifestSchemaVersion: typeof CLAW_SCHEMA_VERSION;
   planIntegrity: string;
   agentId: string;
   workspace: string;

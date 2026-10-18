@@ -9,8 +9,8 @@ import { applyLocalNoAuthHeaderOverride } from "../agents/model-auth-model.js";
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
-  type ProviderRequestAuthOverride,
 } from "../agents/provider-request-config.js";
+import type { ProviderRequestAuthOverride } from "../agents/provider-request-config.types.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
@@ -171,7 +171,7 @@ describe("simple completion with the production transport host", () => {
   it("preserves null header deletion through sentinel resolution and SDK request construction", async () => {
     const source: Model = applyLocalNoAuthHeaderOverride(
       { ...model, headers: { "x-visible": seal("synthetic-visible-header") } },
-      { apiKey: CUSTOM_LOCAL_AUTH_MARKER, source: "synthetic local test", mode: "api-key" },
+      { apiKey: CUSTOM_LOCAL_AUTH_MARKER },
     );
     let sentHeaders: Headers | undefined;
     let request: Promise<unknown> | undefined;

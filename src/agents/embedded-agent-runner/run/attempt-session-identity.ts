@@ -9,7 +9,7 @@ import {
   withSessionEntryReadOnlyInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
-import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
+import { resolveLegacyCompactionSessionKey } from "../legacy-compaction-session-key.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
@@ -60,24 +60,12 @@ export async function applyEmbeddedAttemptSessionIdentity(params: {
       const retainedLookupKey = retainedSessionKey
         ? resolveSqliteSessionKey(retainedSessionKey, marker.agentId)
         : undefined;
-      const retainedEntry = entries.find(
-        ({ sessionKey }) => sessionKey === retainedLookupKey,
-      )?.entry;
-      const markerMatches = entries.filter(({ entry }) => entry.sessionId === marker.sessionId);
-      const preferredMarkerSessionKey = resolvePreferredSessionKeyForSessionIdMatches(
-        markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
+      const successorSessionKey = resolveLegacyCompactionSessionKey(
+        entries,
         marker.sessionId,
+        { sessionId: previousSessionId, sessionKey: retainedSessionKey },
+        retainedLookupKey,
       );
-      const markerMappedToRetainedKey = markerMatches.some(
-        ({ sessionKey }) => sessionKey === retainedSessionKey,
-      );
-      const successorSessionKey =
-        retainedEntry?.sessionId === marker.sessionId ||
-        (retainedEntry?.sessionId === previousSessionId &&
-          (markerMatches.length === 0 || markerMappedToRetainedKey))
-          ? retainedSessionKey
-          : (preferredMarkerSessionKey ??
-            (markerMatches.length === 0 && !retainedEntry ? retainedSessionKey : undefined));
       if (
         (marker.sessionId !== sessionIdUsed && sessionIdUsed !== previousSessionId) ||
         !successorSessionKey ||

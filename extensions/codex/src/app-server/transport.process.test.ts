@@ -105,9 +105,9 @@ describe.skipIf(process.platform === "win32")("Codex app-server process containm
       });
       await once(child, "spawn");
       try {
-        const identity = (await processSnapshot.readCodexAppServerProcessSnapshot())?.find(
-          (row) => row.pid === child.pid,
-        );
+        const identity = (
+          await processSnapshot.readCodexAppServerProcessSnapshot(undefined, [child.pid!])
+        )?.find((row) => row.pid === child.pid);
         if (!identity) {
           throw new Error("Missing test process identity");
         }
@@ -279,7 +279,10 @@ process.stdin.on("end", () => process.exit(0));
       );
       // The root writes this PID before writing readiness to its owned stdout.
       const sentinelPid = Number(await fs.readFile(sentinelPidPath, "utf8"));
-      const initial = await processSnapshot.readCodexAppServerProcessSnapshot();
+      const initial = await processSnapshot.readCodexAppServerProcessSnapshot(undefined, [
+        root.pid!,
+        sentinelPid,
+      ]);
       const rootIdentity = initial?.find((row) => row.pid === root.pid);
       const sentinelIdentity = initial?.find((row) => row.pid === sentinelPid);
       if (!rootIdentity || !sentinelIdentity) {
@@ -376,7 +379,7 @@ process.stdin.on("end", () => process.exit(0));
         }
         const rows = snapshots[Math.min(inspection++, snapshots.length - 1)];
         if (rows === "deadline") {
-          await delay(Math.max(1, inspectionDeadline - Date.now()));
+          await delay(Math.max(1, inspectionDeadline - performance.now()));
           throw new processSnapshot.ProcessInspectionError("deadline");
         }
         if (!rows) {
@@ -399,7 +402,7 @@ process.stdin.on("end", () => process.exit(0));
       const snapshotSpy = vi
         .spyOn(processSnapshot, "readCodexAppServerProcessSnapshot")
         .mockImplementation((inspectionDeadline, pids) =>
-          readSnapshot(inspectionDeadline ?? Date.now() + 2_000, pids),
+          readSnapshot(inspectionDeadline ?? performance.now() + 2_000, pids),
         );
       const processSpy = vi
         .spyOn(processSnapshot, "readCodexAppServerProcess")
@@ -428,7 +431,7 @@ process.stdin.on("end", () => process.exit(0));
       if (mode === "snapshot-failure" || mode === "inspection-timeout") {
         const sentinel = await processSnapshot.readCodexAppServerProcess(
           sentinelIdentity.pid,
-          Date.now() + 2_000,
+          performance.now() + 2_000,
         );
         expect(sentinel).toBeDefined();
         expect(sentinel?.state).not.toMatch(/^[Tt]/);

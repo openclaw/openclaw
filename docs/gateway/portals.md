@@ -28,18 +28,52 @@ for process lifetime and capacity details.
 
 An agent can also use a temporary Crabbox attached to its existing conversation
 without moving the session's primary workspace. It passes the attachment's
-`environmentId` to the `portal` tool and uses `screen` with `portal_show` and the
-returned `portalId` to open that exact preview in the chat side panel. Commands
-for the app run through the Crabbox tool on that environment. Its managed
-background processes survive completed turns; stopping the attachment closes
-its apps and portals. The portal retains the same separate-origin network and
+`environmentId` to the `portal` tool. When `screen` is exposed for the current
+turn, it uses `portal_show` with the returned `portalId` to request that exact
+preview in the chat side panel; `browser_show` opens the agent Browser panel,
+not the app preview. Without `screen`, use **Control UI → Portals** instead of
+claiming a side panel was opened. Commands for the app run through the Crabbox
+tool on that environment. Its managed background processes survive completed
+turns; stopping the attachment closes its apps and portals. The portal retains the same separate-origin network and
 access contract described below.
 
 Opening a route does not prove that the application is running or that a remote
-browser can reach it. Open the returned URL in **Control UI → Portals** and verify
-that the page, assets, and live reload work. Use the returned URLs unchanged;
-replacing their scheme, hostname, or port with the Gateway's address does not
-create an ingress route.
+browser can reach it. The service includes machine-readable `exposure` facts in
+open and list results:
+
+- `kind: "loopback-only"`: the published URL or direct listener is restricted to
+  the Gateway host. This remains valid for local use, including apps running on a
+  worker, but an unrelated remote browser needs private portal ingress or a
+  reachable direct listener.
+- `kind: "non-loopback"`: the route is not known to be loopback-only. This does
+  **not** establish DNS, TLS, firewall, authentication, or browser access.
+- `browserReachability: "unverified"`: allocating or listing a route never proves
+  access from the requesting viewer. Omission is not proof of reachability either.
+
+Verify transport and app rendering from the **requesting viewer** in
+**Control UI → Portals**, including the page, assets, and live reload. A worker/Gateway fetch
+or browser test is useful app diagnostics, not viewer delivery proof. A panel
+request, transport response, authentication page, or waiting page does not by
+itself prove that the application rendered. Report blocked or unverified states
+with the concrete limitation rather than claiming delivery.
+
+`screen(action="portal_show", portalId="<returned id>")` returns
+`delivery: "dispatched"` plus a presentation diagnosis from the requesting Control UI:
+
+- `blocked`: a concrete limitation such as `remote-ingress-required` or
+  `network-unreachable`.
+- `new-tab-required`: this HTTP preview needs a top-level launch for its cookies.
+- `unverified`: transport alone does not establish application rendering. A
+  `network-reachable` response may be a login, waiting, or error page;
+  `probe-blocked` means browser policy prevented the network probe. Missing client
+  feedback or a disconnected viewer also stays unverified.
+
+The observation is scoped to the requesting connection and selected portal, not
+other tabs or users. An eight-second observation timeout does not close the app
+or portal. Inspect the application separately before claiming a working preview.
+
+Use the returned URLs unchanged; replacing their scheme, hostname, or port with
+the Gateway's address does not create an ingress route.
 
 ## Remote access
 
@@ -281,7 +315,7 @@ Portals proxy only the selected development server on the Gateway host or a node
 - Older node bundles without portal-stream support cannot open worker portals. Update the node bundle, or move the session back to the Gateway with `sessions.move`.
 - SSH-backed `remote-exec` placements, including Codex sessions, do not run the OpenClaw worker tool loop, so the `portal` tool does not apply there. Move the session back to the Gateway with `sessions.move` when a Gateway-hosted portal is needed.
 - A Gateway-only proxy, SSH tunnel, or externally managed Serve route does not automatically create portal ingress. Configure private wildcard ingress or OpenClaw-managed Serve. The UI reports a remote loopback URL as requiring ingress; it does not invent a reachable URL.
-- Browser reachability probes check transport only. A response can be an authentication page or a waiting page, not a rendered application. A Content Security Policy-blocked probe says nothing about iframe reachability.
+- Browser reachability checks verify transport only. A response can be an authentication page or a waiting page, not a rendered application. A Content Security Policy-blocked check says nothing about iframe reachability.
 - Portal ingress does not inherit Gateway trusted-proxy identities, Cloudflare Access policies, or tailnet ACL grants. Configure and verify those boundaries separately.
 - The prefix isolates cookies forwarded to each target; it does not create separate browser cookie jars. In direct/Serve mode, browser-side code can see non-`HttpOnly` cookies for sibling portals on the same hostname through `document.cookie`. Wildcard ingress separates hostnames, but portals under a common DNS suffix are not necessarily separate sites, and the cookie-name prefix still applies. Use `HttpOnly` for sensitive application cookies. Applications that manage cookies in browser code must account for the prefix; unprefixed cookies written directly by browser code are not forwarded to the target.
 
@@ -290,6 +324,8 @@ Portals proxy only the selected development server on the Gateway host or a node
 ### The portal shows a 502 waiting page
 
 The proxy is ready, but the application is not listening on the selected port or its worker node is temporarily disconnected. The page retries automatically. Check the background process, confirm that the server honors `PORT`, and verify that the worker node is connected.
+
+WebSocket upgrades to an unavailable worker return the same 502 waiting response and close the connection. Reconnect after the application or worker is available again.
 
 ### The portal is not reachable from this browser
 
@@ -308,7 +344,7 @@ Check the exact returned portal URL rather than substituting the Gateway host:
 - **Page loads but streaming or live reload fails:** preserve WebSocket upgrades
   and request paths, disable buffering, and check the app's `PUBLIC_URL`.
 - **New tab works but the preview does not:** inspect edge authentication,
-  frame policies, and browser cookie restrictions. A blocked reachability probe
+  frame policies, and browser cookie restrictions. A blocked reachability check
   alone does not prove the iframe is unreachable.
 
 After correcting ingress, select **Retry**. Reopen a portal if its route was

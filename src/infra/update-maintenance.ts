@@ -23,6 +23,8 @@ export async function cleanupUpdateTemporaryDirectory(params: {
   canRemove?: () => Promise<boolean>;
   onProgress?: (step: UpdateRunStep) => void | Promise<void>;
   onWarning: (step: UpdateStepResult) => void | Promise<void>;
+  /** Timed receipt for a verified removal; warnings use onWarning instead. */
+  onRemoved?: (step: UpdateStepResult) => void | Promise<void>;
 }): Promise<void> {
   const started = Date.now();
   const monotonicDeadline = performance.now() + UPDATE_CLEANUP_BUDGET_MS;
@@ -44,6 +46,7 @@ export async function cleanupUpdateTemporaryDirectory(params: {
   );
   let canRemove = false;
   let expired = false;
+  const hasExpired = () => expired || performance.now() >= monotonicDeadline;
   let failure: string | undefined;
   try {
     expired =
@@ -51,17 +54,13 @@ export async function cleanupUpdateTemporaryDirectory(params: {
         async () => {
           const owned = !params.canRemove || (await params.canRemove());
           // A late custody result cannot start deletion after this owner stopped waiting.
-          if (!owned || expired || performance.now() >= monotonicDeadline) {
+          if (!owned || hasExpired()) {
             return;
           }
           canRemove = true;
           if (params.canRemove) {
             await recordProgress("waiting for filesystem removal");
-            if (expired || performance.now() >= monotonicDeadline || !(await params.canRemove())) {
-              canRemove = false;
-              return;
-            }
-            if (expired || performance.now() >= monotonicDeadline) {
+            if (hasExpired() || !(await params.canRemove()) || hasExpired()) {
               canRemove = false;
               return;
             }
@@ -88,6 +87,13 @@ export async function cleanupUpdateTemporaryDirectory(params: {
   }
   if (canRemove && failure === undefined && !expired) {
     await recordProgress("removed disposable temporary copy", true);
+    await params.onRemoved?.({
+      name: params.name,
+      command: formatUpdateCleanupCommand(params.directory),
+      cwd: params.root,
+      durationMs: Date.now() - started,
+      exitCode: 0,
+    });
     return;
   }
   // Unverified paths may be absent or replaced; never recommend deleting them.

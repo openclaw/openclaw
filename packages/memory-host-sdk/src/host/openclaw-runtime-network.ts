@@ -1,6 +1,8 @@
 // Narrow network/runtime facade re-exported for memory remote HTTP helpers.
 import type { createProviderHttpError as CreateProviderHttpError } from "../../../../src/agents/provider-http-errors.js";
 
+export { resolveProviderTransportSsrFPolicy } from "../../../../src/agents/provider-network-policy.js";
+export { resolveProviderRequestPolicyConfig } from "../../../../src/agents/provider-request-config.js";
 export { fetchWithSsrFGuard } from "../../../../src/infra/net/fetch-guard.js";
 export { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env.js";
 export { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../../../src/infra/net/ssrf.js";

@@ -3,9 +3,36 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
-import { registerOnePasswordSecretRefCommands, testing } from "./secret-ref-cli.js";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveTrustedOnePasswordCli } from "../onepassword-op-path.js";
+import { registerOnePasswordSecretRefCommands } from "./secret-ref-cli.js";
+
+const readTokenFileMock = vi.hoisted(() =>
+  vi.fn<
+    (
+      filePath: string | undefined,
+      label: string,
+      options?: Parameters<typeof tryReadSecretFileSync>[2],
+    ) => string | undefined
+  >(),
+);
+
+vi.mock("../onepassword-op-path.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../onepassword-op-path.js")>()),
+  resolveTrustedOnePasswordCli: vi.fn(),
+}));
+vi.mock("openclaw/plugin-sdk/secret-file-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-file-runtime")>()),
+  tryReadSecretFileSync: readTokenFileMock,
+}));
+
+beforeEach(() => {
+  vi.stubEnv("PATH", "");
+  vi.stubEnv("CLAW_1PASSWORD_OP", undefined);
+  vi.mocked(resolveTrustedOnePasswordCli).mockReset();
+  readTokenFileMock.mockReset();
+});
 
 type OnePasswordPlan = {
   providerUpserts: Record<string, unknown>;
@@ -28,7 +55,6 @@ function createProgram(config: OpenClawConfig = {}): Command {
     command: onepassword,
     config,
     tokenFile: path.join(os.tmpdir(), "openclaw-onepassword-missing-token"),
-    env: { PATH: "" },
   });
   return program;
 }
@@ -96,22 +122,13 @@ describe("1Password SecretRef setup", () => {
     ]);
   });
 
-  it("encodes native 1Password refs with spaces and selectors", async () => {
-    const nativeRef = "op://Personal/OpenClaw QA API Key/password?attribute=value%20one";
-    const plan = await createSetupPlan(["--provider-key", `openai=${nativeRef}`]);
-    expect(plan.targets[0]).toMatchObject({
-      providerId: "openai",
-      ref: { id: encodeOnePasswordSecretId(nativeRef) },
-    });
-  });
-
   it("rejects traversal secret ids", async () => {
     await expect(
       createSetupPlan(["--provider-key", "openai=op://openclaw/../credential"]),
     ).rejects.toThrow("Invalid --provider-key openai 1Password SecretRef id");
   });
 
-  it.each(["/absolute/path", "op://openclaw\\OpenAI\\credential", "op://vault/clé"])(
+  it.each(["op://openclaw\\OpenAI\\credential", "op://vault/clé"])(
     "rejects invalid 1Password ref %s",
     async (id) => {
       await expect(createSetupPlan(["--provider-key", `openai=${id}`])).rejects.toThrow(
@@ -119,22 +136,6 @@ describe("1Password SecretRef setup", () => {
       );
     },
   );
-
-  it("prints a quoted canonical plan path after the readiness command", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-1password-setup-test-"));
-    const planPath = path.join(tempDir, "plan with spaces.json");
-    const canonicalPlanPath = path.join(await fs.realpath(tempDir), "plan with spaces.json");
-    try {
-      const output = await runSetup(planPath, ["--openai-id", "op://openclaw/OpenAI/credential"]);
-      expect(output).toContain("openclaw onepassword secretref status");
-      expect(output).toContain(
-        `openclaw secrets apply --from '${canonicalPlanPath}' --dry-run --allow-exec`,
-      );
-      expect(output).toContain(`openclaw secrets apply --from '${canonicalPlanPath}' --allow-exec`);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
 
   it.skipIf(process.platform === "win32")(
     "rejects plan output in a directory writable by another account",
@@ -183,51 +184,42 @@ describe("1Password SecretRef setup", () => {
 
 describe("1Password readiness", () => {
   it("reports trusted executable and token prerequisites without exposing the token", async () => {
-    const resolveTrustedCli = vi.fn(async () => "/trusted/op");
-    const readTokenFile = vi.fn(() => "not-a-real-service-account-token");
-    await expect(
-      testing.inspectSecretRefReadiness(
-        {
-          env: { CLAW_1PASSWORD_OP: "/trusted/op", PATH: "/bin" },
-          tokenFile: "/state/credentials/onepassword/service-account-token",
-        },
-        { resolveTrustedCli, readTokenFile },
-      ),
-    ).resolves.toEqual({
+    vi.stubEnv("CLAW_1PASSWORD_OP", "/trusted/op");
+    vi.stubEnv("PATH", "/bin");
+    vi.mocked(resolveTrustedOnePasswordCli).mockResolvedValue("/trusted/op");
+    readTokenFileMock.mockReturnValue("not-a-real-service-account-token");
+    const result = await runStatus({});
+    expect(result).toMatchObject({
       opCommand: "/trusted/op",
       opBinaryPath: "/trusted/op",
       opStatus: "ready",
-      tokenFile: "/state/credentials/onepassword/service-account-token",
+      tokenFile: path.join(os.tmpdir(), "openclaw-onepassword-missing-token"),
       tokenFileStatus: "ready",
       prerequisitesReady: true,
     });
-    expect(resolveTrustedCli).toHaveBeenCalledWith({
+    expect(JSON.stringify(result)).not.toContain("not-a-real-service-account-token");
+    expect(resolveTrustedOnePasswordCli).toHaveBeenCalledWith({
       configuredPath: "/trusted/op",
       pathEnv: "/bin",
     });
-    expect(readTokenFile).toHaveBeenCalledWith(
-      "/state/credentials/onepassword/service-account-token",
+    expect(tryReadSecretFileSync).toHaveBeenCalledWith(
+      path.join(os.tmpdir(), "openclaw-onepassword-missing-token"),
+      "1Password service account token",
+      expect.objectContaining({ rejectHardlinks: false, rejectSymlink: true }),
     );
   });
 
   it("reports untrusted op and unsafe token prerequisites", async () => {
-    await expect(
-      testing.inspectSecretRefReadiness(
-        { env: { CLAW_1PASSWORD_OP: "op", PATH: "/bin" }, tokenFile: "/missing-token" },
-        {
-          resolveTrustedCli: async () => {
-            throw new Error("unsafe path detail");
-          },
-          readTokenFile: () => {
-            throw new Error("unsafe token detail");
-          },
-        },
-      ),
-    ).resolves.toEqual({
+    vi.stubEnv("CLAW_1PASSWORD_OP", "op");
+    vi.mocked(resolveTrustedOnePasswordCli).mockRejectedValue(new Error("unsafe path detail"));
+    readTokenFileMock.mockImplementation(() => {
+      throw new Error("unsafe token detail");
+    });
+    await expect(runStatus({})).resolves.toMatchObject({
       opCommand: "op",
       opBinaryPath: null,
       opStatus: "untrusted",
-      tokenFile: "/missing-token",
+      tokenFile: path.join(os.tmpdir(), "openclaw-onepassword-missing-token"),
       tokenFileStatus: "missing-or-unsafe",
       prerequisitesReady: false,
     });

@@ -67,7 +67,7 @@ registerHooks({
     }
     const resolved = nextResolve(specifier, context);
     if (resolved.url.includes("/node_modules/") ||
-        /\/(managed-windows-job|service-child-windows-job-native)\.[cm]?[jt]s$/.test(resolved.url)) {
+        /\/(managed-windows-job)\.[cm]?[jt]s$/.test(resolved.url)) {
       throw new Error("Unexpected preflight runtime module: " + resolved.url);
     }
     return resolved;

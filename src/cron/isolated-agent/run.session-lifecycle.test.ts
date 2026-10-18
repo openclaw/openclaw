@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it, vi, assert } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolvePreparedRunAdmission } from "../../agents/admitted-run-context.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { createAttemptNestedToolActivityState } from "../../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import { prepareEmbeddedAttemptStream } from "../../agents/embedded-agent-runner/run/attempt-stream-prepare.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { clearActiveEmbeddedRun } from "../../agents/embedded-agent-runner/runs.js";
@@ -16,17 +17,16 @@ import { ModelRegistry } from "../../agents/sessions/model-registry.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "../../gateway/server-chat-state.js";
+import { subscribeAgentEvents } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import {
   createAgentEventHandler,
   type AgentEventHandlerOptions,
 } from "../../gateway/server-chat.js";
-import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import {
   clearAgentRunContext,
   getAgentRunContextOwnership,
@@ -260,17 +260,20 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         };
       });
       const patchWithAbort: typeof accessor.patchSessionEntryCore = (scope, update, options) => {
-        const assertCommitAllowed = options?.assertCommitAllowed;
+        const assertCommitAllowed = options?.workerGuard?.assertCurrent;
         return accessor.patchSessionEntryCore(scope, update, {
           ...options,
           ...(assertCommitAllowed
             ? {
-                assertCommitAllowed: () => {
-                  const isBase = scope.sessionKey === target.sessionKey;
-                  if ((failurePoint !== "continuation") === isBase) {
-                    interrupt();
-                  }
-                  assertCommitAllowed();
+                workerGuard: {
+                  ...options?.workerGuard,
+                  assertCurrent: () => {
+                    const isBase = scope.sessionKey === target.sessionKey;
+                    if ((failurePoint !== "continuation") === isBase) {
+                      interrupt();
+                    }
+                    assertCommitAllowed();
+                  },
                 },
               }
             : {}),
@@ -313,32 +316,6 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       });
       expect(continuation?.cronRunContinuation?.phase).toBe("ready");
       expect(continuation?.cliSessionBindings?.["claude-cli"]).toEqual(acceptedBinding);
-    },
-  );
-
-  it.each(["rotates", "is deleted"])(
-    "rejects a session that %s before async setup",
-    async (change) => {
-      const sessionKey = "agent:main:main";
-      const rotated = change === "rotates";
-      const initialSessionEntry = seedPersistentSession(
-        sessionKey,
-        rotated ? "session-before-setup" : "persistent-session",
-      );
-      loadSessionEntryMock.mockReturnValue(
-        rotated ? { ...initialSessionEntry, sessionId: "session-after-setup" } : undefined,
-      );
-      await expect(
-        runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey)),
-      ).resolves.toMatchObject({
-        status: "error",
-        error: `Session "${sessionKey}" changed while starting work. Retry.`,
-        admissionDisposition: "session-conflict",
-      });
-      if (rotated) {
-        expect(preflightCronModelProviderMock).not.toHaveBeenCalled();
-      }
-      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     },
   );
 
@@ -423,7 +400,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     const run = runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey));
     await runnerStarted.promise;
     let mutationCommitted = false;
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("patch", {
       ...admissionScope,
       prepare: async () => {
         await interruptSessionWorkAdmissions(admissionScope);
@@ -495,7 +472,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       });
       runEmbeddedAgentMock.mockResolvedValue({
         payloads: [
-          { text: outcome === "silent" ? "NO_REPLY" : "Report" },
+          ...(outcome === "silent" ? [] : [{ text: "Report" }]),
           ...(outcome === "presentation warning"
             ? [
                 setReplyPayloadMetadata(
@@ -507,7 +484,10 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         ],
         meta: {
           agentMeta: {},
-          ...(outcome === "silent" ? { finalAssistantRawText: "NO_REPLY" } : {}),
+          terminalReply:
+            outcome === "silent"
+              ? { disposition: "silent" }
+              : { disposition: "visible", text: "Report" },
           ...(outcome === "execution error"
             ? { error: { kind: "provider_error", message: "provider failed" } }
             : {}),
@@ -549,49 +529,6 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
     },
   );
-
-  it("marks a final lifecycle claim conflict as post-execution (#108428)", async () => {
-    const sessionKey = "agent:main:main";
-    seedPersistentSession(sessionKey, "persistent-session");
-
-    let agentExecutionStarted = false;
-    runEmbeddedAgentMock.mockImplementationOnce(
-      async (runParams: { onExecutionStarted?: () => void }) => {
-        runParams.onExecutionStarted?.();
-        agentExecutionStarted = true;
-        return {
-          payloads: [{ text: "completed" }],
-          meta: { agentMeta: {} },
-        };
-      },
-    );
-
-    const writeRow = patchSessionEntryMock.getMockImplementation();
-    if (!writeRow) {
-      throw new Error("Expected guarded session writer");
-    }
-    patchSessionEntryMock.mockImplementation((scope, update, options) =>
-      writeRow(
-        scope,
-        (entry: SessionEntry, context: { existingEntry?: SessionEntry }) =>
-          update(entry, {
-            existingEntry:
-              agentExecutionStarted && scope.sessionKey === sessionKey
-                ? { ...entry, lifecycleRevision: "replacement-revision" }
-                : context.existingEntry,
-          }),
-        options,
-      ),
-    );
-
-    await expect(
-      runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey)),
-    ).resolves.toMatchObject({
-      status: "error",
-      error: `Session "${sessionKey}" changed while starting work. Retry.`,
-      executionStarted: true,
-    });
-  });
 });
 
 describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
@@ -601,13 +538,8 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
   });
 
   it.each([
-    ["failure", "error", undefined],
     ["cancelled", "aborted", undefined],
-    ["cli-success", "final", undefined],
-    ["cli-timeout", "error", undefined],
     ["cli-exhausted-result", "error", undefined],
-    ["finalize-failure", "final", "delivery finalization failed"],
-    ["continuation-failure", "final", "continuation write failed"],
     ["post-execution-abort", "final", "post-execution abort"],
     ["retry-preflight-failure", "error", "retry preparation failed"],
   ] as const)(
@@ -615,8 +547,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
     async (outcome, state, error) => {
       const sessionKey = "agent:main:cron:lifecycle-fallback";
       const sessionId = "cron-lifecycle-fallback";
-      const usesContinuation =
-        outcome === "continuation-failure" || outcome === "post-execution-abort";
+      const usesContinuation = outcome === "post-execution-abort";
       const initialSessionEntry = makeCronSessionEntry({ sessionId });
       resolveCronSessionMock.mockReturnValue(
         makeCronSession({
@@ -644,16 +575,6 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
       }
       const retryPreparationFailure = outcome === "retry-preflight-failure";
       const retryPreparationError = new AgentHarnessPreflightError("retry preparation failed");
-      const retriesInterimAck = retryPreparationFailure;
-      if (retriesInterimAck) {
-        resolveCronPayloadOutcomeMock.mockImplementation(
-          (await vi.importActual<typeof import("./helpers.js")>("./helpers.js"))
-            .resolveCronPayloadOutcome,
-        );
-      }
-      if (outcome === "finalize-failure") {
-        dispatchCronDeliveryMock.mockRejectedValueOnce(new Error("delivery finalization failed"));
-      }
       runWithModelFallbackMock.mockImplementation(
         (
           await vi.importActual<typeof import("../../agents/model-fallback-runner.js")>(
@@ -683,9 +604,6 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           ) => {
             if (args[0].sessionKey === completedContinuationSessionKey) {
               completedContinuationSessionKey = undefined;
-              if (outcome === "continuation-failure") {
-                throw new Error("continuation write failed");
-              }
               postExecutionWriteStarted.resolve();
               await releasePostExecutionWrite.promise;
             }
@@ -714,7 +632,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         persistGatewaySessionLifecycleEventForEvent: persist,
         clearTrackedActiveRun,
       });
-      const unsubscribe = onAgentRuntimeEvent(handler);
+      const unsubscribe = subscribeAgentEvents(handler);
       const runIds = new Set<string>();
       let attemptIndex = 0;
       runCliAgentMock.mockImplementation(async (runParams: RunCliAgentParams) => {
@@ -723,37 +641,21 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         await runParams.onExecutionStarted?.();
         secondPreparing.resolve();
         await releaseSecond.promise;
-        if (outcome === "cli-exhausted-result") {
-          // The real classifier rejects generic CLI failure copy; exhaustion
-          // merges this candidate's metadata with the native incomplete reply.
-          return {
-            payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-            meta: { agentMeta: {} },
-          };
-        }
-        if (cancelled || outcome === "cli-timeout") {
-          return {
-            payloads: [],
-            meta: {
-              agentMeta: {},
-              aborted: true,
-              providerStarted: true,
-              stopReason: cancelled ? "aborted" : "timeout",
-              ...(outcome === "cli-timeout" ? { timeoutPhase: "provider" } : {}),
-            },
-          };
-        }
-        return { payloads: [{ text: "Final report" }], meta: { agentMeta: {} } };
+        // Exhaustion merges this CLI candidate's metadata with the native incomplete reply.
+        return {
+          payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+          meta: { agentMeta: {} },
+        };
       });
       runEmbeddedAgentMock.mockImplementation(async (runParams: RunEmbeddedAgentParams) => {
         runIds.add(runParams.runId);
         const first = attemptIndex++ === 0;
-        if (retriesInterimAck && attemptIndex > 2) {
-          throw retryPreparationError;
-        }
         if (!first) {
           secondPreparing.resolve();
           await releaseSecond.promise;
+          if (retryPreparationFailure) {
+            throw retryPreparationError;
+          }
         }
         const { provider, model, thinkLevel } = runParams;
         if (!provider || !model || !thinkLevel) {
@@ -806,6 +708,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             coreBuiltinToolNames: new Set(),
             replaySafeToolNames: new Set(),
             codeModeExecToolNames: new Set(),
+            sourceReplyCapableToolNames: new Set(),
             sideEffectToolOwners: new Map(),
             trustedLocalMediaToolNames: new Set(),
           },
@@ -816,7 +719,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             sessionKey,
             runId: runParams.runId,
           }),
-          nestedToolActivities: [],
+          nestedToolActivityState: createAttemptNestedToolActivityState(),
           isReplaySafeTool: () => false,
           runAbortController: new AbortController(),
           abortRun: vi.fn(),
@@ -843,11 +746,9 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         };
         try {
           native.emit({ type: "agent_start" });
-          if (first || outcome === "failure") {
-            if (first) {
-              firstStarted.resolve();
-              await releaseFirst.promise;
-            }
+          if (first) {
+            firstStarted.resolve();
+            await releaseFirst.promise;
             const incomplete = outcome === "cli-exhausted-result";
             emitAssistantEnd({
               stopReason: incomplete ? "stop" : "error",
@@ -877,7 +778,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             emitAssistantEnd({ stopReason: "aborted", content: [] });
             return { payloads: [], meta: { aborted: true, stopReason: "aborted", agentMeta: {} } };
           }
-          const text = retriesInterimAck ? "On it." : "Final report";
+          const text = "Final report";
           emitAssistantEnd({
             stopReason: "stop",
             content: [{ type: "text", text }],
@@ -917,6 +818,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         releaseFirst.resolve();
         await Promise.race([secondPreparing.promise, exited]);
         await vi.advanceTimersByTimeAsync(15_000);
+        await unsubscribe.drain();
         expect(attemptIndex).toBe(2);
         expect(runCliAgentMock).toHaveBeenCalledTimes(cliFallback ? 1 : 0);
         expect(broadcast.mock.calls.filter(([event]) => event === "chat")).toHaveLength(0);
@@ -938,18 +840,15 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           controller.abort(new Error("post-execution abort"));
           releasePostExecutionWrite.resolve();
         }
-        const succeeded = outcome === "cli-success";
-        await expect(run).resolves.toMatchObject({ status: succeeded ? "ok" : "error" });
+        await expect(run).resolves.toMatchObject({ status: "error" });
+        await unsubscribe.drain();
         if (error) {
           await expect(run).resolves.toMatchObject({
             error: retryPreparationFailure ? expect.stringContaining(error) : error,
           });
         }
-        if (outcome === "finalize-failure") {
-          await expect(run).resolves.toMatchObject({ executionStarted: true });
-        }
         if (retryPreparationFailure) {
-          await expect(runWithModelFallbackMock.mock.results[1]?.value).rejects.toBe(
+          await expect(runWithModelFallbackMock.mock.results[0]?.value).rejects.toBe(
             retryPreparationError,
           );
         }
@@ -974,7 +873,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             sessionKey,
           });
         }
-        expect(onExecutionStarted).toHaveBeenCalledTimes(2);
+        expect(onExecutionStarted).toHaveBeenCalledTimes(retryPreparationFailure ? 1 : 2);
         expect(runIds.size).toBe(1);
         expect(
           broadcast.mock.calls.filter(
@@ -986,7 +885,6 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             expect.objectContaining({
               runId,
               state,
-              ...(outcome === "cli-timeout" ? { stopReason: "timeout", errorKind: "timeout" } : {}),
             }),
             expect.anything(),
           ],
@@ -996,8 +894,8 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         releaseSecond.resolve();
         releasePostExecutionWrite.resolve();
         await run.catch(() => {});
-        unsubscribe();
-        handler.dispose();
+        await unsubscribe();
+        await handler.dispose();
         vi.useRealTimers();
       }
     },

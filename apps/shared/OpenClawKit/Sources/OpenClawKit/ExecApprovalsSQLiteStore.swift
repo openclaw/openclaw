@@ -248,7 +248,8 @@ public enum ExecApprovalsSQLiteStore {
     }
 
     static func decode(_ rawJSON: String) throws -> ExecApprovalsDocument {
-        guard let data = rawJSON.data(using: .utf8), self.hasValidPersistedStructure(data) else {
+        let data = Data(rawJSON.utf8)
+        guard self.hasValidPersistedStructure(data) else {
             throw OpenClawNativeStateError("Malformed exec approvals raw_json")
         }
         let document = try JSONDecoder().decode(ExecApprovalsDocument.self, from: data)
@@ -265,11 +266,7 @@ public enum ExecApprovalsSQLiteStore {
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(document)
-        guard let rawJSON = String(data: data, encoding: .utf8) else {
-            throw OpenClawNativeStateError("Could not encode exec approvals as UTF-8")
-        }
-        let persisted = rawJSON + "\n"
+        let persisted = try String(bytes: encoder.encode(document), encoding: .utf8)! + "\n"
         _ = try self.decode(persisted)
         return persisted
     }

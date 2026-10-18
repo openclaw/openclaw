@@ -1,4 +1,3 @@
-/** Sanitizes MCP server/tool names into stable model-facing tool ids. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -20,7 +19,6 @@ export function compareMcpCatalogTools(left: McpCatalogTool, right: McpCatalogTo
   );
 }
 
-/** Builds stable node-ID prefixes capped at 32 characters. */
 export function sanitizeNodeIdFragment(value: string): string {
   const fragment = value
     .trim()
@@ -44,7 +42,6 @@ function sanitizeToolFragment(raw: string, fallback: string, maxChars?: number):
   return providerSafe.length > maxChars ? providerSafe.slice(0, maxChars) : providerSafe;
 }
 
-/** Sanitize one MCP server name and reserve it in the provided set. */
 export function sanitizeServerName(raw: string, usedNames: Set<string>): string {
   const base = sanitizeToolFragment(raw, "mcp", TOOL_NAME_MAX_PREFIX);
   let candidate = base;
@@ -73,7 +70,6 @@ export function assignSafeServerNames(serverNames: Iterable<string>): Map<string
   return assignments;
 }
 
-/** Normalizes reserved tool names for collision checks. */
 export function normalizeReservedToolNames(names?: Iterable<string>): Set<string> {
   return new Set(
     Array.from(names ?? [], (name) => normalizeOptionalLowercaseString(name)).filter(
@@ -82,7 +78,6 @@ export function normalizeReservedToolNames(names?: Iterable<string>): Set<string
   );
 }
 
-/** Build a safe model-facing tool name from server and tool fragments. */
 export function buildSafeToolName(params: {
   serverName: string;
   toolName: string;

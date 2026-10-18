@@ -13,6 +13,9 @@ import {
   assertSystemdAvailable,
   isSystemctlAvailable,
   isSystemdUserServiceAvailable,
+  execSystemctl,
+  execSystemctlUser,
+  systemdInspectionError,
 } from "./systemd-exec.js";
 import {
   uninstallLegacySystemdUnits,
@@ -21,7 +24,6 @@ import {
 import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
-  isSystemdUserBusUnavailableDetail,
 } from "./systemd-unavailable.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
@@ -31,24 +33,6 @@ describe("classifySystemdUnavailableDetail", () => {
     expect(classifySystemdUnavailableDetail("systemctl not available")).toBe("missing_systemctl");
   });
 
-  it("classifies user bus/session failures", () => {
-    expect(
-      isSystemdUserBusUnavailableDetail(
-        "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
-      ),
-    ).toBe(true);
-    expect(
-      classifySystemdUnavailableDetail(
-        "systemctl --user unavailable: Failed to connect to bus: No medium found",
-      ),
-    ).toBe("user_bus_unavailable");
-    expect(
-      classifySystemdUnavailableDetail(
-        "systemctl --user unavailable: Failed to connect to bus: Permission denied",
-      ),
-    ).toBe("user_bus_unavailable");
-  });
-
   it("classifies generic systemd-unavailable details", () => {
     expect(
       classifySystemdUnavailableDetail("System has not been booted with systemd as init system"),
@@ -56,10 +40,6 @@ describe("classifySystemdUnavailableDetail", () => {
     expect(classifySystemdUnavailableDetail("not supported on this host")).toBe(
       "generic_unavailable",
     );
-  });
-
-  it("returns null for unrelated details", () => {
-    expect(classifySystemdUnavailableDetail("permission denied")).toBeNull();
   });
 });
 
@@ -93,23 +73,48 @@ printf 's "252.39"\\n'
     };
   }
 
-  it.each(["ENOENT", "EACCES"])("rejects unavailable systemctl with %s", async (errorCode) => {
+  it.each([
+    { probe: "show", scope: "user" },
+    { probe: "cat", scope: "user" },
+    { probe: "is-active", scope: "user" },
+    { probe: "show", scope: "system" },
+  ])(
+    "retains the failed native probe $scope $probe and sanitized stderr",
+    async ({ probe, scope }) => {
+      await withTempDir("openclaw-systemctl-diagnostic-", async (dir) => {
+        await managerProbe(dir);
+        await commandFixture(
+          dir,
+          "systemctl",
+          "#!/bin/sh\nprintf '\\033[31mFailed to connect to user bus\\033[0m\\nPRIVATE_SECOND_LINE\\n' >&2\nexit 7\n",
+        );
+        const result =
+          scope === "user"
+            ? await execSystemctlUser(systemctlEnv(dir), [probe, "openclaw-gateway.service"], 5000)
+            : await execSystemctl([probe, "openclaw-gateway.service"], systemctlEnv(dir), 5000);
+        const error = systemdInspectionError(result, "inspection failed");
+        expect(error.message).toContain(
+          `systemctl --${scope} ${probe}: exit 7; Failed to connect to user bus`,
+        );
+        expect(error.message).not.toContain("PRIVATE_SECOND_LINE");
+        expect(error.message).not.toContain("\u001b");
+      });
+    },
+  );
+
+  it("rejects unavailable systemctl with EACCES", async () => {
     await withTempDir("openclaw-systemctl-", async (dir) => {
-      if (errorCode === "EACCES") {
-        await fs.writeFile(path.join(dir, "systemctl"), "#!/bin/sh\nexit 0\n", { mode: 0o600 });
-      }
+      await fs.writeFile(path.join(dir, "systemctl"), "#!/bin/sh\nexit 0\n", { mode: 0o600 });
       const env = systemctlEnv(dir);
       await expect(isSystemctlAvailable(env)).resolves.toBe(false);
       await managerProbe(dir);
       await expect(isSystemdUserServiceAvailable(env)).resolves.toBe(false);
       await expect(assertSystemdAvailable(env)).rejects.toThrow(
-        errorCode === "EACCES"
-          ? "service-manager probe could not start"
-          : "systemctl not available",
+        "service-manager check could not start",
       );
 
       const result = await execFileUtf8("systemctl", ["private-argument"], { env });
-      expect(result).toMatchObject({ stdout: "", code: 1, errorCode });
+      expect(result).toMatchObject({ stdout: "", code: 1, errorCode: "EACCES" });
       expect(result.stderr).not.toContain("private-argument");
       expect(isLaunchctlNotLoaded(result)).toBe(false);
     });
@@ -196,7 +201,7 @@ printf 's "252.39"\\n'
         await expect(assertSystemdAvailable(env, timeout)).rejects.toThrow(
           termination === "timeout"
             ? "systemd manager inspection deadline expired"
-            : "systemctl --user unavailable",
+            : "systemctl --user status: signal; Command was terminated by SIGTERM",
         );
       });
       const result = await runAfterOutput(() =>

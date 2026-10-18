@@ -1,4 +1,3 @@
-/** POSIX shell option handling for mutable file operand detection. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 import {
@@ -8,7 +7,6 @@ import {
 } from "./shell-inline-command.js";
 import { POSIX_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
 
-const POSIX_SHELL_WRAPPER_SET: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "--init-file",
   "--rcfile",
@@ -92,7 +90,7 @@ export function resolvePosixShellScriptOperandIndex(
 }
 
 export function hasPosixShellCodeLoadingOption(argv: string[], executable: string): boolean {
-  if (!POSIX_SHELL_WRAPPER_SET.has(executable)) {
+  if (!POSIX_SHELL_WRAPPERS.has(executable)) {
     return false;
   }
   const supportsPlusOptions = POSIX_SHELLS_WITH_PLUS_OPTIONS.has(executable);
@@ -127,7 +125,7 @@ export function hasPosixShellStartupEnvironment(params: {
   executable: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  if (!POSIX_SHELL_WRAPPER_SET.has(params.executable)) {
+  if (!POSIX_SHELL_WRAPPERS.has(params.executable)) {
     return false;
   }
   if (params.env?.BASH_ENV?.trim() || params.env?.ENV?.trim()) {

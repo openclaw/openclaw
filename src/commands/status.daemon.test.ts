@@ -55,6 +55,33 @@ it("keeps gateway status readable for unsupported service adapters", async () =>
   expect(summary.runtimeShort).toBe("unknown (Gateway service install not supported on aix)");
 });
 
+it.each(["stopped", "running"] as const)(
+  "shows a masked Gateway's recovery hint while %s",
+  async (status) => {
+    const message =
+      "Service is masked. Run systemctl --user unmask openclaw-gateway.service, then retry.";
+    mocks.resolveGatewayService.mockReturnValue(
+      createMockGatewayService({
+        label: "systemd",
+        loadedText: "enabled",
+        notLoadedText: "disabled",
+        readRuntime: async () => ({
+          status,
+          detail: message,
+          systemd: { scope: "user", startRefusal: { reason: "masked", message } },
+        }),
+      }),
+    );
+
+    const summary = await getDaemonStatusSummary();
+    const output = getStatusOverviewRowValue("Gateway service", { gatewayService: summary });
+
+    expect(output).toContain(message);
+    expect(output).not.toContain("not installed");
+    expect(output?.split(message)).toHaveLength(2);
+  },
+);
+
 it("renders root-status recovery guidance for a rejected node runtime", async () => {
   mocks.resolveNodeService.mockReturnValue(
     createMockGatewayService({

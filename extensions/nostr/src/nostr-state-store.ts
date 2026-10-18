@@ -19,7 +19,6 @@ type NostrProfileState = {
   version: 1;
   /** Unix timestamp (seconds) of last successful profile publish */
   lastPublishedAt: number | null;
-  /** Event ID of the last published profile */
   lastPublishedEventId: string | null;
   /** Per-relay publish results from last attempt */
   lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
@@ -63,7 +62,7 @@ export async function writeNostrBusState(params: {
     version: STORE_VERSION,
     lastProcessedAt: params.lastProcessedAt,
     gatewayStartedAt: params.gatewayStartedAt,
-    recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
+    recentEventIds: params.recentEventIds ?? [],
   };
   await openNostrBusStateStore(params.env).register(
     normalizeNostrStateAccountId(params.accountId),

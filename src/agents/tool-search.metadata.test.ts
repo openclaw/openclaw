@@ -1,9 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { mcpTool, pluginTool } from "./code-mode.test-support.js";
-import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
 import {
-  addClientToolsToToolSearchCatalog,
+  addClientToolsToToolCatalog,
+  compactToolSearchCatalogEntry,
+} from "./tool-search-catalog.js";
+import {
   createToolSearchCatalogRef,
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
@@ -31,7 +33,7 @@ function setup(source: "mcp" | "client") {
   };
   registerHeadlessToolSearchCatalog({ catalogRef, tools: source === "mcp" ? [target] : [] });
   if (source === "client") {
-    addClientToolsToToolSearchCatalog({ catalogRef, config, tools: [target] });
+    addClientToolsToToolCatalog({ catalogRef, enabled: true, tools: [target] });
   }
   const entry = expectDefined(catalogRef.current?.entries[0], "remote catalog entry");
   const tools = createToolSearchTools({ catalogRef, config });

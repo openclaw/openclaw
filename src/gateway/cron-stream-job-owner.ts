@@ -12,7 +12,7 @@ import type {
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import {
   CronStreamOutput,
@@ -120,14 +120,10 @@ async function stopManagedRun(run: ManagedRun): Promise<void> {
 /** Owns one stream job's serialized process lifecycle and durable counters. */
 export class CronStreamJobOwner {
   private state: CronStreamOwnerState = "idle";
-  // Process generation changes across child restarts; logical identity does not.
-  private generation = 0;
   private desiredRunning = false;
-  private retired = false;
   private removalRequested = false;
   // Preserve terminal restart exhaustion across a normal shutdown state write.
   private restartExhausted = false;
-  private requestEpoch = 0;
   private opTail: Promise<void> = Promise.resolve();
   private job: CronStreamJob;
   private scheduleKey: string;
@@ -179,10 +175,8 @@ export class CronStreamJobOwner {
           );
         });
       },
-      getGeneration: () => this.generation,
       getState: () => this.state,
       isDesiredRunning: () => this.desiredRunning,
-      isRetired: () => this.retired,
       logger: params.logger,
     });
   }
@@ -198,7 +192,6 @@ export class CronStreamJobOwner {
   snapshot() {
     return {
       state: this.state,
-      generation: this.generation,
       sourceIdentity: this.sourceIdentity,
       processAlive: this.run !== undefined,
       restartTimerPending: this.restartJob !== undefined,
@@ -213,9 +206,9 @@ export class CronStreamJobOwner {
     if (this.removalRequested) {
       return Promise.resolve();
     }
-    const requestEpoch = ++this.requestEpoch;
+    this.desiredRunning = true;
     return this.enqueue("start", async () => {
-      if (this.removalRequested || requestEpoch !== this.requestEpoch) {
+      if (this.removalRequested || !this.desiredRunning) {
         return;
       }
       const nextScheduleKey = cronStreamScheduleKey(job.schedule);
@@ -224,17 +217,15 @@ export class CronStreamJobOwner {
         await this.stopOperation("schedule-update");
       }
       // A newer stop can arrive while replacement waits for the old child.
-      if (this.removalRequested || requestEpoch !== this.requestEpoch) {
+      if (this.removalRequested || !this.desiredRunning) {
         return;
       }
       if (this.run && this.state !== "running") {
         await this.stopOperation("schedule-update");
-        if (this.removalRequested || requestEpoch !== this.requestEpoch) {
+        if (this.removalRequested || !this.desiredRunning) {
           return;
         }
       }
-      this.retired = false;
-      this.desiredRunning = true;
       this.adoptJob(job, nextScheduleKey, nextSourceIdentity);
       this.droppedBatches = Math.max(
         this.droppedBatches,
@@ -259,7 +250,6 @@ export class CronStreamJobOwner {
 
   stop(reason: CronStreamStopReason, job?: CronStreamJob, failure?: string): Promise<void> {
     // Fence output and queued starts synchronously, before the stop operation runs.
-    ++this.requestEpoch;
     this.desiredRunning = false;
     const scheduler = this.scheduler;
     scheduler.beginClose();
@@ -290,13 +280,13 @@ export class CronStreamJobOwner {
     return this.awaitBoundedStop(settleStop());
   }
 
-  processExited(exit: RunExit, generation: number): Promise<void> {
+  processExited(exit: RunExit, run: ManagedRun): Promise<void> {
     return this.enqueue("process-exited", async () => {
       // desiredRunning is the synchronous stop fence: an exit that queued
       // ahead of a requested stop belongs to that stop, not to the failure
       // counters — counting it could fabricate restart exhaustion for a
       // deliberate disable/removal/shutdown.
-      if (generation !== this.generation || this.state !== "running" || !this.desiredRunning) {
+      if (this.run !== run || this.state !== "running" || !this.desiredRunning) {
         return;
       }
       this.run?.detachOutput?.();
@@ -304,18 +294,17 @@ export class CronStreamJobOwner {
       this.stableJob?.cancel();
       this.stableJob = undefined;
       // Drain accepted tail output before this child loses callback ownership.
-      await this.output.drainBufferedOutput(generation);
-      await this.output.flushSourceOutput(generation);
+      await this.output.drainBufferedOutput();
+      await this.output.flushSourceOutput();
+      this.output.cancelMatching();
       // Both drains can yield while stop() closes desiredRunning synchronously;
       // let its already-queued teardown own the exit instead of counting failure.
-      if (generation !== this.generation || this.state !== "running" || !this.desiredRunning) {
+      if (!this.desiredRunning) {
         return;
       }
-      const backoffGeneration = ++this.generation;
 
       await this.recoverSource(
         `stream source exited (${exit.reason}, code ${exit.exitCode ?? "none"})`,
-        backoffGeneration,
         exit,
       );
     });
@@ -354,30 +343,23 @@ export class CronStreamJobOwner {
   }
 
   private async spawnSource(): Promise<void> {
-    if (!this.desiredRunning || this.retired || this.params.scheduler.signal.aborted) {
+    if (!this.desiredRunning || this.params.scheduler.signal.aborted) {
       this.state = "stopped";
       return;
     }
     this.state = "starting";
     this.restartExhausted = false;
-    const generation = ++this.generation;
     if (this.scheduler.signal.aborted) {
       this.scheduler = this.params.scheduler.scope();
     }
-    this.output.startSource(this.scheduler);
+    const outputSignal = this.output.startSource(this.scheduler);
     const ownsPersistedJob = await this.persistState({
       streamStatus: this.consecutiveFailures > 0 ? "restarting" : "starting",
       streamError: undefined,
       streamConsecutiveFailures: this.consecutiveFailures,
       streamRestartExhausted: undefined,
     });
-    if (
-      !ownsPersistedJob ||
-      generation !== this.generation ||
-      !this.desiredRunning ||
-      this.retired ||
-      this.state !== "starting"
-    ) {
+    if (!ownsPersistedJob || !this.desiredRunning) {
       this.state = "stopped";
       return;
     }
@@ -385,6 +367,7 @@ export class CronStreamJobOwner {
     try {
       resolveCronJobEffectiveAgentId(this.job, this.params.getDefaultAgentId?.());
     } catch (error) {
+      this.desiredRunning = false;
       await this.stopOperation("disabled");
       throw error;
     }
@@ -400,19 +383,19 @@ export class CronStreamJobOwner {
         env: markOpenClawExecEnv({ ...process.env }),
         stdinMode: "pipe-closed",
         captureOutput: false,
-        onStdout: (chunk) => this.output.enqueueChunk("stdout", chunk, generation),
-        onStderr: (chunk) => this.output.enqueueChunk("stderr", chunk, generation),
+        onStdout: (chunk) => this.output.enqueueChunk("stdout", chunk, outputSignal),
+        onStderr: (chunk) => this.output.enqueueChunk("stderr", chunk, outputSignal),
       });
     } catch (error) {
-      if (generation !== this.generation || !this.desiredRunning || this.retired) {
+      if (!this.desiredRunning) {
         this.state = "stopped";
         return;
       }
-      await this.recoverSource(`stream source failed to start: ${String(error)}`, generation);
+      await this.recoverSource(`stream source failed to start: ${String(error)}`);
       return;
     }
 
-    if (generation !== this.generation || !this.desiredRunning || this.retired) {
+    if (!this.desiredRunning) {
       // Retain a late spawn until exit is confirmed so a later stop can retry it.
       this.run = run;
       await stopManagedRun(run);
@@ -427,30 +410,24 @@ export class CronStreamJobOwner {
     this.stableJob = this.scheduler.schedule({
       id: `${scopeKey(this.job.id)}:${this.sourceIdentity}:stable`,
       delayMs: STABLE_RUN_MS,
-      run: () => this.markStable(generation),
+      run: () => this.markStable(run),
     });
     const ownsRunningJob = await this.persistState({
       streamStatus: "running",
       streamError: undefined,
       streamLastStartedAtMs: run.startedAtMs,
     });
-    if (
-      !ownsRunningJob ||
-      generation !== this.generation ||
-      !this.desiredRunning ||
-      this.retired ||
-      this.state !== "running"
-    ) {
+    if (!ownsRunningJob || !this.desiredRunning) {
       await this.stopOperation("schedule-update");
       return;
     }
     this.params.logger.info(
-      { jobId: this.job.id, runId: run.runId, generation },
+      { jobId: this.job.id, runId: run.runId },
       "cron-stream: source running",
     );
-    this.output.schedulePendingIfNeeded(generation);
+    this.output.schedulePendingIfNeeded();
     void run.wait().then(
-      (exit) => this.processExited(exit, generation),
+      (exit) => this.processExited(exit, run),
       (error: unknown) => {
         this.params.logger.warn(
           { jobId: this.job.id, err: formatErrorMessage(error) },
@@ -467,13 +444,13 @@ export class CronStreamJobOwner {
             timedOut: false,
             noOutputTimedOut: false,
           },
-          generation,
+          run,
         );
       },
     );
   }
 
-  private async recoverSource(message: string, generation: number, exit?: RunExit): Promise<void> {
+  private async recoverSource(message: string, exit?: RunExit): Promise<void> {
     const stable = exit !== undefined && exit.durationMs >= STABLE_RUN_MS;
     this.consecutiveFailures = stable ? 0 : boundedCounter(this.consecutiveFailures, 1);
     const exhausted = this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES;
@@ -499,20 +476,15 @@ export class CronStreamJobOwner {
     await this.persistState(patch);
     void this.scheduleRestart(
       stable ? 0 : errorBackoffMs(this.consecutiveFailures, this.params.retryBackoffMs),
-      generation,
     );
   }
 
   private async stopOperation(reason: CronStreamStopReason, job?: CronStreamJob): Promise<void> {
-    this.desiredRunning = false;
-    if (reason === "removed") {
-      this.retired = true;
-    }
+    this.output.cancelMatching();
     if (job) {
       this.adoptJob(job, cronStreamScheduleKey(job.schedule), sourceIdentityFor(job));
     }
     this.state = "stopping";
-    ++this.generation;
 
     let retirementError: unknown;
     if (stopRequiresSourceRetirement(reason)) {
@@ -604,28 +576,23 @@ export class CronStreamJobOwner {
     }
   }
 
-  private scheduleRestart(delayMs: number, generation: number): Promise<void> {
+  private scheduleRestart(delayMs: number): Promise<void> {
     return this.enqueue("schedule-restart", async () => {
-      if (
-        !this.desiredRunning ||
-        this.retired ||
-        this.state !== "backoff" ||
-        generation !== this.generation
-      ) {
+      if (!this.desiredRunning || this.state !== "backoff") {
         return;
       }
       this.restartJob?.cancel();
       this.restartJob = this.scheduler.schedule({
         id: `${scopeKey(this.job.id)}:${this.sourceIdentity}:restart`,
         delayMs,
-        run: () => this.restartAfterBackoff(generation),
+        run: () => this.restartAfterBackoff(),
       });
     });
   }
 
-  private markStable(generation: number): Promise<void> {
+  private markStable(run: ManagedRun): Promise<void> {
     return this.enqueue("mark-stable", async () => {
-      if (generation !== this.generation || this.state !== "running") {
+      if (this.run !== run || this.state !== "running") {
         return;
       }
       this.stableJob = undefined;
@@ -641,14 +608,9 @@ export class CronStreamJobOwner {
     });
   }
 
-  private restartAfterBackoff(generation: number): Promise<void> {
+  private restartAfterBackoff(): Promise<void> {
     return this.enqueue("restart", async () => {
-      if (
-        generation !== this.generation ||
-        this.state !== "backoff" ||
-        !this.desiredRunning ||
-        this.retired
-      ) {
+      if (this.state !== "backoff" || !this.desiredRunning) {
         return;
       }
       this.restartJob?.cancel();

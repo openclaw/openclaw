@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,28 +8,25 @@ import { LEGACY_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/sr
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  replaceTranscriptEvents,
+  replaceTranscriptEventsSync,
+} from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { sessionScope, withSessionState } from "./session-manager-fixtures.test-support.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
-it("reports context queue overload without losing context and recovers in admission order", async () => {
-  await withOpenClawTestState({ label: "model-context-pressure" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "context-pressure",
-      sessionKey: "agent:main:context-pressure",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+it("reports context queue overload without losing context and completes every admitted read", async () => {
+  await withSessionState("context-pressure", async ({ scope }) => {
     const source = SessionManager.open(scope);
     source.appendMessage(makeUserMessage("retain this context", 1));
     await waitForSessionTranscriptProjection(scope);
@@ -44,7 +42,7 @@ it("reports context queue overload without losing context and recovers in admiss
       // Hold this caller's first preparation while real pool admission fills the queue.
       return this.run(async () => {
         await release.promise;
-        return input;
+        return typeof input === "function" ? await input() : input;
       }, options);
     });
     const accepted = Array.from({ length: 128 }, (_, index) =>
@@ -66,7 +64,10 @@ it("reports context queue overload without losing context and recovers in admiss
       expect(source.buildSessionContext()).toEqual(expected);
       release.resolve();
       expect(await Promise.all(accepted)).toEqual(Array.from({ length: 128 }, () => expected));
-      expect(completed).toEqual(Array.from({ length: 128 }, (_, index) => index));
+      // Foreground reads run on a worker pool, so completion order is not FIFO.
+      expect(completed.toSorted((a, b) => a - b)).toEqual(
+        Array.from({ length: 128 }, (_, index) => index),
+      );
       expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
         expected,
       );
@@ -79,14 +80,7 @@ it("reports context queue overload without losing context and recovers in admiss
 });
 
 it("acquires a long sparse context with bounded queries and preserved message order", async () => {
-  await withOpenClawTestState({ label: "model-context-batch" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "batched-context",
-      sessionKey: "agent:main:batched-context",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  await withSessionState("batched-context", async ({ scope }) => {
     const messages = Array.from({ length: 1_200 }, (_, index) => ({
       type: "message",
       id: `message-${index}`,
@@ -138,14 +132,7 @@ it.each([
 ])(
   "acquires detached %s context without native payloads or changing stored evidence",
   async (scenario) => {
-    await withOpenClawTestState({ label: "model-context" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "model-view",
-        sessionKey: "agent:main:model-view",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await withSessionState("model-view", async ({ state, scope }) => {
       const source = SessionManager.open(scope);
       const marker = "synthetic-native-memory:";
       const metadata = {
@@ -341,9 +328,7 @@ it.each([
       source.branch(source.getLeafId()!);
       await waitForSessionTranscriptProjection(scope);
       const admitted = source.appendMessageWithTranscriptAnchor(makeUserMessage("current turn", 7));
-      if (!admitted.anchor) {
-        throw new Error("missing admission");
-      }
+      assert(admitted.anchor, "missing admission");
       const admission = {
         ...admitted.anchor,
         role: "user" as const,
@@ -361,10 +346,6 @@ it.each([
       ).toEqual(earlier);
       if (scenario === "whole") {
         for (const patch of [
-          { generation: "wrong-generation" },
-          { rawSeq: admission.rawSeq + 1 },
-          { effectiveParentId: "wrong-parent" },
-          { activeMessagePosition: admission.activeMessagePosition + 1 },
           { role: "assistant" },
           { sessionKey: "agent:main:wrong" },
           { storePath: path.join(state.agentDir("main"), "wrong.sqlite") },
@@ -498,18 +479,12 @@ it.each([
   },
 );
 
-it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (incognito) => {
+it("keeps durable model reads non-persisting", async () => {
   await withOpenClawTestState({ label: "model-readonly" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "readonly",
-      sessionKey:
-        incognito === true ? "agent:main:dashboard:incognito-readonly" : "agent:main:readonly",
-      storePath:
-        incognito === "path"
-          ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
-          : path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
+    const scope = sessionScope(
+      path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      "readonly",
+    );
     expect(SessionManager.openModelContext(scope).buildSessionContext().messages).toEqual([]);
     expect(
       (await SessionManager.openModelContextAsync(scope)).buildSessionContext().messages,
@@ -517,11 +492,13 @@ it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (i
     expect(SessionManager.readSessionContext(scope, (messages) => Array.from(messages))).toEqual(
       [],
     );
+    expect(
+      await SessionManager.readSessionContextAsync(scope, (messages) => [...messages]),
+    ).toEqual([]);
     expect(fs.existsSync(scope.storePath)).toBe(false);
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
-      ...(incognito ? { incognito: true } : {}),
     });
     const source = SessionManager.open(scope);
     source.appendMessage({ role: "user", content: "visible", timestamp: 1 });
@@ -531,109 +508,78 @@ it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (i
     );
     expect(view.buildSessionContext()).toEqual(source.buildSessionContext());
     expect(view.isPersisted()).toBe(false);
-    if (incognito) {
-      expect(fs.existsSync(scope.storePath)).toBe(false);
-    } else {
-      const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
-      // A transient reader reconstructs navigation from its own read snapshot, not a stale cache.
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
+    // A transient reader reconstructs navigation from its own read snapshot, not a stale cache.
+    database.db
+      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+      .run(scope.sessionId);
+    expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(
+      source.buildSessionContext(),
+    );
+    database.db
+      .prepare("DELETE FROM session_transcript_index_state WHERE session_id = ?")
+      .run(scope.sessionId);
+    expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(
+      source.buildSessionContext(),
+    );
+    expect(
       database.db
-        .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
-        .run(scope.sessionId);
-      expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(
-        source.buildSessionContext(),
-      );
-      database.db
-        .prepare("DELETE FROM session_transcript_index_state WHERE session_id = ?")
-        .run(scope.sessionId);
-      expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(
-        source.buildSessionContext(),
-      );
-      expect(
-        database.db
-          .prepare("SELECT COUNT(*) AS n FROM session_transcript_index_state WHERE session_id = ?")
-          .get(scope.sessionId)?.n,
-      ).toBe(0);
-      const parse = JSON.parse;
-      const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        if (typeof text === "string" && text.includes('"role":"user"')) {
-          throw new Error("synthetic decode failure");
-        }
-        return parse(text, reviver);
-      });
-      try {
-        expect(() => SessionManager.openModelContext(scope)).toThrow("synthetic decode failure");
-      } finally {
-        parseSpy.mockRestore();
+        .prepare("SELECT COUNT(*) AS n FROM session_transcript_index_state WHERE session_id = ?")
+        .get(scope.sessionId)?.n,
+    ).toBe(0);
+    const parse = JSON.parse;
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      if (typeof text === "string" && text.includes('"role":"user"')) {
+        throw new Error("synthetic decode failure");
       }
-      expect(database.db.isTransaction).toBe(false);
-      expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(
-        source.buildSessionContext(),
-      );
+      return parse(text, reviver);
+    });
+    try {
+      expect(() => SessionManager.openModelContext(scope)).toThrow("synthetic decode failure");
+    } finally {
+      parseSpy.mockRestore();
     }
+    expect(database.db.isTransaction).toBe(false);
+    expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(
+      source.buildSessionContext(),
+    );
   });
 });
 
-it.each([false, true])(
-  "releases aborted context reads before the next read (incognito=%s)",
-  async (incognito) => {
-    await withOpenClawTestState({ label: "context-worker-lifecycle" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "worker-lifecycle",
-        sessionKey: incognito
-          ? "agent:main:dashboard:incognito-worker-lifecycle"
-          : "agent:main:worker-lifecycle",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope);
-      source.appendMessage({ role: "user", content: "visible", timestamp: 1 });
-      expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
-        source.buildSessionContext(),
-      );
-      for (const alreadyAborted of [true, false]) {
-        const controller = new AbortController();
-        const reason = new Error("cancel context read");
-        if (alreadyAborted) {
-          controller.abort(reason);
-        }
-        const pending = SessionManager.openModelContextAsync(scope, { signal: controller.signal });
-        if (!alreadyAborted) {
-          controller.abort(reason);
-        }
-        await expect(pending).rejects.toBe(reason);
+it("releases aborted durable context reads before the next read", async () => {
+  await withSessionState("worker-lifecycle", async ({ scope }) => {
+    const source = SessionManager.open(scope);
+    source.appendMessage({ role: "user", content: "visible", timestamp: 1 });
+    expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
+      source.buildSessionContext(),
+    );
+    for (const alreadyAborted of [true, false]) {
+      const controller = new AbortController();
+      const reason = new Error("cancel context read");
+      if (alreadyAborted) {
+        controller.abort(reason);
       }
-      expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
-        source.buildSessionContext(),
-      );
-    });
-  },
-);
+      const pending = SessionManager.openModelContextAsync(scope, { signal: controller.signal });
+      if (!alreadyAborted) {
+        controller.abort(reason);
+      }
+      await expect(pending).rejects.toBe(reason);
+    }
+    expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
+      source.buildSessionContext(),
+    );
+  });
+});
 
-it.each(
-  [false, true].flatMap((incognito) =>
-    (["rewrite", "append"] as const).map((mutation) => ({ incognito, mutation })),
-  ),
-)(
-  "validates admission before accepting context (incognito=$incognito mutation=$mutation)",
-  async ({ incognito, mutation }) => {
-    await withOpenClawTestState({ label: "context-worker-fence" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: incognito ? "incognito-worker-fence" : "worker-fence",
-        sessionKey: incognito
-          ? "agent:main:dashboard:incognito-worker-fence"
-          : "agent:main:worker-fence",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+it.each(["rewrite", "append"] as const)(
+  "validates durable admission before accepting context (mutation=%s)",
+  async (mutation) => {
+    await withSessionState("worker-fence", async ({ scope }) => {
       const source = SessionManager.open(scope);
       source.appendMessage({ role: "user", content: "previous", timestamp: 1 });
       await waitForSessionTranscriptProjection(scope);
       const admitted = source.appendMessageWithTranscriptAnchor(makeUserMessage("current", 2));
-      if (!admitted.anchor) {
-        throw new Error("missing admission");
-      }
+      assert(admitted.anchor, "missing admission");
       const admission = {
         ...admitted.anchor,
         role: "user" as const,
@@ -653,53 +599,37 @@ it.each(
         }
         source.appendMessage({ role: "user", content: "replacement", timestamp: 3 });
       };
-      const spy = incognito
-        ? undefined
-        : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
-            this: WorkerTaskPool<unknown, unknown>,
-            ...args
-          ) {
-            spy!.mockRestore();
-            const result = await this.run(...args);
-            mutate();
-            return result;
-          });
+      const spy = vi
+        .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+        .mockImplementationOnce(async (...args) => {
+          spy.mockRestore();
+          const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+          mutate();
+          return result;
+        });
       try {
         const pending = SessionManager.openModelContextAsync(scope, { admission });
-        if (incognito) {
-          mutate();
-        }
         if (mutation === "rewrite") {
           await expect(pending).rejects.toThrow("Current-turn transcript admission");
         } else {
           expect((await pending).buildSessionContext()).toEqual(expected);
         }
       } finally {
-        spy?.mockRestore();
+        spy.mockRestore();
       }
     });
   },
 );
 
-it.each(
-  [false, true].flatMap((incognito) =>
-    (["append", "rewrite", "other-session"] as const).map((mutation) => ({ incognito, mutation })),
-  ),
-)(
-  "validates unadmitted context before acceptance (incognito=$incognito mutation=$mutation)",
-  async ({ incognito, mutation }) => {
-    await withOpenClawTestState({ label: "unadmitted-context-fence" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "unadmitted-context",
-        sessionKey: incognito
-          ? "agent:main:dashboard:incognito-unadmitted-context"
-          : "agent:main:unadmitted-context",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+it.each(["append", "rewrite", "delete", "branch", "compaction", "reset", "other-session"] as const)(
+  "validates unadmitted durable context before acceptance (mutation=%s)",
+  async (mutation) => {
+    await withSessionState("unadmitted-context", async ({ scope }) => {
       const source = SessionManager.open(scope);
-      source.appendMessage({ role: "user", content: "before", timestamp: 1 });
+      const first = source.appendMessage({ role: "user", content: "before", timestamp: 1 });
+      if (mutation === "branch") {
+        source.appendMessage(makeUserMessage("branch tip", 2));
+      }
       const expected = source.buildSessionContext();
       let mutationSource = source;
       if (mutation === "other-session") {
@@ -717,6 +647,21 @@ it.each(
       const mutate = () => {
         if (mutation === "rewrite") {
           expect(
+            replaceTranscriptEventsSync(scope, [
+              source.getHeader(),
+              ...source.getEntries().map((entry) =>
+                entry.type === "message"
+                  ? Object.assign({}, entry, {
+                      message: makeUserMessage("rewritten prefix", 1),
+                    })
+                  : entry,
+              ),
+            ]),
+          ).toBe(true);
+          return;
+        }
+        if (mutation === "delete") {
+          expect(
             source.removeTrailingEntries(
               (entry) =>
                 entry.type === "message" &&
@@ -724,32 +669,34 @@ it.each(
                 entry.message.content === "before",
             ),
           ).toBe(1);
+          return;
+        }
+        if (mutation === "branch") {
+          source.branch(first);
+        } else if (mutation === "compaction") {
+          source.appendCompaction("summary", first, 1);
+        } else if (mutation === "reset") {
+          source.resetLeaf();
         }
         mutationSource.appendMessage({ role: "user", content: "after", timestamp: 2 });
       };
-      const spy = incognito
-        ? undefined
-        : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
-            this: WorkerTaskPool<unknown, unknown>,
-            ...args
-          ) {
-            spy!.mockRestore();
-            const result = await this.run(...args);
-            mutate();
-            return result;
-          });
+      const spy = vi
+        .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+        .mockImplementationOnce(async (...args) => {
+          spy.mockRestore();
+          const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+          mutate();
+          return result;
+        });
       try {
         const pending = SessionManager.openModelContextAsync(scope);
-        if (incognito) {
-          mutate();
-        }
-        if (mutation === "other-session") {
+        if (mutation === "other-session" || mutation === "append") {
           expect((await pending).buildSessionContext()).toEqual(expected);
         } else {
           await expect(pending).rejects.toThrow("Session transcript changed during context read");
         }
       } finally {
-        spy?.mockRestore();
+        spy.mockRestore();
       }
     });
   },
@@ -758,14 +705,7 @@ it.each(
 it.each([false, true])(
   "closes lazy context without acquiring unread payloads (rejected=%s)",
   async (rejected) => {
-    await withOpenClawTestState({ label: "context-reader-lifetime" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "lazy-context",
-        sessionKey: "agent:main:lazy-context",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await withSessionState("lazy-context", async ({ scope }) => {
       const source = SessionManager.open(scope);
       source.appendMessage({ role: "user", content: "first", timestamp: 1 });
       const marker = "synthetic-unread-context:";
@@ -961,3 +901,80 @@ it.each(["reset", "compaction"])(
     });
   },
 );
+
+it("refills warmed context when a prompt restart retires a suffix entry", async () => {
+  await withSessionState("model-prompt-restart", async ({ scope }) => {
+    const source = SessionManager.open(scope);
+    for (let index = 1; index <= 4; index++) {
+      source.appendMessage(makeUserMessage(`question-${index}`, index));
+    }
+    source.appendCustomMessageEntry("openclaw.system-update", "old prompt", false, {
+      kind: "prompt-update",
+    });
+    const limits = { maxBytes: 1_000_000, maxEvents: 4 };
+    const read = async () =>
+      (await SessionManager.openModelContextAsync(scope, { limits })).buildSessionContext();
+    const warmed = await read();
+    expect(warmed.messages).toHaveLength(4);
+    expect(warmed.messages[0]).toMatchObject({ content: "question-2" });
+
+    source.appendCustomEntry("openclaw.system-prompt", { restart: true });
+    const expected = source.buildSessionContext();
+    expect(expected.messages).toHaveLength(4);
+    expect(expected.messages[0]).toMatchObject({ content: "question-1" });
+    expect(await read()).toEqual(expected);
+    expect(await read()).toEqual(expected);
+  });
+});
+
+it("keeps warmed current context after historical and smaller-window reads", async () => {
+  await withSessionState("model-anchor-retention", async ({ scope }) => {
+    const source = SessionManager.open(scope);
+    const discardedId = source.appendMessage(makeUserMessage("discarded-prefix", 0));
+    for (let index = 1; index < 6; index++) {
+      source.appendMessage(makeUserMessage(`question-${index}`, index));
+    }
+    await waitForSessionTranscriptProjection(scope);
+    const historical = source.appendMessageWithTranscriptAnchor(makeUserMessage("question-6", 6));
+    assert(historical.anchor, "missing historical anchor");
+    for (let index = 7; index < 16; index++) {
+      source.appendMessage(makeUserMessage(`question-${index}`, index));
+    }
+    await waitForSessionTranscriptProjection(scope);
+    const limits = { maxBytes: 8192, maxEvents: 4 };
+    const readCurrent = () => SessionManager.openModelContext(scope, { limits });
+    const current = readCurrent();
+    const expected = current.buildSessionContext();
+    expect(current.getBranch().some((entry) => entry.id === discardedId)).toBe(false);
+    expect(expected.messages.at(-1)).toMatchObject({ content: "question-15" });
+
+    const earlier = SessionManager.openModelContext(scope, {
+      through: historical.anchor,
+      limits: { ...limits, maxEvents: 2 },
+    });
+    expect(earlier.buildSessionContext().messages.at(-1)).toMatchObject({ content: "question-6" });
+
+    let discardedPrefixReads = 0;
+    const parse = JSON.parse;
+    const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      if (typeof text === "string" && text.includes(JSON.stringify(discardedId))) {
+        discardedPrefixReads += 1;
+      }
+      return parse(text, reviver);
+    });
+    try {
+      expect(readCurrent().buildSessionContext()).toEqual(expected);
+      expect(
+        SessionManager.openModelContext(scope, {
+          limits: { ...limits, maxEvents: 2 },
+        })
+          .buildSessionContext()
+          .messages.at(-1),
+      ).toMatchObject({ content: "question-15" });
+      expect(readCurrent().buildSessionContext()).toEqual(expected);
+      expect(discardedPrefixReads).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

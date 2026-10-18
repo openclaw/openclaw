@@ -11,12 +11,13 @@ export function fromForm(
   if (typeof password !== "string" || password.length === 0) {
     return undefined;
   }
-  const username = formData.get("username");
-  if (auth === "ard-account" && (typeof username !== "string" || username.trim().length === 0)) {
+  const rawUsername = formData.get("username");
+  const username = typeof rawUsername === "string" ? rawUsername.trim() : "";
+  if (auth === "ard-account" && !username) {
     return undefined;
   }
   return {
-    ...(typeof username === "string" && username.trim() ? { username: username.trim() } : {}),
+    ...(username ? { username } : {}),
     password,
   };
 }

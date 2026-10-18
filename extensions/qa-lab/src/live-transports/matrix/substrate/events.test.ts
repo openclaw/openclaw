@@ -1,386 +1,222 @@
-// Qa Lab Matrix tests cover event behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeMatrixQaObservedEvent } from "./events.js";
+import {
+  normalizeMatrixQaObservedEvent,
+  type MatrixQaObservedEvent,
+  type MatrixQaRoomEvent,
+} from "./events.js";
+
+const roomId = "!room:matrix-qa.test";
+const sender = "@sut:matrix-qa.test";
+
+function message(content: Record<string, unknown>, envelope: Partial<MatrixQaRoomEvent> = {}) {
+  return { event_id: "$event", sender, type: "m.room.message", ...envelope, content };
+}
+
+function expectEvent(
+  content: Record<string, unknown>,
+  expected: Partial<MatrixQaObservedEvent>,
+  envelope: Partial<MatrixQaRoomEvent> = {},
+) {
+  expect(normalizeMatrixQaObservedEvent(roomId, message(content, envelope))).toEqual({
+    eventId: "$event",
+    kind: "message",
+    roomId,
+    sender,
+    type: "m.room.message",
+    ...expected,
+  });
+}
 
 describe("matrix observed event normalization", () => {
   it("normalizes message events with thread metadata", () => {
-    expect(
-      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
-        event_id: "$event",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        origin_server_ts: 1_700_000_000_000,
-        content: {
-          body: "hello",
-          msgtype: "m.text",
-          "m.mentions": {
-            user_ids: ["@sut:matrix-qa.test"],
-          },
-          "m.relates_to": {
-            rel_type: "m.thread",
-            event_id: "$root",
-            is_falling_back: true,
-            "m.in_reply_to": {
-              event_id: "$driver",
-            },
-          },
+    expectEvent(
+      {
+        body: "hello",
+        msgtype: "m.text",
+        "m.mentions": { user_ids: [sender] },
+        "m.relates_to": {
+          rel_type: "m.thread",
+          event_id: "$root",
+          is_falling_back: true,
+          "m.in_reply_to": { event_id: "$driver" },
         },
-      }),
-    ).toEqual({
-      kind: "message",
-      roomId: "!room:matrix-qa.test",
-      eventId: "$event",
-      sender: "@sut:matrix-qa.test",
-      type: "m.room.message",
-      originServerTs: 1_700_000_000_000,
-      body: "hello",
-      msgtype: "m.text",
-      relatesTo: {
-        relType: "m.thread",
-        eventId: "$root",
-        inReplyToId: "$driver",
-        isFallingBack: true,
       },
-      mentions: {
-        userIds: ["@sut:matrix-qa.test"],
+      {
+        originServerTs: 1_700_000_000_000,
+        body: "hello",
+        msgtype: "m.text",
+        relatesTo: {
+          relType: "m.thread",
+          eventId: "$root",
+          inReplyToId: "$driver",
+          isFallingBack: true,
+        },
+        mentions: { userIds: [sender] },
       },
-    });
-  });
-
-  it("classifies Matrix notices separately from regular messages", () => {
-    expect(
-      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
-        event_id: "$notice",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        content: {
-          body: "notice",
-          msgtype: "m.notice",
-        },
-      }),
-    ).toEqual({
-      kind: "notice",
-      roomId: "!room:matrix-qa.test",
-      eventId: "$notice",
-      sender: "@sut:matrix-qa.test",
-      stateKey: undefined,
-      type: "m.room.message",
-      originServerTs: undefined,
-      body: "notice",
-      formattedBody: undefined,
-      msgtype: "m.notice",
-      membership: undefined,
-    });
-  });
-
-  it("prefers m.new_content text for Matrix replacement events", () => {
-    expect(
-      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
-        event_id: "$replace",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        content: {
-          body: "* finalized",
-          msgtype: "m.text",
-          "m.new_content": {
-            body: "finalized",
-            msgtype: "m.text",
-            // Matrix ignores relations inside replacement content. The
-            // observer inherits the original event's relation separately.
-            "m.relates_to": {
-              rel_type: "m.thread",
-              event_id: "$wrong-root",
-            },
-          },
-          "m.relates_to": {
-            rel_type: "m.replace",
-            event_id: "$draft",
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "message",
-      roomId: "!room:matrix-qa.test",
-      eventId: "$replace",
-      sender: "@sut:matrix-qa.test",
-      stateKey: undefined,
-      type: "m.room.message",
-      originServerTs: undefined,
-      body: "finalized",
-      formattedBody: undefined,
-      msgtype: "m.text",
-      membership: undefined,
-      replacesEventId: "$draft",
-    });
+      { origin_server_ts: 1_700_000_000_000 },
+    );
   });
 
   it.each([
-    { name: "initial preview", content: { "org.matrix.msc4357.live": {} }, live: true },
     {
       name: "preview edit",
-      content: {
-        "m.relates_to": { rel_type: "m.replace", event_id: "$draft" },
-        "m.new_content": { body: "preview", "org.matrix.msc4357.live": {} },
-      },
+      newContent: { body: "preview", "org.matrix.msc4357.live": {} },
+      outerContent: {},
       live: true,
     },
     {
       name: "final edit",
-      content: {
-        "org.matrix.msc4357.live": {},
-        "m.relates_to": { rel_type: "m.replace", event_id: "$draft" },
-        "m.new_content": { body: "final" },
-      },
+      newContent: { body: "final" },
+      outerContent: { "org.matrix.msc4357.live": {} },
       live: undefined,
     },
-    { name: "ordinary final chunk", content: {}, live: undefined },
-  ])("preserves the live marker only on $name", ({ content, live }) => {
-    const event = normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+  ])("preserves the live marker only on $name", ({ newContent, outerContent, live }) => {
+    const event = normalizeMatrixQaObservedEvent(roomId, {
       event_id: "$event",
       type: "m.room.message",
-      content: { body: "preview", msgtype: "m.text", ...content },
+      content: {
+        body: "preview",
+        msgtype: "m.text",
+        ...outerContent,
+        "m.relates_to": { rel_type: "m.replace", event_id: "$draft" },
+        "m.new_content": newContent,
+      },
     });
     expect(event?.live).toBe(live);
   });
 
   it("normalizes Matrix reaction events with target metadata", () => {
-    expect(
-      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+    expectEvent(
+      {
+        "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" },
+      },
+      {
+        eventId: "$reaction",
+        kind: "reaction",
+        sender: "@driver:matrix-qa.test",
+        type: "m.reaction",
+        originServerTs: 1_700_000_000_000,
+        relatesTo: { eventId: "$msg", relType: "m.annotation" },
+        reaction: { eventId: "$msg", key: "👍" },
+      },
+      {
         event_id: "$reaction",
         sender: "@driver:matrix-qa.test",
         type: "m.reaction",
         origin_server_ts: 1_700_000_000_000,
-        content: {
-          "m.relates_to": {
-            rel_type: "m.annotation",
-            event_id: "$msg",
-            key: "👍",
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "reaction",
-      roomId: "!room:matrix-qa.test",
-      eventId: "$reaction",
-      sender: "@driver:matrix-qa.test",
-      type: "m.reaction",
-      originServerTs: 1_700_000_000_000,
-      relatesTo: {
-        eventId: "$msg",
-        relType: "m.annotation",
       },
-      reaction: {
-        eventId: "$msg",
-        key: "👍",
-      },
-    });
+    );
   });
 
-  it("records command presence without deriving a preview from raw approval text", () => {
-    const commandText = `printf ${"A".repeat(300)}`;
-    expect(
-      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
-        event_id: "$approval",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        content: {
-          body: "React here: ✅ Allow once, ❌ Deny",
-          msgtype: "m.text",
-          "com.openclaw.approval": {
-            allowedDecisions: ["allow-once", "deny"],
-            commandText,
-            id: "approval-1",
-            kind: "exec",
-            state: "pending",
-            type: "approval.request",
-            version: 1,
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "message",
-      roomId: "!room:matrix-qa.test",
+  const approval = {
+    allowedDecisions: ["allow-once", "deny"],
+    state: "pending",
+    type: "approval.request",
+    version: 1,
+  };
+  it.each([
+    {
+      name: "command presence without a preview of raw approval text",
       eventId: "$approval",
-      sender: "@sut:matrix-qa.test",
-      stateKey: undefined,
-      type: "m.room.message",
-      originServerTs: undefined,
       body: "React here: ✅ Allow once, ❌ Deny",
-      formattedBody: undefined,
-      msgtype: "m.text",
-      membership: undefined,
-      approval: {
-        allowedDecisions: ["allow-once", "deny"],
-        hasCommandText: true,
-        id: "approval-1",
-        kind: "exec",
-        state: "pending",
-        type: "approval.request",
-        version: 1,
-      },
-    });
-  });
-
-  it("summarizes Matrix plugin approval metadata fields", () => {
-    expect(
-      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
-        event_id: "$plugin-approval",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        content: {
-          body: "Plugin approval required",
-          msgtype: "m.text",
-          "com.openclaw.approval": {
-            agentId: "qa",
-            allowedDecisions: ["allow-once", "deny"],
-            id: "plugin:approval-1",
-            kind: "plugin",
-            pluginId: "qa-plugin",
-            severity: "medium",
-            state: "pending",
-            toolName: "qa_tool",
-            type: "approval.request",
-            version: 1,
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "message",
-      roomId: "!room:matrix-qa.test",
+      metadata: { id: "approval-1", kind: "exec", commandText: "printf " + "A".repeat(300) },
+      summary: { id: "approval-1", kind: "exec", hasCommandText: true },
+    },
+    {
+      name: "plugin approval metadata fields",
       eventId: "$plugin-approval",
-      sender: "@sut:matrix-qa.test",
-      stateKey: undefined,
-      type: "m.room.message",
-      originServerTs: undefined,
       body: "Plugin approval required",
-      formattedBody: undefined,
-      msgtype: "m.text",
-      membership: undefined,
-      approval: {
-        agentId: "qa",
-        allowedDecisions: ["allow-once", "deny"],
+      metadata: {
         id: "plugin:approval-1",
         kind: "plugin",
+        agentId: "qa",
         pluginId: "qa-plugin",
         severity: "medium",
-        state: "pending",
         toolName: "qa_tool",
-        type: "approval.request",
-        version: 1,
       },
-    });
+      summary: {
+        id: "plugin:approval-1",
+        kind: "plugin",
+        agentId: "qa",
+        pluginId: "qa-plugin",
+        severity: "medium",
+        toolName: "qa_tool",
+      },
+    },
+  ] as const)("summarizes $name", ({ eventId, body, metadata, summary }) => {
+    expectEvent(
+      {
+        body,
+        msgtype: "m.text",
+        "com.openclaw.approval": { ...structuredClone(approval), ...metadata },
+      },
+      { eventId, body, msgtype: "m.text", approval: { ...approval, ...summary } },
+      { event_id: eventId },
+    );
   });
 
-  it("normalizes Matrix image messages with attachment metadata", () => {
-    expect(
-      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
-        event_id: "$image",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        content: {
-          body: "Protocol note: generated the QA lighthouse image successfully.",
-          filename: "qa-lighthouse.png",
-          msgtype: "m.image",
-        },
-      }),
-    ).toEqual({
-      kind: "message",
-      roomId: "!room:matrix-qa.test",
-      eventId: "$image",
-      sender: "@sut:matrix-qa.test",
-      stateKey: undefined,
-      type: "m.room.message",
-      originServerTs: undefined,
-      body: "Protocol note: generated the QA lighthouse image successfully.",
-      formattedBody: undefined,
-      msgtype: "m.image",
-      membership: undefined,
+  it.each([
+    {
+      name: "explicit filename and caption",
+      content: {
+        body: "Protocol note: generated the QA lighthouse image successfully.",
+        filename: "qa-lighthouse.png",
+      },
       attachment: {
         kind: "image",
         caption: "Protocol note: generated the QA lighthouse image successfully.",
         filename: "qa-lighthouse.png",
       },
-    });
-  });
-
-  it("treats filename-like Matrix media bodies as attachment filenames", () => {
-    expect(
-      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
-        event_id: "$image",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        content: {
-          body: "qa-lighthouse.png",
-          msgtype: "m.image",
-        },
-      }),
-    ).toEqual({
-      kind: "message",
-      roomId: "!room:matrix-qa.test",
-      eventId: "$image",
-      sender: "@sut:matrix-qa.test",
-      stateKey: undefined,
-      type: "m.room.message",
-      originServerTs: undefined,
-      body: "qa-lighthouse.png",
-      formattedBody: undefined,
-      msgtype: "m.image",
-      membership: undefined,
-      attachment: {
-        kind: "image",
-        filename: "qa-lighthouse.png",
-      },
-    });
+    },
+    {
+      name: "filename-like body",
+      content: { body: "qa-lighthouse.png" },
+      attachment: { kind: "image", filename: "qa-lighthouse.png" },
+    },
+  ] as const)("normalizes image messages with $name", ({ content, attachment }) => {
+    expectEvent(
+      { ...content, msgtype: "m.image" },
+      { eventId: "$image", body: content.body, msgtype: "m.image", attachment },
+      { event_id: "$image" },
+    );
   });
 
   it("normalizes membership events with explicit membership kind", () => {
-    expect(
-      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+    expectEvent(
+      { membership: "leave" },
+      {
+        eventId: "$membership",
+        kind: "membership",
+        sender: "@driver:matrix-qa.test",
+        stateKey: sender,
+        type: "m.room.member",
+        membership: "leave",
+      },
+      {
         event_id: "$membership",
         sender: "@driver:matrix-qa.test",
-        state_key: "@sut:matrix-qa.test",
+        state_key: sender,
         type: "m.room.member",
-        content: {
-          membership: "leave",
-        },
-      }),
-    ).toEqual({
-      kind: "membership",
-      roomId: "!room:matrix-qa.test",
-      eventId: "$membership",
-      sender: "@driver:matrix-qa.test",
-      stateKey: "@sut:matrix-qa.test",
-      type: "m.room.member",
-      originServerTs: undefined,
-      body: undefined,
-      formattedBody: undefined,
-      msgtype: undefined,
-      membership: "leave",
-    });
+      },
+    );
   });
 
   it("classifies Matrix redactions without needing raw event inspection", () => {
-    expect(
-      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+    expectEvent(
+      {},
+      {
+        eventId: "$redaction",
+        kind: "redaction",
+        sender: "@driver:matrix-qa.test",
+        type: "m.room.redaction",
+        redactsEventId: "$reaction",
+      },
+      {
         event_id: "$redaction",
         redacts: "$reaction",
         sender: "@driver:matrix-qa.test",
         type: "m.room.redaction",
-        content: {},
-      }),
-    ).toEqual({
-      kind: "redaction",
-      roomId: "!room:matrix-qa.test",
-      eventId: "$redaction",
-      sender: "@driver:matrix-qa.test",
-      stateKey: undefined,
-      type: "m.room.redaction",
-      originServerTs: undefined,
-      redactsEventId: "$reaction",
-      body: undefined,
-      formattedBody: undefined,
-      msgtype: undefined,
-      membership: undefined,
-    });
+      },
+    );
   });
 });

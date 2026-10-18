@@ -4,13 +4,6 @@ import Foundation
 import OSLog
 import Security
 
-@_silgen_name("csops")
-private func portGuardianCSOps(
-    _: pid_t,
-    _: UInt32,
-    _: UnsafeMutableRawPointer?,
-    _: Int) -> Int32
-
 actor PortGuardian {
     static let shared = PortGuardian()
     static let portGuardianStorageVersion = 2
@@ -96,14 +89,13 @@ actor PortGuardian {
     }
 
     func removeRecord(_ receipt: Record) {
+        // Callers remove only after the child exited. Even when SQLite needs a retry,
+        // this process must stop protecting the receipt from later sweeps.
+        defer { self.relinquishRecord(receipt) }
         do {
             let recordStore = try self.requireRecordStore()
             _ = try recordStore.deleteIfMatches(receipt)
-            self.relinquishRecord(receipt)
         } catch {
-            // Callers remove only after the child exited. Keep the SQLite row for
-            // retry, but stop protecting its in-memory receipt from later sweeps.
-            self.relinquishRecord(receipt)
             self.logger.error(
                 "failed to remove PortGuardian receipt pid \(receipt.pid, privacy: .public): " +
                     "\(error.localizedDescription, privacy: .public)")
@@ -150,7 +142,8 @@ actor PortGuardian {
         do {
             recordStore = try self.requireRecordStore()
         } catch {
-            self.logger.error("PortGuardian persistence unavailable; orphan reap skipped: " +
+            self.logger.error("orphan tunnel reap skipped; shared PortGuardian ledger " +
+                "\(PortGuardianRecordStore.liveDatabaseURL.path, privacy: .public) unavailable: " +
                 "\(error.localizedDescription, privacy: .public)")
             return
         }
@@ -305,8 +298,8 @@ actor PortGuardian {
         return false
     }
 
-    private static func waitForProcessExit(_ orphan: OrphanedTunnel, timeout: TimeInterval = 1.0) async -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
+    private static func waitForProcessExit(_ orphan: OrphanedTunnel) async -> Bool {
+        let deadline = Date().addingTimeInterval(1)
         while true {
             switch self.classifyTunnelRecord(
                 orphan.record,
@@ -374,7 +367,7 @@ actor PortGuardian {
         }
         #endif
         guard let listener = await self.listeners(on: port).first else { return nil }
-        let path = Self.executablePath(for: listener.pid)
+        let path = ProcessIdentity.executablePath(pid: listener.pid)
         return Descriptor(pid: listener.pid, command: listener.command, executablePath: path)
     }
 
@@ -384,14 +377,12 @@ actor PortGuardian {
         let pid: Int32
         let command: String
         let fullCommand: String
-        let user: String?
     }
 
     struct ReportListener: Identifiable {
         let pid: Int32
         let command: String
         let fullCommand: String
-        let user: String?
         let expected: Bool
 
         var id: Int32 {
@@ -479,16 +470,14 @@ actor PortGuardian {
         var listeners: [Listener] = []
         var currentPid: Int32?
         var currentCmd: String?
-        var currentUser: String?
 
         func flush() {
             if let pid = currentPid, let cmd = currentCmd {
                 let full = Self.readFullCommand(pid: pid) ?? cmd
-                listeners.append(Listener(pid: pid, command: cmd, fullCommand: full, user: currentUser))
+                listeners.append(Listener(pid: pid, command: cmd, fullCommand: full))
             }
             currentPid = nil
             currentCmd = nil
-            currentUser = nil
         }
 
         for line in text.split(separator: "\n") {
@@ -500,8 +489,6 @@ actor PortGuardian {
                 currentPid = Int32(value) ?? 0
             case "c":
                 currentCmd = value
-            case "u":
-                currentUser = value
             default:
                 continue
             }
@@ -516,24 +503,12 @@ actor PortGuardian {
         mode: AppState.ConnectionMode,
         tunnelHealthy: Bool?) -> PortReport
     {
-        let expectedDesc: String
-        let okPredicate: (Listener) -> Bool
-        let expectedCommands = ["node", "openclaw", "tsx", "pnpm", "bun"]
-
-        switch mode {
-        case .remote:
-            expectedDesc = "Remote gateway (SSH tunnel, Docker, or direct)"
-            okPredicate = { _ in true }
-        case .local:
-            expectedDesc = "Gateway websocket (node/tsx)"
-            okPredicate = { listener in
-                let c = listener.command.lowercased()
-                return expectedCommands.contains { c.contains($0) }
-            }
-        case .unconfigured:
-            expectedDesc = "Gateway not configured"
-            okPredicate = { _ in false }
+        let expectedDesc = switch mode {
+        case .remote: "Remote gateway (SSH tunnel, Docker, or direct)"
+        case .local: "Gateway websocket (node/tsx)"
+        case .unconfigured: "Gateway not configured"
         }
+        let expectedCommands = ["node", "openclaw", "tsx", "pnpm", "bun"]
 
         if listeners.isEmpty {
             let text = "Nothing is listening on \(port) (\(expectedDesc))."
@@ -542,12 +517,14 @@ actor PortGuardian {
 
         let tunnelUnhealthy = mode == .remote && tunnelHealthy == false
         let reportListeners = listeners.map { listener in
-            ReportListener(
+            let expected = mode == .remote || mode == .local && expectedCommands.contains {
+                listener.command.lowercased().contains($0)
+            }
+            return ReportListener(
                 pid: listener.pid,
                 command: listener.command,
                 fullCommand: listener.fullCommand,
-                user: listener.user,
-                expected: okPredicate(listener) && !tunnelUnhealthy)
+                expected: expected && !tunnelUnhealthy)
         }
 
         let offenders = reportListeners.filter { !$0.expected }
@@ -565,16 +542,6 @@ actor PortGuardian {
             expected: expectedDesc,
             status: status,
             listeners: reportListeners)
-    }
-
-    private static func executablePath(for pid: Int32) -> String? {
-        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
-        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
-        guard length > 0 else { return nil }
-        // Drop trailing null and decode as UTF-8.
-        let trimmed = buffer.prefix { $0 != 0 }
-        let bytes = trimmed.map { UInt8(bitPattern: $0) }
-        return String(bytes: bytes, encoding: .utf8)
     }
 
     private func probeGatewayHealthIfNeeded(
@@ -599,9 +566,10 @@ actor PortGuardian {
     }
 
     private nonisolated static func openRecordStore() throws -> PortGuardianRecordStore {
-        guard !self.hasLegacyOpenClawAppProcess() else {
+        if let application = self.legacyOpenClawAppProcess() {
             throw PortGuardianStoreError(
-                "Quit older OpenClaw app copies before opening the SQLite PortGuardian ledger")
+                "Quit older OpenClaw app copies (pid \(application.processIdentifier), " +
+                    "\(application.bundleIdentifier ?? "unknown")) before opening the SQLite PortGuardian ledger")
         }
         let legacyURL = PortGuardianRecordStore.liveLegacyRecordURL
         guard FileManager.default.fileExists(atPath: legacyURL.path) else {
@@ -620,9 +588,13 @@ actor PortGuardian {
     }
 
     private nonisolated static func requirePostSpawnCompatibility() throws {
-        guard !self.hasLegacyOpenClawAppProcess(),
-              !FileManager.default.fileExists(atPath: PortGuardianRecordStore.liveLegacyRecordURL.path)
-        else {
+        if let application = self.legacyOpenClawAppProcess() {
+            throw PortGuardianStoreError(
+                "Older OpenClaw app (pid \(application.processIdentifier), " +
+                    "\(application.bundleIdentifier ?? "unknown")) appeared after tunnel preflight; " +
+                    "SSH launch cancelled")
+        }
+        guard !FileManager.default.fileExists(atPath: PortGuardianRecordStore.liveLegacyRecordURL.path) else {
             throw PortGuardianStoreError(
                 "Older OpenClaw storage appeared after tunnel preflight; SSH launch cancelled")
         }
@@ -666,9 +638,9 @@ actor PortGuardian {
 
     /// Old app builds can create the JSON ledger after startup. The signed marker
     /// distinguishes those writers without blocking aligned copies.
-    private nonisolated static func hasLegacyOpenClawAppProcess() -> Bool {
+    private nonisolated static func legacyOpenClawAppProcess() -> NSRunningApplication? {
         let currentPID = ProcessInfo.processInfo.processIdentifier
-        return NSWorkspace.shared.runningApplications.contains { application in
+        return NSWorkspace.shared.runningApplications.first { application in
             guard application.processIdentifier != currentPID else { return false }
             return self.usesLegacyPortGuardianStorage(
                 bundleIdentifier: application.bundleIdentifier,
@@ -697,21 +669,13 @@ actor PortGuardian {
                   &information) == errSecSuccess,
               SecCodeCheckValidity(code, SecCSFlags(), nil) == errSecSuccess,
               let information,
-              let runningHash = self.runningCodeDirectoryHash(pid: pid),
+              let runningHash = ProcessIdentity.codeDirectoryHash(pid: pid),
               let signedHash = (information as NSDictionary)[kSecCodeInfoUnique] as? Data,
               self.codeDirectoryHashesMatch(running: runningHash, signed: signedHash),
               let securedInfo = (information as NSDictionary)[kSecCodeInfoPList] as? NSDictionary,
               let version = securedInfo["OpenClawPortGuardianStorageVersion"] as? NSNumber
         else { return nil }
         return version.intValue
-    }
-
-    private nonisolated static func runningCodeDirectoryHash(pid: pid_t) -> Data? {
-        var bytes = [UInt8](repeating: 0, count: 20)
-        let result = bytes.withUnsafeMutableBytes {
-            portGuardianCSOps(pid, 5, $0.baseAddress, $0.count)
-        }
-        return result == 0 ? Data(bytes) : nil
     }
 
     nonisolated static func codeDirectoryHashesMatch(running: Data?, signed: Data?) -> Bool {
@@ -733,11 +697,7 @@ actor PortGuardian {
 #if DEBUG
 extension PortGuardian {
     func setTestingDescriptor(_ descriptor: Descriptor?, forPort port: Int) {
-        if let descriptor {
-            self.testingDescriptors[port] = descriptor
-        } else {
-            self.testingDescriptors.removeValue(forKey: port)
-        }
+        self.testingDescriptors[port] = descriptor
     }
 
     static func _testTunnelProcessInfo(pid: Int32) -> TunnelProcessInfo? {
@@ -747,22 +707,20 @@ extension PortGuardian {
     static func _testParseListeners(_ text: String) -> [(
         pid: Int32,
         command: String,
-        fullCommand: String,
-        user: String?)]
+        fullCommand: String)]
     {
-        self.parseListeners(from: text).map { ($0.pid, $0.command, $0.fullCommand, $0.user) }
+        self.parseListeners(from: text).map { ($0.pid, $0.command, $0.fullCommand) }
     }
 
     static func _testBuildReport(
         port: Int,
         mode: AppState.ConnectionMode,
-        listeners: [(pid: Int32, command: String, fullCommand: String, user: String?)]) -> PortReport
+        listeners: [(pid: Int32, command: String, fullCommand: String)]) -> PortReport
     {
         let mapped = listeners.map { Listener(
             pid: $0.pid,
             command: $0.command,
-            fullCommand: $0.fullCommand,
-            user: $0.user) }
+            fullCommand: $0.fullCommand) }
         return Self.buildReport(port: port, listeners: mapped, mode: mode, tunnelHealthy: nil)
     }
 }

@@ -4,7 +4,10 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasExactKeys } from "../../chrome-extension/modules/strict-json.js";
 import { readPrivateNativeHostFile } from "./extension-native-host-file.js";
-import { BROWSER_NATIVE_HOST_NAME } from "./extension-native-host.constants.js";
+import {
+  BROWSER_NATIVE_HOST_NAME,
+  NATIVE_HOST_MANIFEST_KEYS,
+} from "./extension-native-host.constants.js";
 import {
   type BrowserNativeBootstrapResponse,
   type BrowserNativeRelayEnsureStatus,
@@ -80,7 +83,7 @@ async function validateNativeManifest(params: {
   }
   const expectedOrigins = validateExpectedOrigins(params.expectedOrigins);
   if (
-    !hasExactKeys(manifest, ["name", "description", "path", "type", "allowed_origins"]) ||
+    !hasExactKeys(manifest, NATIVE_HOST_MANIFEST_KEYS) ||
     manifest.name !== BROWSER_NATIVE_HOST_NAME ||
     manifest.type !== "stdio" ||
     (process.platform === "win32"
@@ -143,15 +146,11 @@ export async function runBrowserNativeHost(params: {
         params.write(encodeBrowserNativeResponse(response));
         return response;
       }
-      if (decoded.request.op === "ensure_relay") {
-        try {
+      try {
+        if (decoded.request.op === "ensure_relay") {
           const relay = await params.ensureRelay(decoded.request.relayPort);
           response = { v: 1, ok: true, nonce: decoded.request.nonce, relay };
-        } catch {
-          response = { v: 1, ok: false, code: "relay_unavailable" };
-        }
-      } else {
-        try {
+        } else {
           const pairing = await params.buildPairing(boundProfile);
           response =
             pairing.topology === "direct-remote"
@@ -162,16 +161,18 @@ export async function runBrowserNativeHost(params: {
                   nonce: decoded.request.nonce,
                   pairingString: pairing.pairingString,
                 };
-        } catch (error) {
-          response = {
-            v: 1,
-            ok: false,
-            code:
-              error instanceof Error && error.message.includes("--gateway-url")
+        }
+      } catch (error) {
+        response = {
+          v: 1,
+          ok: false,
+          code:
+            decoded.request.op === "ensure_relay"
+              ? "relay_unavailable"
+              : error instanceof Error && error.message.includes("--gateway-url")
                 ? "manual_required"
                 : "pairing_unavailable",
-          };
-        }
+        };
       }
     }
   } catch {

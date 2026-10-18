@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import path from "node:path";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
@@ -45,7 +44,21 @@ export function registerStatusTimeoutTests(params: {
             return {
               pid: 0,
               output: [null, "", ""],
-              stdout: expired ? "" : JSON.stringify({ state: 4, lastRunResult: 0 }),
+              stdout: expired
+                ? ""
+                : JSON.stringify({
+                    taskPath: "\\OpenClaw Gateway",
+                    state: 4,
+                    lastRunResult: 0,
+                    actions: [
+                      {
+                        type: 0,
+                        path: "C:\\Fixture\\openclaw.exe",
+                        arguments: "gateway",
+                        workingDirectory: "",
+                      },
+                    ],
+                  }),
               stderr: "",
               status: expired ? null : 0,
               signal: null,
@@ -59,7 +72,6 @@ export function registerStatusTimeoutTests(params: {
             {
               ...env,
               OPENCLAW_STATE_DIR: stateDir,
-              OPENCLAW_TASK_SCRIPT: path.join(stateDir, "missing.cmd"),
             },
             options,
           ),
@@ -83,18 +95,17 @@ export function registerStatusTimeoutTests(params: {
               inspectionFailure: {
                 code: "service-runtime-inspection-failed",
                 timeoutMs: 10_000,
-                detail: "Scheduled Task probe timed out after 10000 ms (ETIMEDOUT).",
+                detail: "Scheduled Task check timed out after 10000 ms (ETIMEDOUT).",
               },
             });
           } else {
-            expect(status.service.runtime).toMatchObject({ status: "running", state: "Running" });
+            expect(status.service.runtime).toMatchObject({ status: "unknown", state: "Running" });
             expect(status.service.runtime?.inspectionFailure).toBeUndefined();
           }
-          expect(nativeSpawn).toHaveBeenCalledExactlyOnceWith(
-            expect.any(String),
-            expect.any(Array),
-            expect.objectContaining({ timeout: timeout === undefined ? 60_000 : Number(timeout) }),
-          );
+          expect(nativeSpawn).toHaveBeenCalled();
+          for (const call of nativeSpawn.mock.calls) {
+            expect(call[2]?.timeout).toBe(timeout === undefined ? 60_000 : Number(timeout));
+          }
         } finally {
           nativeSpawn.mockRestore();
         }

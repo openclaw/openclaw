@@ -149,42 +149,6 @@ describe("streamProxy", () => {
     vi.unstubAllGlobals();
   });
 
-  it("reconstructs a text signature from text_start before streamed deltas", async () => {
-    const contentSignature = JSON.stringify({
-      v: 1,
-      id: "item-commentary",
-      phase: "commentary",
-    });
-    const proxyEvents = [
-      { type: "text_start", contentIndex: 0, contentSignature },
-      { type: "text_delta", contentIndex: 0, delta: "Working..." },
-      { type: "text_end", contentIndex: 0 },
-      { type: "done", reason: "stop", usage },
-    ];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        responseFromText(proxyEvents.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")),
-      ),
-    );
-
-    const stream = streamProxy(model, context, proxyOptions);
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
-
-    expect(events.map((event) => event.type)).toEqual([
-      "text_start",
-      "text_delta",
-      "text_end",
-      "done",
-    ]);
-    await expect(stream.result()).resolves.toMatchObject({
-      content: [{ type: "text", text: "Working...", textSignature: contentSignature }],
-    });
-  });
-
   it("accepts data lines without a space after the colon", async () => {
     // The SSE spec makes the space optional; proxies emitting `data:{...}`
     // must not have their events silently dropped.
@@ -222,7 +186,7 @@ describe("streamProxy", () => {
       "done",
     ]);
     await expect(stream.result()).resolves.toMatchObject({
-      content: [{ type: "text", text: "Working..." }],
+      content: [{ type: "text", text: "Working...", textSignature: "sig" }],
     });
   });
 
@@ -578,24 +542,6 @@ describe("streamProxy", () => {
       stopReason: "stop",
       usage,
     });
-  });
-
-  it("returns an error result when the SSE read idles", async () => {
-    vi.useFakeTimers();
-    const cancel = vi.fn(() => undefined);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => pendingReaderResponse({ chunks: [], onCancel: cancel })),
-    );
-
-    const stream = streamProxy(model, context, proxyOptions);
-    await vi.advanceTimersByTimeAsync(120_000);
-
-    expect(await settledResult(stream)).toMatchObject({
-      stopReason: "error",
-      errorMessage: "Proxy SSE stream stalled: no data received for 120000ms",
-    });
-    expect(cancel).toHaveBeenCalledWith(expect.any(Error));
   });
 
   it("honors a longer configured SSE read idle timeout", async () => {

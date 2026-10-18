@@ -4,11 +4,13 @@
  *
  * Active runs stay in chatAbortControllers. Queued waits must NOT look like
  * active runs (projection, timeout ownership, terminal dedupe), but they must
- * remain abortable by authorized requesters after chat.send terminalizes.
+ * remain abortable by authorized requesters until their input is consumed.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { hasFollowupSteeringReservation } from "../auto-reply/reply/queue/state.js";
+import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import {
   resolveChatAbortDiagnosticReason,
   type ChatAbortDiagnosticReason,
@@ -45,6 +47,19 @@ export function isQueuedChatTurnForSession(
     queued.agentId === scope.agentId &&
     queued.abortable !== false &&
     !queued.controller.signal.aborted,
+  );
+}
+
+/** Project follow-up placement without changing parked steering cancellation ownership. */
+export function isQueuedFollowupChatTurnForSession(
+  turns: QueuedChatTurnMap | undefined,
+  runId: string,
+  scope: Pick<QueuedChatTurnEntry, "sessionId" | "sessionKey" | "agentId">,
+): boolean {
+  const entry = turns?.get(runId);
+  return (
+    isQueuedChatTurnForSession(turns, runId, scope) &&
+    Boolean(entry && !hasFollowupSteeringReservation(entry.sessionKey, entry.controller.signal))
   );
 }
 
@@ -89,7 +104,9 @@ function deleteQueuedChatTurnEntry(
     return false;
   }
   detachQueuedChatTurnAbortListener(entry);
-  return chatQueuedTurns.delete(runId);
+  chatQueuedTurns.delete(runId);
+  notifyGatewayWorkMetricsChanged();
+  return true;
 }
 
 export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): boolean {
@@ -132,6 +149,7 @@ export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): bo
     }
   };
   params.controller.signal.addEventListener("abort", entry.abortListener, { once: true });
+  notifyGatewayWorkMetricsChanged();
   return true;
 }
 
@@ -164,6 +182,9 @@ export function retireQueuedChatTurnCancellation(
   }
   entry.abortable = false;
   detachQueuedChatTurnAbortListener(entry);
+  // Retired collect entries remain counted until abort or aggregate completion.
+  entry.abortListener = notifyGatewayWorkMetricsChanged;
+  controller.signal.addEventListener("abort", entry.abortListener, { once: true });
   return true;
 }
 
@@ -259,10 +280,7 @@ export function listQueuedChatTurnsForSession(params: {
   return matches;
 }
 
-/**
- * Abort all provided queued turns (already authorized by caller).
- * Order: abort signals first, then remove from map, so drain cannot promote mid-loop.
- */
+/** The caller authorizes each entry; its abort listeners run before its map removal. */
 export function abortQueuedChatTurns(
   chatQueuedTurns: QueuedChatTurnMap,
   matches: readonly QueuedChatTurnMatch[],

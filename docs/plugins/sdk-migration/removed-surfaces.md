@@ -46,6 +46,73 @@ subpaths, including older published `@openclaw/discord` packages. Upgrade affect
 plugins before upgrading the host. Not every export has a path-only replacement;
 see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
 
+### Retroactively recorded shipped exports
+
+The following exports shipped in `v2026.9.8` and were removed without a
+compatibility window. Their removals were recorded retroactively on October 7,
+2026 when the shipped-surface guard was introduced; the exports remain removed.
+The registry's `removeAfter` is the UTC day before the removing commit landed,
+not a compatibility window that was offered to plugin authors.
+
+| Removed export (`openclaw/plugin-sdk/` prefix)                 | Landed (UTC) | `removeAfter` | Replacement                                                                                           |
+| -------------------------------------------------------------- | ------------ | ------------- | ----------------------------------------------------------------------------------------------------- |
+| `allow-from.mapBasicAllowlistResolutionEntries`                | 2026-10-05   | 2026-10-04    | None; project `BasicAllowlistResolutionEntry` fields in the consuming plugin.                         |
+| `computer-use.compileComputerUseValidator`                     | 2026-10-05   | 2026-10-04    | `Compile(schema).Check` from `typebox/compile`, using the exported Computer Use schemas.              |
+| `extension-shared.runStoppablePassiveMonitor`                  | 2026-10-05   | 2026-10-04    | `channel-outbound.runPassiveAccountLifecycle` with `stop: (monitor) => monitor.stop()`.               |
+| `gateway-runtime.resolveAdvertisedLanHost`                     | 2026-10-05   | 2026-10-04    | None; advertised LAN host discovery is host-owned.                                                    |
+| `json-store.readJsonFileWithFallback`                          | 2026-10-05   | 2026-10-04    | None; own JSON artifact parsing, fallback, and file-existence handling in the plugin.                 |
+| `provider-auth.normalizeSecretInputModeInput`                  | 2026-10-05   | 2026-10-04    | None; validate plugin-owned input as the exported `SecretInputMode` values `plaintext` or `ref`.      |
+| `persistent-dedupe.PersistentDedupeLegacyJsonMigrationOptions` | 2026-10-05   | 2026-10-04    | None; the legacy JSON migration was retired.                                                          |
+| `persistent-dedupe.PersistentDedupeLegacyJsonMigrationResult`  | 2026-10-05   | 2026-10-04    | None; the legacy JSON migration was retired.                                                          |
+| `persistent-dedupe.listPersistentDedupeLegacyJsonFileEntries`  | 2026-10-05   | 2026-10-04    | None; the legacy JSON migration was retired.                                                          |
+| `persistent-dedupe.migratePersistentDedupeLegacyJsonFile`      | 2026-10-05   | 2026-10-04    | None; the legacy JSON migration was retired. Runtime dedupe continues through the SQLite-backed APIs. |
+| `provider-auth.CachedCopilotToken`                             | 2026-10-02   | 2026-10-01    | Provider-local GitHub Copilot auth APIs; none in the public SDK.                                      |
+| `provider-auth.DEFAULT_COPILOT_API_BASE_URL`                   | 2026-10-02   | 2026-10-01    | Provider-local GitHub Copilot auth APIs; none in the public SDK.                                      |
+| `provider-auth.deriveCopilotApiBaseUrlFromToken`               | 2026-10-02   | 2026-10-01    | Provider-local GitHub Copilot auth APIs; none in the public SDK.                                      |
+| `provider-auth.resolveCopilotApiToken`                         | 2026-10-02   | 2026-10-01    | Provider-local GitHub Copilot auth APIs; none in the public SDK.                                      |
+
+The first six exports were removed in
+[`2fec39f57319be5b6e0b20b5305665ed1ff5e685`](https://github.com/openclaw/openclaw/commit/2fec39f57319be5b6e0b20b5305665ed1ff5e685).
+The four legacy JSON migration exports were removed in
+[`bd64d93ff1ae704d13813f6580c4809ba0e76606`](https://github.com/openclaw/openclaw/commit/bd64d93ff1ae704d13813f6580c4809ba0e76606).
+The four Copilot exports and their earlier deprecation entries were removed in
+[`f2de06b38de710854aacd19218327358445816c8`](https://github.com/openclaw/openclaw/commit/f2de06b38de710854aacd19218327358445816c8);
+third-party plugins must own their provider-specific token exchange and caching.
+
+### Reply silence parsing
+
+`isSilentReplyText` and `isSilentReplyPayloadText` were removed from
+`openclaw/plugin-sdk/reply-chunking`. The exact whole-reply classifier remains
+available from `openclaw/plugin-sdk/reply-runtime` for raw producer input.
+Delivery plugins must forward prepared text without reclassifying it: literal
+`NO_REPLY` can be a visible answer.
+
+`SILENT_REPLY_TOKEN` was also removed from `openclaw/plugin-sdk/reply-chunking`.
+Import it from its existing `openclaw/plugin-sdk/reply-runtime` export instead:
+
+```ts
+import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
+```
+
+Harness producers use `prepareAgentRunTerminalReply` from
+`openclaw/plugin-sdk/agent-harness-runtime` once on the raw final text, then
+render the returned text and publish the matching terminal fact. Deliver the full
+returned text rather than the bounded `terminalReply.text` snapshot. An exact uppercase
+`NO_REPLY`, ignoring surrounding whitespace, requests silence; punctuation,
+quotes, JSON, and prose do not. A literal leading `NO_REPLY\n` removes one line
+without reclassifying the suffix. Otherwise, a standalone `NO_REPLY` on the last
+non-empty line is removed and the preceding answer is delivered; whitespace around
+that final line is allowed. Inline and mid-text mentions remain visible.
+See [Silent replies](/concepts/messages#silent-replies).
+
+### Tool argument redaction
+
+`sanitizeToolArgs` was removed from `openclaw/plugin-sdk/agent-harness-runtime`
+on October 11, 2026, as part of the maintainer-approved removal of automatic
+tool argument and result masking. Remove its import and pass arguments unchanged.
+There is no replacement or compatibility masking path. Logging and diagnostic
+redaction helpers remain available.
+
 ### Process-global API-provider publication
 
 `registerApiProvider(...)` and `unregisterApiProviders(...)` were removed from
@@ -74,6 +141,25 @@ api.on("gateway_stop", async (event, ctx) => {
   await stopPluginService(ctx);
 });
 ```
+
+### Skill Workshop proposal hooks
+
+The `skill_proposal_evaluate` and `skill_proposal_changed` hooks were removed
+together with Skill Workshop proposals. Workshop now applies each change
+immediately and keeps a restorable version, so there is no pending draft to
+evaluate and no proposal lifecycle to observe. The hook runner methods
+`runSkillProposalEvaluate` and `runSkillProposalChanged` were removed, and
+`openclaw/plugin-sdk/plugin-entry` no longer exports
+`PluginHookSkillProposalEvaluateEvent`, `PluginHookSkillProposalEvaluateResult`,
+`PluginHookSkillProposalEvaluationOutcome`, `PluginHookSkillProposalChangedEvent`,
+`PluginHookSkillProposalKind`, `PluginHookSkillEvaluationFinding`,
+`PluginHookSkillBundleFile`, or `PluginHookSkillBundleSnapshot`. The optional
+`proposal` field on `PluginHookSkillChangedEvent` was removed too.
+
+To observe committed Workshop skill writes, register `skill_changed` and filter
+on `source: "workshop"`. There is no replacement for pre-apply evaluation.
+Registering a removed hook name logs an `unknown typed hook` warning and the
+handler never runs.
 
 ### Private testing barrel
 
@@ -230,9 +316,9 @@ timeline for current status.
     `resolveDefaultThinkingLevel(ctx)`.
 
     **New**: a single `resolveThinkingProfile(ctx)` that returns a
-    `ProviderThinkingProfile` with the canonical `id`, optional `label`, and a
-    ranked level list. OpenClaw downgrades stale stored values by profile rank
-    automatically.
+    `ProviderThinkingProfile` with the standard `id`, optional `label`, and a
+    ranked level list. OpenClaw clamps unsupported requests by profile rank
+    during execution, preserving the stored preference across model switches.
 
     The context includes `provider`, `modelId`, optional merged `reasoning`,
     and optional merged model `compat` facts. Provider plugins can use those
@@ -309,7 +395,7 @@ timeline for current status.
     `target: { kind: "chat" | "channel" | "room" | "conversation", id }`;
     the old parallel `chatId`, `channelId`, `roomId`, and `conversationId`
     result fields are no longer accepted. The raw result type remains available
-    until the next plugin-SDK major release.
+    until its separately announced ordinary stable removal release.
 
   </Accordion>
 
@@ -335,7 +421,7 @@ timeline for current status.
 
     | Migrating surface | Replacement |
     | ----------------- | ----------- |
-    | Removed `loadSessionStore(...)` and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `getSessionEntry(...)` for one scoped row or `listSessionEntries(...)` for scoped iteration from `openclaw/plugin-sdk/session-store-runtime`. |
+    | Removed `loadSessionStore(...)` and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `await getSessionEntryAsync(...)` for one scoped row or `await listSessionEntriesAsync(...)` for scoped metadata iteration from `openclaw/plugin-sdk/session-store-runtime`. |
     | Removed `updateSessionStore(...)`, package-root `saveSessionStore(...)`, and SDK file-store writes | `patchSessionEntry(...)`, `upsertSessionEntry(...)`, and `deleteSessionEntry(...)` from `openclaw/plugin-sdk/session-store-runtime`; mutate only the intended rows instead of replacing a detached whole-store snapshot. |
     | Removed `LoadSessionStoreOptions` and `UpdateSessionStoreOptions` | Parameters accepted by the scoped row APIs; the whole-store cache and callback options no longer apply. |
     | Removed `resolveSessionFilePath(...)` | Session identity (`agentId`, `sessionKey`, and `sessionId`) with `openclaw/plugin-sdk/session-transcript-runtime`, or Gateway methods that operate on the current session. |
@@ -419,7 +505,7 @@ timeline for current status.
   </Accordion>
 
   <Accordion title="OpenClawSchemaType alias -> OpenClawConfig">
-    The `OpenClawSchemaType` root-SDK alias was removed. Use the canonical
+    The `OpenClawSchemaType` root-SDK alias was removed. Use the primary
     `OpenClawConfig` name.
 
     ```typescript

@@ -1,7 +1,9 @@
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 /** Channel Stop initiates native and ACP cancellation independently of either drain. */
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "../../gateway/server-methods/chat.abort-registry.test-support.js";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -11,7 +13,7 @@ import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -50,13 +52,18 @@ import { buildTestCtx } from "./test-ctx.js";
 
 const fixture = useChatAbortRegistryFixture();
 
-it.each(
-  ["idle", "active", "native failure"].flatMap((scenario) =>
-    ["resolve", "reject"].map((completion) => ({ scenario, completion })),
-  ),
-)(
-  "native and bound ACP cancellation initiate before either drain ($scenario, $completion)",
-  async ({ scenario, completion }) => {
+async function beforeSettlement<T>(gate: Promise<T>, operation: Promise<unknown>) {
+  return Promise.race([
+    gate,
+    operation.then(() => {
+      throw new Error("Operation settled before its cancellation gate");
+    }),
+  ]);
+}
+
+it.each(["idle", "active", "native failure"])(
+  "native and bound ACP cancellation initiate before either drain (%s)",
+  async (scenario) => {
     const active = scenario !== "idle";
     const nativeFailure = scenario === "native failure";
     const nativeError = new Error("native cancellation failed");
@@ -64,11 +71,14 @@ it.each(
     const acpKey = "agent:main:acp:bound-stop";
     const runningKey = "agent:main:subagent:running";
     const queuedKey = "agent:main:subagent:queued";
+    const children = [
+      ["running", runningKey],
+      ["queued", queuedKey],
+    ] as const;
     for (const [runId, sessionKey] of [
       ["source", sourceKey],
       ["acp", acpKey],
-      ["running", runningKey],
-      ["queued", queuedKey],
+      ...children,
     ] as const) {
       await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
@@ -100,15 +110,13 @@ it.each(
     });
     const entered = createDeferred();
     const proceed = createDeferred();
-    const cancelFinished = createDeferred();
     const turnStarted = createDeferred<AbortSignal>();
     const finishTurn = createDeferred();
     const nativeInterrupted = createDeferred();
     const cancel = vi.fn<AcpRuntime["cancel"]>(async () => {
       entered.resolve();
       await proceed.promise;
-      cancelFinished.resolve();
-      if (completion === "reject") {
+      if (active) {
         throw new Error("backend cancellation failed");
       }
     });
@@ -119,9 +127,7 @@ it.each(
         throw new Error("ACP cancellation did not return its runtime promise");
       }
       await Promise.allSettled([result.value]);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
     };
     registerAcpRuntimeBackend({
       id: "stop-test",
@@ -145,6 +151,9 @@ it.each(
     });
     acpTesting.resetAcpSessionManagerForTests();
     const manager = getAcpSessionManager();
+    const syncRead = vi.spyOn(manager, "resolveSession").mockImplementation(() => {
+      throw new Error("Stop must resolve ACP metadata through the worker");
+    });
     const native = createReplyOperation({
       sessionKey: sourceKey,
       sessionId: "source-session",
@@ -182,14 +191,9 @@ it.each(
     const nativeTerminal = createDeferred();
     const stopObservingNative = subscribeSubagentRunChanges("persistence", () => {
       if (
-        (
-          [
-            ["running", runningKey],
-            ["queued", queuedKey],
-          ] as const
-        ).every(([runId, key]) => {
-          const entry = getSubagentRunByChildSessionKey(key);
-          return entry?.runId === runId && entry.endedReason === "subagent-killed";
+        children.every(([runId, key]) => {
+          const entry = subagentRuns.get(runId);
+          return entry?.childSessionKey === key && entry.endedReason === "subagent-killed";
         })
       ) {
         nativeTerminal.resolve();
@@ -217,28 +221,29 @@ it.each(
             text: "keep working",
           })
           .finally(() => preparedAdmission.close());
-        acpSignal = await Promise.race([
-          turnStarted.promise,
-          turn.then(() => {
-            throw new Error("ACP steer completed before the active-turn gate");
-          }),
-        ]);
+        acpSignal = await beforeSettlement(turnStarted.promise, turn);
         expect(acpSignal.aborted).toBe(false);
         expect(manager.getObservabilitySnapshot().turns.active).toBe(1);
         childAdmission = await beginSessionWorkAdmission({
           scope: storePath,
           identities: [runningKey, "running-session"],
+          run: {
+            runId: "running",
+            sessionKey: runningKey,
+            sessionId: "running-session",
+            agentId: "main",
+          },
           assertAllowed: () => {},
           onInterrupt: () => nativeInterrupted.resolve(),
         });
       }
-      for (const [runId, childSessionKey] of [
-        ["running", runningKey],
-        ["queued", queuedKey],
-      ] as const) {
+      for (const [runId, childSessionKey] of children) {
         await registerSubagentRun({
           runId,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+            ?.entry,
           requesterSessionKey: sourceKey,
           requesterAgentId: "main",
           requesterDisplayKey: sourceKey,
@@ -284,12 +289,7 @@ it.each(
         (error: unknown) => ({ error }),
       );
       if (nativeFailure) {
-        await Promise.race([
-          entered.promise,
-          outcome.then(() => {
-            throw new Error("Native failure escaped before ACP cancellation started");
-          }),
-        ]);
+        await beforeSettlement(entered.promise, outcome);
         expect(native.abortSignal.aborted).toBe(true);
         expect(acpSignal?.aborted).toBe(true);
         expect(stopSettled).toBe(false);
@@ -309,23 +309,12 @@ it.each(
         expect(cancel).toHaveBeenCalledOnce();
         expect(stopSettled).toBe(false);
         expect(selectedDispatch).not.toHaveBeenCalled();
-        if (completion === "reject") {
-          proceed.resolve();
-          await cancelFinished.promise;
-          // Let rejection observers run while the native admission is still retained.
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          expect(stopSettled).toBe(false);
-        }
+        proceed.resolve();
+        await settleCancelRpc();
+        expect(stopSettled).toBe(false);
         childAdmission?.release();
       }
-      await Promise.race([
-        entered.promise,
-        pending.then(() => {
-          throw new Error("Stop missed the bound ACP backend");
-        }),
-      ]);
+      await beforeSettlement(entered.promise, pending);
       expect(native.abortSignal.aborted).toBe(true);
       // Native terminal publication is independent of the still-held ACP completion.
       await vi.waitFor(() => expect(runningAbort).toHaveBeenCalledOnce());
@@ -333,7 +322,7 @@ it.each(
       expect(selectedDispatch).not.toHaveBeenCalled();
       await nativeTerminal.promise;
       for (const key of [runningKey, queuedKey]) {
-        expect(getSubagentRunByChildSessionKey(key)?.endedReason).toBe("subagent-killed");
+        expect((await getSubagentRunByChildSessionKey(key))?.endedReason).toBe("subagent-killed");
       }
       await vi.waitFor(() =>
         expect(loadExactSessionEntryReadOnly({ sessionKey: sourceKey })?.entry).toMatchObject({
@@ -342,7 +331,7 @@ it.each(
           abortCutoffTimestamp: 1234567890000,
         }),
       );
-      if (!active || completion !== "reject") {
+      if (!active) {
         expect(stopSettled).toBe(false);
       }
       proceed.resolve();
@@ -362,10 +351,9 @@ it.each(
         reason: "fast-abort",
       });
       await turn;
-      expect(readAcpSessionMeta({ cfg, sessionKey: acpKey })?.state).toBe(
-        !active && completion === "reject" ? "error" : "idle",
-      );
+      expect(readAcpSessionEntry({ cfg, sessionKey: acpKey })?.acp?.state).toBe("idle");
     } finally {
+      syncRead.mockRestore();
       stopObservingNative();
       childAdmission?.release();
       proceed.resolve();

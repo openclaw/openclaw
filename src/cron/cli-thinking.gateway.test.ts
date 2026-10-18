@@ -84,7 +84,20 @@ async function withCronGateway(
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ label: "cron-thinking", layout: "home" }, async (state) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } }, cron: { enabled: false } };
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} }, defaults: { model: "openai/gpt-4.1" } },
+      cron: { enabled: false },
+    };
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:thinking-fixture": {
+          type: "api_key",
+          provider: "openai",
+          key: "synthetic-thinking-inference-key",
+        },
+      },
+    });
     await state.writeConfig(cfg);
     const storePath = state.statePath("cron", "jobs.json");
     const execute = vi.fn((): never => {
@@ -153,27 +166,6 @@ afterEach(() => {
 });
 
 describe("cron thinking mutation readback", () => {
-  it("persists a valid thinking override through registered add", async () => {
-    await withCronGateway(async ({ readJobs }) => {
-      expect(await readJobs()).toEqual([]);
-      const result = await runCli(agentAddArgs("valid-thinking", "high"));
-      const jobs = await readJobs();
-      console.log(
-        "cron-thinking-readback",
-        JSON.stringify({
-          operation: "valid-add",
-          exitCode: result.exitCode,
-          errors: result.errors,
-          methods: result.methods,
-          rows: jobs.map(({ name, payload }) => ({ name, payload })),
-        }),
-      );
-      expect(result.exitCode, result.errors.join("\n")).toBe(0);
-      expect(jobs).toHaveLength(1);
-      expect(jobs[0]?.payload).toMatchObject({ kind: "agentTurn", thinking: "high" });
-    });
-  });
-
   it.each(["add", "edit", "edit after lookup"])(
     "rejects invalid thinking before %s can change stored jobs",
     async (operation) => {
@@ -195,17 +187,6 @@ describe("cron thinking mutation readback", () => {
               ],
         );
         const after = await readJobs();
-        console.log(
-          "cron-thinking-readback",
-          JSON.stringify({
-            operation,
-            exitCode: result.exitCode,
-            errors: result.errors,
-            methods: result.methods,
-            before: before.map(({ name, payload }) => ({ name, payload })),
-            after: after.map(({ name, payload }) => ({ name, payload })),
-          }),
-        );
         expect(result.exitCode).toBe(1);
         expect(result.errors).toContainEqual(expect.stringContaining("Invalid --thinking"));
         expect(result.methods).not.toContain(operation === "add" ? "cron.add" : "cron.update");
@@ -235,7 +216,10 @@ describe("cron thinking mutation readback", () => {
         " extra_high ",
       ];
       expect((await runCli(agentAddArgs("edit-target", "high"))).exitCode).toBe(0);
-      const target = expectDefined((await readJobs())[0], "edit target");
+      const seeded = await readJobs();
+      expect(seeded).toHaveLength(1);
+      const target = expectDefined(seeded[0], "edit target");
+      expect(target.payload).toMatchObject({ kind: "agentTurn", thinking: "high" });
       for (const [index, thinking] of legal.entries()) {
         expect((await runCli(agentAddArgs(`legal-${index}`, thinking))).exitCode).toBe(0);
         expect((await runCli(["edit", target.id, "--thinking", thinking])).exitCode).toBe(0);

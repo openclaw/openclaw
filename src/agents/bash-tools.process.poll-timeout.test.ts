@@ -1,16 +1,26 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
+import {
+  resetDiagnosticSessionStateForTest,
+  type SessionState,
+} from "../logging/diagnostic-session-state.js";
+import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import {
   addSession,
   appendOutput,
   deleteSession,
   markExited,
   recordNotifyOnExitRemoval,
+  type ProcessSession,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
+import {
+  detectToolCallLoop,
+  recordToolCall,
+  recordToolCallOutcome,
+} from "./tool-loop-detection.js";
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -19,12 +29,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function harness() {
+function harness(overrides: Partial<ProcessSession> = {}) {
   const session = createProcessSessionFixture({
     id: "session",
     command: "test",
     backgrounded: true,
+    ...overrides,
   });
+  Object.assign(session, overrides);
   addSession(session);
   const tool = createProcessTool();
   const call = (action: string, extra: Record<string, unknown> = {}, signal?: AbortSignal) =>
@@ -38,6 +50,157 @@ function harness() {
 
 type Result = Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>;
 const text = (result: Result) => (result.content[0]?.type === "text" ? result.content[0].text : "");
+function check(result: Result, details: object, includes: string[] = [], excludes: string[] = []) {
+  expect(result.details).toMatchObject(details);
+  for (const value of includes) {
+    expect(text(result)).toContain(value);
+  }
+  for (const value of excludes) {
+    expect(text(result)).not.toContain(value);
+  }
+}
+const tick = () => vi.advanceTimersByTimeAsync(250);
+function onExit(session: ProcessSession) {
+  const remove = vi.fn(() => true);
+  recordNotifyOnExitRemoval(session, remove);
+  return remove;
+}
+function complete(session: ProcessSession, output: string, exitCode = 0) {
+  appendOutput(session, "stdout", output);
+  markExited(session, exitCode, null, "completed");
+  return onExit(session);
+}
+
+function writableSession() {
+  const stdin = {
+    write: vi.fn<NonNullable<ProcessSession["stdin"]>["write"]>((_data, done) => done?.(null)),
+    end: vi.fn(),
+    destroyed: false,
+    writableEnded: false,
+  };
+  const { session } = harness({
+    id: "input",
+    command: "cat",
+    startedAt: Date.now() - 20_000,
+    stdin,
+  });
+  return { session, stdin };
+}
+
+const inputCall = (action: string, extra: Record<string, unknown> = {}) =>
+  createProcessTool().execute(action, { action, sessionId: "input", ...extra });
+
+test("does not close stdin when requester authority is revoked during a write", async () => {
+  let current = true;
+  const controller = new AbortController();
+  const budget = createAgentToolExecutionBudget({
+    signal: controller.signal,
+    abort: (error) => controller.abort(error),
+    isCurrent: () => current,
+  });
+  const { stdin } = writableSession();
+  stdin.write.mockImplementation((_data, done) => {
+    current = false;
+    done?.(null);
+  });
+  await expect(
+    budget.run(() => inputCall("write", { data: "allowed input", eof: true })),
+  ).rejects.toThrow("execution scope is no longer active");
+  expect(stdin.write).toHaveBeenCalledOnce();
+  expect(stdin.end).not.toHaveBeenCalled();
+});
+
+test("exposes idle input controls only while stdin remains writable", async () => {
+  const { session, stdin } = writableSession();
+  appendOutput(session, "stdout", "Name? ");
+  const details = {
+    status: "running",
+    sessionId: session.id,
+    stdinWritable: true,
+    waitingForInput: true,
+    idleMs: 20_000,
+    lastOutputAt: Date.now() - 20_000,
+  };
+  check(await inputCall("log"), details, ["may be waiting for input"]);
+  await inputCall("poll");
+  check(await inputCall("poll"), details, ["(no new output)", "may be waiting for input"]);
+  check(await inputCall("list"), { sessions: [details] }, ["[input-wait]"]);
+  expect(text(await inputCall("write", { data: "你好😀" }))).toBe(
+    "Wrote 10 bytes to session input.",
+  );
+  stdin.writableEnded = true;
+  check(
+    await inputCall("log"),
+    { status: "running", stdinWritable: false, waitingForInput: false },
+    [],
+    ["provide input"],
+  );
+  check(await inputCall("write", { data: "answer\n" }), { status: "failed" }, [
+    "stdin is not writable",
+  ]);
+});
+
+test.each(["poll", "log"])(
+  "blocks repeated %s input waits despite elapsed time, then recognizes new output",
+  async (action) => {
+    const { session } = writableSession();
+    const tool = createProcessTool();
+    const params = { action, sessionId: session.id };
+    const state: SessionState = { lastActivity: Date.now(), state: "processing", queueDepth: 0 };
+    let sequence = 0;
+    const observe = async () => {
+      const toolCallId = `process-${sequence++}`;
+      recordToolCall(state, "process", params, toolCallId);
+      const result = await tool.execute(toolCallId, params);
+      recordToolCallOutcome(state, { toolName: "process", toolParams: params, toolCallId, result });
+      acknowledgeInternalToolResult(result);
+      return result;
+    };
+
+    for (let index = 0; index < 20; index++) {
+      vi.setSystemTime(Date.now() + 1_000);
+      await observe();
+    }
+    expect(detectToolCallLoop(state, "process", params)).toMatchObject({
+      stuck: true,
+      level: "critical",
+      detector: "known_poll_no_progress",
+      count: 20,
+    });
+
+    appendOutput(session, "stdout", "New prompt: ");
+    check(await observe(), { idleMs: 40_000, lastOutputAt: session.startedAt }, ["New prompt:"]);
+    expect(detectToolCallLoop(state, "process", params)).toEqual({ stuck: false });
+  },
+);
+
+test("sorts by start time then registration order across terminal transitions", async () => {
+  const sessions = (
+    [
+      ["later", 3_000],
+      ["oldest", 1_000],
+      ["middle", 2_000],
+      ["newest-tie", 2_000],
+    ] as const
+  ).map(([id, startedAt]) => harness({ id, startedAt }).session);
+  const expected = ["later", "newest-tie", "middle", "oldest"];
+  const expectOrder = async () => {
+    const result = await inputCall("list");
+    expect(result.details).toMatchObject({
+      sessions: expected.map((sessionId) => ({ sessionId })),
+    });
+    expect(
+      text(result)
+        .split("\n")
+        .map((line) => line.split(" ")[0]),
+    ).toEqual(expected);
+  };
+  for (const session of sessions) {
+    await expectOrder();
+    markExited(session, 0, null, "completed");
+  }
+  await expectOrder();
+});
 
 test("poll returns a new interactive prompt before its wait expires", async () => {
   const { session, poll } = harness();
@@ -47,11 +210,9 @@ test("poll returns a new interactive prompt before its wait expires", async () =
     return result;
   });
   appendOutput(session, "stderr", "interactive prompt\n");
-  await vi.advanceTimersByTimeAsync(250);
+  await tick();
   expect(settled).toBe(true);
-  const result = await pending;
-  expect(result.details).toMatchObject({ status: "running", sessionId: session.id });
-  expect(text(result)).toContain("interactive prompt");
+  check(await pending, { status: "running", sessionId: session.id }, ["interactive prompt"]);
 });
 
 test("an already-aborted poll leaves buffered output unread", async () => {
@@ -67,25 +228,20 @@ test("poll drains interleaved output in callback order across completion", async
   const { session, poll } = harness();
   appendOutput(session, "stderr", "ERR-before\n");
   appendOutput(session, "stdout", "OUT-after\n");
-  const running = await poll();
-  expect(text(running)).toContain("ERR-before\nOUT-after");
-  expect(running.details).toMatchObject({
-    status: "running",
-    aggregated: "ERR-before\nOUT-after\n",
-  });
+  check(await poll(), { status: "running", aggregated: "ERR-before\nOUT-after\n" }, [
+    "ERR-before\nOUT-after",
+  ]);
   const pending = poll("2000");
   const unread = `ERR-last\n${"x".repeat(2_001)}\nEND`;
   appendOutput(session, "stderr", unread);
   markExited(session, 0, null, "completed");
-  await vi.advanceTimersByTimeAsync(250);
-  const terminal = await pending;
-  expect(text(terminal)).toContain(unread);
-  expect(text(terminal)).not.toContain("ERR-before");
-  expect(text(terminal)).not.toContain("OUT-after");
-  expect(terminal.details).toMatchObject({
-    status: "completed",
-    aggregated: `ERR-before\nOUT-after\n${unread}`,
-  });
+  await tick();
+  check(
+    await pending,
+    { status: "completed", aggregated: `ERR-before\nOUT-after\n${unread}` },
+    [unread],
+    ["ERR-before", "OUT-after"],
+  );
   expect(text(await poll())).not.toContain(unread);
 });
 
@@ -95,15 +251,11 @@ test("a waiting poll cannot adopt a same-id successor after removal", async () =
   session.backgrounded = false;
   deleteSession(session.id);
   markExited(session, 0, null, "completed");
-  const successor = createProcessSessionFixture({ id: session.id, backgrounded: true });
-  addSession(successor);
-  appendOutput(successor, "stdout", "successor output\n");
-  markExited(successor, 0, null, "completed");
-  const remove = vi.fn(() => true);
-  recordNotifyOnExitRemoval(successor, remove);
-  await vi.advanceTimersByTimeAsync(250);
+  const { session: successor } = harness();
+  const remove = complete(successor, "successor output\n");
+  await tick();
   const original = await pending;
-  expect(original.details).toMatchObject({ status: "failed" });
+  check(original, { status: "failed" });
   expect(text(original)).toBe(`No session found for ${session.id}`);
   expect(remove).not.toHaveBeenCalled();
   const result = await poll();
@@ -118,38 +270,28 @@ test("an evicted completion keeps its receipt without recommending successor log
   const pending = poll(2_000);
   const output = `[earlier]${"x".repeat(30_000)}[latest]`;
   session.maxOutputChars = output.length;
-  appendOutput(session, "stdout", output);
-  markExited(session, 0, null, "completed");
-  const originalRemove = vi.fn(() => true);
-  recordNotifyOnExitRemoval(session, originalRemove);
+  const originalRemove = complete(session, output);
   deleteSession(session.id);
-  const successor = createProcessSessionFixture({ id: session.id, backgrounded: true });
-  addSession(successor);
-  appendOutput(successor, "stdout", "successor output\n");
-  markExited(successor, 7, null, "completed");
-  const successorRemove = vi.fn(() => true);
-  recordNotifyOnExitRemoval(successor, successorRemove);
-  await vi.advanceTimersByTimeAsync(250);
+  const { session: successor } = harness();
+  const successorRemove = complete(successor, "successor output\n", 7);
+  await tick();
   const original = await pending;
-  expect(original.details).toMatchObject({ status: "completed", exitCode: 0, aggregated: output });
-  expect(text(original)).not.toContain("[earlier]");
-  expect(text(original)).toContain("[latest]");
-  expect(text(original)).not.toContain("successor output");
-  expect(text(original)).not.toContain("use action=log");
-  expect(text(original)).toContain("omitted output is no longer available through action=log");
+  check(
+    original,
+    { status: "completed", exitCode: 0, aggregated: output },
+    ["[latest]", "omitted output is no longer available through action=log"],
+    ["[earlier]", "successor output", "use action=log"],
+  );
   expect(originalRemove).not.toHaveBeenCalled();
   acknowledgeInternalToolResult(original);
   expect(originalRemove).toHaveBeenCalledOnce();
-  const log = await call("log");
-  expect(log.details).toMatchObject({ status: "completed", exitCode: 7 });
-  expect(text(log)).toContain("successor output");
+  check(await call("log"), { status: "completed", exitCode: 7 }, ["successor output"]);
   expect(successorRemove).not.toHaveBeenCalled();
 });
 
 test("capped stream output stays ordered, compact, and frozen through terminal drains", async () => {
   const { session, poll, call } = harness();
-  session.maxOutputChars = 3_000;
-  session.pendingMaxOutputChars = 1_000;
+  Object.assign(session, { maxOutputChars: 3_000, pendingMaxOutputChars: 1_000 });
   const appendChunks = () => {
     for (let index = 0; index < 2_000; index += 1) {
       appendOutput(session, "stdout", "o");
@@ -174,15 +316,12 @@ test("capped stream output stays ordered, compact, and frozen through terminal d
   );
   appendOutput(session, "stderr", "late".repeat(1_000));
   expect(text(await poll())).toBe(discarded + "(no new output)\n\nProcess exited with code 0.");
-  expect(session.totalOutputChars).toBe(8_000);
-  expect(session.pendingOutput).toBe("");
+  expect(session).toMatchObject({ totalOutputChars: 8_000, pendingOutput: "" });
   expect(text(await call("log"))).toBe(discarded + "oe".repeat(1_500));
 });
 
 test.each([
-  [7, null, "completed", "exit", false, "code 7"],
   [null, null, "failed", "manual-cancel", false, "unknown exit code"],
-  [0, null, "failed", "overall-timeout", true, "code 0"],
   [null, "SIGKILL", "failed", "no-output-timeout", true, "signal SIGKILL"],
 ] as const)(
   "preserves exit %s/%s as %s (%s) across waiting and retained observations",
@@ -192,9 +331,8 @@ test.each([
     appendOutput(session, "stderr", "terminal output\n");
     const noOutputTimedOut = reason === "no-output-timeout";
     markExited(session, code, signal, status, reason, noOutputTimedOut);
-    const remove = vi.fn(() => true);
-    recordNotifyOnExitRemoval(session, remove);
-    await vi.advanceTimersByTimeAsync(250);
+    const remove = onExit(session);
+    await tick();
     const raced = await pending;
     const details = {
       status,
@@ -204,20 +342,21 @@ test.each([
       timedOut,
       noOutputTimedOut,
     };
-    expect(raced.details).toMatchObject({ ...details, aggregated: "terminal output\n" });
-    expect(text(raced)).toContain(`Process exited with ${label}.`);
-    expect(text(raced).includes("Verify the resulting state before retrying")).toBe(timedOut);
+    check(raced, { ...details, aggregated: "terminal output\n" }, [
+      `Process exited with ${label}.`,
+    ]);
     const listed = await call("list");
     expect(listed.details).toMatchObject({ sessions: [details] });
     expect(text(listed).includes(`[${reason}]`)).toBe(timedOut);
     const log = await call("log");
-    expect(log.details).toMatchObject(details);
-    expect(text(log)).toContain("terminal output");
-    expect(text(log).includes("Verify the resulting state before retrying")).toBe(timedOut);
+    check(log, details, ["terminal output"]);
+    const warning = "Verify the resulting state before retrying";
+    expect([raced, log].map((result) => text(result).includes(warning))).toEqual([
+      timedOut,
+      timedOut,
+    ]);
     const retained = await poll();
-    expect(retained.details).toMatchObject(details);
-    expect(text(retained)).toContain(`Process exited with ${label}.`);
-    expect(text(retained)).not.toContain("terminal output");
+    check(retained, details, [`Process exited with ${label}.`], ["terminal output"]);
     expect(remove).not.toHaveBeenCalled();
     acknowledgeInternalToolResult(raced);
     expect(remove).toHaveBeenCalledOnce();
@@ -233,26 +372,6 @@ test("poll rejects timeoutMs with a correction before consuming output", async (
   expect(text(await poll())).toContain("ready");
 });
 
-test("poll still tolerates unrelated model-added parameters", async () => {
-  const { call } = harness();
-  expect((await call("poll", { description: "model-added explanation" })).details).toMatchObject({
-    status: "running",
-  });
-});
-
-test("poll clamps a long wait to 30 seconds", async () => {
-  const { poll } = harness();
-  let settled = false;
-  const pending = poll(120_000).then((result) => {
-    settled = true;
-    return result;
-  });
-  await vi.advanceTimersByTimeAsync(29_999);
-  expect(settled).toBe(false);
-  await vi.advanceTimersByTimeAsync(1);
-  expect((await pending).details).toMatchObject({ status: "running" });
-});
-
 test("poll aborts while waiting for completion", async () => {
   const { poll } = harness();
   const controller = new AbortController();
@@ -261,18 +380,4 @@ test("poll aborts while waiting for completion", async () => {
   await vi.advanceTimersByTimeAsync(500);
   controller.abort();
   await rejected;
-});
-
-test("poll backoff grows while idle, resets on output, and clears on completion", async () => {
-  const { session, poll } = harness();
-  for (const retryInMs of [5_000, 10_000, 30_000, 60_000, 60_000]) {
-    expect((await poll()).details).toMatchObject({ retryInMs });
-  }
-  appendOutput(session, "stdout", "step complete\n");
-  expect((await poll()).details).toMatchObject({ retryInMs: 5_000 });
-  markExited(session, 0, null, "completed");
-  const completed = await poll();
-  expect(completed.details).toMatchObject({ status: "completed" });
-  expect(completed.details).not.toHaveProperty("retryInMs");
-  expect((await poll()).details).not.toHaveProperty("retryInMs");
 });

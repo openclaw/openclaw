@@ -1,0 +1,369 @@
+/** Captured destination identity and live generation facts for ordinary session events. */
+import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
+import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
+import {
+  attachToolAllowlistIntersection,
+  readToolAllowlistIntersection,
+} from "../../agents/tool-policy-shared.js";
+import {
+  getGatewayToolCallerIdentity,
+  prepareGatewayToolCallerAssertion,
+} from "../../agents/tools/gateway-caller-context.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "../../routing/session-key.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import type { SessionEventTarget } from "./session-event-contract.js";
+import { narrowSessionEventSettings } from "./session-event-policy.js";
+
+const targetScopes = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionEvents.targetScopes"),
+  () => new WeakMap<SessionEventTarget, { env?: NodeJS.ProcessEnv }>(),
+);
+
+export function getSessionEventRuntimeConfig() {
+  const cfg = getRuntimeConfigSnapshot();
+  if (!cfg) {
+    throw new Error(
+      "Session event admission requires an initialized runtime config; start the Gateway and retry",
+    );
+  }
+  return cfg;
+}
+
+export function resolveSessionEventKey(agentId: string, sessionKey: string) {
+  const cfg = getSessionEventRuntimeConfig();
+  const raw = sessionKey.trim();
+  const owner = parseAgentSessionKey(raw)?.agentId;
+  if (!raw || (owner && owner !== agentId)) {
+    throw new Error("Session event requires an exact session owned by its agent");
+  }
+  if (raw === "global") {
+    return raw;
+  }
+  return canonicalizeMainSessionAlias({
+    cfg,
+    agentId,
+    sessionKey: toAgentStoreSessionKey({ agentId, requestKey: raw, mainKey: cfg.session?.mainKey }),
+  });
+}
+
+/** Capture at the producer's admission, before asynchronous work can outlive its session. */
+export async function captureSessionEventTargetForHost(
+  requestedAgentId: string,
+  requestedSessionKey: string,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    assertCurrent?: () => void;
+    /** Submitting invocation authority ends after capture/acceptance, not event settlement. */
+    assertCaptureCurrent?: () => void;
+    /** Prepared host policy survives adapters that translate or clear the original tool cap. */
+    producerPolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
+  } = {},
+): Promise<SessionEventTarget> {
+  options.assertCaptureCurrent?.();
+  options.assertCurrent?.();
+  const agentId = normalizeAgentId(requestedAgentId);
+  const sessionKey = resolveSessionEventKey(agentId, requestedSessionKey);
+  const cfg = getSessionEventRuntimeConfig();
+  const env = options.env ? { ...options.env } : undefined;
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId, env });
+  const generation = getAgentEventLifecycleGeneration();
+  const caller = getGatewayToolCallerIdentity();
+  const callerAgentMatches = caller?.agentId === agentId;
+  if (callerAgentMatches) {
+    // Validate producer ownership even when routing selects another session of this agent.
+    resolveSessionEventKey(agentId, caller.sessionKey);
+  }
+  // Routing can remap a completion without widening its originating delivery policy.
+  const deliver =
+    callerAgentMatches &&
+    (caller.sessionEventDelivery === false ||
+      (caller.operationalRunInstance &&
+        getAgentRunContext(caller.operationalRunInstance.runId)?.sessionEventDelivery === false))
+      ? false
+      : undefined;
+  const preparedCaller =
+    callerAgentMatches && caller?.operationalRunInstance
+      ? await prepareGatewayToolCallerAssertion()
+      : undefined;
+  const assertCaptureCurrent = () => {
+    options.assertCaptureCurrent?.();
+    options.assertCurrent?.();
+    if (!callerAgentMatches || !caller) {
+      return;
+    }
+    if (preparedCaller) {
+      preparedCaller.assertCurrent?.();
+    } else if (
+      caller.receiptAuthority?.() === false ||
+      caller.approvalSignals?.some((signal) => signal.aborted)
+    ) {
+      throw new Error("Session event producer no longer owns its invocation");
+    }
+  };
+  try {
+    assertCaptureCurrent();
+    const { withSessionEntryReadOnlyInWorker } =
+      await import("../../config/sessions/session-entry-read-runtime.js");
+    await readAgentDeletionJournalStatusInWorker(agentId, { env });
+    const entry = await withSessionEntryReadOnlyInWorker(
+      { agentId, storePath, sessionKey, env },
+      assertCaptureCurrent,
+      async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        return read.value;
+      },
+    );
+    let toolsAllow: string[] | undefined;
+    if (caller && callerAgentMatches) {
+      assertCaptureCurrent();
+      if (caller.sessionEventToolsAllow) {
+        if (
+          caller.sessionEventToolsAllow.length > 512 ||
+          caller.sessionEventToolsAllow.some((name) => name.length > 256)
+        ) {
+          throw new Error("Session event producer tool surface exceeds the supported bound");
+        }
+        toolsAllow = intersectSessionEventToolsAllow(caller.sessionEventToolsAllow);
+      }
+    }
+    toolsAllow = intersectSessionEventToolsAllow(toolsAllow, options.producerPolicy?.toolsAllow);
+    const destinationSettings = entry
+      ? { permissionMode: entry.permissionMode, toolOverrides: entry.toolOverrides }
+      : undefined;
+    const callerSettings = callerAgentMatches ? caller?.sessionEventSettings : undefined;
+    const producerSettings =
+      options.producerPolicy?.settings && callerSettings
+        ? narrowSessionEventSettings(options.producerPolicy.settings, callerSettings)
+        : (options.producerPolicy?.settings ?? callerSettings);
+    const target: SessionEventTarget = {
+      agentId,
+      sessionKey,
+      storePath,
+      toolsAllow,
+      deliver,
+      assertCurrent: options.assertCurrent,
+      // Empty identity pins absence until normal admission creates the first session.
+      sessionId: entry?.sessionId ?? "",
+      lifecycleRevision: entry?.lifecycleRevision,
+      generation,
+      deliveryContext: structuredClone(deliveryContextFromSession(entry)),
+      chatType: resolveEffectiveReplyRoute({ ctx: { InternalTurnSource: "event" }, entry })
+        .chatType,
+      settings: producerSettings
+        ? narrowSessionEventSettings(producerSettings, destinationSettings)
+        : structuredClone(destinationSettings),
+    };
+    targetScopes.set(target, { env });
+    return target;
+  } finally {
+    preparedCaller?.release();
+  }
+}
+
+/** Validate the original destination; callers still own the live execution/delivery claim. */
+export function assertSessionEventTargetCurrent(target: SessionEventTarget): void {
+  target.assertCurrent?.();
+  if (!target.agentId || !target.sessionKey) {
+    throw new Error("Session event target has no original owner");
+  }
+  const cfg = getSessionEventRuntimeConfig();
+  resolveConfiguredAgentId(cfg, target.agentId);
+  if (isAgentDeletionBlocked(target.agentId, { env: targetScopes.get(target)?.env })) {
+    throw new Error("Session event owner is being deleted");
+  }
+}
+
+/** Deferred producers retain snapshots; only admitted consumption holds live generation facts. */
+export async function prepareSessionEventTargetForHost(
+  target: SessionEventTarget,
+  options: { createIfMissing?: true; assertAcceptanceCurrent?: () => void } = {},
+) {
+  assertSessionEventTargetCurrent(target);
+  if (!target.agentId || !target.sessionKey || !target.storePath) {
+    throw new Error("Session event target has no captured destination");
+  }
+  const { prepareSessionGenerationFacts } =
+    await import("../../config/sessions/session-delivery-generation.js");
+  const env = targetScopes.get(target)?.env;
+  const assertAcceptance = () => {
+    options.assertAcceptanceCurrent?.();
+    assertSessionEventTargetCurrent(target);
+  };
+  assertAcceptance();
+  let preparation:
+    | ReturnType<
+        typeof import("../../config/sessions/session-accessor.entry-mutation.js").prepareSessionEntryMutationDatabases
+      >
+    | undefined;
+  if (!target.sessionId && options.createIfMissing) {
+    const { prepareSessionEntryMutationDatabases } =
+      await import("../../config/sessions/session-accessor.entry-mutation.js");
+    assertAcceptance();
+    preparation = prepareSessionEntryMutationDatabases(
+      [
+        {
+          scope: {
+            agentId: target.agentId,
+            storePath: target.storePath,
+            sessionKey: target.sessionKey,
+            env,
+          },
+          assertCurrent: assertAcceptance,
+        },
+      ],
+      Promise.resolve(),
+    );
+  }
+  let lease: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
+  try {
+    try {
+      const prepared = await preparation?.preparations[0];
+      assertAcceptance();
+      prepared?.assertCurrent();
+      lease = await prepareSessionGenerationFacts({
+        agentId: target.agentId,
+        storePath: target.storePath,
+        sessionKey: target.sessionKey,
+        sessionId: target.sessionId || null,
+        lifecycleRevision: target.lifecycleRevision ?? null,
+        env,
+      });
+      prepared?.assertCurrent();
+      assertAcceptance();
+    } finally {
+      await preparation?.[Symbol.asyncDispose]();
+    }
+    assertAcceptance();
+    lease.assertCurrent();
+    const retained = lease;
+    const assertTargetCurrent = () => {
+      assertSessionEventTargetCurrent(target);
+    };
+    const assertCurrent = () => {
+      assertTargetCurrent();
+      retained.assertCurrent();
+    };
+    assertCurrent();
+    return {
+      ...retained,
+      assertCurrent,
+      bindCreation: (operation: Parameters<typeof retained.bindCreation>[0]) => {
+        assertTargetCurrent();
+        const assertCreationCurrent = retained.bindCreation(operation, (binding) => {
+          // Retain the committed origin even if this attempt stops before model start.
+          target.sessionId = binding.sessionId;
+          target.lifecycleRevision = binding.lifecycleRevision;
+        });
+        return () => {
+          assertTargetCurrent();
+          assertCreationCurrent();
+        };
+      },
+    };
+  } catch (error) {
+    lease?.release();
+    throw error;
+  }
+}
+
+export function readSessionEventTargetEnvironment(
+  target: SessionEventTarget,
+): NodeJS.ProcessEnv | undefined {
+  return targetScopes.get(target)?.env;
+}
+
+/** Coalesced work retains every producer's original destination and permission bound. */
+export function combineSessionEventTargetsForHost(
+  targets: readonly SessionEventTarget[],
+): SessionEventTarget {
+  const first = targets[0];
+  if (!first) {
+    throw new Error("Session event batch requires a captured destination");
+  }
+  const retained = [...targets];
+  const route = channelRouteDedupeKey(first.deliveryContext);
+  for (const target of retained) {
+    if (
+      target.agentId !== first.agentId ||
+      target.sessionKey !== first.sessionKey ||
+      target.storePath !== first.storePath ||
+      target.sessionId !== first.sessionId ||
+      target.lifecycleRevision !== first.lifecycleRevision ||
+      target.chatType !== first.chatType ||
+      channelRouteDedupeKey(target.deliveryContext) !== route
+    ) {
+      throw new Error("Session event batch has different captured destinations");
+    }
+  }
+  const assertCurrent = () => {
+    for (const target of retained) {
+      assertSessionEventTargetCurrent(target);
+    }
+  };
+  assertCurrent();
+  const combined: SessionEventTarget = {
+    ...first,
+    deliveryContext: structuredClone(first.deliveryContext),
+    assertCurrent,
+    settings: retained.reduce(
+      (settings, target) => narrowSessionEventSettings(settings, target.settings),
+      first.settings,
+    ),
+    toolsAllow: intersectSessionEventToolsAllow(...retained.map((target) => target.toolsAllow)),
+    deliver: retained.some((target) => target.deliver === false) ? false : first.deliver,
+  };
+  targetScopes.set(combined, targetScopes.get(first) ?? {});
+  return combined;
+}
+
+/** Retain each canonical cap independently; overlapping globs cannot be flattened safely. */
+export function intersectSessionEventToolsAllow(
+  ...allowlists: Array<readonly string[] | undefined>
+): string[] | undefined {
+  const restrictions = allowlists.flatMap((allow) =>
+    allow === undefined
+      ? []
+      : (readToolAllowlistIntersection(allow) ?? [allow]).map((restriction) => restriction.slice()),
+  );
+  if (restrictions.length === 0) {
+    return undefined;
+  }
+  const matchers = restrictions.map((restriction) => createRuntimeToolMatcher(restriction));
+  const candidates = [...new Set(restrictions.flat())].filter((name) =>
+    matchers.every((matches) => matches(name)),
+  );
+  return attachToolAllowlistIntersection(candidates, restrictions);
+}
+
+/** Frozen tools may continue only while the current session still covers their admitted policy. */
+export function assertSessionEventSettingsCurrent(
+  admitted: SessionEventTarget["settings"],
+  current: SessionEventTarget["settings"],
+): void {
+  const narrowed = narrowSessionEventSettings(admitted, current);
+  if (
+    admitted?.permissionMode !== narrowed.permissionMode ||
+    !sessionToolOverridesEqual(admitted?.toolOverrides, narrowed.toolOverrides)
+  ) {
+    throw new Error(
+      "Session event permissions were restricted; start a new turn under the current policy.",
+    );
+  }
+}

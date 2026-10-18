@@ -20,6 +20,7 @@ import {
 import { describePluginAvailabilityFailure } from "../plugins/runtime-degraded-state.js";
 import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
 import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
+import type { SetupSecretMigrationInspection } from "../secrets/setup-secret-migration.js";
 import { getHealthCheck, registerHealthCheck } from "./health-check-registry.js";
 import type { HealthFinding } from "./health-checks.js";
 
@@ -62,6 +63,10 @@ type WorkerProviderHealthApi = {
     getHealthCheck: typeof getHealthCheck;
     registerHealthCheck: typeof registerHealthCheck;
     listPluginStateEntries: <T>(options: OpenKeyedStoreOptions) => Promise<PluginStateEntry<T>[]>;
+    inspectSetupSecrets: (
+      names: readonly string[],
+      env?: NodeJS.ProcessEnv,
+    ) => Promise<SetupSecretMigrationInspection[]>;
   }) => void;
 };
 
@@ -298,7 +303,7 @@ function registerPolicyHealthChecks(
   params: BundledHealthCheckParams,
   registerCheck: typeof registerHealthCheck,
 ): void {
-  if (shouldRegisterPolicyHealth(params)) {
+  if (shouldRegisterPolicyHealth(params.cfg)) {
     loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
       dirName: "policy",
       artifactBasename: "api.js",
@@ -338,6 +343,11 @@ function registerBundledWorkerProviderHealthChecks(
     })?.registerWorkerProviderDoctorChecks?.({
       getHealthCheck,
       registerHealthCheck: registerCheck,
+      async inspectSetupSecrets(names, inspectionEnv) {
+        const { inspectSetupSecretMigration } =
+          await import("../secrets/setup-secret-migration.js");
+        return inspectSetupSecretMigration({ names, env: inspectionEnv ?? env });
+      },
       async listPluginStateEntries<T>(options: OpenKeyedStoreOptions) {
         const { createPluginStateKeyedStore } =
           await import("../plugin-state/plugin-state-store.js");
@@ -391,8 +401,8 @@ function shouldRegisterPluginHealth(cfg: OpenClawConfig, pluginId: string): bool
   });
 }
 
-function shouldRegisterPolicyHealth(params: { cfg: OpenClawConfig; cwd?: string }): boolean {
-  const entry = params.cfg.plugins?.entries?.policy;
+function shouldRegisterPolicyHealth(cfg: OpenClawConfig): boolean {
+  const entry = cfg.plugins?.entries?.policy;
   const config = readRecord(entry?.config) ?? {};
   if (entry === undefined || entry.enabled === false || config.enabled === false) {
     return false;
@@ -401,7 +411,7 @@ function shouldRegisterPolicyHealth(params: { cfg: OpenClawConfig; cwd?: string 
   if (
     !passesManifestOwnerBasePolicy({
       plugin: { id: "policy" },
-      normalizedConfig: normalizePluginsConfig(params.cfg.plugins),
+      normalizedConfig: normalizePluginsConfig(cfg.plugins),
     })
   ) {
     return false;

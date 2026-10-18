@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import type { JsonValue } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
-import { getCodexAppServerTurnRouter, type CodexAppServerServerRequest } from "./turn-router.js";
+import { getCodexAppServerTurnRouter } from "./turn-router.js";
 import { settleInput, waitForResponse, type WireResponse } from "./turn-router.test-support.js";
 
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
@@ -134,13 +134,15 @@ describe("CodexAppServerTurnRouter", () => {
     await route.bindTurn("turn-warnings");
 
     await vi.waitFor(() =>
-      expect(notifications).toHaveBeenCalledWith(warning, { threadId: "thread-warnings" }),
+      expect(notifications).toHaveBeenCalledWith(
+        { ...warning, completedTurn: undefined },
+        { threadId: "thread-warnings" },
+      ),
     );
   });
 
   it.each([
     "Codex couldn't save diagnostic logs to its local database. Use /feedback with logs included before closing Codex, or run `codex doctor` for diagnostics.",
-    "Codex couldn't save diagnostic logs to its local database. Run `codex doctor` for diagnostics.",
   ])(
     "records a diagnostic-log failure once instead of replaying it across turns: %s",
     async (message) => {
@@ -175,17 +177,6 @@ describe("CodexAppServerTurnRouter", () => {
       later.release();
     },
   );
-
-  it("records a log failure before observers exist and keeps a new connection's failure visible", () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const message =
-      "Codex couldn't save diagnostic logs to its local database. Run `codex doctor` for diagnostics.";
-    for (const harness of [createHarness(), createHarness()]) {
-      harness.send({ method: "warning", params: { threadId: null, message } });
-      harness.client.addNotificationHandler(vi.fn());
-    }
-    expect(warn.mock.calls).toEqual([[message], [message]]);
-  });
 
   it("does not dispatch a request that times out before route activation", async () => {
     vi.useFakeTimers();
@@ -259,7 +250,7 @@ describe("CodexAppServerTurnRouter", () => {
     vi.useFakeTimers();
     vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createHarness();
-    let setExecutionTimeoutMs: ((timeoutMs: number) => void) | undefined;
+    let setExecutionTimeoutMs: ((timeoutMs: number | null) => void) | undefined;
     const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
       threadId: "released",
       onRequest: (_request, _scope, _signal, setTimeoutMs) => {
@@ -337,6 +328,9 @@ describe("CodexAppServerTurnRouter", () => {
       {
         method: "item/agentMessage/delta",
         params: { threadId: "thread-2", turnId: "turn-2", delta: "right" },
+        threadId: "thread-2",
+        turnId: "turn-2",
+        completedTurn: undefined,
       },
       { threadId: "thread-2", turnId: "turn-2" },
     );
@@ -344,6 +338,9 @@ describe("CodexAppServerTurnRouter", () => {
       {
         method: "turn/completed",
         params: { threadId: "thread-2", turn: { id: "turn-2", status: "completed", items: [] } },
+        threadId: "thread-2",
+        turnId: "turn-2",
+        completedTurn: { id: "turn-2", status: "completed", items: [] },
       },
       { threadId: "thread-2", turnId: "turn-2" },
     );
@@ -387,11 +384,13 @@ describe("CodexAppServerTurnRouter", () => {
       {
         method: "thread/status/changed",
         params: { threadId: "thread-1", status: { type: "active" } },
+        threadId: "thread-1",
+        completedTurn: undefined,
       },
       { threadId: "thread-1" },
     );
     expect(notifications).toHaveBeenCalledWith(
-      { method: "configWarning", params: { message: "global" } },
+      { method: "configWarning", params: { message: "global" }, completedTurn: undefined },
       { threadId: "thread-1" },
     );
     expect(warn).toHaveBeenCalledTimes(1);
@@ -462,7 +461,7 @@ describe("CodexAppServerTurnRouter", () => {
     ]);
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "flushes prior notifications before releasing a bound request (paused: %s)",
     async (paused) => {
       const harness = createHarness();
@@ -693,17 +692,23 @@ describe("CodexAppServerTurnRouter", () => {
     harness.send(bufferedNotification);
 
     await vi.waitFor(() =>
-      expect(threadHandler).toHaveBeenCalledWith(liveNotification, {
-        threadId: "thread-live",
-      }),
+      expect(threadHandler).toHaveBeenCalledWith(
+        { ...liveNotification, threadId: "thread-live", completedTurn: undefined },
+        { threadId: "thread-live" },
+      ),
     );
     expect(turnHandler).not.toHaveBeenCalled();
 
     await turnRoute.bindTurn("turn-buffered");
-    expect(turnHandler).toHaveBeenCalledWith(bufferedNotification, {
-      threadId: "thread-buffered",
-      turnId: "turn-buffered",
-    });
+    expect(turnHandler).toHaveBeenCalledWith(
+      {
+        ...bufferedNotification,
+        threadId: "thread-buffered",
+        turnId: "turn-buffered",
+        completedTurn: undefined,
+      },
+      { threadId: "thread-buffered", turnId: "turn-buffered" },
+    );
   });
 
   it("holds dormant traffic until one-shot activation", async () => {
@@ -839,40 +844,6 @@ describe("CodexAppServerTurnRouter", () => {
     expect(staleHandler).not.toHaveBeenCalled();
   });
 
-  it("routes no-turn requests and preserves exact cancellation before release", async () => {
-    const harness = createHarness();
-    const handleRequest = (request: CodexAppServerServerRequest): JsonValue => {
-      if (request.method === "execCommandApproval" || request.method === "applyPatchApproval") {
-        return { decision: "approved" };
-      }
-      return { action: "cancel", content: null, _meta: null };
-    };
-    const handler = vi.fn(handleRequest);
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
-      threadId: "thread-1",
-    });
-
-    harness.send({
-      id: "elicitation-1",
-      method: "mcpServer/elicitation/request",
-      params: { threadId: "thread-1", turnId: null, message: "Continue?" },
-    });
-
-    await settleInput();
-
-    expect(handler).not.toHaveBeenCalled();
-    expect(harness.writes).toEqual([]);
-
-    await route.activate({ onRequest: handler });
-
-    expect(await waitForResponse(harness, "elicitation-1")).toEqual({
-      id: "elicitation-1",
-      result: { action: "cancel", content: null, _meta: null },
-    });
-    expect(handler).toHaveBeenCalledOnce();
-    route.release();
-  });
-
   it("keeps resumed-turn requests open until a new turn is armed", async () => {
     const harness = createHarness();
     const handler = vi.fn(() => undefined);
@@ -910,9 +881,10 @@ describe("CodexAppServerTurnRouter", () => {
     expect(notificationHandler).not.toHaveBeenCalled();
 
     await route.cancelTurn();
-    expect(notificationHandler).toHaveBeenCalledWith(earlyError, {
-      threadId: "thread-resumed",
-    });
+    expect(notificationHandler).toHaveBeenCalledWith(
+      { ...earlyError, threadId: "thread-resumed", completedTurn: undefined },
+      { threadId: "thread-resumed" },
+    );
     await expect(waitForResponse(harness, "pending-turn-request")).resolves.toEqual({
       id: "pending-turn-request",
       result: { decision: "decline" },

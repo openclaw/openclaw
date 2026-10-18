@@ -56,12 +56,7 @@ export type AcpLedgerOptions = {
   now?: () => number;
 };
 
-export type AcpMutableLedgerState = {
-  maxSessions: number;
-  maxEventsPerSession: number;
-  maxSerializedBytes: number;
-  now: () => number;
-};
+export type AcpMutableLedgerState = ReturnType<typeof normalizeAcpLedgerOptions>;
 
 export function normalizeAcpLedgerOptions(options: AcpLedgerOptions = {}) {
   return {
@@ -115,6 +110,6 @@ export function normalizeAcpLedgerEvent(raw: unknown): AcpEventLedgerEntry | und
     sessionId,
     sessionKey,
     ...(typeof runId === "string" && runId ? { runId } : {}),
-    update: structuredClone(raw.update) as SessionUpdate,
+    update: raw.update as SessionUpdate,
   };
 }

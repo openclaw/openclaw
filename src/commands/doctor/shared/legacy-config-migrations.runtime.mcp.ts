@@ -1,6 +1,4 @@
-// Legacy MCP runtime config migrations.
 import {
-  defineLegacyConfigMigration,
   getRecord,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
@@ -126,11 +124,9 @@ function migrateMcpServerDisabledFlags(
   }
 }
 
-/** Legacy config migration specs for MCP server config compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "mcp.servers.canonicalize",
-    describe: "Normalize legacy MCP server config",
     legacyRules: [
       ...mcpServerRules(
         'entries use the unsupported "disabled" key; use "enabled" with the inverse boolean value. Run "openclaw doctor --fix" to migrate it.',
@@ -161,5 +157,5 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] =
         migrateMcpServerAliases(owner?.servers, path, changes);
       }
     },
-  }),
+  },
 ];

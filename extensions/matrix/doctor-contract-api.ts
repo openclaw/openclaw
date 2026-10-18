@@ -164,6 +164,39 @@ const matrixSyncCacheMigration: PluginDoctorStateMigration = {
 };
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
+  {
+    id: "matrix-crypto-unsafe-state",
+    label: "Matrix crypto unsafe final state",
+    async detectLegacyState(params) {
+      const { listMatrixCryptoUnsafeState } =
+        await import("./src/matrix/crypto-unsafe-state-doctor.js");
+      const roots = await listMatrixCryptoUnsafeState(params.stateDir, {
+        openKeyedStoreV2: params.context.openPluginStateKeyedStore,
+      });
+      return roots.length > 0
+        ? {
+            preview: roots.map(
+              (root) =>
+                `Matrix crypto store is blocked after unsafe final save: ${root}. Run openclaw matrix doctor inspect; recovery is never automatic.`,
+            ),
+          }
+        : null;
+    },
+    async migrateLegacyState(params) {
+      const { listMatrixCryptoUnsafeState } =
+        await import("./src/matrix/crypto-unsafe-state-doctor.js");
+      const roots = await listMatrixCryptoUnsafeState(params.stateDir, {
+        openKeyedStoreV2: params.context.openPluginStateKeyedStore,
+      });
+      return {
+        changes: [],
+        warnings: roots.map(
+          (root) =>
+            `Matrix crypto store remains blocked: ${root}. Inspect with openclaw matrix doctor inspect; explicit recovery may roll back keys.`,
+        ),
+      };
+    },
+  },
   matrixAccountStateSchemaMigration,
   {
     id: "matrix-credentials-json-to-plugin-state",
@@ -203,32 +236,31 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         const key = matrixCredentialsStoreKey(source.accountId);
         const stored = await store.lookup(key);
-        if (isMatrixCredentialRevocation(stored, source.accountId)) {
-          changes.push(
-            `Archived revoked Matrix credential legacy source for account ${source.accountId}`,
-          );
-          await archiveLegacyStateSource({
+        const archiveSource = () =>
+          archiveLegacyStateSource({
             filePath: source.filePath,
             label: "Matrix credentials",
             changes,
             warnings,
           });
+        if (isMatrixCredentialRevocation(stored, source.accountId)) {
+          changes.push(
+            `Archived revoked Matrix credential legacy source for account ${source.accountId}`,
+          );
+          await archiveSource();
           continue;
         }
         const existing = normalizeMatrixStoredCredentials(stored, source.accountId);
         if (existing && JSON.stringify(existing) !== JSON.stringify(credentials)) {
           changes.push(`Kept existing Matrix credentials for account ${source.accountId}`);
-          await archiveLegacyStateSource({
-            filePath: source.filePath,
-            label: "Matrix credentials",
-            changes,
-            warnings,
-          });
+          await archiveSource();
           continue;
         }
         if (!existing) {
           try {
-            await store.registerIfAbsent(key, credentials);
+            if (!(await store.registerIfAbsent(key, credentials))) {
+              throw new Error("Canonical state appeared during offline import.");
+            }
           } catch (error) {
             warnings.push(
               `Failed importing Matrix credentials for account ${source.accountId}: ${String(error)}; left legacy source in place`,
@@ -236,23 +268,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             continue;
           }
         }
-        const persisted = normalizeMatrixStoredCredentials(
-          await store.lookup(key),
-          source.accountId,
-        );
-        if (!persisted || JSON.stringify(persisted) !== JSON.stringify(credentials)) {
-          warnings.push(
-            `Failed verifying Matrix credentials for account ${source.accountId}; left legacy source in place`,
-          );
-          continue;
-        }
         changes.push(`Migrated Matrix credentials for account ${source.accountId} to SQLite`);
-        await archiveLegacyStateSource({
-          filePath: source.filePath,
-          label: "Matrix credentials",
-          changes,
-          warnings,
-        });
+        await archiveSource();
       }
       return { changes, warnings };
     },
@@ -260,11 +277,27 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "matrix-inbound-dedupe-to-claimable-dedupe",
     label: "Matrix inbound dedupe markers",
+    sqliteOnly: { family: "state" },
     async detectLegacyState(params) {
-      await collectMatrixInboundDedupeSources(params.stateDir);
-      return (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env))
-        ? null
-        : { preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"] };
+      const sources = await collectMatrixInboundDedupeSources(params.stateDir);
+      if (sources.status === "complete" && sources.sqliteRoots.length === 0) {
+        return null;
+      }
+      if (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env)) {
+        return null;
+      }
+      const pending = {
+        preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
+      };
+      if (sources.status === "incomplete") {
+        return pending;
+      }
+      for (const storageRootDir of sources.sqliteRoots) {
+        if ((await readLegacyInboundDedupeSqliteSource(storageRootDir)).legacyRowCount > 0) {
+          return pending;
+        }
+      }
+      return null;
     },
     async migrateLegacyState(params) {
       const sources = await collectMatrixInboundDedupeSources(params.stateDir);

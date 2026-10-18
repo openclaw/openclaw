@@ -1,12 +1,30 @@
-import { vi } from "vitest";
+import { flush } from "solid-js";
+import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { settleLitElement, settleLitElements } from "../../test-helpers/lit-settle.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/application-context.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 type OpenClawBoardWidgetCell = HTMLElementTagNameMap["openclaw-board-widget-cell"];
+
+export async function openBoardMenu(
+  root: ParentNode,
+  selector = ".board-widget__menu-trigger",
+): Promise<void> {
+  const trigger = root.querySelector<HTMLButtonElement>(selector)!;
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+}
 
 export function boardWidget(overrides: Partial<BoardWidget> = {}): BoardWidget {
   return {
@@ -60,27 +78,24 @@ export function callbacks(overrides: Partial<BoardViewCallbacks> = {}): BoardVie
   };
 }
 
-export function gatewayContext(
-  client: { request: ReturnType<typeof vi.fn> } | null,
-  basePath = "",
-) {
+export function gatewayContext(client: { request: GatewayRequestHandler } | null, basePath = "") {
+  const { gateway } = createApplicationGateway();
+  gateway.connection.gatewayUrl = "";
+  gateway.snapshot.client = client ? createTestGatewayClient(client.request) : null;
+  gateway.snapshot.phase = "connected";
   return {
     basePath,
-    gateway: {
-      connection: { gatewayUrl: "" },
-      snapshot: { client, phase: "connected" },
-    },
+    gateway,
   } as unknown as ApplicationContext;
 }
 
 export async function settleCells(view: OpenClawBoardView): Promise<OpenClawBoardWidgetCell[]> {
-  // Cells appear during the view's own update, and a cell can schedule a further update
-  // while completing, so both levels drain to Lit's settled state. Anything less lets a
-  // frame's ticket-refresh timer be armed after the test has moved the clock on.
-  await settleLitElement(view);
+  flush();
+  await view.updateComplete;
   const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
-  await settleLitElements(cells);
-  await settleLitElement(view);
+  await Promise.all(cells.map((cell) => cell.updateComplete));
+  flush();
+  await view.updateComplete;
   return cells;
 }
 
@@ -102,13 +117,12 @@ export async function mount(
   view.callbacks = options.callbacks ?? callbacks();
   view.canMutate = options.canMutate ?? true;
   view.canGrant = options.canGrant ?? true;
-  if (options.context) {
-    const provider = createApplicationContextProvider(options.context);
-    provider.append(view);
-    document.body.append(provider);
-  } else {
-    document.body.append(view);
+  const root = options.context ? createApplicationContextProvider(options.context) : view;
+  if (root !== view) {
+    root.append(view);
   }
+  const mounted = mountSolid(() => root);
+  onTestFinished(() => mounted.unmount());
   await settleCells(view);
   return view;
 }

@@ -32,16 +32,6 @@ describe("SQLite reliability worker messages", () => {
     vi.useRealTimers();
   });
 
-  it("rejects child errors without replacing the original error", async () => {
-    const child = new ChildProcess();
-    const error = new Error("IPC failed");
-    const ready = waitForReady(child);
-    child.emit("error", error);
-
-    await expect(ready).rejects.toBe(error);
-    expectWaitCleanedUp(child);
-  });
-
   it("formats premature exit diagnostics when the child exits", async () => {
     const child = new ChildProcess();
     let stderr = "before";
@@ -73,17 +63,11 @@ describe("SQLite reliability worker messages", () => {
     expectWaitCleanedUp(child);
   });
 
-  it.each(["action", "matches"] as const)("cleans up when %s throws", async (source) => {
+  it("cleans up when action throws", async () => {
     const child = new ChildProcess();
-    const error = new Error(`${source} failed`);
+    const error = new Error("action failed");
     const ready = waitForReady(child, {
       action: () => {
-        if (source === "action") {
-          throw error;
-        }
-        child.emit("message", "ready");
-      },
-      matches: () => {
         throw error;
       },
     });

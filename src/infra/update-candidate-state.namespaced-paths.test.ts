@@ -11,11 +11,9 @@ import {
 } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
-import {
-  readUpdateStateSchemaVersions,
-  updateStateSchemaVersionsMatch,
-} from "./update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
+import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 let root: string;
 beforeEach(async () => {
@@ -84,34 +82,6 @@ function runSnapshotWorker(
     candidateRoot: path.join(root, "candidate-host"),
   });
 }
-
-// Windows registries can carry extended-length \\?\ agent paths (issue #144581):
-// projection must rebase them under the candidate root instead of embedding the
-// namespace prefix mid-path and failing the snapshot mkdir.
-it.skipIf(process.platform !== "win32")(
-  "projects extended-length registered agent paths under the candidate state root",
-  async () => {
-    const source = path.join(root, "source");
-    const target = path.join(root, "copy");
-    const canonical = path.join(source, "agents", "main", "agent", "openclaw-agent.sqlite");
-    await createDatabase(canonical);
-    const namespaced = `\\\\?\\${canonical}`;
-    registerDatabases(source, [["main", namespaced]]);
-    const versions = await runSnapshotWorker({
-      stateDir: source,
-      targetStateDir: target,
-      config: {},
-    });
-    // The physical copy dedupes to one identity, but the published versions
-    // keep every raw alias so released mixed-alias baselines still match.
-    expect(versions.map((entry) => entry.path)).toContain(canonical);
-    expect(versions.map((entry) => entry.path)).toContain(namespaced);
-    expectPreservedEvidence(path.join(target, "agents", "main", "agent", "openclaw-agent.sqlite"));
-    const rebound = readRegisteredPath(target, "main");
-    expect(path.isAbsolute(rebound)).toBe(false);
-    expect(rebound.split(/[\\/]/)).toEqual(["agents", "main", "agent", "openclaw-agent.sqlite"]);
-  },
-);
 
 // A namespaced registration outside the state root must keep one projection
 // identity: the copy and the rebound registry entry must name the same hashed
@@ -245,7 +215,15 @@ it.skipIf(process.platform !== "win32")(
     expect(inspected.map((entry) => entry.path)).toEqual(
       expect.arrayContaining([shared, canonical, namespaced]),
     );
-    expect(inspected).toHaveLength(3);
+    expect(inspected).toContainEqual({
+      path: path.join(source, "control", "services.sqlite"),
+      userVersion: null,
+    });
+    expect(inspected).toContainEqual({
+      path: path.join(source, "client", "credentials.sqlite"),
+      userVersion: null,
+    });
+    expect(inspected).toHaveLength(5);
     expect(
       updateStateSchemaVersionsMatch(releasedBaseline, inspected, { sharedPath: shared }),
     ).toBe(true);
@@ -256,6 +234,9 @@ it.skipIf(process.platform !== "win32")(
     });
     // Snapshot mode publishes the same aliases but copies each database once.
     expect(versions).toEqual(inspected);
-    expectPreservedEvidence(path.join(target, "agents", "main", "agent", "openclaw-agent.sqlite"));
+    const rebound = readRegisteredPath(target, "main");
+    expect(path.isAbsolute(rebound)).toBe(false);
+    expect(rebound.split(/[\\/]/)).toEqual(["agents", "main", "agent", "openclaw-agent.sqlite"]);
+    expectPreservedEvidence(path.join(target, rebound));
   },
 );

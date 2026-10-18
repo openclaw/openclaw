@@ -6,6 +6,8 @@ import { z } from "zod";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 
+export const MCP_ELICITATION_TIMEOUT_MS = 600_000;
+
 export type McpElicitationHandler = (request: {
   method: "elicitation/create" | "openai/elicitation/create";
   requestId?: string | number;
@@ -38,7 +40,11 @@ export function captureMcpClientElicitation() {
 
 /** The SDK transport callback does not inherit the calling tool's async scope. */
 export function bindMcpClientElicitation(client: Client) {
-  const active = new Set<{ handler?: McpElicitationHandler; signal: AbortSignal }>();
+  const active = new Set<{
+    handler?: McpElicitationHandler;
+    signal: AbortSignal;
+    holdForHumanInput?: () => () => void;
+  }>();
   for (const method of ["elicitation/create", "openai/elicitation/create"] as const) {
     const schema = z.object({
       method: z.literal(method),
@@ -56,20 +62,29 @@ export function bindMcpClientElicitation(client: Client) {
       }
       const signal = AbortSignal.any([call.signal, extra.signal]);
       signal.throwIfAborted();
-      const result = await call.handler({
-        method,
-        requestId: extra.requestId,
-        params: request.params,
-        signal,
-      });
-      signal.throwIfAborted();
-      if (!active.has(call)) {
-        throw new McpError(ErrorCode.InvalidRequest, "MCP elicitation requester expired");
+      const release = call.holdForHumanInput?.();
+      try {
+        const result = await call.handler({
+          method,
+          requestId: extra.requestId,
+          params: request.params,
+          signal,
+        });
+        signal.throwIfAborted();
+        if (!active.has(call)) {
+          throw new McpError(ErrorCode.InvalidRequest, "MCP elicitation requester expired");
+        }
+        return result;
+      } finally {
+        release?.();
       }
-      return result;
     });
   }
-  return async <T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> => {
+  return async <T>(
+    signal: AbortSignal,
+    run: () => Promise<T>,
+    holdForHumanInput?: () => () => void,
+  ): Promise<T> => {
     const handler = handlers.getStore();
     const restoreCaller = AsyncLocalStorage.snapshot();
     const call = {
@@ -77,6 +92,7 @@ export function bindMcpClientElicitation(client: Client) {
         ? (request: Parameters<McpElicitationHandler>[0]) => restoreCaller(handler, request)
         : undefined,
       signal,
+      holdForHumanInput,
     };
     active.add(call);
     try {
@@ -163,7 +179,7 @@ export function createMcpClientElicitationHandler(params: {
         input,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
-        timeoutMs: 120_000,
+        timeoutMs: MCP_ELICITATION_TIMEOUT_MS,
         delivery: {},
         gatewayCall: params.gatewayCall,
         signal: request.signal,

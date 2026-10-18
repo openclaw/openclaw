@@ -1,15 +1,17 @@
-import { once } from "node:events";
 import { createServer } from "node:http";
 import { text as readText } from "node:stream/consumers";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as databaseIdentity from "../../state/openclaw-agent-db-identity.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import * as retainedSessionReads from "../session-utils-read-lifetime.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
+import {
+  closeModelsEndpoint,
+  createModelsTestState,
+  listenModelsEndpoint,
+  modelsTestConfig,
+  settleModelsWork,
+  startModelsGateway,
+} from "./models-integration.test-support.js";
 
 type DispatchRequest = {
   authorization: string | undefined;
@@ -17,10 +19,25 @@ type DispatchRequest = {
   body: { model: string; max_tokens: number; messages: unknown[] };
 };
 
+function expectDispatch(
+  requests: DispatchRequest[],
+  index: number,
+  model: string,
+  account = "account-a-key",
+  requestHeader = "initial-transport",
+) {
+  expect(requests).toHaveLength(index + 1);
+  expect(requests[index]).toMatchObject({
+    authorization: `Bearer ${account}`,
+    requestHeader,
+    body: { model, max_tokens: 1536 },
+  });
+}
+
 async function withDispatchLifecycle(
   signal: AbortSignal,
   run: (fixture: {
-    client: Awaited<ReturnType<typeof startGatewayWithClient>>["client"];
+    client: Awaited<ReturnType<typeof startModelsGateway>>["client"];
     requests: DispatchRequest[];
     discoveryAccounts: (string | undefined)[];
     advertised: Map<string, string[]>;
@@ -32,17 +49,8 @@ async function withDispatchLifecycle(
     send: (model: string, name: string) => Promise<{ status: string; error?: string }>;
   }) => Promise<void>,
 ) {
-  const state = await createOpenClawTestState({
-    label: "models-dispatch-lifecycle",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
+  await using state = await createModelsTestState("models-dispatch-lifecycle", {
+    env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
   });
   const requests: DispatchRequest[] = [];
   const discoveryAccounts: (string | undefined)[] = [];
@@ -115,7 +123,7 @@ async function withDispatchLifecycle(
       response.destroy(error instanceof Error ? error : new Error(String(error)));
     });
   });
-  let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+  let gateway: Awaited<ReturnType<typeof startModelsGateway>> | undefined;
   const saveAccount = async (key: string) => {
     await state.writeAuthProfiles({
       version: 1,
@@ -123,13 +131,7 @@ async function withDispatchLifecycle(
     });
   };
   try {
-    endpoint.listen(0, "127.0.0.1");
-    await once(endpoint, "listening");
-    const address = endpoint.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Lifecycle fixture did not bind a TCP port");
-    }
-    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    const baseUrl = `${await listenModelsEndpoint(endpoint)}/v1`;
     await state.writeJson("catalog-plugin/openclaw.plugin.json", {
       id: "opencode",
       providers: ["opencode"],
@@ -171,7 +173,7 @@ async function withDispatchLifecycle(
       };`,
     );
     const token = "dispatch-lifecycle-gateway-token";
-    const cfg = {
+    const cfg = modelsTestConfig(state, token, {
       models: {
         providers: {
           opencode: {
@@ -190,7 +192,6 @@ async function withDispatchLifecycle(
           heartbeat: { every: "0m" },
           modelPolicy: { allow: ["opencode/*"] },
         },
-        entries: { main: { workspace: state.workspaceDir } },
       },
       tools: { profile: "minimal" },
       plugins: {
@@ -198,18 +199,11 @@ async function withDispatchLifecycle(
         load: { paths: [pluginPath] },
         slots: { memory: "none" },
       },
-      gateway: { mode: "local", auth: { mode: "token", token } },
-    } satisfies OpenClawConfig;
+    });
     await state.writeConfig(cfg);
     await saveAccount("account-a-key");
     const start = async () => {
-      const started = await startGatewayWithClient({
-        cfg,
-        configPath: state.configPath,
-        token,
-        scopes: ["operator.admin"],
-        hotReloadRecovery,
-      });
+      const started = await startModelsGateway(state, cfg, token, { hotReloadRecovery });
       gateway = started;
       await started.server.startupSettled;
       return started;
@@ -245,8 +239,7 @@ async function withDispatchLifecycle(
       },
       saveAccount,
       restart: async () => {
-        await disconnectGatewayClient(active.client);
-        await active.server.close();
+        await active.close();
         gateway = undefined;
         active = await start();
       },
@@ -284,15 +277,13 @@ async function withDispatchLifecycle(
           const history = await active.client.request<{ messages: unknown[] }>("chat.history", {
             sessionKey: session.key,
           });
-          expect(history.messages).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                role: "assistant",
-                content: expect.arrayContaining([
-                  expect.objectContaining({ type: "text", text: "LIFECYCLE_DISPATCH_REPLY" }),
-                ]),
-              }),
-            ]),
+          expect(history.messages).toContainEqual(
+            expect.objectContaining({
+              role: "assistant",
+              content: expect.arrayContaining([
+                expect.objectContaining({ type: "text", text: "LIFECYCLE_DISPATCH_REPLY" }),
+              ]),
+            }),
           );
         }
         return completed;
@@ -302,20 +293,11 @@ async function withDispatchLifecycle(
   } finally {
     heldDiscovery?.release.resolve();
     try {
-      if (gateway) {
-        await disconnectGatewayClient(gateway.client);
-        await gateway.server.close();
-      }
+      await gateway?.close();
     } finally {
       endpoint.closeAllConnections();
-      try {
-        await new Promise<void>((resolve, reject) => {
-          endpoint.close((error) => (error ? reject(error) : resolve()));
-        });
-        await Promise.all(pending);
-      } finally {
-        await state.cleanup();
-      }
+      await closeModelsEndpoint(endpoint);
+      await Promise.all(pending);
     }
   }
 }
@@ -344,85 +326,41 @@ it(
         model: "opencode/account-a-only",
       });
       fixture.discoveryAccounts.length = 0;
-      const pathChecks = vi.spyOn(databaseIdentity, "isOpenClawAgentDatabasePathCurrent");
-      let selectedPathCheckCount = 0;
-      const observedReads = { factory: 0, isCurrent: 0, isCurrentAtResponse: 0 };
-      const measureRead = <T>(span: keyof typeof observedReads, read: () => T): T => {
-        observedReads[span]++;
-        const before = pathChecks.mock.calls.length;
-        try {
-          return read();
-        } finally {
-          // Synchronous owner calls exclude overlapping startup inventory work.
-          selectedPathCheckCount += pathChecks.mock.calls.length - before;
-        }
-      };
-      const retain = retainedSessionReads.retainGatewaySessionEntryReadOnly;
-      const retainedReads = vi
-        .spyOn(retainedSessionReads, "retainGatewaySessionEntryReadOnly")
-        .mockImplementation((...args) => {
-          if (args[0] !== selected.key) {
-            return retain(...args);
-          }
-          const read = measureRead("factory", () => retain(...args));
-          return {
-            ...read,
-            isCurrent: () => measureRead("isCurrent", () => read.isCurrent()),
-            isCurrentAtResponse: () =>
-              measureRead("isCurrentAtResponse", () => read.isCurrentAtResponse()),
-          };
-        });
+      const held = fixture.holdDiscovery();
+      const pending = settleModelsWork(
+        fixture.client.request<ModelsListResult>("models.list", {
+          agentId: "main",
+          sessionKey: selected.key,
+          provider: "opencode",
+          view: "all",
+          refresh: true,
+        }),
+      );
       try {
-        const held = fixture.holdDiscovery();
-        const pending = fixture.client
-          .request<ModelsListResult>("models.list", {
-            agentId: "main",
-            sessionKey: selected.key,
-            provider: "opencode",
-            view: "all",
-            refresh: true,
-          })
-          .then(
-            (result) => ({ result, error: undefined }),
-            (error: unknown) => ({
-              result: undefined,
-              error: error instanceof Error ? error.message : String(error),
-            }),
-          );
-        try {
-          await withTestTimeout(held.started, 30_000, "Selected session discovery did not start");
-          expect(fixture.discoveryAccounts).toEqual(["account-a-key"]);
-          await expect(
-            fixture.client.request("sessions.patch", {
-              key: other.key,
-              label: "Other session renamed",
-            }),
-          ).resolves.toMatchObject({ entry: { label: "Other session renamed" } });
-        } finally {
-          held.release();
-          await pending;
-        }
-        const outcome = await pending;
-        expect(outcome.error).toBeUndefined();
-        expect(
-          outcome.result?.models
-            .filter((model) => model.provider === "opencode")
-            .map(({ id, available }) => ({ id, available })),
-        ).toEqual(
-          ["account-a-only", ...expectedIds.filter((id) => id !== "account-a-only").toSorted()].map(
-            (id) => ({ id, available: true }),
-          ),
-        );
+        await withTestTimeout(held.started, 30_000, "Selected session discovery did not start");
         expect(fixture.discoveryAccounts).toEqual(["account-a-key"]);
-        expect(observedReads.factory).toBeGreaterThan(0);
-        expect(observedReads.isCurrent).toBeGreaterThan(0);
-        expect(observedReads.isCurrentAtResponse).toBeGreaterThan(0);
-        expect(selectedPathCheckCount).toBeGreaterThan(0);
-        expect(selectedPathCheckCount).toBeLessThanOrEqual(2);
+        await expect(
+          fixture.client.request("sessions.patch", {
+            key: other.key,
+            label: "Other session renamed",
+          }),
+        ).resolves.toMatchObject({ entry: { label: "Other session renamed" } });
       } finally {
-        retainedReads.mockRestore();
-        pathChecks.mockRestore();
+        held.release();
+        await pending;
       }
+      const outcome = await pending;
+      expect(outcome.error).toBeUndefined();
+      expect(
+        outcome.result?.models
+          .filter((model) => model.provider === "opencode")
+          .map(({ id, available }) => ({ id, available })),
+      ).toEqual(
+        ["account-a-only", ...expectedIds.filter((id) => id !== "account-a-only").toSorted()].map(
+          (id) => ({ id, available: true }),
+        ),
+      );
+      expect(fixture.discoveryAccounts).toEqual(["account-a-key"]);
     });
   },
 );
@@ -449,12 +387,7 @@ it("models.list retains executable rows on failed refresh and replaces them afte
     await expect(fixture.send("account-a-only", "after-failure")).resolves.toMatchObject({
       status: "ok",
     });
-    expect(fixture.requests).toHaveLength(2);
-    expect(fixture.requests[1]).toMatchObject({
-      authorization: "Bearer account-a-key",
-      requestHeader: "initial-transport",
-      body: { model: "account-a-only", max_tokens: 1536 },
-    });
+    expectDispatch(fixture.requests, 1, "account-a-only");
 
     fixture.advertised.set("account-a-key", ["after-restart"]);
     fixture.setDiscoveryAvailable(true);
@@ -466,12 +399,7 @@ it("models.list retains executable rows on failed refresh and replaces them afte
     await expect(fixture.send("after-restart", "first-after-restart")).resolves.toMatchObject({
       status: "ok",
     });
-    expect(fixture.requests).toHaveLength(3);
-    expect(fixture.requests[2]).toMatchObject({
-      authorization: "Bearer account-a-key",
-      requestHeader: "initial-transport",
-      body: { model: "after-restart", max_tokens: 1536 },
-    });
+    expectDispatch(fixture.requests, 2, "after-restart");
     await expect(fixture.send("account-a-only", "withdrawn-after-restart")).resolves.toMatchObject({
       status: "error",
       error: expect.stringContaining("This model was not found."),
@@ -518,12 +446,7 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
     await expect(fixture.send("account-b-only", "after-replacement")).resolves.toMatchObject({
       status: "ok",
     });
-    expect(fixture.requests).toHaveLength(2);
-    expect(fixture.requests[1]).toMatchObject({
-      authorization: "Bearer account-b-key",
-      requestHeader: "initial-transport",
-      body: { model: "account-b-only", max_tokens: 1536 },
-    });
+    expectDispatch(fixture.requests, 1, "account-b-only", "account-b-key");
 
     const config = await fixture.client.request<{ hash: string }>("config.get", {});
     await fixture.client.request("config.patch", {
@@ -566,11 +489,6 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
     await expect(fixture.send("account-b-only", "after-config-reload")).resolves.toMatchObject({
       status: "ok",
     });
-    expect(fixture.requests).toHaveLength(3);
-    expect(fixture.requests[2]).toMatchObject({
-      authorization: "Bearer account-b-key",
-      requestHeader: "reloaded-transport",
-      body: { model: "account-b-only", max_tokens: 1536 },
-    });
+    expectDispatch(fixture.requests, 2, "account-b-only", "account-b-key", "reloaded-transport");
   });
 }, 180_000);

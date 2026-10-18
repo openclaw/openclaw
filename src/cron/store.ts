@@ -1,9 +1,10 @@
 /** Public cron store load/save API backed entirely by shared SQLite state. */
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -13,7 +14,7 @@ import { invalidateCronJobNames, publishCronJobNames } from "./store/job-name.js
 import { readCronJobNamesInDatabase } from "./store/job-name.kernel.js";
 import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
-import { resolveCronJobsStorePath } from "./store/paths.js";
+import { resolveCronJobsStorePath, resolveCronJobsStorePathAsync } from "./store/paths.js";
 import {
   assertCronStoreCanPersist,
   readCronJobsFingerprint,
@@ -28,6 +29,7 @@ import type {
 } from "./store/save-worker.types.js";
 import {
   isCronRuntimeOnlySave,
+  loadCronStoreForChanges,
   prepareCronStoreChanges,
   saveCronStoreChangesInDatabase,
   saveCronStoreInDatabase,
@@ -39,7 +41,12 @@ import type {
 } from "./store/transaction-hooks.types.js";
 import type { LoadedCronStore } from "./store/types.js";
 import type { CronStoreFile } from "./types.js";
-export { resolveCronJobsStorePath, resolveCronJobsStorePathFromConfig } from "./store/paths.js";
+export {
+  resolveCronJobsStorePath,
+  resolveCronJobsStorePathAsync,
+  resolveCronJobsStorePathFromConfig,
+  resolveCronJobsStorePathFromConfigAsync,
+} from "./store/paths.js";
 export { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 export { CronJobsStoreChangedError } from "./store/save-error.js";
 export type { LoadedCronStore } from "./store/types.js";
@@ -58,18 +65,26 @@ export function getCronJobsStoreRevision(storePath: string): number {
   return cronStoreRevisions.get(cronStoreKey(storePath)) ?? nextCronStoreRevision;
 }
 
-export function noteCronJobsStoreCommit(storeKey: string): void {
+export function noteCronJobsStoreCommit(storeKey?: string): void {
   invalidateCronJobNames(storeKey);
   // A bounded monotonic fact invalidates sibling service snapshots without
   // polling SQLite or discarding the current scheduler's transient run state.
+  if (storeKey === undefined) {
+    // A lost default-load reply can hide both the selected partition and a committed repair.
+    cronStoreRevisions.clear();
+    nextCronStoreRevision += 1;
+    return;
+  }
   cronStoreRevisions.delete(storeKey);
   cronStoreRevisions.set(storeKey, ++nextCronStoreRevision);
   pruneMapToMaxSize(cronStoreRevisions, MAX_TRACKED_CRON_STORE_REVISIONS);
 }
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
-export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
-  const storeKey = cronStoreKey(storePath);
+export async function loadCronJobsStoreWithConfigJobs(
+  storePath?: string,
+): Promise<LoadedCronStore> {
+  const storeKey = storePath === undefined ? undefined : cronStoreKey(storePath);
   const context = captureOpenClawStateWorkerContext();
   let received = false;
   try {
@@ -77,12 +92,12 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
       const result = await scope.execute({ type: "cron.loadMutable", input: { storeKey } });
       received = true;
       for (let index = 0; index < result.repairCommits; index += 1) {
-        noteCronJobsStoreCommit(storeKey);
+        noteCronJobsStoreCommit(result.storeKey);
       }
       if (!result.ok) {
         // Coordinator cleanup can fail after COMMIT but before a repair is reported.
         if (result.repairCommits === 0) {
-          noteCronJobsStoreCommit(storeKey);
+          noteCronJobsStoreCommit(result.storeKey);
         }
         throw restoreCronLoadError(result.error);
       }
@@ -98,7 +113,7 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
 }
 
 export function assertCronJobsStoreUnchanged(
-  db: DatabaseSync,
+  db: EngineConnection,
   storePath: string,
   expectedJobsFingerprint: string,
 ): undefined {
@@ -122,7 +137,7 @@ export async function removeStaleCronJobFamilyRows(
     type: "cron.removeStaleFamily",
     input: { storeKey, family: { ...family } },
     assertCurrent: () => opts?.commitGuard?.(),
-    prepare: () => ({ value: {}, assertCurrent() {} }),
+    snapshot: {},
     publish: (outcome) => {
       removed = outcome.removed;
       if (removed > 0) {
@@ -139,7 +154,7 @@ export async function removeStaleCronJobFamilyRows(
 }
 
 /** Loads only the persisted cron job store payload. */
-export async function loadCronJobsStore(storePath: string): Promise<CronStoreFile> {
+export async function loadCronJobsStore(storePath?: string): Promise<CronStoreFile> {
   return (await loadCronJobsStoreWithConfigJobs(storePath)).store;
 }
 
@@ -267,7 +282,15 @@ function saveCronJobsStoreChangesNative(
   return commitCronStoreNative(
     storeKey,
     ({ db }, admittedHooks) =>
-      saveCronStoreChangesInDatabase(db, storeKey, storeKey, prepared, options, admittedHooks),
+      saveCronStoreChangesInDatabase(
+        db,
+        storeKey,
+        storeKey,
+        prepared,
+        loadCronStoreForChanges(db, storeKey),
+        options,
+        admittedHooks,
+      ),
     transactionHooks,
     "cron.config-mutation",
   ).value;
@@ -348,9 +371,19 @@ export async function saveCronJobsStore(
 }
 
 // Public plugin SDK seam; core callers use the SQLite-backed cron-jobs names above.
-/** Resolves the public plugin-SDK cron store path. */
+/** @deprecated Await resolveCronStorePathAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveCronStorePath(storePath?: string) {
+  warnPluginSdkDeprecation({
+    family: "cron-store-path",
+    method: "resolveCronStorePath",
+    replacement: "resolveCronStorePathAsync",
+  });
   return resolveCronJobsStorePath(storePath);
+}
+
+/** Resolves the public plugin-SDK cron partition through the shared-state worker. */
+export async function resolveCronStorePathAsync(storePath?: string): Promise<string> {
+  return resolveCronJobsStorePathAsync(storePath);
 }
 
 /** Plugin-SDK alias for loading the cron store. */

@@ -8,7 +8,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 type RecoveryScope = { storePath: string; sessionKey: string };
 
 export function createRecoveryRuntimeFixture(params: {
-  callGateway: typeof callGateway;
+  callGateway: (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
   getDispatchSettlement: () => Promise<void>;
   sendRecoveryNotice: GatewayRecoveryRuntime["sendRecoveryNotice"];
 }) {
@@ -64,6 +64,7 @@ export function createRecoveryRuntimeFixture(params: {
     }
   };
   return {
+    prepareRestartRecovery: () => undefined,
     async expectAdmission(
       expectedGatewayCalls: number,
       recovery: { stop: () => Promise<void> },
@@ -116,12 +117,6 @@ export function createRecoveryRuntimeFixture(params: {
       return result;
     },
     waitForAgent: async <T>(request: Record<string, unknown>, timeoutMs?: number) => {
-      if (request.timeoutMs === 30_000) {
-        // Capacity observation follows this fixture's actual dispatch lifetime;
-        // zero-time recovery probes below retain their independent RPC plan.
-        await params.getDispatchSettlement();
-        return { status: "ok", endedAt: Date.now() } as T;
-      }
       return (await params.callGateway({ method: "agent.wait", params: request, timeoutMs })) as T;
     },
     sendRecoveryNotice: params.sendRecoveryNotice,

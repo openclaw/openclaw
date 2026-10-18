@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -260,15 +259,13 @@ type HealthChannelPlan = {
 // replaced by later health refreshes and amplify process-wide probe work.
 const healthOperationPermits = createPermitPool(HEALTH_PROBE_CONCURRENCY);
 
-function buildHealthTimeoutRecord(
-  accountId: string,
-  timeoutMs: number,
-): ChannelAccountHealthSummary {
-  const error = `health collection timed out after ${timeoutMs}ms`;
+function buildHealthTimeoutRecord(accountId: string): ChannelAccountHealthSummary {
+  const error = `health collection timed out after ${HEALTH_COLLECTION_TIMEOUT_MS}ms`;
   return {
     accountId,
     lastError: error,
-    probe: { ok: false, timedOut: true, error },
+    // Published updaters treat ok:false as definitive failure. A deadline proves neither outcome.
+    probe: { timedOut: true, error },
   };
 }
 
@@ -284,11 +281,11 @@ async function buildHealthAccountRecord(params: {
   includeSensitive: boolean;
   probe: boolean;
   deadlineAtMs: number;
-  timeoutMs: number;
+  deadlineFallback: { record: ChannelAccountHealthSummary };
   runtimeSnapshot?: ChannelRuntimeSnapshot;
   runtimeOnly: boolean;
 }): Promise<ChannelAccountHealthSummary> {
-  const timedOut = () => buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
+  const timedOut = () => params.deadlineFallback.record;
   const runtimeAccount =
     params.runtimeSnapshot?.channelAccounts[params.plugin.id]?.[params.accountId];
   const runtimeSnapshot =
@@ -359,6 +356,17 @@ async function buildHealthAccountRecord(params: {
     }
     lastProbeAt = Date.now();
   }
+  const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(params.plugin.id, probe);
+  const snapshotProbe = params.includeSensitive ? probe : nonSensitiveProbeFailure;
+  const failure = asNullableObjectRecord(snapshotProbe);
+  if (failure?.ok === false && failure.timedOut !== true) {
+    // Later summary hooks cannot erase an observed negative when the outer deadline expires.
+    params.deadlineFallback.record = {
+      accountId: params.accountId,
+      probe: snapshotProbe,
+      ...(typeof failure.error === "string" ? { lastError: failure.error } : {}),
+    };
+  }
   if (Date.now() >= params.deadlineAtMs) {
     return timedOut();
   }
@@ -372,8 +380,6 @@ async function buildHealthAccountRecord(params: {
     });
   }
 
-  const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(params.plugin.id, probe);
-  const snapshotProbe = params.includeSensitive ? probe : nonSensitiveProbeFailure;
   const snapshot: ChannelAccountSnapshot =
     probeAccount === undefined
       ? buildChannelAccountSnapshotFromInspection({
@@ -452,31 +458,29 @@ async function buildHealthAccountRecord(params: {
 }
 
 async function runHealthAccountWithinDeadline(
-  params: Parameters<typeof buildHealthAccountRecord>[0],
+  params: Omit<Parameters<typeof buildHealthAccountRecord>[0], "deadlineFallback">,
 ): Promise<ChannelAccountHealthSummary> {
+  const deadlineFallback = { record: buildHealthTimeoutRecord(params.accountId) };
   // Own permit admission and release too: neither a deadline nor shutdown may orphan a hook.
   const operation = trackAsyncWork(async () => {
     const release = await healthOperationPermits.acquire({ deadlineAtMs: params.deadlineAtMs });
     if (!release) {
-      return buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
+      return deadlineFallback.record;
     }
     try {
-      return await buildHealthAccountRecord(params);
+      return await buildHealthAccountRecord({ ...params, deadlineFallback });
     } finally {
       release();
     }
   });
   const result = await awaitWithinDeadline(() => operation, params.deadlineAtMs);
-  return result === ABSOLUTE_DEADLINE_EXPIRED
-    ? buildHealthTimeoutRecord(params.accountId, params.timeoutMs)
-    : result;
+  return result === ABSOLUTE_DEADLINE_EXPIRED ? deadlineFallback.record : result;
 }
 
 /** Collects the gateway-owned health snapshot for an explicit trust audience. */
 export async function collectGatewayHealthSnapshot(params: {
   audience: HealthSnapshotAudience;
   probe: boolean;
-  timeoutMs?: number;
   runtimeSnapshot?: ChannelRuntimeSnapshot;
   eventLoop?: HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
@@ -484,11 +488,7 @@ export async function collectGatewayHealthSnapshot(params: {
 }): Promise<HealthSummary> {
   const stateContext = captureDeliveryQueueHealthContext();
   const start = Date.now();
-  const timeoutMs = Math.min(
-    resolveTimerTimeoutMs(params.timeoutMs, HEALTH_COLLECTION_TIMEOUT_MS, 50),
-    HEALTH_COLLECTION_TIMEOUT_MS,
-  );
-  const deadlineAtMs = start + timeoutMs;
+  const deadlineAtMs = start + HEALTH_COLLECTION_TIMEOUT_MS;
   const cfg = await readRuntimeHealthConfig();
   const { defaultAgentId, ordered } = resolveHealthAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
@@ -544,7 +544,6 @@ export async function collectGatewayHealthSnapshot(params: {
       ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
       : [];
     const preferredAccountId = resolvePreferredAccountId({
-      accountIds,
       defaultAccountId,
       boundAccounts,
     });
@@ -596,7 +595,6 @@ export async function collectGatewayHealthSnapshot(params: {
         includeSensitive,
         probe: params.probe,
         deadlineAtMs,
-        timeoutMs,
         runtimeSnapshot: params.runtimeSnapshot,
         runtimeOnly: !plan.configuredAccountIds.has(accountId),
       }),
@@ -633,7 +631,7 @@ export async function collectGatewayHealthSnapshot(params: {
 
   const pluginHealth = buildPluginHealthSummary(cfg);
   const contextEngineHealth = await buildContextEngineHealthSummary();
-  const deliveryQueueHealth = await buildDeliveryQueueHealthSummary(undefined, stateContext);
+  const deliveryQueueHealth = await buildDeliveryQueueHealthSummary(stateContext);
   return {
     ok: true,
     ts: Date.now(),

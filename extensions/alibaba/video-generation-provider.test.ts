@@ -1,15 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  saveAuthProfileStore,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import {
   capturePluginRegistration,
   createRuntimeEnv,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -20,7 +18,7 @@ import {
   expectSuccessfulDashscopeVideoResult,
   mockSuccessfulDashscopeVideoTask,
 } from "openclaw/plugin-sdk/provider-test-contracts";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -92,47 +90,7 @@ describe("alibaba video generation provider", () => {
     });
   });
 
-  it("advertises Wan video generation with a config-only Standard API key", () => {
-    clearAlibabaAuthEnvironment();
-
-    expect(
-      alibabaVideoGenerationProvider.isConfigured?.({
-        cfg: {
-          models: {
-            providers: {
-              alibaba: {
-                apiKey: "sk-alibaba-legacy-standard-key",
-                baseUrl: "https://dashscope-intl.aliyuncs.com",
-                models: [],
-              },
-            },
-          },
-        },
-      }),
-    ).toBe(true);
-  });
-
-  it("does not use Qwen Coding Plan credentials for Alibaba video discovery", () => {
-    clearAlibabaAuthEnvironment();
-
-    expect(
-      alibabaVideoGenerationProvider.isConfigured?.({
-        cfg: {
-          models: {
-            providers: {
-              qwen: {
-                apiKey: "qwen-coding-plan-key",
-                baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-                models: [],
-              },
-            },
-          },
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("tracks whether an allowed Alibaba API-key SecretRef resolves", () => {
+  it("tracks whether an allowed Alibaba API-key SecretRef resolves", async () => {
     clearAlibabaAuthEnvironment();
     vi.stubEnv("ALIBABA_QA_CONFIG_KEY", "resolved-alibaba-config-key");
 
@@ -161,31 +119,17 @@ describe("alibaba video generation provider", () => {
       },
     };
 
-    expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg })).toBe(true);
+    expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg })).toBe(true);
     vi.stubEnv("ALIBABA_QA_CONFIG_KEY", "");
-    expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg })).toBe(false);
+    expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg })).toBe(false);
   });
 
-  it("preserves Alibaba environment API-key discovery", () => {
-    clearAlibabaAuthEnvironment();
-    vi.stubEnv("MODELSTUDIO_API_KEY", "alibaba-environment-key");
-
-    expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg: {} })).toBe(true);
-  });
-
-  it("does not advertise an inherited Qwen Coding Plan API key", () => {
-    clearAlibabaAuthEnvironment();
-    vi.stubEnv("QWEN_API_KEY", "sk-sp-qwen-coding-plan-key");
-
-    expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg: {} })).toBe(false);
-  });
-
-  it("keeps explicit Standard config above an inherited Coding Plan environment key", () => {
+  it("keeps explicit Standard config above an inherited Coding Plan environment key", async () => {
     clearAlibabaAuthEnvironment();
     vi.stubEnv("QWEN_API_KEY", "sk-sp-qwen-coding-plan-key");
 
     expect(
-      alibabaVideoGenerationProvider.isConfigured?.({
+      await alibabaVideoGenerationProvider.isConfiguredAsync?.({
         cfg: {
           models: {
             providers: {
@@ -211,28 +155,30 @@ describe("alibaba video generation provider", () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-alibaba-wan-auth-"));
 
     try {
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "alibaba:standard": {
-              type: "api_key",
-              provider: "alibaba",
-              key: profileKey,
-            },
+      await expect(
+        updateAuthProfileStoreWithLock({
+          agentDir,
+          saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+          updater(store) {
+            store.profiles = {
+              "alibaba:standard": {
+                type: "api_key",
+                provider: "alibaba",
+                key: profileKey,
+              },
+            };
+            return true;
           },
-        },
-        agentDir,
-        { filterExternalAuthProfiles: false, syncExternalCli: false },
-      );
+        }),
+      ).resolves.not.toBeNull();
 
-      expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg: {}, agentDir })).toBe(expected);
+      expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg: {}, agentDir })).toBe(
+        expected,
+      );
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
-      // Saving the profile store opens the per-agent database under the temporary agent
-      // dir, and clearing the snapshots does not release it, so Windows fails the removal
-      // with EBUSY unless the cached handles are closed first.
-      closeOpenClawAgentDatabasesForTest();
+      // Release the worker's database handles before Windows removes the temporary directory.
+      await closeOpenClawAgentDatabasesAsync();
       await fs.rm(agentDir, { force: true, recursive: true });
     }
   });

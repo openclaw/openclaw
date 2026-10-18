@@ -21,25 +21,20 @@ import {
   type ExpectedWorkerBuild,
   type WorkerConnectionIdentity,
 } from "./admission.js";
-import type { WorkerInstallationArtifact } from "./bundle.js";
-import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
-import type { WorkerLiveEventReceiver } from "./live-events.js";
+import { workerInferencePlacement } from "./inference-placement.js";
+import type { WorkerInferenceSink } from "./inference.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   acknowledgeWorkerTurnFinishing,
   getWorkerTurnToolSurface,
   type WorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
-import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import type { WorkerEnvironmentStore } from "./store.js";
-import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
 import type { WorkerGatewayToolSink } from "./worker-gateway-tool-contract.js";
 import { workerSessionToolErrorResult } from "./worker-session-tool-result.js";
-import {
-  createWorkerComputerRpc,
-  type WorkerComputerExecutor,
-} from "./worker-turn-computer-rpc.js";
+import { createWorkerComputerRpc } from "./worker-turn-computer-rpc.js";
+import { refreshWorkerGitHubBinding } from "./worker-turn-github-rpc.js";
 import type {
+  WorkerTurnRpcOptions,
   WorkerProcessTurnBinding,
   WorkerTerminalTurnFence,
   WorkerPendingTerminalTurnFence,
@@ -57,21 +52,6 @@ class WorkerTranscriptAuthorityError extends Error {
   }
 }
 
-type WorkerTurnRpcOptions = {
-  store: WorkerEnvironmentStore;
-  prepareInstallation: (
-    install: WorkerInstallationArtifact["install"],
-  ) => Promise<WorkerInstallationArtifact>;
-  applyTranscriptCommit?: WorkerTranscriptCommitApplication;
-  liveEvents?: Pick<WorkerLiveEventReceiver, "apply">;
-  placementStore?: WorkerSessionPlacementGate;
-  executeComputer?: WorkerComputerExecutor;
-  inference: ReturnType<typeof createWorkerInferenceManager>;
-  isStopping: () => boolean;
-  now: () => number;
-  withLock: <T>(environmentId: string, task: () => Promise<T>) => Promise<T>;
-};
-
 export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
   const { store } = options;
   const inference = options.inference;
@@ -85,10 +65,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
 
   const placementClaim = (identity: WorkerConnectionIdentity) => identity.turnClaim ?? undefined;
 
-  const sourceFor = (identity: WorkerConnectionIdentity) => {
-    const claim = placementClaim(identity);
-    return claim ? options.placementStore?.getExecutionIdentityCapability?.(claim) : undefined;
-  };
+  const sourceFor = (identity: WorkerConnectionIdentity) =>
+    identity.turnClaim
+      ? options.placementStore?.getExecutionIdentityCapability?.(identity.turnClaim)
+      : undefined;
 
   const processTurnBinding = (
     identity: WorkerConnectionIdentity,
@@ -262,7 +242,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       const isReplay =
         (request.kind === "transcript" && request.seq <= terminalFence.transcriptSeq) ||
         (request.kind === "live" && request.seq <= terminalFence.liveSeq);
-      if (!isReplay) {
+      if (!isReplay && request.kind !== "heartbeat") {
         return { ok: false, closeReason: "placement-mismatch" };
       }
     }
@@ -425,6 +405,20 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     request: WorkerGatewayToolCancelParams,
   ) => withToolSurface(identity, (runtime) => runtime.cancel(request));
 
+  const refreshGitHubBinding = (identity: WorkerConnectionIdentity, generation?: number) =>
+    refreshWorkerGitHubBinding({
+      identity,
+      generation,
+      source: sourceFor(identity),
+      validate: () =>
+        validateAttachedWorkerRequest(identity, identity.ownerEpoch, { kind: "heartbeat" }).ok,
+      isTerminal: () => {
+        const turn = processTurnBinding(identity);
+        const fence = identity.sessionId ? terminalTurnFences.get(identity.sessionId) : undefined;
+        return Boolean(turn && fence && matchesTurnBinding(turn, fence));
+      },
+    });
+
   const validateLiveEvent = (
     identity: WorkerConnectionIdentity,
     request: WorkerLiveEventParams,
@@ -582,6 +576,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     if (!binding.ok) {
       return binding;
     }
+    const environment = options.store.get(identity.environmentId);
+    if (!environment || workerInferencePlacement(environment) !== "gateway") {
+      return { ok: false, reason: "model-not-approved" };
+    }
     const source = sourceFor(identity);
     if (!source) {
       return { ok: false, reason: "session-not-attached" };
@@ -591,13 +589,8 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       if (!runtime) {
         return { ok: false, reason: "invalid-context" };
       }
-      const surface = await runtime.getSurface(identity);
+      const { tools } = await runtime.getPromptProjection(identity);
       source.receiptAuthority();
-      const tools = surface.tools.map(({ definition: { name, description, parameters } }) => ({
-        name,
-        description,
-        parameters,
-      }));
       if (JSON.stringify(request.context.tools) !== JSON.stringify(tools)) {
         return { ok: false, reason: "invalid-context" };
       }
@@ -718,6 +711,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     commitTranscript,
     pushLiveEvent,
     getToolSurface,
+    refreshGitHubBinding,
     invokeGatewayTool,
     cancelGatewayTool,
     executeComputer,

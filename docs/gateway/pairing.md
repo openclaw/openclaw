@@ -296,14 +296,14 @@ Enabled by default. Requirements for it to fire:
   pairing only; upgrades, browsers, Control UI, and WebChat always prompt.
 
 While device approval is pending, the node client is told to keep retrying
-(`wait_then_retry`), including while an SSH probe is running. If the probe fails,
+(`wait_then_retry`), including while an SSH check is running. If the check fails,
 the request remains available for manual approval and the node keeps retrying.
 Failed SSH targets get a short cooldown (5 minutes after a key mismatch).
 
 Pairing settings hot-apply without restarting the Gateway. Automatic approvals
 recheck the current policy immediately before granting access, even if an SSH
-probe or store lock was already pending when the policy changed. Changes to SSH
-verification settings use a fresh probe and do not inherit the previous policy’s
+check or store lock was already pending when the policy changed. Changes to SSH
+verification settings use a fresh check and do not inherit the previous policy’s
 cooldown. Already paired devices remain paired.
 
 Approved devices record `approvedVia: "ssh-verified"` and their first declared
@@ -321,8 +321,8 @@ Harden or disable:
       pairing: {
         // Disable entirely:
         sshVerify: false,
-        // ...or scope/tune the probe:
-        // sshVerify: { user: "me", identity: "~/.ssh/probe", timeoutMs: 7000, cidrs: ["10.0.0.0/8"] },
+        // ...or scope/tune the check:
+        // sshVerify: { user: "me", identity: "~/.ssh/check", timeoutMs: 7000, cidrs: ["10.0.0.0/8"] },
       },
     },
   },
@@ -440,10 +440,23 @@ still use the explicit re-approval flow. Scope upgrades (read to
 write/admin) and public key changes are **not** eligible for
 metadata-upgrade auto-approval; they stay explicit re-approval requests.
 
+The Gateway loads paired devices once during startup. Reconnects use those
+committed, process-owned records for pairing lookups. Pairing writes publish updated records before the next authorization
+check. Access metadata is recorded after the hello response and coalesced across
+tabs of the same device; last-seen-only refreshes within one minute may be skipped.
+This bookkeeping never grants access and cannot update a replacement approval.
+
 ## QR pairing helpers
 
 `/pair qr` renders the pairing payload as structured media so mobile and
 browser clients can scan it directly.
+
+In Control UI, the QR image stays beside the pairing details during chat history
+refreshes until it expires. The setup secret is not saved in the transcript or
+the browser's disk cache. Reloading, reconnecting, or changing authentication
+discards the live QR; run `/pair qr` again for a fresh code.
+Browser snapshots saved by older versions also discard QR credentials on restore;
+the remaining history is preserved and the sanitized snapshot replaces the old cache entry.
 
 Deleting a device also sweeps any stale pending pairing requests for that
 device id, so `nodes pending` does not show orphaned rows after a revoke.

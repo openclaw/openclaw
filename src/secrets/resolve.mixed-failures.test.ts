@@ -45,7 +45,7 @@ describe.each(["env", "file", "exec", "store"] as const)("%s mixed failures", (s
         provider = { source };
       }
       if (source === "store") {
-        readValue.mockImplementation(({ name }: { name: string }) =>
+        readValue.mockImplementation(async ({ name }: { name: string }) =>
           name === "REDACTED_KEY" || name === "HEALTHY_KEY"
             ? { ok: true, value: values[name] }
             : {

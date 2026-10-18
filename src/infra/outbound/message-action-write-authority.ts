@@ -31,7 +31,7 @@ export async function prepareMessageActionWriteAuthority(params: {
   enforceMessageActionAllowlist({ cfg, agentId: context.agentId, action });
   await validateExplicitMessageAccountSelection({ cfg, channel, accountId, plugin });
   assertCurrent();
-  const available = plugin.actions?.describeMessageTool({
+  const discoveryContext = {
     cfg,
     accountId,
     agentId: context.agentId ?? undefined,
@@ -39,7 +39,11 @@ export async function prepareMessageActionWriteAuthority(params: {
     sessionId: context.sessionId ?? undefined,
     requesterSenderId: context.requesterSenderId ?? undefined,
     senderIsOwner: context.senderIsOwner,
-  });
+  };
+  const available = plugin.actions.describeMessageToolAsync
+    ? await plugin.actions.describeMessageToolAsync(discoveryContext)
+    : plugin.actions.describeMessageTool(discoveryContext);
+  assertCurrent();
   if (!available?.actions?.includes(action)) {
     throw new Error(`Scheduled ${channel}:${action} is disabled for this account.`);
   }

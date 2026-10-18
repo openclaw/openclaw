@@ -14,7 +14,6 @@ import {
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 
-/** Resolve the profile context requested by query/profile parameters. */
 export function getProfileContext(
   req: BrowserRequest,
   ctx: BrowserRouteContext,
@@ -98,16 +97,8 @@ export function toStringOrEmpty(value: unknown) {
 
 /** Return a canonical HTTP origin, or null when the route value is absent or invalid. */
 export function readHttpOrigin(value: unknown): string | null {
-  const raw = toStringOrEmpty(value);
-  if (!raw) {
-    return null;
-  }
-  try {
-    const url = new URL(raw);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
-  } catch {
-    return null;
-  }
+  const url = URL.parse(toStringOrEmpty(value));
+  return url?.protocol === "http:" || url?.protocol === "https:" ? url.origin : null;
 }
 
 /** Coerce route boolean values from booleans or common string forms. */

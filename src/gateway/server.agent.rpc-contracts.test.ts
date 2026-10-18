@@ -1,8 +1,10 @@
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-// Real Gateway WebSocket proof for agent delivery fallback, response ordering, and idempotency.
+// Real Gateway WebSocket proof for session-only replies, response ordering, and idempotency.
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import type { AgentCommandDeliveryResult } from "../agents/command/delivery-result.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
   agentCommandMock,
@@ -20,14 +22,7 @@ type AgentResponse = {
   payload?: {
     runId?: string;
     status?: string;
-    result?: {
-      payloads?: Array<{ text?: string }>;
-      deliveryStatus?: {
-        requested?: boolean;
-        attempted?: boolean;
-        reason?: string;
-      };
-    };
+    result?: Pick<AgentCommandDeliveryResult, "payloads" | "deliveryStatus" | "deliverySucceeded">;
   };
 };
 
@@ -69,22 +64,15 @@ function sendAgentRequest(params: {
 }
 
 describe("gateway agent RPC contracts", () => {
-  test("preserves WebChat delivery status across ordered final response and replay", async () => {
+  test("preserves a session-only WebChat reply across ordered final response and replay", async () => {
+    const commandStarted = createDeferred();
     const runCompletion = createDeferred();
     vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
+      commandStarted.resolve();
       await runCompletion.promise;
       return {
         payloads: [{ text: "assistant reply" }],
         meta: { durationMs: 1 },
-        deliverySucceeded: false,
-        deliveryStatus: {
-          requested: true,
-          attempted: false,
-          status: "failed",
-          succeeded: false,
-          error: true,
-          reason: "channel_resolved_to_internal",
-        },
       };
     });
 
@@ -117,60 +105,64 @@ describe("gateway agent RPC contracts", () => {
         frame.payload?.status !== "accepted",
     );
 
-    sendAgentRequest({
-      ws: first.ws,
-      id: "agent-contract",
-      idempotencyKey,
-      message: "prove the gateway agent RPC contract",
-    });
+    let terminal: AgentResponse;
+    try {
+      sendAgentRequest({
+        ws: first.ws,
+        id: "agent-contract",
+        idempotencyKey,
+        message: "prove the gateway agent RPC contract",
+      });
 
-    await acceptedPromise;
-    await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(agentCommandMock).mock.calls[0]?.[0]).toMatchObject({
-      runId: idempotencyKey,
-      channel: "webchat",
-      messageChannel: "webchat",
-      runContext: { messageChannel: "webchat" },
-      deliver: true,
-      bestEffortDeliver: true,
-    });
+      await acceptedPromise;
+      await awaitGateBeforeSettlement(
+        commandStarted.promise,
+        terminalPromise,
+        "agent completed before command dispatch",
+      );
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(agentCommandMock).mock.calls[0]?.[0]).toMatchObject({
+        runId: idempotencyKey,
+        channel: "webchat",
+        messageChannel: "webchat",
+        runContext: { messageChannel: "webchat" },
+        deliver: false,
+        bestEffortDeliver: true,
+      });
 
-    runCompletion.resolve();
-    const terminal = await terminalPromise;
-    first.ws.off("message", recordResponse);
-    expect(orderedResponses.map((frame) => frame.payload?.status)).toEqual(["accepted", "ok"]);
-    const accepted = orderedResponses[0];
-    expect(accepted).toMatchObject({
-      type: "res",
-      id: "agent-contract",
-      ok: true,
-      payload: {
-        runId: idempotencyKey,
-        status: "accepted",
-      },
-    });
-    expect(terminal).toMatchObject({
-      type: "res",
-      id: "agent-contract",
-      ok: true,
-      payload: {
-        runId: idempotencyKey,
-        status: "ok",
-        result: {
-          payloads: [{ text: "assistant reply" }],
-          deliveryStatus: {
-            requested: true,
-            attempted: false,
-            reason: "channel_resolved_to_internal",
+      runCompletion.resolve();
+      terminal = await terminalPromise;
+      expect(orderedResponses.map((frame) => frame.payload?.status)).toEqual(["accepted", "ok"]);
+      expect(orderedResponses[0]).toMatchObject({
+        type: "res",
+        id: "agent-contract",
+        ok: true,
+        payload: {
+          runId: idempotencyKey,
+          status: "accepted",
+        },
+      });
+      expect(terminal).toMatchObject({
+        type: "res",
+        id: "agent-contract",
+        ok: true,
+        payload: {
+          runId: idempotencyKey,
+          status: "ok",
+          result: {
+            payloads: [{ text: "assistant reply" }],
           },
         },
-      },
-    });
-
-    first.ws.close();
-    await new Promise<void>((resolve) => {
-      first.ws.once("close", () => resolve());
-    });
+      });
+      expect(terminal.payload?.result).not.toHaveProperty("deliveryStatus");
+      expect(terminal.payload?.result).not.toHaveProperty("deliverySucceeded");
+    } finally {
+      runCompletion.resolve();
+      first.ws.off("message", recordResponse);
+      const responsesSettled = Promise.allSettled([acceptedPromise, terminalPromise]);
+      await closeGatewayTestWebSocket(first.ws);
+      await responsesSettled;
+    }
 
     const second = await harness.openClient(clientOptions);
     try {
@@ -189,7 +181,7 @@ describe("gateway agent RPC contracts", () => {
       expect(replay.payload).toEqual(terminal.payload);
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     } finally {
-      second.ws.close();
+      await closeGatewayTestWebSocket(second.ws);
     }
   });
 });

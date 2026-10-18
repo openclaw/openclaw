@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TypingMode } from "../../config/types.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { TypingPolicy } from "../types.js";
 import type { TypingController } from "./typing.js";
 
@@ -38,10 +37,7 @@ export function resolveTypingMode({
   if (configured) {
     return configured;
   }
-  if (sourceReplyDeliveryMode === "message_tool_only") {
-    return "instant";
-  }
-  if (!isGroupChat || wasMentioned) {
+  if (sourceReplyDeliveryMode === "message_tool_only" || !isGroupChat || wasMentioned) {
     return "instant";
   }
   // Group chats wait for visible text to avoid noisy indicators.
@@ -87,14 +83,6 @@ export function createTypingSignaler(params: {
     typing.refreshTypingTtl();
   };
 
-  const isRenderableText = (text?: string): boolean => {
-    const trimmed = normalizeOptionalString(text);
-    if (!trimmed) {
-      return false;
-    }
-    return !isSilentReplyText(trimmed, SILENT_REPLY_TOKEN);
-  };
-
   return {
     mode,
     shouldStartImmediately,
@@ -112,7 +100,8 @@ export function createTypingSignaler(params: {
       }
     },
     async signalTextDelta(text?: string) {
-      if (disabled || !isRenderableText(text)) {
+      const trimmed = disabled ? undefined : normalizeOptionalString(text);
+      if (!trimmed) {
         return;
       }
       hasRenderableText = true;

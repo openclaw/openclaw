@@ -8,8 +8,10 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  persistRegistryFixture,
+} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   listSubagentRunsForRequester,
   registerSubagentRun,
@@ -18,6 +20,10 @@ import {
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resetConfigOverrides } from "../config/runtime-overrides.js";
+import {
+  persistSessionTranscriptTurn,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -202,6 +208,7 @@ describe("Completed child results on a real parent-agent turn", () => {
           token,
           clientDisplayName: "vitest-subagent-prompt-recent",
         });
+        await gateway.server.startupSettled;
 
         const firstCursor = requests.length;
         await runParentAgentTurn(gateway.client, "first parent turn");
@@ -211,9 +218,42 @@ describe("Completed child results on a real parent-agent turn", () => {
         if (kind === "outstanding") {
           const result = `Retained-result-${randomUUID()}`;
           const endedAt = Date.now() - 7_200_000;
+          const childSessionId = "persisted-outstanding-session";
+          const childScope = {
+            agentId: "main",
+            sessionKey: CHILD_SESSION_KEY,
+            storePath: resolvePhysicalSessionStorePath({ sessionKey: CHILD_SESSION_KEY }, cfg),
+          };
+          await upsertSessionEntryCore(childScope, {
+            sessionId: childSessionId,
+            updatedAt: endedAt,
+          });
+          await persistSessionTranscriptTurn(
+            { ...childScope, sessionId: childSessionId },
+            {
+              cwd: workspace,
+              config: cfg,
+              runId: "persisted-outstanding-result",
+              expectedSessionId: childSessionId,
+              touchSessionEntry: false,
+              updateMode: "none",
+              messages: [
+                {
+                  message: {
+                    role: "assistant",
+                    phase: "final_answer",
+                    stopReason: "stop",
+                    content: [{ type: "text", text: result }],
+                  },
+                  now: endedAt,
+                },
+              ],
+            },
+          );
           const retained: SubagentRunRecord = {
             runId: "persisted-outstanding-result",
             childSessionKey: CHILD_SESSION_KEY,
+            childSessionIdentity: { sessionId: childSessionId },
             requesterSessionKey: PARENT_SESSION_KEY,
             requesterStorePath: resolvePhysicalSessionStorePath(
               { sessionKey: PARENT_SESSION_KEY },
@@ -226,7 +266,12 @@ describe("Completed child results on a real parent-agent turn", () => {
             expectsCompletionMessage: true,
             createdAt: endedAt - 1_000,
             execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
-            completion: { required: true, resultText: result, capturedAt: endedAt },
+            completion: {
+              required: true,
+              resultText: result,
+              capturedAt: endedAt,
+              terminalReply: { disposition: "visible", text: result },
+            },
             delivery: { status: "failed" },
           };
           // Publish retained custody through the owner without registering an active child.
@@ -266,6 +311,8 @@ describe("Completed child results on a real parent-agent turn", () => {
         await registerSubagentRun({
           runId: RUN_ID,
           childSessionKey: CHILD_SESSION_KEY,
+          childAgentId: "main",
+          sessionEntry: { sessionId: "gw-prompt-recent-child" },
           requesterSessionKey: PARENT_SESSION_KEY,
           requesterDisplayKey: "main",
           task: "summarize the inbox",

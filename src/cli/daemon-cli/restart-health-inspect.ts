@@ -29,6 +29,7 @@ export async function inspectGatewayRestart(params: {
   expectedBuildId?: string | null;
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
   requirePluginHealth?: boolean;
+  requireChannelHealth?: boolean;
   probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
@@ -77,9 +78,10 @@ export async function inspectGatewayRestart(params: {
     }));
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   const expectedBuildId = normalizeOptionalString(params.expectedBuildId);
-  const requiresGatewayProbe = Boolean(
-    expectedVersion || expectedBuildId || params.requirePluginHealth === false,
-  );
+  const requiresGatewayProbe =
+    Boolean(expectedVersion || expectedBuildId) ||
+    params.requirePluginHealth === false ||
+    params.requireChannelHealth === false;
   let reachability: GatewayReachability | null = null;
   const loadReachability = () =>
     read("gateway-health", () =>
@@ -88,6 +90,10 @@ export async function inspectGatewayRestart(params: {
         ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
         env,
+        allowHttpVerification:
+          Boolean(expectedVersion) &&
+          params.requirePluginHealth === false &&
+          params.requireChannelHealth === false,
         timeoutMs: remainingTimeoutMs(params.probeTimeoutMs),
         ...(signal ? { signal } : {}),
       }),
@@ -147,35 +153,6 @@ export async function inspectGatewayRestart(params: {
     // Startup cannot conceal a previous install or a definitive plugin/channel failure.
     reachability = await loadReachability();
   }
-  if (!startupPhase && portUsage.status === "busy" && runtime.status !== "running") {
-    const reachable = (reachability ??= await loadReachability());
-    if (reachable.reachable) {
-      return finalizeGatewayRestartSnapshot(
-        {
-          runtime,
-          portUsage,
-          healthy: true,
-          staleGatewayPids: [],
-          gatewayVersion: reachable.gatewayVersion,
-          ...(reachable.gatewayBootId ? { gatewayBootId: reachable.gatewayBootId } : {}),
-          gatewayBuildId: reachable.gatewayBuildId,
-          ...(reachable.activatedPluginErrors.length > 0
-            ? { activatedPluginErrors: reachable.activatedPluginErrors }
-            : {}),
-          ...(reachable.unavailablePlugins.length > 0
-            ? { unavailablePlugins: reachable.unavailablePlugins }
-            : {}),
-          ...(reachable.channelProbeErrors.length > 0
-            ? { channelProbeErrors: reachable.channelProbeErrors }
-            : {}),
-        },
-        expectedVersion,
-        expectedBuildId,
-        params.requirePluginHealth !== false,
-      );
-    }
-  }
-
   const gatewayListeners =
     portUsage.status === "busy"
       ? portUsage.listeners.filter((listener) => classifyPortListener(listener) === "gateway")
@@ -189,19 +166,19 @@ export async function inspectGatewayRestart(params: {
           listenerOwnedByRuntimePid({ listener, runtimePid }),
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
-  let healthy = running && ownsPort && !startupPhase;
+  let healthy = false;
   if (
     !startupPhase &&
-    running &&
     portUsage.status === "busy" &&
-    (requiresGatewayProbe ? healthy : !healthy)
+    (!running || !requiresGatewayProbe || ownsPort)
   ) {
     const reachable = (reachability ??= await loadReachability());
     healthy = reachable.reachable;
   }
   // Read after probes: an owner can acquire the coordinator while health is unavailable.
+  const unmanagedHealthy = healthy && !running;
   const owner =
-    portUsage.status === "busy"
+    !unmanagedHealthy && portUsage.status === "busy"
       ? readGatewayOwnerLease({
           env,
           port: params.port,
@@ -212,30 +189,34 @@ export async function inspectGatewayRestart(params: {
       : undefined;
   // A recorded owner is never stale by PID inference; other listeners are foreign.
   // 2026.9.3 Gateways have no row and retain the installed-runtime ownership path.
-  const staleGatewayPids = owner
-    ? []
-    : Array.from(
-        new Set(
-          gatewayListeners.flatMap((listener) =>
-            typeof listener.pid === "number" &&
-            Number.isFinite(listener.pid) &&
-            (!running ||
-              (runtimePid != null && !listenerOwnedByRuntimePid({ listener, runtimePid })))
-              ? [listener.pid]
-              : [],
+  const staleGatewayPids =
+    unmanagedHealthy || owner
+      ? []
+      : Array.from(
+          new Set(
+            gatewayListeners.flatMap((listener) =>
+              typeof listener.pid === "number" &&
+              Number.isFinite(listener.pid) &&
+              (!running ||
+                (runtimePid != null && !listenerOwnedByRuntimePid({ listener, runtimePid })))
+                ? [listener.pid]
+                : [],
+            ),
           ),
-        ),
-      );
+        );
 
   const {
     gatewayBootId,
     gatewayVersion,
     gatewayBuildId,
     probeError,
+    authenticationError,
     staleConnection,
     activatedPluginErrors,
     unavailablePlugins,
     channelProbeErrors,
+    channelProbeTimeouts,
+    channelRuntimeWarnings,
   } = reachability ?? {};
   return finalizeGatewayRestartSnapshot(
     {
@@ -248,13 +229,17 @@ export async function inspectGatewayRestart(params: {
       ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
       ...(startupPhase ? { startupPhase } : {}),
       ...(probeError ? { probeError } : {}),
+      ...(authenticationError ? { authenticationError } : {}),
       ...(staleConnection ? { staleConnection } : {}),
       ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
       ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),
       ...(channelProbeErrors?.length ? { channelProbeErrors } : {}),
+      ...(channelProbeTimeouts?.length ? { channelProbeTimeouts } : {}),
+      ...(channelRuntimeWarnings?.length ? { channelRuntimeWarnings } : {}),
     },
     expectedVersion,
     expectedBuildId,
     params.requirePluginHealth !== false,
+    params.requireChannelHealth !== false,
   );
 }

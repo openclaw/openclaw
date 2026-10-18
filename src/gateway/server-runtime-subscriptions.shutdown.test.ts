@@ -1,11 +1,14 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
@@ -14,7 +17,11 @@ import { createSubscriptionTestFixture } from "./server-runtime-subscriptions.te
 import * as sessionObserverModel from "./session-observer-model.js";
 
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtimeConfigState.value }));
+// mock-isolation: Subscription and transcript readers share the fixture config without live file I/O.
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => runtimeConfigState.value,
+  getRuntimeConfigSnapshot: () => runtimeConfigState.value,
+}));
 vi.mock("../audit/audit-recorder.js", () => ({
   createAuditEventRecorder: () => ({
     record: vi.fn(),
@@ -26,9 +33,13 @@ vi.mock("../audit/audit-recorder.js", () => ({
   }),
 }));
 
-it.for(["before startup", "before inherited connection drain"] as const)(
-  "cancels auxiliary model work %s",
-  async (phase, { signal }) => {
+it.for([
+  { phase: "before startup", completion: "physical" },
+  { phase: "before inherited connection drain", completion: "physical" },
+  { phase: "before inherited connection drain", completion: "logical" },
+] as const)(
+  "cancels auxiliary model work $phase after $completion completion",
+  async ({ phase, completion }, { signal }) => {
     let unsubs: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
     const testState = await createOpenClawTestState({ scenario: "minimal" });
     const connectionWork = new GatewayConnectionWork();
@@ -40,6 +51,7 @@ it.for(["before startup", "before inherited connection drain"] as const)(
     };
     const started = createDeferred();
     const finish = createDeferred();
+    const released = vi.fn();
     const prepared = vi.spyOn(sessionObserverModel, "defaultPrepareModel").mockResolvedValue({
       config: {},
       authProfileId: undefined,
@@ -48,11 +60,18 @@ it.for(["before startup", "before inherited connection drain"] as const)(
       agentId: "main",
       agentDir: testState.path("agent"),
       outputTextPolicy: "strict-visible",
+      thinkLevel: "off",
     });
     const complete = vi.spyOn(sessionObserverModel, "defaultCompleteModel").mockImplementation(() =>
-      trackAsyncWork(async () => {
-        started.resolve();
-        await finish.promise;
+      runWithAsyncWorkResources(async (onAcquired) => {
+        onAcquired({ release: released });
+        const physical = trackAsyncWork(async () => {
+          started.resolve();
+          await finish.promise;
+        });
+        if (completion === "physical") {
+          await physical;
+        }
         return {
           text: "Finished.",
           provider: "test",
@@ -64,7 +83,11 @@ it.for(["before startup", "before inherited connection drain"] as const)(
     let draining: Promise<void> | undefined;
     try {
       runtimeConfigState.value = { agents: { defaults: { utilityModel: "test/utility" } } };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await setAppliedRuntimeConfigSnapshot(runtimeConfigState.value, runtimeConfigState.value);
+      const entry = await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+      });
       await persistSessionTranscriptTurn(scope, {
         messages: Array.from({ length: 70 }, (_, index) => ({
           eventId: `shutdown-message-${index}`,
@@ -81,12 +104,16 @@ it.for(["before startup", "before inherited connection drain"] as const)(
         log: createSubsystemLogger("test/subscriptions-shutdown"),
       });
       if (phase === "before startup") {
-        expect(unsubs.sessionActivitySummaries.ensure(target).state).toBe("unavailable");
+        expect(
+          (await unsubs.sessionActivitySummaries.ensure(target, entry ?? undefined)).state,
+        ).toBe("unavailable");
         expect(prepared).not.toHaveBeenCalled();
         expect(complete).not.toHaveBeenCalled();
         return;
       }
-      await connectionWork.track(() => unsubs!.sessionActivitySummaries.ensure(target));
+      await connectionWork.track(() =>
+        unsubs!.sessionActivitySummaries.ensure(target, entry ?? undefined),
+      );
       // ensure returns a projection before the real transcript worker reaches the model.
       await withinTest(started.promise, signal);
       expect(complete).toHaveBeenCalledOnce();
@@ -96,10 +123,13 @@ it.for(["before startup", "before inherited connection drain"] as const)(
         drained = true;
       });
       expect(modelSignal.aborted).toBe(true);
+      await nextTurn();
       expect(drained).toBe(false);
+      expect(released).not.toHaveBeenCalled();
       finish.resolve();
       await draining;
       await unsubs.agentUnsub();
+      expect(released).toHaveBeenCalledOnce();
       expect(complete).toHaveBeenCalledOnce();
       expect(loadSessionEntryReadOnly(scope)?.activitySummary).toBeUndefined();
     } finally {

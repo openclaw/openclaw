@@ -1,24 +1,18 @@
 /** Stable code that survives channel and framework error wrappers. */
 export const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
-export const SESSION_WORK_START_CHANGED_ERROR_CODE = "SESSION_WORK_START_CHANGED";
+const SESSION_WORK_START_CHANGED_ERROR_CODE = "SESSION_WORK_START_CHANGED";
 export const SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE = "SESSION_RESTART_RECOVERY_TOMBSTONE";
 
 export class SessionWorkStartInvalidatedError extends Error {
   readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;
 
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionWorkStartInvalidatedError";
-  }
+  override name = "SessionWorkStartInvalidatedError";
 }
 
 export class SessionWorkStartChangedError extends Error {
   readonly code = SESSION_WORK_START_CHANGED_ERROR_CODE;
 
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionWorkStartChangedError";
-  }
+  override name = "SessionWorkStartChangedError";
 }
 
 export function createSessionWorkStartChangedError(
@@ -46,8 +40,5 @@ export function isSessionWorkStartInvalidatedError(
 export class SessionRestartRecoveryTombstoneError extends Error {
   readonly code = SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE;
 
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionRestartRecoveryTombstoneError";
-  }
+  override name = "SessionRestartRecoveryTombstoneError";
 }

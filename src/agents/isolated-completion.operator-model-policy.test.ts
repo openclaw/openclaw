@@ -212,33 +212,6 @@ describe("isolated completion requester model policy", () => {
     expect(dispatch).toHaveBeenCalledOnce();
   });
 
-  it("carries the canonical requester model and original authority into CLI admission", async () => {
-    const authority = operator();
-    mocks.resolveCliRuntimeCanonicalProvider.mockReturnValue("test-provider");
-    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
-    mocks.runCliAgent.mockImplementation(async (params) => {
-      expect(readRunOperatorAuthority({ preparedRunAdmission: params.preparedRunAdmission })).toBe(
-        authority,
-      );
-      return { payloads: [{ text: "CLI answer." }] };
-    });
-    await expect(
-      runIsolatedCompletion({
-        ...request(),
-        provider: "test-cli",
-        agentHarnessRuntimeOverride: "test-cli",
-        operatorAuthority: authority,
-      }),
-    ).resolves.toMatchObject({ text: "CLI answer." });
-    expect(mocks.runCliAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "test-cli",
-        modelProvider: "test-provider",
-        requesterModel: { provider: "test-provider", model: "allowed" },
-      }),
-    );
-  });
-
   it("preserves a retired CLI model denial after the model policy is restored", async () => {
     const preparePolicy = (deny: string[]) =>
       prepareOperatorModelPolicy({
@@ -268,6 +241,14 @@ describe("isolated completion requester model policy", () => {
     });
     const cleanup = vi.fn(async () => {});
     cli.prepare.mockImplementation(async (params) => {
+      expect(readRunOperatorAuthority({ preparedRunAdmission: params.preparedRunAdmission })).toBe(
+        authority,
+      );
+      expect(params).toMatchObject({
+        provider: "test-cli",
+        modelProvider: "test-provider",
+        requesterModel: { provider: "test-provider", model: "allowed" },
+      });
       const admittedRunContext =
         params.admittedRunContext ?? (await params.preparedRunAdmission?.admit("embedded"));
       if (!admittedRunContext) {

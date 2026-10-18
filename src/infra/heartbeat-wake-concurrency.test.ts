@@ -10,6 +10,7 @@ import {
   requestHeartbeatAndWait,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import { expectWakeHandlerReplacementConcurrency } from "./wake-concurrency.test-helpers.js";
 
 describe("heartbeat wake target concurrency", () => {
   type WakeRequest = Parameters<typeof requestHeartbeat>[0];
@@ -154,143 +155,87 @@ describe("heartbeat wake target concurrency", () => {
   );
 
   it("preserves the target concurrency bound across heartbeat handler replacement", async () => {
-    vi.useFakeTimers();
-    const finishOldWakeByAgent = new Map<string, () => void>();
-    const finishNewWakeByAgent = new Map<string, () => void>();
-    const oldWakeSignals: AbortSignal[] = [];
-    let peakActiveWakeCount = 0;
-    const oldHandler = vi.fn(async (request: WakeRequest) => {
-      peakActiveWakeCount = Math.max(peakActiveWakeCount, getActiveGatewayRootWorkCount());
-      const signal = getHeartbeatWakeAbortSignal();
-      if (signal) {
-        oldWakeSignals.push(signal);
-      }
-      await new Promise<void>((resolve) => {
-        finishOldWakeByAgent.set(request.agentId ?? "", resolve);
-      });
-      return { status: "ran" as const, durationMs: 1 };
+    await expectWakeHandlerReplacementConcurrency({
+      setHandler: setHeartbeatWakeHandler,
+      requestTarget: (agentId) => {
+        requestHeartbeat({
+          source: "cron",
+          intent: "event",
+          reason: `cron:${agentId}`,
+          agentId,
+          sessionKey: `agent:${agentId}:main`,
+          coalesceMs: 0,
+        });
+      },
+      getAbortSignal: getHeartbeatWakeAbortSignal,
     });
-    setHeartbeatWakeHandler(oldHandler);
-
-    function requestTarget(agentId: string): void {
-      requestHeartbeat({
-        source: "cron",
-        intent: "event",
-        reason: `cron:${agentId}`,
-        agentId,
-        sessionKey: `agent:${agentId}:main`,
-        coalesceMs: 0,
-      });
-    }
-
-    for (let index = 0; index < 4; index += 1) {
-      requestTarget(`target-${index}`);
-    }
-    await vi.advanceTimersByTimeAsync(1);
-    expect(oldHandler).toHaveBeenCalledTimes(4);
-    expect(getActiveGatewayRootWorkCount()).toBe(4);
-
-    const newHandler = vi.fn(async (request: WakeRequest) => {
-      peakActiveWakeCount = Math.max(peakActiveWakeCount, getActiveGatewayRootWorkCount());
-      await new Promise<void>((resolve) => {
-        finishNewWakeByAgent.set(request.agentId ?? "", resolve);
-      });
-      return { status: "ran" as const, durationMs: 1 };
-    });
-    setHeartbeatWakeHandler(newHandler);
-    requestTarget("target-0");
-    for (let index = 4; index < 8; index += 1) {
-      requestTarget(`target-${index}`);
-    }
-
-    try {
-      await vi.advanceTimersByTimeAsync(1);
-      expect(oldWakeSignals).toHaveLength(4);
-      expect(oldWakeSignals.every((signal) => signal.aborted)).toBe(true);
-      expect(newHandler.mock.calls.map(([request]) => request.agentId)).toEqual([
-        "target-0",
-        "target-4",
-        "target-5",
-        "target-6",
-      ]);
-      expect(getActiveGatewayRootWorkCount()).toBe(4);
-
-      finishNewWakeByAgent.get("target-0")?.();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(newHandler.mock.calls.map(([request]) => request.agentId)).toEqual([
-        "target-0",
-        "target-4",
-        "target-5",
-        "target-6",
-        "target-7",
-      ]);
-      expect(getActiveGatewayRootWorkCount()).toBe(4);
-    } finally {
-      for (let index = 0; index < 9; index += 1) {
-        for (const finishWake of finishOldWakeByAgent.values()) {
-          finishWake();
-        }
-        for (const finishWake of finishNewWakeByAgent.values()) {
-          finishWake();
-        }
-        await vi.advanceTimersByTimeAsync(0);
-      }
-    }
-
-    expect(newHandler).toHaveBeenCalledTimes(8);
-    expect(peakActiveWakeCount).toBe(4);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("aborts the disposed generation without letting its stale disposer abort a replacement", async () => {
+  it("joins disposed work without letting its stale disposer abort a replacement", async () => {
     vi.useFakeTimers();
     const { promise: oldWakeFinished, resolve: finishOldWake } = createDeferred();
     const { promise: newWakeFinished, resolve: finishNewWake } = createDeferred();
     let oldSignal: AbortSignal | undefined;
     let newSignal: AbortSignal | undefined;
-    const oldHandler = vi.fn(async () => {
-      oldSignal = getHeartbeatWakeAbortSignal();
-      await oldWakeFinished;
-      return { status: "ran" as const, durationMs: 1 };
-    });
-    const disposeOld = setRuntimeHeartbeatWakeHandler(oldHandler);
-    currentHandlerDisposer = disposeOld;
-    requestHeartbeat({
-      source: "cron",
-      intent: "event",
-      reason: "generation-owned",
-      sessionKey: "agent:main:main",
-      coalesceMs: 0,
-    });
-    await vi.advanceTimersByTimeAsync(1);
-    expect(oldSignal?.aborted).toBe(false);
+    try {
+      const oldHandler = vi.fn(async () => {
+        oldSignal = getHeartbeatWakeAbortSignal();
+        await oldWakeFinished;
+        return { status: "ran" as const, durationMs: 1 };
+      });
+      const disposeOld = setRuntimeHeartbeatWakeHandler(oldHandler);
+      currentHandlerDisposer = disposeOld;
+      requestHeartbeat({
+        source: "cron",
+        intent: "event",
+        reason: "generation-owned",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(oldSignal?.aborted).toBe(false);
 
-    disposeOld();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(oldSignal?.aborted).toBe(true);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
+      disposeOld();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(oldSignal?.aborted).toBe(true);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      finishOldWake?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
 
-    const newHandler = vi.fn(async () => {
-      newSignal = getHeartbeatWakeAbortSignal();
-      await newWakeFinished;
-      return { status: "ran" as const, durationMs: 1 };
-    });
-    const disposeNew = setRuntimeHeartbeatWakeHandler(newHandler);
-    currentHandlerDisposer = disposeNew;
-    await vi.advanceTimersByTimeAsync(250);
-    expect(newHandler).toHaveBeenCalledOnce();
-    expect(newSignal?.aborted).toBe(false);
+      const newHandler = vi.fn(async () => {
+        newSignal = getHeartbeatWakeAbortSignal();
+        await newWakeFinished;
+        return { status: "ran" as const, durationMs: 1 };
+      });
+      const disposeNew = setRuntimeHeartbeatWakeHandler(newHandler);
+      currentHandlerDisposer = disposeNew;
+      requestHeartbeat({
+        source: "cron",
+        intent: "event",
+        reason: "new-handler",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(newHandler).toHaveBeenCalledOnce();
+      expect(newSignal?.aborted).toBe(false);
 
-    disposeOld();
-    expect(newSignal?.aborted).toBe(false);
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
+      disposeOld();
+      expect(newSignal?.aborted).toBe(false);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-    disposeNew();
-    finishOldWake?.();
-    finishNewWake?.();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(newSignal?.aborted).toBe(true);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
+      disposeNew();
+      finishOldWake?.();
+      finishNewWake?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(newSignal?.aborted).toBe(true);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      finishOldWake();
+      finishNewWake();
+      await vi.advanceTimersByTimeAsync(0);
+    }
   });
 
   it("keeps task and event wakes for the same target serialized", async () => {

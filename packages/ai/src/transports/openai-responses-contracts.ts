@@ -6,6 +6,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   FunctionTool,
+  Response as OpenAIResponse,
   ResponseCreateParamsStreaming,
   ResponseCompactionItem,
   ResponseInput,
@@ -19,6 +20,7 @@ import type {
 } from "../providers/openai-reasoning-effort.js";
 import type { OpenAIRequestReasoningEffort } from "../providers/openai-request-reasoning.js";
 import type { OpenAIResponsesCompactedWindow } from "./openai-responses-compaction-window.js";
+import { isResponsesServiceTierRejection } from "./openai-responses-service-tier.js";
 
 export const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 export const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -28,6 +30,8 @@ export const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error detai
 export const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
+// Projection-only provenance: symbols survive option/object spreads but never enter provider JSON.
+export const RESPONSES_RETAINED_USER = Symbol("responsesRetainedUser");
 export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
 export const OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE =
   "openai-responses-retained-compaction";
@@ -78,12 +82,18 @@ function readWebSocketServerError(value: unknown) {
     return undefined;
   }
   const details = isRecord(value.error) ? value.error : value;
-  if (typeof details.code !== "string" || typeof details.message !== "string") {
+  const code =
+    typeof details.code === "string"
+      ? details.code
+      : isResponsesServiceTierRejection(details)
+        ? "invalid_request_error"
+        : undefined;
+  if (!code || typeof details.message !== "string") {
     return undefined;
   }
   const rawStatus = value.status ?? value.status_code;
   return {
-    code: details.code,
+    code,
     message: details.message,
     param: typeof details.param === "string" ? details.param : null,
     status: typeof rawStatus === "number" ? rawStatus : undefined,
@@ -116,6 +126,7 @@ export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
   }
   const ErrorClass =
     isPreviousResponseRejection(details) ||
+    isResponsesServiceTierRejection(details) ||
     details.code === "websocket_connection_limit_reached" ||
     details.code === "invalid_encrypted_content" ||
     details.code === "thinking_signature_invalid"
@@ -191,10 +202,17 @@ export const responsesPromptObserver = {
 };
 
 const SERVICE_TIER_OBSERVER = Symbol("openaiResponsesServiceTierObserver");
-export type ResponsesServiceTierObservation = {
-  requestedTier: string;
-  responseTier: string;
-};
+export type ResponsesServiceTierObservation =
+  | {
+      requestedTier: string;
+      responseTier: string;
+      rejected?: false;
+      responseId?: string;
+      responseModel?: string;
+      inputTokens?: number;
+      cachedTokens?: number;
+    }
+  | { requestedTier: string; rejected: true };
 type ResponsesServiceTierObserver = (observation: ResponsesServiceTierObservation) => void;
 
 export const responsesServiceTierObserver = {
@@ -211,7 +229,16 @@ export const responsesServiceTierObserver = {
       responsesServiceTierObserver.set(target, observer);
     }
   },
-  observe(options: object | undefined, requestedTier: unknown, responseTier: unknown): void {
+  reject(options: object | undefined, requestedTier: string): void {
+    const observer = options && responsesServiceTierObserver.get(options);
+    observer?.({ requestedTier, rejected: true });
+  },
+  observe(
+    options: object | undefined,
+    requestedTier: unknown,
+    responseTier: unknown,
+    response?: Pick<OpenAIResponse, "id" | "model" | "usage">,
+  ): void {
     const observer = options && responsesServiceTierObserver.get(options);
     if (
       observer &&
@@ -220,7 +247,16 @@ export const responsesServiceTierObserver = {
       typeof responseTier === "string" &&
       /^[a-z0-9_-]{1,64}$/i.test(responseTier)
     ) {
-      observer({ requestedTier, responseTier });
+      observer({
+        requestedTier,
+        responseTier,
+        ...(response && {
+          responseId: response.id,
+          responseModel: response.model,
+          inputTokens: response.usage?.input_tokens,
+          cachedTokens: response.usage?.input_tokens_details?.cached_tokens,
+        }),
+      });
     }
   },
 };

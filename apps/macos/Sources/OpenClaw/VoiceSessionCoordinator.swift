@@ -23,8 +23,6 @@ final class VoiceSessionCoordinator {
         self.didDismiss = didDismiss
     }
 
-    enum Source: String { case wakeWord, pushToTalk }
-
     struct Session {
         let token: UUID
         var text: String
@@ -32,29 +30,24 @@ final class VoiceSessionCoordinator {
         var voiceWakeTrigger: String?
     }
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.coordinator")
     private var session: Session?
 
     // MARK: - API
 
     func startSession(
-        source: Source,
         text: String,
         attributed: NSAttributedString? = nil,
         forwardEnabled: Bool = false,
         voiceWakeTrigger: String? = nil) -> UUID
     {
         let token = UUID()
-        self.logger.info("coordinator start token=\(token.uuidString) source=\(source.rawValue) len=\(text.count)")
-        let session = Session(
+        self.session = Session(
             token: token,
             text: text,
             sendChime: .none,
             voiceWakeTrigger: voiceWakeTrigger)
-        self.session = session
         self.overlay.startSession(
             token: token,
-            source: source,
             transcript: text,
             attributed: attributed,
             forwardEnabled: forwardEnabled,
@@ -81,9 +74,6 @@ final class VoiceSessionCoordinator {
         voiceWakeTrigger: String? = nil)
     {
         guard let session, session.token == token else { return }
-        self.logger
-            .info(
-                "coordinator finalize token=\(token.uuidString) len=\(text.count) autoSendAfter=\(autoSendAfter ?? -1)")
         self.session?.text = text
         self.session?.sendChime = sendChime
         if let voiceWakeTrigger {
@@ -96,18 +86,16 @@ final class VoiceSessionCoordinator {
             autoSendAfter: autoSendAfter)
     }
 
-    func sendNow(token: UUID, reason: String = "explicit") {
+    func sendNow(token: UUID) {
         guard let session, session.token == token else { return }
         let text = session.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let voiceWakeTrigger = session.voiceWakeTrigger
-        let sendChime = session.sendChime
         guard !text.isEmpty else {
-            self.logger.info("coordinator sendNow \(reason) empty -> dismiss")
             self.overlay.dismiss(token: token, reason: .empty, outcome: .empty)
             self.session = nil
             return
         }
-        self.overlay.beginSendUI(token: token, sendChime: sendChime)
+        self.overlay.beginSendUI(token: token, sendChime: session.sendChime)
         Task.detached { [forward] in
             _ = await forward(text, voiceWakeTrigger)
         }

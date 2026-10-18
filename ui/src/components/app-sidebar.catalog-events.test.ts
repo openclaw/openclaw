@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/context.ts";
 import {
@@ -14,19 +13,26 @@ import {
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import "./app-sidebar.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import "./app-sidebar.tsx";
+
+// Capture JSDOM's frame owner before the sidebar fixture installs its scheduler.
+const requestNativeFrame = window.requestAnimationFrame.bind(window);
+const cancelNativeFrame = window.cancelAnimationFrame.bind(window);
+const catalogClock: Parameters<typeof vi.useFakeTimers>[0] = {
+  toFake: ["setTimeout", "clearTimeout", "Date"],
+};
 
 async function mountTab(
   request = createGatewayRequestMock().mockResolvedValue(
     catalogPage([{ threadId: "stable", name: "Stable catalog" }]),
   ),
-  events: string[] | undefined = ["sessions.catalog.changed"],
 ) {
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   gateway.publish({
     hello: {
       auth: { role: "operator", scopes: ["operator.read"] },
-      features: { methods: ["sessions.catalog.list"], events },
+      features: { methods: ["sessions.catalog.list"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
   const { sidebar } = await mountSidebar(
@@ -34,156 +40,95 @@ async function mountTab(
     createSessions("main", ["agent:main:main"]),
   );
   sidebar.connected = true;
-  await sidebar.updateComplete;
+  await settleLitElement(sidebar);
   await vi.advanceTimersByTimeAsync(0);
   expect(request).toHaveBeenCalledTimes(1);
   return { sidebar, gateway, request };
 }
 
 describe("AppSidebar catalog event refresh", () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => {
+    // Catalog retries use timeouts; JSDOM retains its native frame interval.
+    vi.useFakeTimers(catalogClock);
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
-  it("keeps four stable tabs idle for five minutes and refreshes each once per catalog event", async () => {
-    const tabs = [];
-    for (let index = 0; index < 4; index += 1) {
-      tabs.push(await mountTab());
-    }
-    await vi.advanceTimersByTimeAsync(300_000);
-    for (const { request, gateway } of tabs) {
-      expect.soft(request).toHaveBeenCalledTimes(1);
-      request.mockClear();
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    }
-    await vi.advanceTimersByTimeAsync(5_000);
-    for (const { request, sidebar } of tabs) {
-      expect(request).toHaveBeenCalledTimes(1);
-      expect(sidebar.textContent).toContain("Stable catalog");
-    }
-  });
-
-  it("ignores session churn and unrelated agents while coalescing catalog event bursts", async () => {
+  it("ignores session churn while coalescing tab activation bursts", async () => {
     const { gateway, request } = await mountTab();
     gateway.publishEvent("sessions.changed", {
       agentId: "research",
       sessionKey: "agent:research:x",
     });
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "research" });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(1);
     gateway.publishEvent("sessions.changed", { agentId: "main", sessionKey: "agent:main:x" });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(1);
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps a stable 30-second fallback when catalog changes are not advertised", async () => {
-    const events = ["sessions.changed"];
+  it("discovers native sessions every two minutes while visible", async () => {
     const request = createGatewayRequestMock()
       .mockResolvedValueOnce(catalogPage([]))
       .mockResolvedValue(catalogPage([{ threadId: "discovered", name: "New catalog row" }]));
-    const { gateway, sidebar } = await mountTab(request, events);
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    const { gateway, sidebar } = await mountTab(request);
     gateway.publishEvent("sessions.changed", { agentId: "main", sessionKey: "agent:main:x" });
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(119_999);
     expect.soft(request).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(request).toHaveBeenCalledTimes(2);
     expect(sidebar.textContent).toContain("New catalog row");
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(119_999);
     expect(request).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(request).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    expect(request).toHaveBeenCalledTimes(6);
   });
 
-  it("paces a trailing event after a slow catalog request without overlapping reads", async () => {
-    vi.spyOn(Math, "random").mockReturnValue(0);
-    const pending = deferred<ReturnType<typeof catalogPage>>();
-    const request = createGatewayRequestMock()
-      .mockResolvedValueOnce(catalogPage([]))
-      .mockReturnValueOnce(pending.promise)
-      .mockResolvedValue(catalogPage([{ threadId: "updated", name: "Updated catalog" }]));
-    const { gateway, sidebar } = await mountTab(request);
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(request).toHaveBeenCalledTimes(2);
-    for (let second = 0; second < 3; second += 1) {
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(1_000);
+  it.each(["recovered", "exhausted"] as const)("paces busy retries until %s", async (outcome) => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const error = new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message: "server busy",
+      retryable: true,
+      retryAfterMs: outcome === "recovered" ? 5_000 : 100,
+    });
+    const request = createGatewayRequestMock().mockResolvedValueOnce(
+      catalogPage([{ threadId: "stable", name: "Stable catalog" }]),
+    );
+    if (outcome === "recovered") {
+      request
+        .mockRejectedValueOnce(error)
+        .mockResolvedValue(catalogPage([{ threadId: "updated", name: "Updated catalog" }]));
+    } else {
+      request.mockRejectedValue(error);
     }
-    expect(request).toHaveBeenCalledTimes(2);
-    pending.resolve(catalogPage([]));
-    await vi.advanceTimersByTimeAsync(8_999);
-    expect(request).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(sidebar.textContent).toContain("Updated catalog");
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it("absorbs an event when an explicit refresh already reads the current catalog", async () => {
-    const { gateway, sidebar, request } = await mountTab();
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    const { sidebar } = await mountTab(request);
     await sidebar.sessionData.refreshSessionCatalogs();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("recovers a busy catalog without flashing an error or letting events bypass the retry delay", async () => {
-    const request = createGatewayRequestMock()
-      .mockResolvedValueOnce(catalogPage([{ threadId: "stable", name: "Stable catalog" }]))
-      .mockRejectedValueOnce(
-        new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "server busy",
-          retryable: true,
-          retryAfterMs: 5_000,
-        }),
-      )
-      .mockResolvedValue(catalogPage([{ threadId: "updated", name: "Updated catalog" }]));
-    const { gateway, sidebar } = await mountTab(request);
-    await sidebar.sessionData.refreshSessionCatalogs();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).toContain("Stable catalog");
     expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
-    for (let second = 0; second < 4; second += 1) {
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(1_000);
+    if (outcome === "recovered") {
+      for (let second = 0; second < 4; second += 1) {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(request).toHaveBeenCalledTimes(2);
+      }
+      await vi.advanceTimersByTimeAsync(999);
       expect(request).toHaveBeenCalledTimes(2);
-    }
-    await vi.advanceTimersByTimeAsync(999);
-    expect(request).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
-    await sidebar.updateComplete;
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(sidebar.textContent).toContain("Updated catalog");
-    expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it("bounds busy retries and reports a persistent failure while preserving the catalog", async () => {
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const request = createGatewayRequestMock()
-      .mockResolvedValueOnce(catalogPage([{ threadId: "stable", name: "Stable catalog" }]))
-      .mockRejectedValue(
-        new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "server busy",
-          retryable: true,
-          retryAfterMs: 100,
-        }),
-      );
-    try {
-      const { sidebar } = await mountTab(request);
-      await sidebar.sessionData.refreshSessionCatalogs();
+      await vi.advanceTimersByTimeAsync(1);
+      await settleLitElement(sidebar);
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(sidebar.textContent).toContain("Updated catalog");
+      expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
+    } else {
       for (const delay of [1_000, 2_000, 4_000]) {
         expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
         expect(warning).not.toHaveBeenCalled();
@@ -193,18 +138,59 @@ describe("AppSidebar catalog event refresh", () => {
         await vi.advanceTimersByTimeAsync(1);
         expect(request).toHaveBeenCalledTimes(requests + 1);
       }
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       expect(sidebar.textContent).toContain("Stable catalog");
       expect(sidebar.sessionData.sessionCatalogRefreshStatus).toMatchObject({
         error: expect.any(String),
         stale: true,
       });
       expect(warning).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(300_000);
-      expect(request).toHaveBeenCalledTimes(5);
-    } finally {
-      warning.mockRestore();
     }
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(request).toHaveBeenCalledTimes(outcome === "recovered" ? 3 : 5);
+  });
+
+  it("keeps agent startup quiet past three minutes and surfaces a later inspection failure", async () => {
+    // JSDOM may already own a native frame when the catalog clock takes over.
+    vi.useRealTimers();
+    const pendingFrame = requestNativeFrame(() => undefined);
+    vi.useFakeTimers(catalogClock);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    cancelNativeFrame(pendingFrame);
+    const request = createGatewayRequestMock().mockRejectedValue(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Agent has not completed startup inspection. Run openclaw doctor --fix.",
+        retryable: true,
+        retryAfterMs: 250,
+        details: { code: "agent-database-inspection-pending", agentId: "main" },
+      }),
+    );
+    const { sidebar } = await mountTab(request);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await settleLitElement(sidebar);
+    expect(request.mock.calls.length).toBeGreaterThan(30);
+    expect(
+      sidebar.querySelector('.sidebar-session-empty-hint--startup[role="status"]')?.textContent,
+    ).toContain("Starting up");
+    expect(sidebar.querySelector(".callout.danger")).toBeNull();
+    expect(sidebar.textContent).not.toContain("doctor --fix");
+    expect(warning).not.toHaveBeenCalled();
+
+    request.mockRejectedValue(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Inspection failed. Run openclaw doctor --fix.",
+        retryable: false,
+        details: { code: "agent-database-inspection-failed", agentId: "main" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settleLitElement(sidebar);
+    expect(sidebar.textContent).not.toContain("Starting up");
+    expect(sidebar.querySelector(".sidebar-session-catalog-error")?.textContent).toContain(
+      "Inspection failed. Run openclaw doctor --fix.",
+    );
   });
 
   it.each(["hide", "remove"])(
@@ -255,10 +241,10 @@ describe("AppSidebar catalog event refresh", () => {
     let visibility: DocumentVisibilityState = "visible";
     const spy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
     try {
-      const { gateway, request, sidebar } = await mountTab();
+      const { request, sidebar } = await mountTab();
       const context = sidebar.sessionData.context;
       context?.connectionBootstrap.setForegroundRoute(undefined);
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(5_000);
       visibility = "hidden";
       document.dispatchEvent(new Event("visibilitychange"));

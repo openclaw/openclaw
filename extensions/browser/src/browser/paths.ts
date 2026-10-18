@@ -8,27 +8,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { CONFIG_DIR } from "openclaw/plugin-sdk/text-utility-runtime";
 export { resolveExistingPathsWithinRoot };
 
-const DEFAULT_FALLBACK_BROWSER_TMP_DIR = "/tmp/openclaw";
-
-function canUseNodeFs(): boolean {
-  const getBuiltinModule = (
-    process as NodeJS.Process & {
-      getBuiltinModule?: (id: string) => unknown;
-    }
-  ).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
-    return false;
-  }
-  try {
-    return getBuiltinModule("fs") !== undefined;
-  } catch {
-    return false;
-  }
-}
-
-const DEFAULT_BROWSER_TMP_DIR = canUseNodeFs()
-  ? resolvePreferredOpenClawTmpDir()
-  : DEFAULT_FALLBACK_BROWSER_TMP_DIR;
+const DEFAULT_BROWSER_TMP_DIR = resolvePreferredOpenClawTmpDir();
 export const DEFAULT_TRACE_DIR = DEFAULT_BROWSER_TMP_DIR;
 export const DEFAULT_DOWNLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "downloads");
 export const DEFAULT_UPLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "uploads");
@@ -87,13 +67,13 @@ function resolveManagedInboundMediaRef(
     return null;
   }
 
-  if (/^media:\/\//i.test(normalizedSource)) {
+  const uploadRootPrecedence = !/^media:\/\//i.test(normalizedSource);
+  let mediaId: string;
+  if (!uploadRootPrecedence) {
     const rawUriMatch = /^media:\/\/[^/?#]*([^?#]*)/iu.exec(normalizedSource);
     const rawPath = rawUriMatch?.[1] ?? "";
-    let parsed: URL;
-    try {
-      parsed = new URL(normalizedSource);
-    } catch {
+    const parsed = URL.parse(normalizedSource);
+    if (!parsed) {
       return { ok: false, error: `Invalid media reference: ${normalizedSource}` };
     }
     if (parsed.hostname !== "inbound") {
@@ -105,26 +85,20 @@ function resolveManagedInboundMediaRef(
     if (!rawPath.startsWith("/") || rawPath.slice(1).includes("/") || rawPath.includes("\\")) {
       return { ok: false, error: `Invalid media reference: ${normalizedSource}` };
     }
-    const decoded = decodeInboundMediaId(rawPath.slice(1), normalizedSource);
-    return decoded.ok
-      ? {
-          ok: true,
-          path: path.join(inboundMediaDir, decoded.path),
-          uploadRootPrecedence: false,
-        }
-      : decoded;
+    mediaId = rawPath.slice(1);
+  } else {
+    const relativeMatch = /^(?:\.\/)?media\/inbound\/([^/\\]+)$/u.exec(normalizedSource);
+    if (!relativeMatch?.[1]) {
+      return null;
+    }
+    mediaId = relativeMatch[1];
   }
-
-  const relativeMatch = /^(?:\.\/)?media\/inbound\/([^/\\]+)$/u.exec(normalizedSource);
-  if (!relativeMatch?.[1]) {
-    return null;
-  }
-  const decoded = decodeInboundMediaId(relativeMatch[1], normalizedSource);
+  const decoded = decodeInboundMediaId(mediaId, normalizedSource);
   return decoded.ok
     ? {
         ok: true,
         path: path.join(inboundMediaDir, decoded.path),
-        uploadRootPrecedence: true,
+        uploadRootPrecedence,
       }
     : decoded;
 }
@@ -230,7 +204,6 @@ export async function resolveExistingUploadPaths(
   return resolveUploadPaths({ ...options, strict: false });
 }
 
-/** Strictly resolve upload paths under the upload root only. */
 export async function resolveStrictExistingUploadPaths(
   options: UploadPathResolutionOptions,
 ): Promise<StrictExistingPathsResult> {

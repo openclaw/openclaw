@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
@@ -30,14 +27,10 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
 export { hasBinary };
 
 export function resolveSkillsInstallPreferences(config?: OpenClawConfig): SkillsInstallPreferences {
-  const raw = config?.skills?.install;
-  const preferBrew = raw?.preferBrew ?? true;
-  const manager = normalizeLowercaseStringOrEmpty(raw?.nodeManager);
-  const nodeManager: SkillsInstallPreferences["nodeManager"] =
-    manager === "pnpm" || manager === "yarn" || manager === "bun" || manager === "npm"
-      ? manager
-      : "npm";
-  return { preferBrew, nodeManager };
+  return {
+    preferBrew: config?.skills?.install?.preferBrew ?? true,
+    nodeManager: config?.skills?.install?.nodeManager ?? "npm",
+  };
 }
 
 export function isSkillConfigPathTruthy(
@@ -51,15 +44,7 @@ export function resolveSkillConfig(
   config: OpenClawConfig | undefined,
   skillKey: string,
 ): SkillConfig | undefined {
-  const skills = config?.skills?.entries;
-  if (!skills || typeof skills !== "object") {
-    return undefined;
-  }
-  const entry = skills[skillKey];
-  if (!entry || typeof entry !== "object") {
-    return undefined;
-  }
-  return entry;
+  return config?.skills?.entries?.[skillKey];
 }
 
 /** Returns whether cold startup isolated this exact skill's configured secret. */
@@ -93,8 +78,7 @@ export function isSkillEnvRequirementSatisfied(params: {
 const BUNDLED_SOURCES = new Set(["openclaw-bundled", "openclaw-custodian"]);
 
 export function resolveBundledAllowlist(config?: OpenClawConfig): ReadonlySet<string> | undefined {
-  const input = config?.skills?.allowBundled;
-  const normalized = Array.isArray(input) ? normalizeStringEntries(input) : [];
+  const normalized = normalizeStringEntries(config?.skills?.allowBundled);
   return normalized.length > 0 ? new Set(normalized) : undefined;
 }
 
@@ -105,8 +89,20 @@ export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: ReadonlySet
   if (!BUNDLED_SOURCES.has(resolveSkillSource(entry.skill))) {
     return true;
   }
-  const key = resolveSkillKey(entry.skill, entry);
+  const key = resolveSkillKey(entry);
   return allowlist.has(key) || allowlist.has(entry.skill.name);
+}
+
+/** Learned Workshop skills bypass agent allowlists and session toggles; archiving hides them. */
+export function isSkillEntrySelected(
+  entry: SkillEntry,
+  skillFilter: readonly string[] | undefined,
+  skillOverrides: Readonly<Record<string, boolean>> | undefined,
+): boolean {
+  return (
+    resolveSkillSource(entry.skill) === "openclaw-workshop" ||
+    isSessionSkillEnabled(entry.skill.name, skillFilter, skillOverrides, resolveSkillKey(entry))
+  );
 }
 
 export function shouldIncludeSkill(params: {
@@ -118,7 +114,7 @@ export function shouldIncludeSkill(params: {
   platform?: string;
 }): boolean {
   const { entry, config, bundledAllowlist, eligibility } = params;
-  const skillKey = resolveSkillKey(entry.skill, entry);
+  const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
 
   if (skillConfig?.enabled === false) {
@@ -162,7 +158,7 @@ export async function prepareSkillBinaryProbe(
 ) {
   if (runtime) {
     const available = new Set(runtime.bins);
-    return { hasBin: (bin: string) => available.has(bin), needsRetry: () => false };
+    return { hasBin: (bin: string) => available.has(bin) };
   }
   const bins = new Set<string>();
   const bundledAllowlist = resolveBundledAllowlist(opts?.config);
@@ -172,14 +168,7 @@ export async function prepareSkillBinaryProbe(
     return true;
   };
   for (const entry of entries) {
-    if (
-      !isSessionSkillEnabled(
-        entry.skill.name,
-        opts?.skillFilter,
-        opts?.skillOverrides,
-        resolveSkillKey(entry.skill, entry),
-      )
-    ) {
+    if (!isSkillEntrySelected(entry, opts?.skillFilter, opts?.skillOverrides)) {
       continue;
     }
     const requires = entry.metadata?.requires;
@@ -195,25 +184,15 @@ export async function prepareSkillBinaryProbe(
       hasBin: recordBinaryRequirement,
     });
     if (needsBinaries) {
-      for (const bin of entry.metadata?.requires?.bins ?? []) {
-        bins.add(bin);
-      }
-      for (const bin of entry.metadata?.requires?.anyBins ?? []) {
+      for (const bin of resolveSkillRequiredBins(entry)) {
         bins.add(bin);
       }
     }
   }
   const facts = await prepareBinaryAvailability(bins, assertCurrent);
-  let unprepared = false;
-  return {
-    hasBin: (bin: string) => {
-      // Eligibility can change while probing; prepare newly requested facts before publishing.
-      if (!bins.has(bin)) {
-        unprepared = true;
-        return false;
-      }
-      return facts.hasBinary(bin);
-    },
-    needsRetry: () => unprepared || !facts.isCurrent(),
-  };
+  return { hasBin: facts.hasBinary };
+}
+
+export function resolveSkillRequiredBins(entry: SkillEntry): string[] {
+  return (entry.metadata?.requires?.bins ?? []).concat(entry.metadata?.requires?.anyBins ?? []);
 }

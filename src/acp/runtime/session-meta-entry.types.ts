@@ -13,8 +13,7 @@ export type AcpSessionEntryMutationInput = {
 
 export type AcpSessionEntryMutation =
   | { kind: "touch"; updatedAt: number; fallbackEntry: SessionEntry }
-  | { kind: "clear" }
-  | { kind: "clear-legacy" };
+  | { kind: "clear" };
 
 export type AcpSessionEntryMutationResult = {
   entry: SessionEntry | null;

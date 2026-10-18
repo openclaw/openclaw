@@ -28,7 +28,14 @@ function isTestCommand(command: Command) {
   );
 }
 
-type Step = { name?: string; run?: string; if?: string };
+type Step = {
+  id?: string;
+  name?: string;
+  run?: string;
+  if?: string;
+  "continue-on-error"?: boolean;
+  "timeout-minutes"?: number;
+};
 const workflow: {
   jobs: Record<
     string,
@@ -57,6 +64,88 @@ const configureStep = workflow.jobs["ios-build"]?.steps?.find(
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+describe("iOS incremental build-cache admission", () => {
+  it("reads only current main-tier products and publishes only after successful scheduled main tests", () => {
+    const step = (name: string) => {
+      const found = workflow.jobs["ios-build"]?.steps?.find((candidate) => candidate.name === name);
+      if (!found) {
+        throw new Error(`Missing iOS cache step: ${name}`);
+      }
+      return found;
+    };
+    const restore = step("Restore iOS test build products");
+    const record = step("Record iOS build-cache input metadata");
+    const save = step("Save iOS test build products");
+    const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+      eventName: "schedule",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      ref: "refs/heads/main",
+      matrix: { phase: "tests" },
+      env: { IOS_MAIN_TIER: "true" },
+      preflightOutputs: { cache_mode: "restore", cache_write_allowed: "true" },
+      steps: {
+        "ios-cache-inputs": { outputs: { xcode: "toolchain" } },
+        "ios-build-cache": {
+          outputs: { "cache-primary-key": "native-inputs", "cache-hit": "false" },
+        },
+        "record-ios-build-cache-metadata": { outputs: {}, outcome: "success" as const },
+      },
+    };
+    const selected = (owner: Step, overrides: Partial<typeof context> = {}) =>
+      evaluateWorkflowExpression(`\${{ ${owner.if} }}`, { ...context, ...overrides });
+    expect(selected(restore)).toBe(true);
+    expect(selected(record)).toBe(true);
+    expect(selected(save)).toBe(true);
+    for (const overrides of [
+      { matrix: { phase: "smoke" } },
+      { env: { IOS_MAIN_TIER: "false" } },
+      { preflightOutputs: { cache_mode: "off", cache_write_allowed: "true" } },
+      { steps: { ...context.steps, "ios-cache-inputs": { outputs: { xcode: "" } } } },
+    ]) {
+      expect(selected(restore, overrides)).toBe(false);
+    }
+    expect(
+      selected(save, {
+        preflightOutputs: { cache_mode: "restore", cache_write_allowed: "false" },
+      }),
+    ).toBe(false);
+    expect(selected(record, { eventName: "pull_request" })).toBe(false);
+    expect(selected(record, { ref: "refs/heads/feature" })).toBe(false);
+    expect(
+      selected(record, {
+        preflightOutputs: { cache_mode: "restore", cache_write_allowed: "false" },
+      }),
+    ).toBe(false);
+    for (const outputs of [
+      { "cache-primary-key": "", "cache-hit": "false" },
+      { "cache-primary-key": "native-inputs", "cache-hit": "true" },
+    ]) {
+      expect(
+        selected(record, { steps: { ...context.steps, "ios-build-cache": { outputs } } }),
+      ).toBe(false);
+    }
+    expect(evaluateWorkflowExpression(`\${{ ${record.if} }}`, { ...context, failed: true })).toBe(
+      false,
+    );
+    expect(
+      selected(save, {
+        steps: {
+          ...context.steps,
+          "record-ios-build-cache-metadata": { outputs: {}, outcome: "failure" },
+        },
+      }),
+    ).toBe(false);
+    for (const [owner, minutes] of [
+      [record, 1],
+      [save, 3],
+    ] as const) {
+      expect(owner["continue-on-error"]).toBe(true);
+      expect(owner["timeout-minutes"]).toBe(minutes);
+    }
+  });
+});
+
 function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<string, string> = {}) {
   const root = tempDirs.make("openclaw-watch-workflow-");
   const bin = path.join(root, "bin");
@@ -66,6 +155,12 @@ function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<strin
   mkdirSync(harnessLib, { recursive: true });
   copyFileSync("scripts/lib/swift-toolchain.sh", path.join(harnessLib, "swift-toolchain.sh"));
   copyFileSync("scripts/lib/ci-ios-smoke-plan.mjs", path.join(harnessLib, "ci-ios-smoke-plan.mjs"));
+  copyFileSync("scripts/ci-xcodebuild.py", path.join(harnessLib, "..", "ci-xcodebuild.py"));
+  copyFileSync(
+    "scripts/swift-build-cache-metadata.py",
+    path.join(harnessLib, "..", "swift-build-cache-metadata.py"),
+  );
+  copyFileSync("scripts/ci-collect-checks.sh", path.join(harnessLib, "..", "ci-collect-checks.sh"));
   mkdirSync(product, { recursive: true });
   const runner = path.join(root, "tools.mjs");
   writeFileSync(
@@ -126,11 +221,29 @@ if (tool === "installer") {
 }
 `,
   );
-  for (const tool of ["xcrun", "xcodebuild", "pnpm", "uname", "installer", "simslim"]) {
+  // Exercise the restart helper itself below; this fixture checks workflow ordering.
+  for (const tool of ["xcrun", "xcodebuild", "pnpm", "uname", "sysctl", "installer", "simslim"]) {
     const executable = path.join(bin, tool);
     writeFileSync(executable, `#!/bin/sh\nexec '${process.execPath}' '${runner}' '${tool}' "$@"\n`);
     chmodSync(executable, 0o755);
   }
+  // The build runner also uses Python to execute its logged shell command. Only
+  // intercept the restart helper; the inline build wrapper must still execute.
+  const python = spawnSync("python3", ["-c", "import sys; print(sys.executable)"], {
+    encoding: "utf8",
+  });
+  expect(python.status, python.stderr).toBe(0);
+  const pythonWrapper = path.join(bin, "python3");
+  writeFileSync(
+    pythonWrapper,
+    `#!/bin/sh
+if [ "$1" = "scripts/ios-access-restart-proof.py" ]; then
+  exec '${process.execPath}' '${runner}' python3 "$@"
+fi
+exec '${python.stdout.trim()}' "$@"
+`,
+  );
+  chmodSync(pythonWrapper, 0o755);
   if (mode.includes("slim")) {
     const scripts = path.join(root, "scripts");
     mkdirSync(scripts);
@@ -172,6 +285,7 @@ if (tool === "installer") {
       IOS_SIMULATOR_SELECTION: JSON.stringify(resolveIosSimulatorTestSelection(null)),
       IOS_CI_PHASE: "smoke",
       IOS_MAIN_TIER: "false",
+      IOS_FROZEN_TARGET: "false",
       HISTORICAL_TARGET: "false",
       IOS_DEST: "",
       XCODE_XCCONFIG_FILE: "",
@@ -190,18 +304,43 @@ if (tool === "installer") {
     commands,
     product,
     summary: readFileSync(summaryFile, "utf8"),
+    environment: readFileSync(environmentFile, "utf8"),
   };
 }
 
 describe.skipIf(process.platform === "win32")("SimSlim workflow admission", () => {
-  it("prewarms and slims the build's exact iPhone before testing", () => {
-    const { result, commands } = runSimulatorStep("voice-slim", [
+  it.each([
+    "voice-slim",
+    "voice-slim-missing-installer",
+    "voice-slim-missing-prepare",
+    "voice-slim-install-failed",
+    "voice-slim-on-failed",
+    "voice-slim-verify-failed",
+    "voice-slim-boot-failed",
+    "voice-boot-failed",
+  ])("admits XCTest only after simulator preparation succeeds: %s", (mode) => {
+    const missingTooling = mode.includes("missing");
+    const { result, commands } = runSimulatorStep(mode, [
       configureStep,
       prepareStep,
       buildStep,
-      voiceStep,
+      ...(missingTooling ? [] : [voiceStep]),
     ]);
+    if (mode.endsWith("failed")) {
+      expect(result.status).toBe(23);
+      expect(commands.some(({ tool }) => tool === "pnpm")).toBe(true);
+      expect(commands.some(isTestCommand)).toBe(false);
+      if (mode === "voice-boot-failed") {
+        expect(result.stdout).toContain("Intentional simulator boot failure");
+      }
+      return;
+    }
     expect(result.status, result.stderr).toBe(0);
+    if (missingTooling) {
+      expect(commands.some(({ tool }) => tool === "simslim" || tool === "installer")).toBe(false);
+      expect(commands.some(({ tool }) => tool === "pnpm")).toBe(true);
+      return;
+    }
     const slim = commands.filter(({ tool }) => tool === "simslim");
     expect(slim.map(({ args }) => args[0])).toEqual(["on", "verify"]);
     for (const { args } of slim) {
@@ -211,29 +350,6 @@ describe.skipIf(process.platform === "win32")("SimSlim workflow admission", () =
     expect(
       commands.filter(({ tool, args }) => tool === "xcrun" && args[1] === "bootstatus"),
     ).toHaveLength(3);
-  });
-
-  it.each(["missing-installer", "missing-prepare"])("keeps %s targets stock", (mode) => {
-    const { result, commands } = runSimulatorStep(`voice-slim-${mode}`, [
-      configureStep,
-      prepareStep,
-      buildStep,
-    ]);
-    expect(result.status, result.stderr).toBe(0);
-    expect(commands.some(({ tool }) => tool === "simslim" || tool === "installer")).toBe(false);
-    expect(commands.some(({ tool }) => tool === "pnpm")).toBe(true);
-  });
-
-  it.each(["install", "on", "verify", "boot"])("stops before XCTest on %s failure", (mode) => {
-    const { result, commands } = runSimulatorStep(`voice-slim-${mode}-failed`, [
-      configureStep,
-      prepareStep,
-      buildStep,
-      voiceStep,
-    ]);
-    expect(result.status).toBe(23);
-    expect(commands.some(({ tool }) => tool === "pnpm")).toBe(true);
-    expect(commands.some(isTestCommand)).toBe(false);
   });
 });
 
@@ -290,84 +406,57 @@ describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => 
     },
   );
 
-  it.each(["missing-product", "ambiguous-product", "relative-product"])(
-    "rejects %s settings before simulator installation or test execution",
+  it.each(["missing-product", "ambiguous-product", "relative-product", "boot-failed"])(
+    "rejects %s before simulator installation or test execution",
     (mode) => {
       const { result, commands } = runSimulatorStep(mode);
-      expect(result.status).not.toBe(0);
+      if (mode === "boot-failed") {
+        expect(result.status).toBe(23);
+      } else {
+        expect(result.status).not.toBe(0);
+      }
       expect(commands.some((command) => command.args.includes("install"))).toBe(false);
       expect(commands.some((command) => command.args.includes("test-without-building"))).toBe(
         false,
       );
     },
   );
-
-  it("preserves simulator readiness failure without installing or running tests", () => {
-    const { result, commands } = runSimulatorStep("boot-failed");
-    expect(result.status).toBe(23);
-    expect(commands.some((command) => command.args.includes("install"))).toBe(false);
-    expect(commands.some((command) => command.args.includes("test-without-building"))).toBe(false);
-  });
 });
 
 describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () => {
   it.each([
-    ["tests", "false"],
-    ["smoke", "true"],
-  ])("keeps the generic simulator build for phase=%s historical=%s", (phase, historical) => {
-    const { result, commands } = runSimulatorStep("voice", [buildStep], {
-      IOS_CI_PHASE: phase,
-      HISTORICAL_TARGET: historical,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(commands).toEqual([{ tool: "pnpm", args: ["ios:build"], destination: "" }]);
-  });
-
-  it("retains universal build settings and verbose diagnostics in full manual validation", () => {
-    const { result, commands } = runSimulatorStep(
-      "voice",
-      [configureStep, prepareStep, buildStep, voiceStep],
-      {
-        IOS_CI_PHASE: "tests",
-      },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const appBuild = commands.find((command) => command.tool === "pnpm");
-    expect(appBuild?.destination).toBe("");
-    expect(commands.every((command) => command.settings === undefined)).toBe(true);
-    const testRun = commands.find((command) => command.tool === "xcodebuild");
-    expect(testRun?.args).toEqual(
-      expect.arrayContaining(["-collect-test-diagnostics", "on-failure"]),
-    );
-  });
-
-  it("fails after the overlapping build without XCTest when the selected iPhone cannot boot", () => {
-    const { result, commands } = runSimulatorStep("voice-boot-failed", [
-      configureStep,
-      prepareStep,
-      buildStep,
-      voiceStep,
-    ]);
-    expect(result.status).toBe(23);
-    expect(commands.some((command) => command.tool === "pnpm")).toBe(true);
-    expect(commands.some(isTestCommand)).toBe(false);
-    expect(result.stdout).toContain("Intentional simulator boot failure");
-  });
-
-  it.each([
     ["smoke", "false"],
     ["tests", "true"],
+    ["tests", "false"],
   ])(
     "executes cleanup and sibling suites with normal Debug signing: %s, main=%s",
     (phase, main) => {
-      const { result, commands } = runSimulatorStep(
+      const manual = phase === "tests" && main === "false";
+      const { result, commands, environment } = runSimulatorStep(
         "voice",
-        [configureStep, prepareStep, buildStep, voiceStep, iosStep],
+        [configureStep, prepareStep, buildStep, voiceStep, ...(manual ? [] : [iosStep])],
         { IOS_CI_PHASE: phase, IOS_MAIN_TIER: main },
       );
       expect(result.status, result.stderr).toBe(0);
+      expect(environment.includes("IOS_TEST_BUILD_PREPARED=true")).toBe(
+        phase === "smoke" || main === "true",
+      );
       const appBuild = commands.find((command) => command.tool === "pnpm");
-      expect(appBuild?.args).toEqual([phase === "smoke" ? "ios:gen" : "ios:build"]);
+      if (manual) {
+        expect(appBuild?.destination).toBe("");
+        expect(commands.every((command) => command.settings === undefined)).toBe(true);
+        const testRun = commands.find(isTestCommand);
+        expect(testRun?.args).toEqual(
+          expect.arrayContaining([
+            "-collect-test-diagnostics",
+            "never",
+            "-resultBundlePath",
+            "apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.xcresult",
+          ]),
+        );
+        return;
+      }
+      expect(appBuild?.args).toEqual(["ios:gen"]);
       expect(appBuild?.destination).toBe("platform=iOS Simulator,id=watch-fixture");
       expect(appBuild?.settings).toBe("ARCHS = arm64\nCOMPILER_INDEX_STORE_ENABLE = NO\n");
       expect(
@@ -375,19 +464,16 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
       ).toEqual([
         ["simctl", "list", "devices", "available", "--json"],
         ["simctl", "bootstatus", "watch-fixture", "-b"],
+        ["simctl", "list", "devices", "booted"],
       ]);
       const builds = commands.filter((command) => command.tool === "xcodebuild");
       expect(
         builds.map((command) =>
           command.args.find((arg) =>
-            ["build-for-testing", "test", "test-without-building"].includes(arg),
+            ["build", "build-for-testing", "test", "test-without-building"].includes(arg),
           ),
         ),
-      ).toEqual(
-        phase === "smoke"
-          ? ["build-for-testing", "test-without-building", "test-without-building"]
-          : ["test", "test"],
-      );
+      ).toEqual(["build-for-testing", "test-without-building", "test-without-building"]);
       for (const command of builds) {
         expect(command.args).toEqual(expect.arrayContaining(["-configuration", "Debug"]));
         expect(command.args).toContain(appBuild?.destination);
@@ -442,50 +528,71 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
 describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", () => {
   const authClasses = [
     "CloudflareAccessClientTests",
+    "CloudflareAccessBrowserPresenterTests",
     "CloudflareAccessTransferTests",
     "CloudflareAccessSessionStoreTests",
   ];
 
-  it("executes the actual auth test classes during smoke and excludes compatibility targets", () => {
+  it.each(["smoke", "tests"])("executes auth and admitted lifecycle/UI suites in %s", (phase) => {
     expect(iosStep?.if).toContain("matrix.phase == 'smoke'");
     expect(iosStep?.if).toContain("needs.preflight.outputs.compatibility_target != 'true'");
     expect(workflow.jobs["ios-build"]?.env?.IOS_CI_PHASE).toBe("${{ matrix.phase }}");
-    const { result, commands } = runSimulatorStep("voice", [
-      configureStep,
-      prepareStep,
-      buildStep,
-      iosStep,
-    ]);
-    expect(result.status, result.stderr).toBe(0);
-    const tests = commands.filter(isTestCommand);
-    expect(tests).toHaveLength(1);
-    expect(tests[0]?.args).toContain("platform=iOS Simulator,id=watch-fixture");
-    expect(tests[0]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual([
-      ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
-      "-only-testing:OpenClawTests/ChatTypingFocusTests",
-      "-only-testing:OpenClawTests/ChatSendHydrationTests",
-    ]);
-    for (const name of authClasses) {
-      expect(readFileSync(`apps/ios/Tests/${name}.swift`, "utf8")).toContain(`struct ${name}`);
-    }
-  });
-
-  it("keeps full lifecycle and UI tests alongside Access tests in full validation", () => {
     const { result, commands } = runSimulatorStep(
       "voice",
       [configureStep, prepareStep, buildStep, iosStep],
-      {
-        IOS_CI_PHASE: "tests",
-      },
+      { IOS_CI_PHASE: phase },
     );
     expect(result.status, result.stderr).toBe(0);
-    const tests = commands.filter((command) => command.tool === "xcodebuild");
-    expect(tests).toHaveLength(2);
+    const tests = commands.filter(isTestCommand);
+    expect(tests).toHaveLength(phase === "smoke" ? 1 : 2);
+    expect(tests[0]?.args).toContain("platform=iOS Simulator,id=watch-fixture");
     expect(tests[0]?.args).toEqual(
       expect.arrayContaining([
-        ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
-        "-only-testing:OpenClawTests/ChatTypingFocusTests",
-        "-only-testing:OpenClawTests/ChatSendHydrationTests",
+        "-collect-test-diagnostics",
+        "never",
+        "-resultBundlePath",
+        "apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult",
+      ]),
+    );
+    const authSelectors = [
+      ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
+      "-only-testing:OpenClawTests/ChatTypingFocusTests",
+      "-only-testing:OpenClawTests/ChatSendHydrationTests",
+      "-only-testing:OpenClawTests/GatewayIngressControllerTests",
+      "-only-testing:OpenClawTests/GatewayIngressLoginPreparationTests",
+      "-only-testing:OpenClawTests/GatewayConnectionControllerTests",
+      "-only-testing:OpenClawTests/LegacyManualGatewayMigrationTests",
+      "-only-testing:OpenClawTests/GatewayOperatorFleetTests",
+      "-only-testing:OpenClawTests/IOSMediaArtifactLoaderTests",
+      "-only-testing:OpenClawTests/OpenClawTypographyTests",
+      "-only-testing:OpenClawTests/GatewayConnectionSecurityTests",
+      "-only-testing:OpenClawTests/GatewaySettingsStoreTests",
+    ];
+    for (const name of authClasses) {
+      expect(readFileSync(`apps/ios/Tests/${name}.swift`, "utf8")).toContain(`struct ${name}`);
+    }
+    expect(
+      readFileSync("apps/ios/Tests/GatewayIngressLoginPreparationTests.swift", "utf8"),
+    ).toContain("struct GatewayIngressLoginPreparationTests");
+    expect(readFileSync("apps/ios/Tests/GatewayConnectionControllerTests.swift", "utf8")).toContain(
+      "struct LegacyManualGatewayMigrationTests",
+    );
+    expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
+    if (phase === "smoke") {
+      expect(commands.at(-1)).toEqual({
+        tool: "python3",
+        args: ["scripts/ios-access-restart-proof.py", "watch-fixture"],
+        destination: "platform=iOS Simulator,id=watch-fixture",
+        settings: "ARCHS = arm64\nCOMPILER_INDEX_STORE_ENABLE = NO\n",
+      });
+      expect(tests[0]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual(
+        authSelectors,
+      );
+      return;
+    }
+    expect(tests[0]?.args).toEqual(
+      expect.arrayContaining([
+        ...authSelectors,
         "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
         "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
         "-only-testing:OpenClawTests/OpenClawTypographyTests",
@@ -495,10 +602,13 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
       "-only-testing:OpenClawUITests/BootstrapSetupFailureUITests",
     ]);
+    const restart = commands.findIndex((command) => command.tool === "python3");
+    expect(restart).toBeGreaterThan(commands.indexOf(tests[0]!));
+    expect(restart).toBeLessThan(commands.indexOf(tests[1]!));
   });
 
   it.each(["smoke", "tests"])(
-    "propagates auth test errors without later UI tests (%s)",
+    "retains auth test errors after completing independent restart and UI checks (%s)",
     (phase) => {
       const { result, commands } = runSimulatorStep(
         "voice-tests-failed",
@@ -507,30 +617,18 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
           IOS_CI_PHASE: phase,
         },
       );
-      expect(result.status).toBe(25);
-      expect(commands.filter(isTestCommand)).toHaveLength(1);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("[apple-command] Exit 25");
+      expect(commands.filter(isTestCommand)).toHaveLength(phase === "smoke" ? 1 : 2);
+      expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
     },
   );
 });
 
 describe("iOS simulator owner selection", () => {
   it.each([
-    ["apps/ios/Sources/Voice/TalkModeManager.swift", true, true],
-    ["apps/ios/Sources/Onboarding/OnboardingWizardView.swift", true, true],
-    ["apps/ios/Sources/FutureFeature/NewService.swift", true, true],
-    ["apps/ios/WatchApp/Sources/WatchInboxView.swift", true, false],
-    ["apps/ios/ActivityWidget/OpenClawLiveActivity.swift", true, false],
-    ["apps/ios/Tests/TalkModeConfigParsingTests.swift", true, false],
-    ["apps/ios/Tests/Fixtures/managed-document-message.json", true, false],
-    ["apps/ios/Tests/CloudflareAccessTestTokens.swift", false, true],
-    ["apps/ios/Tests/ChatSendHydrationTests.swift", false, true],
-    ["apps/ios/Tests/RootTabsNavigationTests.swift", false, false],
-    ["apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatViewModelTests.swift", false, false],
-    ["apps/shared/OpenClawKit/Sources/OpenClawNativeState/NativeState.swift", true, true],
-    ["apps/macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift", true, true],
     ["apps/swabble/Sources/SwabbleKit/Speech.swift", true, true],
-    ["apps/swabble/Sources/swabble/main.swift", false, false],
-    ["apps/ios/fastlane/Fastfile", false, false],
+    ["scripts/lib/swift-toolchain.sh", true, true],
   ] as const)(
     "selects the actual runtime, test, and resource owners for %s",
     (file, voice, lifecycle) => {
@@ -543,45 +641,18 @@ describe("iOS simulator owner selection", () => {
     },
   );
 
-  it.each([
-    "apps/ios/project.yml",
-    "apps/ios/Config/Signing.xcconfig",
-    "apps/ios/Sources/Fonts/Inter[opsz,wght].ttf",
-    "apps/ios/Tests/Info.plist",
-    "apps/shared/OpenClawKit/Package.swift",
-    "apps/swabble/Package.resolved",
-    "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid/index.html",
-    "scripts/lib/swift-toolchain.sh",
-    "scripts/ios-simulator-prepare.sh",
-    "scripts/lib/ci-ios-smoke-plan.mjs",
-    ".github/workflows/ci.yml",
-    "pnpm-lock.yaml",
-  ])("retains both groups when shared build or bundle input changes: %s", (file) => {
-    const selected = resolveIosSimulatorTestSelection([file]);
-    expect(selected.voice.selected).toBe(true);
-    expect(selected.lifecycle.selected).toBe(true);
-  });
-
-  it.each([
-    null,
-    ["../apps/ios/Tests/ChatTypingFocusTests.swift"],
-    ["/unknown"],
-    ["invalid\npath"],
-  ])(
-    "falls back to full coverage when changed paths are unavailable or invalid: %j",
-    (changedPaths) => {
-      const selected = resolveIosSimulatorTestSelection(changedPaths);
-      expect(selected.mode).toBe("full");
-      expect(selected.voice.selected).toBe(true);
-      expect(selected.lifecycle.selected).toBe(true);
+  it.each([{ changedPaths: null, enabled: false }])(
+    "falls back to full coverage only for admitted jobs: %j",
+    ({ changedPaths, enabled }) => {
+      const selected = resolveIosSimulatorTestSelection(changedPaths, {
+        enabled,
+        forceFull: !enabled,
+      });
+      expect(selected.mode).toBe(enabled ? "full" : "not-selected");
+      expect(selected.voice.selected).toBe(enabled);
+      expect(selected.lifecycle.selected).toBe(enabled);
     },
   );
-
-  it("never turns an unselected iOS job back on, even with the full-sequence override", () => {
-    const selected = resolveIosSimulatorTestSelection(null, { enabled: false, forceFull: true });
-    expect(selected.voice.selected).toBe(false);
-    expect(selected.lifecycle.selected).toBe(false);
-  });
 });
 
 function admittedSimulatorSteps(
@@ -589,6 +660,15 @@ function admittedSimulatorSteps(
   phase = "smoke",
   compatibility = false,
 ) {
+  const outcomes: Record<
+    string,
+    { outputs: Record<string, string>; outcome: "success" | "skipped" }
+  > = Object.fromEntries(
+    ["select-xcode", "node-env", "ios-swift-tools", "watch-rust-toolchain"].map((id) => [
+      id,
+      { outputs: {}, outcome: "success" },
+    ]),
+  );
   return [configureStep, prepareStep, buildStep, voiceStep, iosStep].filter((step) => {
     if (!step) {
       throw new Error("Missing iOS simulator workflow step");
@@ -597,17 +677,22 @@ function admittedSimulatorSteps(
       return true;
     }
     const expression = step.if.startsWith("${{") ? step.if : `\${{ ${step.if} }}`;
-    return evaluateWorkflowExpression(expression, {
+    const selected = evaluateWorkflowExpression(expression, {
       repository: "openclaw/openclaw",
       eventName: "pull_request",
       runAttempt: 1,
       matrix: { phase },
+      steps: outcomes,
       preflightOutputs: {
         compatibility_target: String(compatibility),
         run_ios_voice_cleanup_tests: String(selection.voice.selected),
         run_ios_lifecycle_tests: String(selection.lifecycle.selected),
       },
     });
+    if (step.id) {
+      outcomes[step.id] = { outputs: {}, outcome: selected ? "success" : "skipped" };
+    }
+    return selected;
   });
 }
 
@@ -647,50 +732,340 @@ describe.skipIf(process.platform === "win32")("iOS selected simulator workflow",
       );
     }
     if (!groups.length) {
-      expect(commands.some(({ tool }) => ["xcrun", "installer", "simslim"].includes(tool))).toBe(
-        false,
-      );
+      expect(commands.some(({ tool }) => ["installer", "simslim"].includes(tool))).toBe(false);
+      expect(commands.filter(({ tool }) => tool === "xcrun").map(({ args }) => args)).toEqual([
+        ["simctl", "list", "devices", "booted"],
+      ]);
     }
     expect(summary).toBe(formatIosSimulatorSelectionSummary(selection));
     for (const group of ["voice", "lifecycle"]) {
       expect(summary).toContain(`| ${group} | ${groups.includes(group) ? "yes" : "no"} |`);
     }
   });
+});
 
-  it("retains the full tests phase and compatibility exclusions regardless of PR group flags", () => {
-    const none = resolveIosSimulatorTestSelection([]);
-    expect(admittedSimulatorSteps(none, "tests")).toEqual([
-      configureStep,
-      prepareStep,
-      buildStep,
-      voiceStep,
-      iosStep,
-    ]);
-    const all = resolveIosSimulatorTestSelection(null);
-    expect(admittedSimulatorSteps(all)).toEqual([
-      configureStep,
-      prepareStep,
-      buildStep,
-      voiceStep,
-      iosStep,
-    ]);
-    for (const phase of ["smoke", "tests"]) {
-      const compatible = admittedSimulatorSteps(all, phase, true);
-      expect(compatible).toContain(buildStep);
-      expect(compatible).not.toContain(prepareStep);
-      expect(compatible).not.toContain(voiceStep);
-      expect(compatible).not.toContain(iosStep);
+function runRestartProof(mode = "ready", format = 1, prepared = false) {
+  const root = tempDirs.make("openclaw-access-restart-");
+  const result = spawnSync(
+    "python3",
+    [
+      "-B",
+      "-c",
+      String.raw`
+import contextlib, datetime, importlib.util, io, json, os, pathlib, plistlib, subprocess, sys
+helper, root, mode, format, prepared = sys.argv[1:]
+os.environ["IOS_TEST_BUILD_PREPARED"] = prepared
+format = int(format)
+root = pathlib.Path(root)
+os.chdir(root)
+spec = importlib.util.spec_from_file_location("restart_proof", helper)
+proof = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(proof)
+products = root / "Build Products"
+app = products / "Debug-iphonesimulator/OpenClaw.app"
+tests = app / "PlugIns/OpenClawTests.xctest"
+data = root / "app data"
+data.mkdir()
+for bundle, identifier in [(app, "test.openclaw.app"), (tests, "test.openclaw.tests")]:
+    bundle.mkdir(parents=True, exist_ok=True)
+    (bundle / "fixture").write_bytes(b"unchanged executable")
+    (bundle / "Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable": "fixture", "CFBundleIdentifier": identifier}))
+target = {"BlueprintName": "OpenClawTests", "TestHostPath": "__TESTROOT__/Debug-iphonesimulator/OpenClaw.app",
+     "TestBundlePath": "__TESTHOST__/PlugIns/OpenClawTests.xctest", "UITargetAppPath": "unused",
+     "OnlyTestIdentifiers": ["OldSelection"], "SkipTestIdentifiers": ["AnotherSelection"],
+     "TestingEnvironmentVariables": {"DYLD_FRAMEWORK_PATH": "__TESTROOT__/Debug-iphonesimulator"}}
+document = {"OpenClawTests": target, "OpenClawLogicTests": {"BlueprintName": "OpenClawLogicTests"}}
+if format == 2:
+    document = {"TestConfigurations": [{"Name": "Default", "IsEnabled": True, "TestTargets": [
+        {"BlueprintName": "OpenClawLogicTests"}, target]}]}
+if format != 0:
+    document["__xctestrun_metadata__"] = {"FormatVersion": format}
+(products / "OpenClaw_iphonesimulator.xctestrun").write_bytes(plistlib.dumps(document))
+commands, runs, boot_timeouts = [], [], []
+booted = True
+receipt = None
+source = "a" * 40
+def run(args, capture=False, env=None, timeout=None):
+    global booted, receipt
+    commands.append(args)
+    if args[0] == "git":
+        return source
+    if "-showBuildSettings" in args:
+        return json.dumps([{"target": "OpenClaw", "buildSettings": {
+            "BUILD_DIR": str(products), "TARGET_BUILD_DIR": str(app.parent), "FULL_PRODUCT_NAME": app.name}}])
+    if "test-without-building" in args:
+        booted = mode == "already-booted"
+        config = plistlib.loads(pathlib.Path(args[args.index("-xctestrun") + 1]).read_bytes())
+        runs.append({"config": config, "environment": {key: value for key, value in env.items()
+            if key.startswith("TEST_RUNNER_OPENCLAW_ACCESS_RESTART_")}})
+        nonce = env["TEST_RUNNER_OPENCLAW_ACCESS_RESTART_NONCE"]
+        receipt = data / "Library/Application Support" / ("access-restart-" + nonce + ".plist")
+        if mode != "missing-handoff":
+            receipt.parent.mkdir(parents=True)
+            handoff = {"phase": "verified", "nonce": nonce, "source": source, "simulator": "simulator-fixture",
+                "installation": proof.installation_identity(app, tests, data), "seedPID": 2147483647,
+                "verifyPID": 2147483646, "seedProcessExited": True,
+                "expiresAt": datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(hours=1)}
+            if mode == "seed-only": handoff["phase"] = "seeded"
+            if mode == "same-pid": handoff["verifyPID"] = handoff["seedPID"]
+            if mode == "unconfirmed-exit": handoff["seedProcessExited"] = False
+            if mode == "wrong-source": handoff["source"] = "b" * 40
+            if mode == "wrong-nonce": handoff["nonce"] = "foreign"
+            if mode == "wrong-receipt-device": handoff["simulator"] = "another-device"
+            if mode == "expired-control": handoff["expiresAt"] = datetime.datetime(2000, 1, 1)
+            if mode == "changed-container": handoff["installation"]["container"]["inode"] += 1
+            receipt.write_bytes(plistlib.dumps(handoff))
+        if mode == "changed-binary": (app / "fixture").write_bytes(b"replacement executable")
+        if mode == "changed-test-binary": (tests / "fixture").write_bytes(b"replacement test executable")
+        if mode == "reinstalled-same-bytes":
+            executable = tests / "fixture"
+            replacement = tests / "replacement"
+            replacement.write_bytes(executable.read_bytes())
+            replacement.replace(executable)
+        if mode == "xcodebuild-failed": raise subprocess.CalledProcessError(65, args)
+    if "xcresulttool" in args:
+        device = {"deviceId": "simulator-fixture", "deviceName": "iPhone"}
+        configuration = {"configurationId": "1", "configurationName": "Default"}
+        if "summary" in args:
+            count = 0 if mode == "zero-tests" else (2 if mode == "execution-count" else 1)
+            device_run = {"device": {**device}, "testPlanConfiguration": {**configuration},
+                "passedTests": 2, "failedTests": 0, "skippedTests": 0, "expectedFailures": 0}
+            if mode == "wrong-summary-device": device_run["device"]["deviceId"] = "foreign"
+            if mode == "wrong-summary-configuration": device_run["testPlanConfiguration"]["configurationId"] = "foreign"
+            return json.dumps({"result": "Passed", "totalTestCount": count, "passedTests": count,
+                "failedTests": 0, "skippedTests": 1 if mode == "skipped" else 0,
+                "expectedFailures": 0, "testFailures": [],
+                "devicesAndConfigurations": [device_run] * (2 if mode == "extra-summary-device" else 1)})
+        identifier = "GatewayAccessRestartTests/testAcknowledgedSignOutSurvivesProcessRestart()"
+        repetitions = [{"nodeType": "Repetition", "nodeIdentifier": str(index),
+            "name": f"Repetition {index}", "result": "Passed"} for index in (1, 2)]
+        if mode == "one-repetition": repetitions.pop()
+        if mode == "extra-repetition": repetitions.append({**repetitions[0], "nodeIdentifier": "3", "name": "Repetition 3"})
+        if mode == "duplicate-repetition": repetitions[1] = repetitions[0]
+        if mode == "missing-repetition-id": repetitions[1].pop("nodeIdentifier")
+        if mode == "failed-repetition": repetitions[1]["result"] = "Failed"
+        if mode == "skipped-repetition": repetitions[1]["result"] = "Skipped"
+        if mode == "unknown-result-shape": repetitions = []
+        if mode in ("explicit-case-runs", "extra-case-run"):
+            for repetition in repetitions:
+                repetition["children"] = [{"nodeType": "Test Case Run", "name": "Execution", "result": "Passed"}]
+        if mode == "extra-case-run": repetitions[1]["children"].append(repetitions[1]["children"][0])
+        if mode == "unscoped-execution": repetitions.append({"nodeType": "Test Case Run", "name": "Extra", "result": "Passed"})
+        if mode == "wrapped-repetition": repetitions = [{"nodeType": "Device", "nodeIdentifier": device["deviceId"],
+            "children": [{"nodeType": "Test Plan Configuration", "nodeIdentifier": "1", "children": repetitions}]}]
+        if mode == "nested-repetition": repetitions[0]["children"] = [{**repetitions[1]}]
+        if "test-details" in args:
+            assert args[-2:] == ["--test-id", identifier]
+            if mode == "wrong-device": device["deviceId"] = "another-device"
+            if mode == "wrong-configuration": configuration["configurationId"] = "foreign"
+            return json.dumps({"testIdentifier": "WrongCase" if mode == "wrong-details-case" else identifier,
+                "testResult": "Passed", "arguments": ["unexpected"] if mode == "parameterized-case" else [],
+                "devices": [device], "testPlanConfigurations": [configuration] * (2 if mode == "extra-configuration" else 1),
+                "testRuns": repetitions})
+        identifier = "WrongCase" if mode == "wrong-case" else identifier
+        if mode == "tree-repetition-mismatch": repetitions[1]["nodeIdentifier"] = "foreign"
+        case = {"nodeType": "Test Case", "nodeIdentifier": identifier, "result": "Passed", "children": repetitions}
+        bundle = {"nodeType": "Unit test bundle", "name": "WrongBundle" if mode == "wrong-bundle" else "OpenClawTests",
+            "children": [{"nodeType": "Test Suite", "name": "GatewayAccessRestartTests",
+                "children": [case] * (2 if mode == "extra-case" else 1)}]}
+        if mode == "wrong-tree-device": device["deviceId"] = "foreign"
+        if mode == "wrong-tree-configuration": configuration["configurationId"] = "foreign"
+        return json.dumps({"testNodes": [{"nodeType": "Test Plan", "name": "OpenClaw", "children": [bundle]}],
+            "devices": [device], "testPlanConfigurations": [configuration]})
+    if "bootstatus" in args:
+        assert args == ["xcrun", "simctl", "bootstatus", "simulator-fixture", "-b"]
+        boot_timeouts.append(timeout)
+        if mode == "boot-failed": raise RuntimeError("simulator boot failed")
+        booted = True
+    if "get_app_container" in args:
+        if not booted:
+            raise RuntimeError("Unable to lookup in current state: Shutdown")
+        return str(app if args[-1] == "app" else data)
+    return ""
+proof.run = run
+proof.process_exists = lambda pid: mode == "live-seed"
+error = None
+with contextlib.redirect_stdout(io.StringIO()):
+    try:
+        proof.main("simulator-fixture")
+    except Exception as failure:
+        error = str(failure)
+print(json.dumps({"error": error, "commands": commands, "runs": runs, "bootTimeouts": boot_timeouts,
+    "receiptRetained": receipt is not None and receipt.exists()}))
+`,
+      path.resolve("scripts/ios-access-restart-proof.py"),
+      root,
+      mode,
+      String(format),
+      String(prepared),
+    ],
+    { encoding: "utf8", timeout: 5_000 },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout) as {
+    error: string | null;
+    commands: string[][];
+    bootTimeouts: number[];
+    receiptRetained: boolean;
+    runs: {
+      environment: Record<string, string>;
+      config: {
+        OpenClawTests?: Record<string, unknown>;
+        OpenClawLogicTests?: Record<string, unknown>;
+        TestConfigurations?: { TestTargets: Record<string, unknown>[] }[];
+        __xctestrun_metadata__?: { FormatVersion: number };
+      };
+    }[];
+  };
+}
+
+describe("iOS Access process restart proof", () => {
+  it.each([
+    { format: 0, prepared: false },
+    { format: 1, prepared: false },
+    { format: 2, prepared: false },
+    { format: 0, prepared: true },
+    { format: 1, prepared: true },
+    { format: 2, prepared: true },
+  ])("preserves two fixed process repetitions (%j)", ({ format, prepared }) => {
+    const { error, commands, runs, bootTimeouts, receiptRetained } = runRestartProof(
+      "ready",
+      format,
+      prepared,
+    );
+    expect(error).toBeNull();
+    expect(runs).toHaveLength(1);
+    expect(bootTimeouts).toEqual([120]);
+    expect(receiptRetained).toBe(false);
+    const { config, environment } = runs[0]!;
+    expect(config["__xctestrun_metadata__"]?.FormatVersion).toBe(format || undefined);
+    expect(config).not.toHaveProperty("OpenClawLogicTests");
+    const targets =
+      format === 2 ? config.TestConfigurations![0]!.TestTargets : [config.OpenClawTests!];
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject({
+      BlueprintName: "OpenClawTests",
+      TestHostPath: "__TESTROOT__/Debug-iphonesimulator/OpenClaw.app",
+      TestBundlePath: "__TESTHOST__/PlugIns/OpenClawTests.xctest",
+      UITargetAppPath: "unused",
+      TestingEnvironmentVariables: { DYLD_FRAMEWORK_PATH: "__TESTROOT__/Debug-iphonesimulator" },
+    });
+    for (const key of ["OnlyTestIdentifiers", "SkipTestIdentifiers", "UseDestinationArtifacts"]) {
+      expect(targets[0]).not.toHaveProperty(key);
     }
+    expect(environment.TEST_RUNNER_OPENCLAW_ACCESS_RESTART_DEVICE).toBe("simulator-fixture");
+    expect(environment).not.toHaveProperty("TEST_RUNNER_OPENCLAW_ACCESS_RESTART_PHASE");
+    const invocations = commands.filter((args) => args.includes("test-without-building"));
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0]).toEqual(
+      expect.arrayContaining([
+        "-test-iterations",
+        "2",
+        "-test-repetition-relaunch-enabled",
+        "YES",
+        "-parallel-testing-enabled",
+        "NO",
+        "platform=iOS Simulator,id=simulator-fixture",
+        "-only-testing:OpenClawTests/GatewayAccessRestartTests/testAcknowledgedSignOutSurvivesProcessRestart",
+      ]),
+    );
+    expect(commands.filter((args) => args.includes("build-for-testing"))).toHaveLength(
+      prepared ? 0 : 1,
+    );
+    for (const operation of [
+      "install",
+      "uninstall",
+      "erase",
+      "terminate",
+      "-retry-tests-on-failure",
+      "-run-tests-until-failure",
+    ]) {
+      expect(commands.some((args) => args.includes(operation))).toBe(false);
+    }
+  });
+
+  it.each(["already-booted", "execution-count"])(
+    "accepts %s with two explicit passing repetitions and a verified handoff",
+    (mode) => {
+      const { error, bootTimeouts, receiptRetained } = runRestartProof(mode);
+      expect(error).toBeNull();
+      expect(bootTimeouts).toEqual([120]);
+      expect(receiptRetained).toBe(false);
+    },
+  );
+
+  it("rejects xcodebuild failure even when the result records and final receipt would pass", () => {
+    const { error, commands, receiptRetained } = runRestartProof("xcodebuild-failed");
+    expect(error).toContain("exit status 65");
+    expect(commands.some((args) => args.includes("xcresulttool"))).toBe(false);
+    expect(commands.some((args) => args.includes("get_app_container"))).toBe(false);
+    expect(receiptRetained).toBe(true);
+  });
+
+  it("stops before container inspection if readiness fails", () => {
+    const { error, commands, receiptRetained } = runRestartProof("boot-failed");
+    expect(error).toBe("simulator boot failed");
+    expect(commands.at(-1)).toEqual(["xcrun", "simctl", "bootstatus", "simulator-fixture", "-b"]);
+    expect(receiptRetained).toBe(true);
+  });
+
+  it("rejects an unknown generated format before a test process starts", () => {
+    const { error, runs } = runRestartProof("ready", 3);
+    expect(error).toBe("Unsupported generated test run format");
+    expect(runs).toEqual([]);
+  });
+
+  it.each([
+    "zero-tests",
+    "skipped",
+    "wrong-case",
+    "extra-case",
+    "wrong-device",
+    "extra-configuration",
+    "wrong-details-case",
+    "parameterized-case",
+    "wrong-bundle",
+    "wrong-summary-device",
+    "wrong-summary-configuration",
+    "extra-summary-device",
+    "wrong-tree-device",
+    "wrong-tree-configuration",
+    "wrong-configuration",
+    "one-repetition",
+    "extra-repetition",
+    "duplicate-repetition",
+    "failed-repetition",
+    "skipped-repetition",
+    "unknown-result-shape",
+    "extra-case-run",
+    "unscoped-execution",
+    "explicit-case-runs",
+    "nested-repetition",
+    "missing-repetition-id",
+    "tree-repetition-mismatch",
+    "wrapped-repetition",
+    "missing-handoff",
+    "seed-only",
+    "same-pid",
+    "live-seed",
+    "unconfirmed-exit",
+    "wrong-source",
+    "wrong-nonce",
+    "wrong-receipt-device",
+    "expired-control",
+    "changed-container",
+    "changed-binary",
+    "changed-test-binary",
+    "reinstalled-same-bytes",
+  ])("rejects %s without claiming restart proof", (mode) => {
+    const { error, runs, receiptRetained } = runRestartProof(mode);
+    expect(error).toBeTruthy();
+    expect(runs).toHaveLength(1);
+    expect(receiptRetained).toBe(mode !== "missing-handoff");
   });
 });
 
 it.each([
-  { event: "pull_request", kill: "", full: false, releaseGate: false, historical: false },
-  { event: "pull_request", kill: "true", full: true, releaseGate: false, historical: false },
-  { event: "pull_request", kill: "1", full: true, releaseGate: false, historical: false },
-  { event: "schedule", kill: "", full: true, releaseGate: false, historical: false },
-  { event: "workflow_dispatch", kill: "", full: true, releaseGate: false, historical: false },
-  { event: "workflow_dispatch", kill: "", full: true, releaseGate: false, historical: true },
   { event: "workflow_dispatch", kill: "", full: true, releaseGate: true, historical: false },
 ] as const)(
   "publishes iOS manifest decisions for $event, override=$kill, release=$releaseGate, historical=$historical",
@@ -704,7 +1079,7 @@ it.each([
       scopeEnv: {
         OPENCLAW_CI_RUN_IOS_BUILD: "true",
         OPENCLAW_CI_IOS_SIMULATOR_FULL: kill,
-        OPENCLAW_CI_VALIDATION_TIER: event === "schedule" ? "main" : "full",
+        OPENCLAW_CI_VALIDATION_TIER: "full",
       },
     });
     expect(result.status, result.output).toBe(0);
@@ -726,12 +1101,6 @@ it.each([
       releaseGate,
       preflightOutputs: result.outputs,
     });
-    expect(phases).toEqual(
-      event === "schedule" || historical
-        ? ["tests"]
-        : event === "workflow_dispatch" && !releaseGate
-          ? ["release", "tests"]
-          : ["smoke"],
-    );
+    expect(phases).toEqual(["smoke"]);
   },
 );

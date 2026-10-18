@@ -1,7 +1,3 @@
-/**
- * Structured logging for auth profile failure state changes.
- * Log payloads keep machine-readable fields while redacting console-facing ids.
- */
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeForConsole } from "../console-sanitize.js";
@@ -9,7 +5,15 @@ import type { AuthProfileFailureReason, ProfileUsageStats } from "./types.js";
 
 const observationLog = createSubsystemLogger("agent/embedded");
 
-/** Logs an auth profile failure/cooldown/disable state transition. */
+export function logDroppedAuthProfileBookkeeping(kind: string, profileId: string): void {
+  observationLog.warn("dropped auth profile bookkeeping after locked store update failed", {
+    event: "auth_profile_bookkeeping_dropped",
+    kind,
+    profileId,
+    tags: ["auth_profiles", "persistence"],
+  });
+}
+
 export function logAuthProfileFailureStateChange(params: {
   runId?: string;
   profileId: string;
@@ -29,7 +33,6 @@ export function logAuthProfileFailureStateChange(params: {
   // this update reused the existing window instead of extending it.
   const windowReused =
     typeof previousUntil === "number" &&
-    Number.isFinite(previousUntil) &&
     previousUntil > params.now &&
     previousUntil === params.next[windowKey];
   const safeProfileId = redactIdentifier(params.profileId, { len: 12 });

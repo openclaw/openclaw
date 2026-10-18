@@ -25,7 +25,7 @@ import { createSessionsHistoryTool } from "./sessions-history-tool.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
 const config: OpenClawConfig = {
-  agents: { entries: { main: { default: true }, work: {} } },
+  agents: { entries: { main: {}, work: {} } },
   tools: { sessions: { visibility: "agent" } },
 };
 const scope = {
@@ -149,31 +149,49 @@ describe("embedded session history anchors", () => {
     });
   });
 
-  it("returns the recovered tail offset and reset marker through the embedded history tool", async () => {
-    const messages = [{ role: "assistant", content: "current tail", __openclaw: { seq: 3 } }];
-    vi.spyOn(historyPages, "readChatHistoryPage").mockResolvedValueOnce({
-      messages,
-      responseOffset: 0,
-      windowReset: true,
-      pagination: { offset: 0, totalMessages: 3, rawPageMessages: 1 },
-    });
-    const tool = toolsFor().history;
-    const result = await tool.execute("recovered-tail", {
-      sessionKey: scope.sessionKey,
-      limit: 1,
-      offset: 2,
-    });
-
-    expect(result.details).toMatchObject({
-      messages,
+  it.each([
+    { name: "recovered tail", seq: 3, offset: 2, windowReset: true, messageSequences: undefined },
+    {
+      name: "merged native/local tail",
+      seq: 1,
       offset: 0,
-      nextOffset: 1,
-      hasMore: true,
-      totalMessages: 3,
-      windowReset: true,
-    });
-    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-  });
+      windowReset: undefined,
+      messageSequences: { "id:local": 3 },
+    },
+  ])(
+    "preserves continuation facts for the $name through the embedded tool",
+    async ({ seq, offset, windowReset, messageSequences }) => {
+      const messages = [
+        { role: "assistant", content: "current tail", __openclaw: { id: "local", seq } },
+      ];
+      vi.spyOn(historyPages, "readChatHistoryPage").mockResolvedValueOnce({
+        messages,
+        responseOffset: 0,
+        ...(windowReset ? { windowReset } : {}),
+        pagination: {
+          offset: 0,
+          totalMessages: 3,
+          rawPageMessages: 1,
+          ...(messageSequences ? { messageSequences } : {}),
+        },
+      });
+      const tool = toolsFor().history;
+      const result = await tool.execute("history-continuation", {
+        sessionKey: scope.sessionKey,
+        limit: 1,
+        offset,
+      });
+      expect(result.details).toMatchObject({
+        messages,
+        offset: 0,
+        nextOffset: 1,
+        hasMore: true,
+        totalMessages: 3,
+        ...(windowReset ? { windowReset: true } : {}),
+      });
+      expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    },
+  );
 
   it("reopens a search hit after a reset of the same physical session", async () => {
     await appendTranscriptMessage(scope, {

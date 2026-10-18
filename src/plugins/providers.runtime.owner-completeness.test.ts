@@ -120,6 +120,67 @@ afterEach(clearPluginLoaderCache);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("provider selection registration coverage", () => {
+  it("activates the Bedrock API owner for a custom provider without loading other owners", () => {
+    const manifest = JSON.parse(
+      readFileSync(
+        new URL("../../extensions/amazon-bedrock/openclaw.plugin.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    const root = makePluginLoaderTempDir();
+    const marker = path.join(root, "registrations.log");
+    const bedrock = writePlugin({
+      id: manifest.id,
+      dir: root,
+      filename: "index.cjs",
+      body: `module.exports={id:"amazon-bedrock",register(api){
+        require("node:fs").appendFileSync(${JSON.stringify(marker)},"bedrock");
+        api.registerProvider({id:"amazon-bedrock",label:"Bedrock",auth:[],hookAliases:["bedrock-converse-stream"]});
+      }};`,
+    });
+    const unrelated = writePlugin({
+      id: "unrelated-owner",
+      filename: "index.cjs",
+      body: 'module.exports={id:"unrelated-owner",register(){throw new Error("unrelated owner loaded");}};',
+    });
+    const plugins = [
+      { ...manifest, origin: "global" as const, rootDir: root, source: bedrock.file },
+      {
+        id: "unrelated-owner",
+        providers: ["unrelated"],
+        origin: "global" as const,
+        rootDir: unrelated.dir,
+        source: unrelated.file,
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+      },
+    ];
+    for (const plugin of plugins) {
+      writeFileSync(path.join(plugin.rootDir, "openclaw.plugin.json"), JSON.stringify(plugin));
+    }
+    const snapshot = createPluginMetadataSnapshotFixture({ plugins });
+    const config: OpenClawConfig = {
+      plugins: { allow: ["amazon-bedrock", "unrelated-owner"] },
+      models: {
+        providers: {
+          "amazon-bedrock-east1": {
+            api: "bedrock-converse-stream",
+            auth: "aws-sdk",
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            models: [],
+          },
+        },
+      },
+    };
+    const handle = resolveProviderRuntimePluginHandle({
+      provider: "amazon-bedrock-east1",
+      config,
+      env: {},
+      pluginMetadataSnapshot: snapshot,
+    });
+    expect(handle.plugin?.id).toBe("amazon-bedrock");
+    expect(readFileSync(marker, "utf8")).toBe("bedrock");
+  });
+
   it("reselects retained API owners from current config without activating plugins", async () => {
     const ids = ["ollama", "github-copilot"];
     const metadataSnapshot = createPluginMetadataSnapshotFixture({

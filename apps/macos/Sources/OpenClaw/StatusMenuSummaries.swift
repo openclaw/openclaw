@@ -24,19 +24,8 @@ final class StatusMenuSummaries: NSObject {
         var pending = false
     }
 
-    @MainActor
-    private final class Refresh {
-        let revision: UInt64?
-        var lease: GatewayConnection.ServerLease?
-        var task: Task<Void, Never>?
-
-        init(revision: UInt64?) {
-            self.revision = revision
-        }
-    }
-
     private var usageState: UsageState?
-    @ObservationIgnored private var refreshOperation: Refresh?
+    @ObservationIgnored private var refreshOperation: GatewayStoreRefresh?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var updateHandler: (@MainActor () -> Void)?
     @ObservationIgnored private var copiedValues: [String: String] = [:]
@@ -92,10 +81,6 @@ final class StatusMenuSummaries: NSObject {
         return "\(row.titleText) · \(row.detailText())"
     }
 
-    var connectedDeviceCount: Int {
-        self.nodes.nodes.filter(\.isConnected).count
-    }
-
     func refresh(onUpdate: @escaping @MainActor () -> Void) {
         self.updateHandler = onUpdate
         self.nodes.start()
@@ -143,6 +128,15 @@ final class StatusMenuSummaries: NSObject {
         self.beginRefresh()
     }
 
+    private func configureSummary(_ item: NSMenuItem, title: String, symbol: String, detail: String?) {
+        item.title = title
+        item.image = nil
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: StatusSummaryCard(symbolName: symbol, title: title, detail: detail),
+            highlights: true)
+    }
+
     func configureAutomations(_ item: NSMenuItem) {
         let summary = self.cron.summary
         let jobs = summary.jobs
@@ -151,15 +145,11 @@ final class StatusMenuSummaries: NSObject {
         } else {
             String(summary.total)
         }
-        item.title = String(localized: "Automations")
-        item.image = nil
-        StatusMenuRenderer.configureHostedView(
+        self.configureSummary(
             item,
-            rootView: StatusSummaryCard(
-                symbolName: "clock.badge.checkmark",
-                title: String(localized: "Automations"),
-                detail: detail),
-            highlights: true)
+            title: String(localized: "Automations"),
+            symbol: "clock.badge.checkmark",
+            detail: detail)
 
         var entries = jobs.prefix(CronJobsSummary.previewLimit).map { job in
             MenuEntry(id: "cron.job.\(job.id)") { [weak self] item in
@@ -188,15 +178,11 @@ final class StatusMenuSummaries: NSObject {
     }
 
     func configureUsage(_ item: NSMenuItem) {
-        item.title = String(localized: "Usage")
-        item.image = nil
-        StatusMenuRenderer.configureHostedView(
+        self.configureSummary(
             item,
-            rootView: StatusSummaryCard(
-                symbolName: "chart.bar.xaxis",
-                title: String(localized: "Usage"),
-                detail: self.usageSummary),
-            highlights: true)
+            title: String(localized: "Usage"),
+            symbol: "chart.bar.xaxis",
+            detail: self.usageSummary)
 
         var entries = self.orderedUsageRows.map { row in
             MenuEntry(id: "usage.provider.\(row.id)") { item in
@@ -234,16 +220,12 @@ final class StatusMenuSummaries: NSObject {
     }
 
     func configureDevices(_ item: NSMenuItem) {
-        let count = self.connectedDeviceCount
-        item.title = String(localized: "Devices")
-        item.image = nil
-        StatusMenuRenderer.configureHostedView(
+        let count = self.nodes.nodes.filter(\.isConnected).count
+        self.configureSummary(
             item,
-            rootView: StatusSummaryCard(
-                symbolName: "laptopcomputer.and.iphone",
-                title: String(localized: "Devices"),
-                detail: String(format: String(localized: "%lld connected"), count)),
-            highlights: true)
+            title: String(localized: "Devices"),
+            symbol: "laptopcomputer.and.iphone",
+            detail: String(format: String(localized: "%lld connected"), count))
 
         var entries = [self.nodeEntry(self.gatewayEntry())]
         if let notice = self.nodes.persistentServiceNotice {
@@ -335,7 +317,7 @@ final class StatusMenuSummaries: NSObject {
         state.pending = loadUsage
         state.retryAttempts = 0
         self.usageState = state
-        let refresh = Refresh(revision: state.revision)
+        let refresh = GatewayStoreRefresh(revision: state.revision)
         refresh.task = Task { [weak self] in
             await self?.performRefresh(refresh, loadUsage: loadUsage, loadCost: loadCost)
         }
@@ -348,13 +330,11 @@ final class StatusMenuSummaries: NSObject {
         self.usageState?.pending = false
     }
 
-    private func isCurrent(_ refresh: Refresh) -> Bool {
-        self.refreshOperation === refresh && refresh.task?.isCancelled != true &&
-            refresh.revision == self.control.gateway.selectedEndpointRevision &&
-            refresh.lease.map(self.control.gateway.serverLeaseMatchesCurrentState) != false
+    private func isCurrent(_ refresh: GatewayStoreRefresh) -> Bool {
+        self.refreshOperation === refresh && refresh.isCurrent(on: self.control.gateway)
     }
 
-    private func performRefresh(_ refresh: Refresh, loadUsage: Bool, loadCost: Bool) async {
+    private func performRefresh(_ refresh: GatewayStoreRefresh, loadUsage: Bool, loadCost: Bool) async {
         defer {
             if self.refreshOperation === refresh {
                 self.refreshOperation = nil
@@ -381,7 +361,7 @@ final class StatusMenuSummaries: NSObject {
         }
     }
 
-    private func loadUsage(_ refresh: Refresh, enabled: Bool) async {
+    private func loadUsage(_ refresh: GatewayStoreRefresh, enabled: Bool) async {
         guard enabled, let lease = refresh.lease else { return }
         while self.isCurrent(refresh) {
             do {
@@ -412,7 +392,7 @@ final class StatusMenuSummaries: NSObject {
         }
     }
 
-    private func loadCost(_ refresh: Refresh, enabled: Bool) async {
+    private func loadCost(_ refresh: GatewayStoreRefresh, enabled: Bool) async {
         guard enabled, self.isCurrent(refresh), let lease = refresh.lease else { return }
         do {
             let dates = CostUsageMenuDateParser(timeZone: .current)
@@ -574,23 +554,13 @@ extension StatusMenuSummaries {
             id: "devices.node.\(node.nodeId).paired",
             title: node.isPaired ? String(localized: "Paired: Yes") : String(localized: "Paired: No")))
 
-        if let capabilities = node.caps?.filter({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
-           !capabilities.isEmpty
-        {
-            entries.append(self.copyEntry(
-                node: node,
-                id: "capabilities",
-                label: String(localized: "Caps"),
-                value: capabilities.joined(separator: ", ")))
-        }
-        if let commands = node.commands?.filter({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
-           !commands.isEmpty
-        {
-            entries.append(self.copyEntry(
-                node: node,
-                id: "commands",
-                label: String(localized: "Commands"),
-                value: commands.joined(separator: ", ")))
+        for (id, label, values) in [
+            ("capabilities", String(localized: "Caps"), node.caps),
+            ("commands", String(localized: "Commands"), node.commands),
+        ] {
+            guard let values = values?.filter({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+                  !values.isEmpty else { continue }
+            entries.append(self.copyEntry(node: node, id: id, label: label, value: values.joined(separator: ", ")))
         }
         self.reconcileSubmenu(for: item, entries: entries)
     }

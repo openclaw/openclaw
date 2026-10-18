@@ -1,10 +1,8 @@
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
-import type { Worker } from "node:worker_threads";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as queue from "../../shared/store-writer-queue.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -26,6 +24,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
+import { drainSessionDiskBudgetWorkers } from "./disk-budget-runtime.js";
 import * as diskBudget from "./disk-budget.js";
 import { appendTranscriptMessage, resetSessionEntryLifecycle } from "./session-accessor.js";
 import * as archiveStore from "./session-accessor.sqlite-archive-store.js";
@@ -48,23 +47,17 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 const states: OpenClawTestState[] = [];
 const work: Promise<unknown>[] = [];
 const releaseGates: Array<() => void> = [];
-const workers: Worker[] = [];
-const workerChannel = channel("worker_threads");
-const trackWorker = (message: unknown) => workers.push((message as { worker: Worker }).worker);
-beforeEach(() => workerChannel.subscribe(trackWorker));
 afterEach(async () => {
   for (const release of releaseGates.splice(0)) {
     release();
   }
   await Promise.allSettled(work.splice(0));
   vi.restoreAllMocks();
+  await drainSessionDiskBudgetWorkers();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-  workerChannel.unsubscribe(trackWorker);
-  // Archive/reclamation promises above already joined their Workers; the measurement pool is idle.
-  await Promise.all(workers.splice(0).map((worker) => worker.terminate()));
   vi.unstubAllEnvs();
   for (const state of states.splice(0).toReversed()) {
     await state.cleanup();
@@ -79,6 +72,46 @@ function readRow(databasePath: string, sql: string, ...values: SQLInputValue[]) 
   } finally {
     database.close();
   }
+}
+
+function historyRow(
+  databasePath: string,
+  table: "session_windows" | "session_transcript_archives",
+  sessionId: string,
+) {
+  return readRow(databasePath, `SELECT session_id FROM ${table} WHERE session_id = ?`, sessionId);
+}
+
+function currentRow(databasePath: string, sessionKey: string) {
+  return readRow(
+    databasePath,
+    "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
+    sessionKey,
+  );
+}
+
+async function makeState(scenario: "minimal" | "empty" = "minimal") {
+  const state = await createOpenClawTestState({ layout: "state-only", scenario });
+  states.push(state);
+  return state;
+}
+
+function budgetConfig(maxDiskBytes = 1, highWaterBytes = maxDiskBytes) {
+  return resolveMaintenanceConfigFromInput({ mode: "enforce", maxDiskBytes, highWaterBytes });
+}
+
+function budgetCalls(spy: SessionHistoryBudgetQueueObservation) {
+  return spy.mock.calls.filter(
+    ([params]) => params.label === "enforceSqliteSessionHistoryDiskBudget",
+  );
+}
+
+function assertHistory(databasePath: string, sessionId: string) {
+  expect(historyRow(databasePath, "session_windows", sessionId)).toEqual({ session_id: sessionId });
+}
+
+function assertCurrent(databasePath: string, sessionKey: string, sessionId: string) {
+  expect(currentRow(databasePath, sessionKey)).toEqual({ current_session_id: sessionId });
 }
 
 function observeFirstSweep(spy: SessionHistoryBudgetQueueObservation) {
@@ -106,12 +139,7 @@ it.each([
 ] as const)(
   "retains $layout ownership for actual $trigger budget work on $victim",
   async ({ layout, trigger, victim }) => {
-    const state = await createOpenClawTestState({
-      prefix: "budget-owner-",
-      layout: "state-only",
-      scenario: "minimal",
-    });
-    states.push(state);
+    const state = await makeState();
     const successor = state.path("successor-state");
     fs.mkdirSync(successor);
     const agentId = layout === "shared" ? "secondary" : "main";
@@ -147,8 +175,7 @@ it.each([
         buildNextEntry: () => ({ sessionId: currentId, updatedAt: 2 }),
       });
     } else {
-      // Keep the old generation referenced by a cap-archived node: only the entry
-      // eviction stage can reclaim it, not the unreferenced-history stage.
+      // Referenced generations must use entry eviction, not unreferenced-history reclamation.
       replaceSessionEntrySync(scope, {
         sessionId: originalId,
         updatedAt: 1,
@@ -157,31 +184,15 @@ it.each([
       });
       replaceSessionEntrySync(
         { ...scope, sessionKey: protectedKey },
-        {
-          sessionId: currentId,
-          updatedAt: 2,
-        },
+        { sessionId: currentId, updatedAt: 2 },
       );
     }
-    // Join seed-triggered real default-budget work; do not use a warn/no-retention drain.
     await joinSessionHistoryBudgetSweeps(queueSpy, work);
     queueSpy.mockClear();
     const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId, env: state.env });
     const databasePath = target.path;
-    expect(
-      readRow(
-        databasePath,
-        "SELECT session_id FROM session_windows WHERE session_id = ?",
-        originalId,
-      ),
-    ).toEqual({ session_id: originalId });
-    expect(
-      readRow(
-        databasePath,
-        "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
-        protectedKey,
-      ),
-    ).toEqual({ current_session_id: currentId });
+    assertHistory(databasePath, originalId);
+    assertCurrent(databasePath, protectedKey, currentId);
     // Forget cached reads without revoking the active sweep's database workers.
     const databaseOptions = {
       agentId: target.agentId ?? "main",
@@ -191,7 +202,7 @@ it.each([
     const forgetCachedDatabase = () => {
       const cached = getOpenClawAgentDatabaseIfOpen(databaseOptions);
       if (cached) {
-        closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+        closeCachedOpenClawAgentDatabase(cached);
       }
       clearOpenClawAgentDatabaseValidationCache(state.root);
       expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
@@ -204,33 +215,19 @@ it.each([
       async (...args) => {
         if (victim === "cap-entry" && args[0].target.canonicalKey === sessionKey) {
           capEntryCalls += 1;
-          expect(
-            readRow(
-              databasePath,
-              "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
-              sessionKey,
-            ),
-          ).toEqual({ current_session_id: originalId });
+          assertCurrent(databasePath, sessionKey, originalId);
           forgetCachedDatabase();
         }
         return await deleteEntry(...args);
       },
     );
     const order: string[] = [];
-    const materialize = archives.materializeSessionStateDeletePlans;
-    vi.spyOn(archives, "materializeSessionStateDeletePlans").mockImplementation(async (plans) => {
-      const result = await materialize(plans);
-      if (victim === "history" && plans.some((plan) => plan.sessionId === originalId)) {
-        expect(
-          result.find((plan) => plan.sessionId === originalId)?.archive?.bytes.byteLength,
-        ).toBeGreaterThan(0);
-        expect(
-          readRow(
-            databasePath,
-            "SELECT session_id FROM session_windows WHERE session_id = ?",
-            originalId,
-          ),
-        ).toEqual({ session_id: originalId });
+    const materialize = archives.materializeSessionHistoryEvictionPlan;
+    vi.spyOn(archives, "materializeSessionHistoryEvictionPlan").mockImplementation(async (plan) => {
+      const result = await materialize(plan);
+      if (victim === "history" && plan.sessionId === originalId) {
+        expect(result?.archive?.bytes.byteLength).toBeGreaterThan(0);
+        assertHistory(databasePath, originalId);
         order.push("materialized while source exists");
       }
       return result;
@@ -239,13 +236,7 @@ it.each([
     vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation(async (params) => {
       const result = await reclaim(params);
       if (params.plan.kind === "history-eviction" && params.plan.sessionId === originalId) {
-        expect(
-          readRow(
-            databasePath,
-            "SELECT session_id FROM session_windows WHERE session_id = ?",
-            originalId,
-          ),
-        ).toBeUndefined();
+        expect(historyRow(databasePath, "session_windows", originalId)).toBeUndefined();
         expect(
           readRow(
             databasePath,
@@ -264,13 +255,7 @@ it.each([
             sessionKey,
           ),
         ).toBeUndefined();
-        expect(
-          readRow(
-            databasePath,
-            "SELECT session_id FROM session_windows WHERE session_id = ?",
-            originalId,
-          ),
-        ).toBeUndefined();
+        expect(historyRow(databasePath, "session_windows", originalId)).toBeUndefined();
         order.push("cap-archived entry durably deleted");
       }
       return result;
@@ -300,19 +285,12 @@ it.each([
       }
       return usage;
     });
-    // Pure observation: preserve runQueuedStoreWrite and its callback/promise exactly.
-    const maintenanceConfig = resolveMaintenanceConfigFromInput({
-      mode: "enforce",
-      maxDiskBytes: 1,
-      highWaterBytes: 1,
-    });
+    const maintenanceConfig = budgetConfig();
     let moveRelativeCwd: (() => void) | undefined;
     let sweep: Promise<unknown>;
     if (trigger === "patch") {
-      // Seed writes used the normal 30-minute throttle. Advance wall-clock time
-      // past it so the ordinary patch kick (which has no force flag) is eligible.
-      const afterThrottle = Date.now() + 31 * 60 * 1000;
-      vi.spyOn(Date, "now").mockReturnValue(afterThrottle);
+      // The ordinary patch kick has no force flag; advance past the 30-minute seed throttle.
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31 * 60 * 1000);
       const updaterStarted = createDeferred();
       const finishUpdater = createDeferred();
       releaseGates.push(() => finishUpdater.resolve());
@@ -326,14 +304,8 @@ it.each([
         { skipMaintenance: true, maintenanceConfig },
       );
       work.push(patch);
-      await Promise.race([
-        updaterStarted.promise,
-        patch.then(() => {
-          throw new Error("Patch ended without entering updater");
-        }),
-      ]);
-      // The patch began in A, but its late budget kick occurs while ambient is B.
-      // Capturing B inside kick alone is insufficient: the patch must forward A.
+      await awaitGateBeforeSettlement(updaterStarted.promise, patch, "Patch ended before updater");
+      // The patch must forward A to its late kick, even with ambient B.
       vi.stubEnv("OPENCLAW_STATE_DIR", successor);
       finishUpdater.resolve();
       await expect(patch).resolves.toMatchObject({
@@ -346,7 +318,6 @@ it.each([
       if (trigger === "relative-kick") {
         const cwd = vi.spyOn(process, "cwd").mockReturnValue(state.root);
         suppliedEnv = { ...state.env, OPENCLAW_STATE_DIR: "state" };
-        // state-only layout is <root>/state; the physical store locator stays absolute.
         expect(path.join(state.root, "state")).toBe(state.stateDir);
         expect(path.isAbsolute(storePath)).toBe(true);
         moveRelativeCwd = () => {
@@ -374,16 +345,10 @@ it.each([
           : enforceSqliteSessionHistoryDiskBudget(input);
       work.push(sweep);
     }
-    await Promise.race([
-      measured.promise,
-      sweep.then(() => {
-        throw new Error("Sweep ended without entering real measurement");
-      }),
-    ]);
+    await awaitGateBeforeSettlement(measured.promise, sweep, "Sweep ended before measurement");
     vi.stubEnv("OPENCLAW_STATE_DIR", successor);
     moveRelativeCwd?.();
-    // Patch commit reopened A. Remove its handle and validation before allowing
-    // the REAL first measurement to return to enforcement/preview.
+    // Drop A's reopened handle/validation before the real measurement returns.
     forgetCachedDatabase();
     release.resolve();
     if (trigger === "inspect") {
@@ -406,32 +371,13 @@ it.each([
     }
     expect(capEntryCalls).toBe(victim === "cap-entry" ? 1 : 0);
     // A one-byte high water can legitimately prune the new derived archive afterward.
-    const oldWindow = readRow(
-      databasePath,
-      "SELECT session_id FROM session_windows WHERE session_id = ?",
-      originalId,
+    expect(historyRow(databasePath, "session_windows", originalId)).toEqual(
+      trigger === "inspect" ? { session_id: originalId } : undefined,
     );
-    if (trigger === "inspect") {
-      expect(oldWindow).toEqual({ session_id: originalId });
-    } else {
-      expect(oldWindow).toBeUndefined();
-    }
     if (victim === "cap-entry") {
-      expect(
-        readRow(
-          databasePath,
-          "SELECT session_id FROM session_transcript_archives WHERE session_id = ?",
-          originalId,
-        ),
-      ).toBeUndefined();
+      expect(historyRow(databasePath, "session_transcript_archives", originalId)).toBeUndefined();
     }
-    expect(
-      readRow(
-        databasePath,
-        "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
-        protectedKey,
-      ),
-    ).toEqual({ current_session_id: currentId });
+    assertCurrent(databasePath, protectedKey, currentId);
     expect(readRow(databasePath, "SELECT agent_id FROM schema_meta")).toEqual({ agent_id: "main" });
 
     // Do not open B to inspect it: that would create the failure under test.
@@ -439,55 +385,78 @@ it.each([
     const successorStatePath = resolveOpenClawStateSqlitePath({
       OPENCLAW_STATE_DIR: trigger === "relative-kick" ? path.join(successor, "state") : successor,
     });
-    const successorLeases = fs.existsSync(successorStatePath)
-      ? readRow(successorStatePath, "SELECT count(*) AS count FROM agent_database_leases")
-      : undefined;
-    const successorRegistration = fs.existsSync(successorStatePath)
-      ? readRow(successorStatePath, "SELECT agent_id, path FROM agent_databases LIMIT 1")
-      : undefined;
+    const successorRow = (sql: string) =>
+      fs.existsSync(successorStatePath) ? readRow(successorStatePath, sql) : undefined;
     expect
-      .soft(successorRegistration, "budget admission must not register A's file in B")
-      .toBeUndefined();
-    expect
-      .soft(successorLeases, "budget admission must not claim a runtime lease in B")
-      .toBeUndefined();
-    expect(
-      successorFiles,
-      "absolute file ownership must retain the originating shared-state owner",
-    ).toEqual([]);
+      .soft(
+        {
+          registration: successorRow("SELECT agent_id, path FROM agent_databases LIMIT 1"),
+          leases: successorRow("SELECT count(*) AS count FROM agent_database_leases"),
+          files: successorFiles,
+        },
+        "budget work must not register, lease or create files under the successor state",
+      )
+      .toEqual({ registration: undefined, leases: undefined, files: [] });
   },
 );
 
+it("measures the disk budget after a committed patch but not after unchanged entry attempts", async () => {
+  const state = await makeState();
+  const storePath = path.join(state.sessionsDir(), "sessions.json");
+  const scope = {
+    agentId: "main",
+    env: state.env,
+    storePath,
+    sessionKey: "agent:main:budget-noop",
+  };
+  const queueSpy = vi.spyOn(queue, "runQueuedStoreWrite");
+  replaceSessionEntrySync(scope, { sessionId: "budget-noop", updatedAt: 1, label: "unchanged" });
+  await joinSessionHistoryBudgetSweeps(queueSpy, work);
+  queueSpy.mockClear();
+  const measureSpy = vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage");
+  const options = {
+    skipMaintenance: true,
+    preserveActivity: true,
+    maintenanceConfig: budgetConfig(1024 * 1024 * 1024, 512 * 1024 * 1024),
+  };
+  try {
+    for (const update of [() => null, () => ({ label: "unchanged" })]) {
+      await expect(patchSessionEntryCore(scope, update, options)).resolves.toMatchObject({
+        sessionId: "budget-noop",
+        updatedAt: 1,
+        label: "unchanged",
+      });
+    }
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
+    expect(budgetCalls(queueSpy)).toEqual([]);
+    expect(measureSpy).not.toHaveBeenCalled();
+
+    await expect(
+      patchSessionEntryCore(scope, () => ({ label: "committed" }), options),
+    ).resolves.toMatchObject({ sessionId: "budget-noop", label: "committed" });
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
+    expect(measureSpy).toHaveBeenCalledExactlyOnceWith(storePath);
+  } finally {
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
+  }
+});
+
 it("skips an originating incognito budget kick without disk or background work", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", scenario: "empty" });
-  states.push(state);
+  const state = await makeState("empty");
   const successor = state.path("successor-state");
   fs.mkdirSync(successor);
   const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-  const memory = openOpenClawAgentDatabase({ agentId: "main", env: state.env, path: sentinel });
   const queueSpy = vi.spyOn(queue, "runQueuedStoreWrite");
   const measureSpy = vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage");
   kickSessionHistoryDiskBudgetMaintenance({
     agentId: "main",
     storePath: sentinel,
     force: true,
-    maintenanceConfig: resolveMaintenanceConfigFromInput({
-      mode: "enforce",
-      maxDiskBytes: 1,
-      highWaterBytes: 1,
-    }),
+    maintenanceConfig: budgetConfig(),
   });
   vi.stubEnv("OPENCLAW_STATE_DIR", successor);
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-  expect(
-    queueSpy.mock.calls.filter(
-      ([params]) => params.label === "enforceSqliteSessionHistoryDiskBudget",
-    ),
-  ).toEqual([]);
+  expect(budgetCalls(queueSpy)).toEqual([]);
   expect(measureSpy).not.toHaveBeenCalled();
-  expect(memory.db.isOpen).toBe(true);
   expect(fs.existsSync(path.dirname(sentinel))).toBe(false);
   expect(fs.readdirSync(successor)).toEqual([]);
 });

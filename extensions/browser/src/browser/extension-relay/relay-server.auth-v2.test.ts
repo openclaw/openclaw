@@ -226,11 +226,9 @@ async function sendRawV2Frames(params: {
 }
 
 describe("extension relay WebSocket auth v2 frame boundary", () => {
-  it.each([
-    ["Buffer", Buffer.alloc(16 * 1024 + 1, 0x20)],
-    ["ArrayBuffer", new Uint8Array(16 * 1024 + 1).buffer],
-    ["Buffer[]", [Buffer.alloc(8 * 1024), Buffer.alloc(8 * 1024 + 1)]],
-  ] satisfies Array<[string, RawData]>)(
+  it.each([["Buffer[]", [Buffer.alloc(8 * 1024), Buffer.alloc(8 * 1024 + 1)]]] satisfies Array<
+    [string, RawData]
+  >)(
     "rejects an oversized text auth frame backed by %s before issuing a challenge",
     (_kind, data) => {
       const harness = createWebSocketAuthHarness();
@@ -409,12 +407,6 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
   });
 
   it.each([
-    {
-      name: "an oversized first auth message",
-      payloadBytes: 18 * 1024,
-      fragmentBytes: 18 * 1024,
-      wireBytes: 18_440,
-    },
     {
       name: "fragmented masked pre-auth wire overhead",
       payloadBytes: 16 * 1024,

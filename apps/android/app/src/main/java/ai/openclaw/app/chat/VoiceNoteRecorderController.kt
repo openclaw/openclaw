@@ -259,7 +259,6 @@ internal fun normalizeM4aContainerBrand(file: File) {
 /** Android AAC/m4a engine kept behind [VoiceNoteRecordingEngine] for JVM tests. */
 internal class AndroidVoiceNoteRecordingEngine(
   private val context: Context,
-  private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
 ) : VoiceNoteRecordingEngine {
   private var recorder: MediaRecorder? = null
   private var startedAtElapsedMs = 0L
@@ -277,7 +276,7 @@ internal class AndroidVoiceNoteRecordingEngine(
       next.setOutputFile(outputFile.absolutePath)
       next.prepare()
       next.start()
-      startedAtElapsedMs = elapsedRealtime()
+      startedAtElapsedMs = SystemClock.elapsedRealtime()
       recorder = next
     } catch (error: Throwable) {
       next.release()
@@ -290,7 +289,7 @@ internal class AndroidVoiceNoteRecordingEngine(
     recorder = null
     return try {
       active.stop()
-      (elapsedRealtime() - startedAtElapsedMs).coerceAtLeast(0L)
+      (SystemClock.elapsedRealtime() - startedAtElapsedMs).coerceAtLeast(0L)
     } finally {
       active.release()
     }

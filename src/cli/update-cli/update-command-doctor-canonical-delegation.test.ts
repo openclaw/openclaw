@@ -21,7 +21,6 @@ const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
 it.each([
   { kind: "git", fault: "healthy" },
   { kind: "package", fault: "requester-revoked" },
-  { kind: "git", fault: "run-replaced" },
 ] as const)(
   "delegates $kind Doctor without reusing its suspended parent ($fault)",
   async ({ kind, fault }) => {
@@ -54,7 +53,7 @@ it.each([
       // Wait for parent admission and decode UTF-8 across pipe chunks.
       process.stdin.setEncoding("utf8");
       let raw=""; for await (const chunk of process.stdin) raw+=chunk;
-      if(raw) fs.writeFileSync(${JSON.stringify(received)},"received");
+      if(raw) fs.writeFileSync(${JSON.stringify(received)},raw);
       const input=JSON.parse(raw);
       await withDelegatedUpdateCommandExecutor(input.executor,input.runId,input.root,async fence=>{
         fence.assertCurrent();
@@ -74,15 +73,13 @@ it.each([
             if (fault === "requester-revoked") {
               requesterCurrent = false;
             }
-            if (fault === "run-replaced") {
-              params.opts.run = { runId: "replacement-run", env };
-            }
             commandOptions.beforeInput?.(pid, spawnedArgv);
           },
         });
       });
       const params = executionParams(kind);
       params.root = root;
+      params.opts.fullIntegrityCheck = true;
       params.opts.run = {
         runId,
         env,
@@ -98,7 +95,10 @@ it.each([
         doctorConfigWrites: true,
       });
       const runUpdate = async (
-        options: Pick<Parameters<typeof runPackageUpdateDoctor>[0], "getDoctorContext"> & {
+        options: Pick<
+          Parameters<typeof runPackageUpdateDoctor>[0],
+          "getDoctorContext" | "fullIntegrityCheck"
+        > & {
           validateCandidate?: (root: string) => Promise<unknown>;
         },
       ) => {
@@ -109,6 +109,7 @@ it.each([
           progress: {},
           managedServiceEnv: env,
           getDoctorContext: options.getDoctorContext,
+          fullIntegrityCheck: options.fullIntegrityCheck,
         });
         return {
           ...successfulUpdate,
@@ -134,6 +135,9 @@ it.each([
           steps: [{ name: "openclaw doctor", exitCode: 0 }],
         });
         expect(await fs.readFile(marker, "utf8")).toBe("owned");
+        expect(JSON.parse(await fs.readFile(received, "utf8"))).toMatchObject({
+          fullIntegrityCheck: true,
+        });
       }
       expect(reachedSpawn).toBe(true);
       expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });

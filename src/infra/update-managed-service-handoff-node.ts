@@ -100,20 +100,16 @@ export async function resolveManagedHandoffNodeExecutable(
     return serviceNode;
   }
   const systemNode = await resolveSystemNodeInfo({ env });
-  let replacement = systemNode?.status === "supported" ? systemNode.path : undefined;
-  if (!replacement) {
-    for (const directory of (env.PATH ?? "").split(path.delimiter).filter(path.isAbsolute)) {
-      const pathNode = resolveExecutableFromPathEnv("node", directory, env, { useCache: false });
-      if (pathNode && (await resolveNodeRuntimeInfo(pathNode, env)).status === "supported") {
-        replacement = pathNode;
-        break;
-      }
+  if (systemNode?.status === "supported" && systemNode.path) {
+    return systemNode.path;
+  }
+  for (const directory of (env.PATH ?? "").split(path.delimiter).filter(path.isAbsolute)) {
+    const pathNode = resolveExecutableFromPathEnv("node", directory, env, { useCache: false });
+    if (pathNode && (await resolveNodeRuntimeInfo(pathNode, env)).status === "supported") {
+      return pathNode;
     }
   }
-  if (!replacement) {
-    throw new ManagedHandoffNodeUnavailableError();
-  }
-  return replacement;
+  throw new ManagedHandoffNodeUnavailableError();
 }
 
 /** Keep the update CLI on the selected handoff runtime and preserve startup flags. */

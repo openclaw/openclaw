@@ -115,13 +115,9 @@ export function createNativeBootstrapController({ chromeApi = chrome, getPairing
     disabledNow ||= stored[DISABLED_KEY] === true;
     return {
       disabled: disabledNow,
-      state:
-        stored[STATE_KEY] === "ready" ||
-        stored[STATE_KEY] === "retrying" ||
-        stored[STATE_KEY] === "manual_required" ||
-        stored[STATE_KEY] === "disabled"
-          ? stored[STATE_KEY]
-          : "waiting",
+      state: ["ready", "retrying", "manual_required", "disabled"].includes(stored[STATE_KEY])
+        ? stored[STATE_KEY]
+        : "waiting",
       failureCode: typeof stored[FAILURE_KEY] === "string" ? stored[FAILURE_KEY] : "",
     };
   }
@@ -295,7 +291,10 @@ export async function prepareRetiredCopilotState(chromeApi = chrome) {
     return { blocked: true };
   }
   try {
-    await discardRetiredCopilotState(chromeApi);
+    // No custody remains, so partial cleanup is safe to retry on the next worker.
+    // Reserve the durable marker for explicit discard of potentially live custody.
+    await chromeApi.storage.session.remove(COPILOT_SESSION_KEYS);
+    await chromeApi.storage.local.remove(COPILOT_LOCAL_KEYS);
   } catch {
     return { blocked: true };
   }

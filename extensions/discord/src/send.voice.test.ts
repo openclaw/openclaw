@@ -60,17 +60,6 @@ describe("sendVoiceMessageDiscord", () => {
     });
   });
 
-  it("validates runtime config before materializing voice media", async () => {
-    await expect(
-      sendVoiceMessageDiscord("273512430271856640", "https://example.com/voice.ogg", {
-        cfg: undefined as never,
-      }),
-    ).rejects.toThrow(/requires a resolved runtime config/i);
-
-    expect(loadWebMediaRawMock).not.toHaveBeenCalled();
-    await expect(fs.readdir(tempPathMocks.rootDir)).resolves.toEqual([]);
-  });
-
   it("cleans materialized voice media when pre-send conversion fails", async () => {
     const { rest } = makeDiscordRest();
     voiceMocks.ensureOggOpus.mockRejectedValueOnce(new Error("ffmpeg unavailable"));

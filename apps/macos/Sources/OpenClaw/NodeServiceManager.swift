@@ -25,9 +25,7 @@ enum NodeServiceManager {
     /// exists but could not be read, so callers must not treat it as external.
     static func launchdProgramArguments(profile: AppProfile = .current) -> [String]? {
         if self.skipUnderProfile(profile, action: "status") { return [] }
-        return self.launchdProgramArguments(
-            plistURL: self.launchdPlistURL,
-            fileManager: .default)
+        return self.launchdProgramArguments(plistURL: self.launchdPlistURL)
     }
 
     static func installedServiceCLI(
@@ -57,7 +55,7 @@ enum NodeServiceManager {
         var consecutiveRunningChecks = 0
         for attempt in 0..<20 {
             let result = await self.runServiceCommandResult(
-                ["status"],
+                "status",
                 timeout: 10,
                 quiet: true)
             if result.success,
@@ -87,7 +85,7 @@ extension NodeServiceManager {
             let task = Task<String?, Never> {
                 _ = await predecessor?.value
                 let result = await NodeServiceManager.runServiceCommandResult(
-                    [action],
+                    action,
                     timeout: action == "stop" ? 15 : 20,
                     quiet: false)
                 guard let error = NodeServiceManager.errorMessage(
@@ -109,10 +107,10 @@ extension NodeServiceManager {
         return true
     }
 
-    private static func serviceCommand(_ args: [String]) async -> [String] {
+    static func serviceCommand(_ action: String) async -> [String] {
         await CommandResolver.localOpenclawCommand(
             subcommand: "node",
-            extraArgs: self.withJsonFlag(args))
+            extraArgs: [action, "--json"])
     }
 
     private struct CommandResult {
@@ -122,7 +120,7 @@ extension NodeServiceManager {
     }
 
     private static func runServiceCommandResult(
-        _ args: [String],
+        _ action: String,
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
@@ -138,7 +136,7 @@ extension NodeServiceManager {
             return CommandResult(success: true, message: nil, parsed: nil)
         }
         #if DEBUG
-        self.testingServiceCommandCalls.append(args)
+        self.testingServiceCommandCalls.append([action])
         #endif
         let command: [String]
         let env: [String: String]
@@ -150,15 +148,10 @@ extension NodeServiceManager {
                     parsed: nil)
             }
             command = AppProfile.current.localCLICommand(
-                prefix: cli.prefix, arguments: ["node"] + self.withJsonFlag(args))
-            env = GatewayLaunchAgentManager.daemonEnvironment(
-                runtime: nil,
-                installedCLI: cli,
-                environment: ProcessInfo.processInfo.environment,
-                profile: .current,
-                searchPaths: CommandResolver.preferredPaths())
+                prefix: cli.prefix, arguments: ["node", action, "--json"])
+            env = GatewayLaunchAgentManager.daemonEnvironment(installedCLI: cli)
         } else {
-            command = await self.serviceCommand(args)
+            command = await self.serviceCommand(action)
             var environment = ProcessInfo.processInfo.environment
             environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
             env = environment
@@ -169,12 +162,8 @@ extension NodeServiceManager {
         let ok = parsed?.object["ok"] as? Bool
         let message = (parsed?.object["error"] as? String) ?? (parsed?.object["message"] as? String)
         let success = response.success && (ok ?? true)
-        if success {
-            return CommandResult(success: true, message: nil, parsed: parsed)
-        }
-
-        if quiet {
-            return CommandResult(success: false, message: message, parsed: parsed)
+        if success || quiet {
+            return CommandResult(success: success, message: success ? nil : message, parsed: parsed)
         }
 
         let detail = message ?? TextSummarySupport.summarizeLastLine(response.stderr)
@@ -199,19 +188,11 @@ extension NodeServiceManager {
         return nil
     }
 
-    private static func withJsonFlag(_ args: [String]) -> [String] {
-        if args.contains("--json") { return args }
-        return args + ["--json"]
-    }
-
-    private static func launchdProgramArguments(
-        plistURL: URL,
-        fileManager: FileManager) -> [String]?
-    {
+    static func launchdProgramArguments(plistURL: URL) -> [String]? {
         #if DEBUG
         self.testingOwnershipReadCount += 1
         #endif
-        guard fileManager.fileExists(atPath: plistURL.path) else { return [] }
+        guard FileManager.default.fileExists(atPath: plistURL.path) else { return [] }
         guard let arguments = LaunchAgentPlist.snapshot(url: plistURL)?.programArguments,
               !arguments.isEmpty
         else { return nil }
@@ -239,14 +220,6 @@ extension NodeServiceManager {
 
     static func _testPersistentServiceCallSnapshot() -> (commands: [[String]], ownershipReads: Int) {
         (self.testingServiceCommandCalls, self.testingOwnershipReadCount)
-    }
-
-    static func _testServiceCommand(_ args: [String]) async -> [String] {
-        await self.serviceCommand(args)
-    }
-
-    static func _testLaunchdProgramArguments(plistURL: URL) -> [String]? {
-        self.launchdProgramArguments(plistURL: plistURL, fileManager: .default)
     }
 
     static func _testRuntimeIsRunning(fromJSON json: String) -> Bool {

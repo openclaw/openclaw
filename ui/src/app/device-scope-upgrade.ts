@@ -1,30 +1,23 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import {
   readScopeUpgradeAvailability,
   type ScopeUpgradeState,
 } from "./device-scope-upgrade-availability.ts";
-import type { ScopeUpgradeController } from "./device-scope-upgrade-controller.runtime.ts";
+import type { ScopeUpgradeOwner } from "./device-scope-upgrade-owner.runtime.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 
-type ScopeUpgradeControllerConstructor = new (
+type ScopeUpgradeOwnerConstructor = new (
   initial: ApplicationGatewaySnapshot,
   onChange: () => void,
-) => ScopeUpgradeController;
+) => ScopeUpgradeOwner;
 
-export type ScopeUpgradeCapability = {
-  readonly state: ScopeUpgradeState;
-  activate(Controller: ScopeUpgradeControllerConstructor): void;
-  request(): void;
-  retry(): void;
-  cancel(): void;
-  subscribe(listener: () => void): () => void;
-  dispose(): void;
-};
+export type ScopeUpgradeCapability = ReturnType<typeof createScopeUpgradeCapability>;
 
 /** App-lifetime state shared by every Inbox presenter and settings takeover. */
-export function createScopeUpgradeCapability(gateway: ApplicationGateway): ScopeUpgradeCapability {
+export function createScopeUpgradeCapability(gateway: ApplicationGateway) {
   const listeners = new Set<() => void>();
   let snapshot = gateway.snapshot;
-  let controller: ScopeUpgradeController | null = null;
+  let owner: ScopeUpgradeOwner | null = null;
   let state = readScopeUpgradeAvailability(snapshot);
 
   const publish = (next: ScopeUpgradeState) => {
@@ -36,15 +29,15 @@ export function createScopeUpgradeCapability(gateway: ApplicationGateway): Scope
       listener();
     }
   };
-  const syncController = () => {
-    if (controller) {
-      publish(controller.state);
+  const syncOwner = () => {
+    if (owner) {
+      publish(owner.state);
     }
   };
   const syncGateway = (next: ApplicationGatewaySnapshot) => {
     snapshot = next;
-    controller?.sync(snapshot);
-    publish(controller?.state ?? readScopeUpgradeAvailability(snapshot));
+    owner?.sync(snapshot);
+    publish(owner?.state ?? readScopeUpgradeAvailability(snapshot));
   };
   const stopGateway = gateway.subscribe(syncGateway);
 
@@ -52,22 +45,19 @@ export function createScopeUpgradeCapability(gateway: ApplicationGateway): Scope
     get state() {
       return state;
     },
-    activate(Controller) {
-      controller ??= new Controller(snapshot, syncController);
-      controller.sync(snapshot);
-      publish(controller.state);
+    activate(Owner: ScopeUpgradeOwnerConstructor) {
+      owner ??= new Owner(snapshot, syncOwner);
+      owner.sync(snapshot);
+      publish(owner.state);
     },
-    request: () => controller?.request(),
-    retry: () => controller?.retry(),
-    cancel: () => controller?.cancel(),
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    request: (): void => owner?.request(),
+    retry: (): void => owner?.retry(),
+    cancel: (): void => owner?.cancel(),
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
     dispose() {
       stopGateway();
-      controller?.dispose();
-      controller = null;
+      owner?.dispose();
+      owner = null;
       listeners.clear();
     },
   };

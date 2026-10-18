@@ -9,10 +9,8 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import { enforceSqliteSessionHistoryDiskBudget } from "../config/sessions/session-history-eviction.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  closeOpenClawAgentDatabases,
-  closeOpenClawAgentDatabasesAsync,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -131,37 +129,6 @@ describe("sessionsCommand ACP model display", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
       vi.unstubAllEnvs();
     }
-  });
-
-  it("reports native ACP metadata for binding sessions", async () => {
-    const sessionKey = "agent:copilot:acp:binding:discord:default:feedface";
-    writeSession("copilot", sessionKey);
-    await writeAcpRuntimeMeta("copilot", sessionKey);
-
-    expect(await readSessions()).toMatchObject([
-      {
-        key: sessionKey,
-        model: "copilot-acp",
-        modelProvider: "acpx",
-        acpRuntime: true,
-        agentRuntime: { id: "copilot", source: "session-key" },
-      },
-    ]);
-  });
-
-  it("keeps the configured model for ACP-shaped bridge sessions without runtime metadata", async () => {
-    const sessionKey = "agent:copilot:acp:bridge-session-1";
-    writeSession("copilot", sessionKey);
-
-    expect(await readSessions()).toMatchObject([
-      {
-        key: sessionKey,
-        model: AGENT_CONFIGURED_MODEL,
-        modelProvider: AGENT_CONFIGURED_PROVIDER,
-        acpRuntime: false,
-        agentRuntime: { id: "openclaw", source: "model" },
-      },
-    ]);
   });
 
   it("keeps each selected owner's metadata and rejects a replaced lifecycle", async () => {

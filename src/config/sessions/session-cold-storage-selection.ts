@@ -4,6 +4,7 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -22,6 +23,7 @@ import { normalizeStoreSessionKey } from "./store-entry.js";
 export type SessionColdBatchInput = {
   databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
   admissionIdentities: string[];
+  liveSessionKeys: string[];
   cooledSessionIds: string[];
   beforeMs: number;
   maxTranscripts: number;
@@ -36,10 +38,14 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
           const db = getNodeSqliteKysely<DB>(database.db);
           const admissions = collectSessionAdmissionReferences({
             database,
-            admissionIdentities: input.admissionIdentities,
+            admissionIdentities: [...input.admissionIdentities, ...input.liveSessionKeys],
           });
           const cooled = new Set(input.cooledSessionIds);
-          const excluded = readSessionColdStorageProtection(database, input.beforeMs);
+          const excluded = readSessionColdStorageProtection(
+            database,
+            input.beforeMs,
+            new Set(input.liveSessionKeys),
+          );
           for (const id of [...admissions, ...cooled]) {
             excluded.add(id);
           }
@@ -96,14 +102,16 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
                   {
                     databaseOptions: input.databaseOptions,
                     sessionId,
-                    beforeMs: input.beforeMs,
                     snapshot,
                   },
                 ]
               : [];
           });
           let freePages = 0;
-          if (plans.length + externalizations.length === 0) {
+          if (
+            plans.length + externalizations.length === 0 &&
+            !isPostgresSqlConnection(database.db)
+          ) {
             freePages = Number(
               // sqlite-allow-raw -- Physical maintenance is needed only when SQLite owns free pages.
               database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0,

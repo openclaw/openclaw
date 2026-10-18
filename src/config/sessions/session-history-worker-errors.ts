@@ -1,5 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget.js";
+import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
@@ -11,7 +11,7 @@ import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "./session-transcript-projection-error.js";
-import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence.js";
+import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
   SessionTranscriptWorkerError,
@@ -73,6 +73,7 @@ export function encodeSessionTranscriptRequestError(
     request.kind === "history-page" &&
     (request.request.kind === "message-lookup" ||
       request.request.kind === "message-by-id" ||
+      request.request.kind === "rpc-message" ||
       request.request.kind === "message-count" ||
       request.request.kind === "artifacts" ||
       request.request.kind === "message-page" ||

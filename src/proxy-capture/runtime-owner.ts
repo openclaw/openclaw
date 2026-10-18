@@ -4,12 +4,14 @@ import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { reserveSqliteWorkerInputPreparation } from "../infra/sqlite-worker-store.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { createDebugProxyChildCaptureStore } from "./child-transport.js";
 import { resolveEnabledDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
 import { registerActiveDebugProxyCapture } from "./runtime-cleanup.js";
@@ -20,7 +22,7 @@ import {
 } from "./store-lifecycle.js";
 import { createDebugProxyCaptureStoreForContext } from "./store.async.js";
 import { getDebugProxyCaptureStore, persistEventPayload, safeJsonString } from "./store.sqlite.js";
-import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
+import type { AsyncDebugProxyCaptureWriter } from "./store.types.js";
 import type { CapturePayloadInput } from "./store.worker-contract.js";
 import type { CaptureEventRecord } from "./types.js";
 
@@ -89,8 +91,13 @@ export type CaptureOwner = {
   runtime: ReturnType<typeof resolveRuntimeDeps>;
   store: DebugProxyCaptureStoreLike;
   syncStore?: DebugProxyCaptureStoreLike;
-  asyncLease?: ReturnType<typeof createDebugProxyCaptureStoreForContext>;
-  asyncStore?: AsyncDebugProxyCaptureStore;
+  asyncLease?: {
+    store: AsyncDebugProxyCaptureWriter;
+    ready: Promise<void>;
+    runOperation<T>(operation: (store: AsyncDebugProxyCaptureWriter) => Promise<T>): Promise<T>;
+    release(): Promise<void>;
+  };
+  asyncStore?: AsyncDebugProxyCaptureWriter;
   state: CaptureStateContext;
   readonly asynchronous: boolean;
   writes: Set<Promise<unknown>>;
@@ -433,11 +440,16 @@ export function resolveCaptureOwnerForTransport(
 
 // Legacy finalization settles legacy work synchronously. Worker-backed claims
 // retain their lifecycle owner and end the shared session when they also close.
-/** @deprecated Use finalizeDebugProxyCaptureAsync to drain asynchronous capture work. */
+/** @deprecated Use finalizeDebugProxyCaptureAsync to drain asynchronous capture work. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function finalizeDebugProxyCapture(
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-runtime",
+    method: "finalizeDebugProxyCapture",
+    replacement: "await finalizeDebugProxyCaptureAsync()",
+  });
   const settings = resolveEnabledDebugProxySettings(resolved);
   if (!settings) {
     return;
@@ -531,7 +543,9 @@ export function observeCaptureWrite<T>(owner: CaptureOwner, operation: Promise<T
 function ensureAsyncCaptureLease(owner: CaptureOwner) {
   const context = currentStateContext(owner);
   if (!owner.asyncLease) {
-    const lease = createDebugProxyCaptureStoreForContext(context);
+    const lease =
+      createDebugProxyChildCaptureStore(owner.settings) ??
+      createDebugProxyCaptureStoreForContext(context);
     owner.asyncLease = lease;
     owner.asyncStore = lease.store;
     const unregister = registerAsyncCaptureStoreFinalizer(lease.store, (finalizingStore) => {
@@ -557,7 +571,7 @@ function ensureAsyncCaptureLease(owner: CaptureOwner) {
 
 export async function getAsyncCaptureStore(
   owner: CaptureOwner,
-): Promise<AsyncDebugProxyCaptureStore> {
+): Promise<AsyncDebugProxyCaptureWriter> {
   const lease = ensureAsyncCaptureLease(owner);
   await lease.ready;
   return lease.store;
@@ -565,7 +579,7 @@ export async function getAsyncCaptureStore(
 
 export function runCaptureOperation<T>(
   owner: CaptureOwner,
-  operation: (store: AsyncDebugProxyCaptureStore) => Promise<T>,
+  operation: (store: AsyncDebugProxyCaptureWriter) => Promise<T>,
 ): Promise<T> {
   return ensureAsyncCaptureLease(owner).runOperation(operation);
 }
@@ -575,7 +589,7 @@ export async function recordCaptureEventAsync(
   owner: CaptureOwner,
   event: CaptureEventRecord,
   payload: CapturePayloadInput | undefined,
-  store: AsyncDebugProxyCaptureStore,
+  store: AsyncDebugProxyCaptureWriter,
 ): Promise<void> {
   const data = payload?.data;
   const inputBytes =
@@ -613,8 +627,8 @@ export async function recordCaptureEventAsync(
 
 export function sequenceCaptureWrite<T>(
   owner: CaptureOwner,
-  store: AsyncDebugProxyCaptureStore,
-  write: (store: AsyncDebugProxyCaptureStore) => Promise<T>,
+  store: AsyncDebugProxyCaptureWriter,
+  write: (store: AsyncDebugProxyCaptureWriter) => Promise<T>,
 ): Promise<T> {
   // The invocation's private capability survives its body read or cold lease
   // wait. Only finite commands enter maintenance's pending-operation drain.

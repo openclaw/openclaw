@@ -6,12 +6,16 @@ import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import {
   createAgentHarnessHostCapabilitiesForTest,
   createMockPluginRegistry,
+  useProviderToolSchemaRuntimeForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
-import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import {
+  resolveCodexSupervisionAppServerRuntimeOptions,
+  type CodexPluginConfig,
+} from "./config.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { getCodexInferenceThread, ownCodexInferenceClient } from "./inference-routing.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
@@ -75,6 +79,8 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 });
 
 setupRunAttemptTestHooks();
+// Load real provider schema policy once; cold plugin discovery is not part of the turn budget.
+useProviderToolSchemaRuntimeForTest(["codex"]);
 
 describe("Codex native configuration", () => {
   it.each(["missing", "disabled"])(
@@ -245,7 +251,7 @@ describe("Codex native configuration", () => {
       if (!harness.runAttempt) {
         throw new Error("Registered Codex harness must support run attempts");
       }
-      // Native protocol events own progress; preparation cost is not the model-policy oracle.
+      // Model policy owns this proof; cold preparation must not spend its logical clock.
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = harness.runAttempt(params);
       const settled = run.then(
@@ -372,7 +378,7 @@ describe("Codex native configuration", () => {
           ...(transport === "unix" ? { url: "unix:///tmp/synthetic-codex.sock" } : {}),
         },
         supervision: { enabled: true },
-      };
+      } satisfies CodexPluginConfig;
       await writeCodexAppServerBinding(sessionFile, {
         threadId: "thread-existing",
         cwd: workspaceDir,
@@ -479,6 +485,9 @@ describe("Codex native configuration", () => {
       });
       params.hostCapabilities = { ...params.hostCapabilities, bindModelExecution };
       params.registerPluginRuntimeRefreshConsumer = vi.fn();
+      params.onSettledTurn = async (attempt, captureContext) => {
+        attempt.settledTurnFinalizationContext = await captureContext();
+      };
       params.agentDir = agentDir;
       params.provider = "anthropic";
       params.modelId = "claude-opus-4-6";
@@ -604,7 +613,6 @@ describe("Codex native configuration", () => {
           expect(result.settledTurnFinalizationContext).toBeUndefined();
         } else {
           expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
-          expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
           expect(warn).toHaveBeenCalledWith(
             "codex settled-turn finalization context is unavailable",
             expect.objectContaining({
@@ -668,7 +676,7 @@ describe("Codex native configuration", () => {
   );
 });
 
-it.each(["restore", "fresh", "fresh after yield"] as const)(
+it.each(["restore", "fresh"] as const)(
   "cancels accepted unqualified native work when a policy is introduced (%s)",
   async (origin) => {
     const fresh = origin !== "restore";

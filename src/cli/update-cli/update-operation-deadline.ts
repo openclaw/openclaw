@@ -1,5 +1,7 @@
+import { withSqliteDatabaseAdmissionWait } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   ABSOLUTE_DEADLINE_EXPIRED,
   awaitWithinDeadline,
@@ -15,10 +17,7 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
   let cancelDeadline: (() => void) | undefined;
   let admission: { error: E; timeoutMs: number; deadlineAtMs: number } | undefined;
   let failure: E | undefined;
-  let expire: (error: E) => void = () => {};
-  const expired = new Promise<{ error: E }>((resolve) => {
-    expire = (error) => resolve({ error });
-  });
+  const expired = createDeferredCore<{ error: E }>();
   const inspectDeadline = () => {
     if (!closed && !failure && admission && Date.now() >= admission.deadlineAtMs) {
       failure = admission.error;
@@ -29,7 +28,7 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
         failure.message += " Cancellation could not be requested completely.";
       } finally {
         controller.abort(failure);
-        expire(failure);
+        expired.resolve({ error: failure });
       }
     }
   };
@@ -60,17 +59,30 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
       admission = { error, timeoutMs, deadlineAtMs: Date.now() + timeoutMs };
       cancelDeadline = scheduleAbsoluteDeadline(admission.deadlineAtMs, inspectDeadline);
     },
-    async run<T>(operation: () => Promise<T>): Promise<T> {
+    async run<T>(
+      operation: () => Promise<T>,
+      acceptSettledTimeout?: (result: T) => boolean,
+    ): Promise<T> {
       return await withCommandProcessScope(async () => {
         assertCurrent();
         const work = Promise.resolve()
-          .then(operation)
+          .then(() =>
+            withSqliteDatabaseAdmissionWait(
+              {
+                get deadlineAtMs() {
+                  return admission?.deadlineAtMs;
+                },
+                assertActive: assertCurrent,
+              },
+              operation,
+            ),
+          )
           .then(
             (value) => ({ value }),
             (error: unknown) => ({ error }),
           );
         try {
-          const outcome = await Promise.race([work, expired]);
+          const outcome = await Promise.race([work, expired.promise]);
           inspectDeadline();
           const timeout = failure;
           if (timeout) {
@@ -90,6 +102,13 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
               throw new AggregateError([timeout, joined.error], "Update operation cleanup failed", {
                 cause: timeout,
               });
+            }
+            if (
+              joined !== ABSOLUTE_DEADLINE_EXPIRED &&
+              "value" in joined &&
+              acceptSettledTimeout?.(joined.value)
+            ) {
+              return joined.value;
             }
             throw timeout;
           }

@@ -31,9 +31,6 @@ export const DEVICE_TOKEN_MUTATION_PARAMS = {
   deviceId: "device-1",
   role: "operator",
 } as const satisfies Record<string, unknown>;
-export const NODE_PAIR_REMOVE_PARAMS = {
-  nodeId: "device-1",
-} as const satisfies Record<string, unknown>;
 export const BACKEND_CONNECT_PARAMS = {
   minProtocol: PROTOCOL_VERSION,
   maxProtocol: PROTOCOL_VERSION,
@@ -62,10 +59,6 @@ export function captureSecurityEvents(): {
 
 export function createCloseMock() {
   return vi.fn<CloseGatewayConnection>();
-}
-
-export function createBackendClient() {
-  return { id: "gateway-client", version: "dev", platform: "test", mode: "backend" };
 }
 
 export function waitForFast(assertion: () => void | Promise<void>) {
@@ -269,7 +262,7 @@ export async function withGatewayTestState(
   options: Parameters<typeof withOpenClawTestState>[0],
   run: () => Promise<void>,
 ) {
-  await withOpenClawTestState(options, async () => {
+  await withOpenClawTestState({ ...options, prepareProfileCatalog: true }, async () => {
     try {
       await run();
     } finally {
@@ -285,6 +278,7 @@ export function attachGatewayHarness(options: {
   deferSocketSend?: boolean;
   socket?: WebSocket;
   refreshHealthSnapshot?: GatewayRequestContext["refreshHealthSnapshot"];
+  publishPresence?: () => void;
   requestOrigin?: string;
   requestHost?: string;
   headers?: Record<string, string>;
@@ -302,6 +296,7 @@ export function attachGatewayHarness(options: {
   handoffAuthenticatedReceive?: () => void;
 }) {
   const connectionWork = new GatewayConnectionWork();
+  const logGateway = createLogger();
   const logWsControl = createLogger();
   const attachment = createGatewayAttachmentCompletion(
     options.connId,
@@ -319,8 +314,10 @@ export function attachGatewayHarness(options: {
     connectionWork.beginClose();
     await connectionWork.drain();
   });
+  const frames: unknown[] = [];
   let finishSocketSend: ((error?: Error) => void) | undefined;
   const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
+    frames.push(JSON.parse(_payload));
     if (options.deferSocketSend) {
       finishSocketSend = (error) => cb?.(error);
       return;
@@ -341,7 +338,10 @@ export function attachGatewayHarness(options: {
         return socket;
       }),
     } as unknown as WebSocket);
-  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
+  const send = vi.fn((frame: unknown) => {
+    frames.push(frame);
+    return { kind: "sent" } as const;
+  });
   let client: unknown = options.client ?? null;
   let registeredProfileId: string | undefined;
   const refreshedProfileIds: Array<string | undefined> = [];
@@ -428,7 +428,7 @@ export function attachGatewayHarness(options: {
       ({
         refreshConnectedUserProfile,
         broadcast: vi.fn(),
-        publishPresence: vi.fn(),
+        publishPresence: options.publishPresence ?? vi.fn(),
       }) as never,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:
@@ -444,7 +444,7 @@ export function attachGatewayHarness(options: {
     setCloseCause: options.setCloseCause ?? createSetCloseCauseMock(),
     setLastFrameMeta: vi.fn(),
     originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
-    logGateway: createLogger() as never,
+    logGateway: logGateway as never,
     logHealth: createLogger() as never,
     logWsControl: logWsControl as never,
   });
@@ -458,12 +458,14 @@ export function attachGatewayHarness(options: {
     onMessage(Buffer.from(data));
   };
   return {
+    frames,
     whenAttached: attachment.promise,
     runWhenIdle: () => connectionWork.runWhenIdle(() => {}),
     advanceHandshakePhase,
     clearHandshakeTimer,
     finishSocketSend: (error?: Error) => finishSocketSend?.(error),
     handoffAuthenticatedReceive,
+    logGateway,
     logWsControl,
     refreshConnectedUserProfile,
     refreshedProfileIds,

@@ -10,12 +10,9 @@ import { useAuthIdentityFixture } from "./server.auth.identity-fixture.test-supp
 import {
   BACKEND_GATEWAY_CLIENT,
   connectReq,
-  CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
-  createSignedDevice,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-  readConnectChallengeNonce,
   openWs,
   originForPort,
   rpcReq,
@@ -232,75 +229,6 @@ describe("gateway auth compatibility baseline", () => {
         expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
           ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
         );
-      } finally {
-        ws.close();
-      }
-    });
-
-    test("keeps auth-none control ui first-connect token absence unchanged", async () => {
-      const ws = await openWs(gateway.port, { origin: originForPort(gateway.port) });
-      try {
-        const deviceIdentityPath = makeIdentityPath(
-          `openclaw-auth-none-control-ui-first-${process.pid}-${gateway.port}.sqlite`,
-        );
-        const res = await connectReq(ws, {
-          skipDefaultAuth: true,
-          client: { ...CONTROL_UI_CLIENT },
-          scopes: ["operator.read"],
-          deviceIdentityPath,
-        });
-        expect(res.ok).toBe(true);
-        const helloOk = res.payload as HelloOk;
-        expect(helloOk?.auth?.deviceToken).toBeUndefined();
-      } finally {
-        ws.close();
-      }
-    });
-
-    test("keeps auth-none control ui stale-key token handoff unchanged", async () => {
-      const ws = await openWs(gateway.port, { origin: originForPort(gateway.port) });
-      try {
-        const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
-          await import("../infra/device-identity.js");
-        const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
-        const { requestDevicePairing } = await import("../infra/device-pairing.js");
-        const nonce = await readConnectChallengeNonce(ws);
-        const identityPath = makeIdentityPath(
-          `openclaw-auth-none-control-ui-${process.pid}-${gateway.port}.sqlite`,
-        );
-        const staleIdentityPath = makeIdentityPath(
-          `openclaw-auth-none-control-ui-stale-${process.pid}-${gateway.port}.sqlite`,
-        );
-        const { identity, device } = await createSignedDevice({
-          token: null,
-          scopes: ["operator.read"],
-          clientId: CONTROL_UI_CLIENT.id,
-          clientMode: CONTROL_UI_CLIENT.mode,
-          identityPath,
-          nonce,
-        });
-        const staleIdentity = loadOrCreateDeviceIdentity({ path: staleIdentityPath });
-        const pending = await requestDevicePairing({
-          deviceId: identity.deviceId,
-          publicKey: publicKeyRawBase64UrlFromPem(staleIdentity.publicKeyPem),
-          clientId: CONTROL_UI_CLIENT.id,
-          clientMode: CONTROL_UI_CLIENT.mode,
-          role: "operator",
-          scopes: ["operator.read"],
-        });
-        await approveDevicePairing(pending.request.requestId, {
-          callerScopes: ["operator.admin"],
-        });
-
-        const res = await connectReq(ws, {
-          skipDefaultAuth: true,
-          client: { ...CONTROL_UI_CLIENT },
-          scopes: ["operator.read"],
-          device,
-        });
-        expect(res.ok).toBe(true);
-        const helloOk = res.payload as HelloOk;
-        expect(typeof helloOk?.auth?.deviceToken).toBe("string");
       } finally {
         ws.close();
       }

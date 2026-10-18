@@ -6,7 +6,7 @@ import {
   matchPluginCommandInvocation,
   PLUGIN_COMMAND_DISPATCH,
 } from "../../plugins/plugin-command-runtime.js";
-import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { isNativeCommandTurn } from "../command-turn-context.js";
 import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import {
   findCommandByNativeName,
@@ -28,7 +28,7 @@ export function shouldBypassPluginOwnedBindingForCommand(
   if (ctx.CommandAuthorized !== undefined && typeof ctx.CommandAuthorized !== "boolean") {
     return false;
   }
-  const commandTurn = resolveCommandTurnContext(ctx);
+  const commandTurn = ctx.CommandTurn;
   if (
     (commandTurn.kind === "native" || commandTurn.kind === "text-slash") &&
     !commandTurn.authorized
@@ -80,13 +80,10 @@ export function shouldBypassPluginOwnedBindingForCommand(
     return true;
   }
   const provider = normalizeOptionalString(ctx.Provider ?? ctx.Surface);
-  if (
+  return Boolean(
     commandTurn.commandName &&
     findCommandByNativeName(commandTurn.commandName, provider, {
       includeBundledChannelFallback: true,
-    })
-  ) {
-    return true;
-  }
-  return false;
+    }),
+  );
 }

@@ -1,7 +1,3 @@
-import type {
-  SubagentMaintenanceDurableBasis,
-  SubagentRunsDurableBasis,
-} from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type {
@@ -28,14 +24,18 @@ import type {
   SqliteSessionArtifactPreparationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type { SqliteSessionEntryRevision } from "./session-accessor.sqlite-entry-revision.js";
-import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
+import type {
+  SessionEntryMaintenanceAgeChange,
+  SessionEntryMaintenanceAgeFact,
+} from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionEntryCommitContext,
   SessionEntryCreateWithTranscriptOptions,
+  TranscriptEvent,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
+import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -44,7 +44,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 /** Transportable planning facts; live guards and native identity remain with their owners. */
 type SessionDeletionPlanningParams = Omit<
   DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "env" | "expectedDatabaseIdentity" | "descendantRunBasis"
+  "commitGuard" | "env" | "expectedDatabaseIdentity"
 >;
 
 export type SessionEntryDeletionPlanInput = {
@@ -115,21 +115,32 @@ export type LifecycleRemovalProjectionInput = {
 export type ProjectedLifecycleCommitResult = {
   archivedTranscripts: SessionLifecycleArchivedTranscript[];
   beforeCount: number;
+  afterCount: number;
   maintenancePlans: SessionEntryMaintenancePlan[];
   removedSessionKeys: string[];
   pendingArchives: boolean;
+  progressCardResetKeys?: string[];
+  projectionReconcileSessionIds?: string[];
 };
 
-export type ProjectedLifecycleRemovalCommitInput = {
+export type ProjectedLifecycleCommitInput = {
   projected: ProjectedLifecycleMutation;
   materializationFailed: boolean;
   allowCanonicalRepair?: boolean;
+  creation?: SessionLifecycleCreation;
   maintenance: SessionEntryMaintenanceInput | null;
 };
 
+type SessionLifecycleCreation = {
+  preparedTranscript?: {
+    sessionKey: string;
+    sessionId: string;
+    events: readonly TranscriptEvent[];
+  };
+  ownerAssignment?: { sessionKey: string; owner: SessionOwnerAssignment };
+};
+
 export type SessionEntryLifecycleMutationParams = {
-  /** Internal durable comparison paired with the caller's live descendant guard. */
-  descendantRunBasis?: SubagentRunsDurableBasis;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   storePath: string;
@@ -147,8 +158,7 @@ export type SessionEntryLifecycleMutationParams = {
   allowCanonicalRepair?: boolean;
   /** Doctor-only synchronous state transfer that commits with the destination entry. */
   afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
-  /** Fresh-row sidecar writes that must not retry unrelated pending archives. */
-  afterFreshUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
+  creation?: SessionLifecycleCreation;
   /**
    * Revalidate caller and external lifecycle owners at each synchronous deletion boundary.
    * Must not write the deleting agent database: its Worker may hold the transaction lock.
@@ -176,7 +186,7 @@ export type SqliteSessionReclamationCallbacks = {
 
 export type ReclamationDeleteParams = Omit<
   DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "env" | "descendantRunBasis"
+  "commitGuard" | "env"
 >;
 
 /** Internal scope: a historical request cannot authorize whole-entry reclamation. */
@@ -188,15 +198,11 @@ export type SessionEntryMaintenanceInput = {
   activeSessionKeys?: readonly string[];
   archiveDirectory: string;
   forceMaintenance?: boolean;
+  /** Automatic cap work yields between operations; inline cleanup remains exhaustive. */
+  maxCapEntries?: number;
   maintenance: ResolvedSessionMaintenanceConfig;
-  preservation: SessionMaintenancePreservationSnapshot | null;
+  preservation: SessionMaintenancePreservationSnapshot;
   storePath: string;
-};
-
-type SessionMaintenanceAgeSnapshot = {
-  incarnation: string;
-  revision: SqliteSessionEntryRevision;
-  capture: number;
 };
 
 export type SessionMaintenanceLiveProtection = Pick<
@@ -205,8 +211,6 @@ export type SessionMaintenanceLiveProtection = Pick<
 >;
 
 type SessionReclamationPlanBase = {
-  descendantRunBasis?: SubagentRunsDurableBasis;
-  maintenanceRunBasis?: SubagentMaintenanceDurableBasis;
   databaseOptions: ReclamationDatabaseOptions;
   materializedPlans: MaterializedSessionStateDeletePlan[];
 };
@@ -217,24 +221,26 @@ export type SessionMaintenanceMetadataCommand =
       kind: "maintenance-age";
       ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
       maintenance: ResolvedSessionMaintenanceConfig;
-      expected?: SessionMaintenanceAgeSnapshot;
     }
   | {
       kind: "maintenance-plan";
-      ageOwner?: string;
       ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
       input: SessionEntryMaintenanceInput;
     };
 
 export type SessionMaintenanceMetadataResult =
   | { kind: "maintenance-statistics"; value: true }
-  | { kind: "maintenance-age"; nextAt: number | undefined }
-  | { kind: "maintenance-preservation-required" }
+  | {
+      kind: "maintenance-age";
+      nextAt: number | undefined;
+      ageFact?: SessionEntryMaintenanceAgeFact;
+    }
   | { kind: "maintenance-plan-stale" }
   | {
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;
-      ageSnapshot: SessionMaintenanceAgeSnapshot;
+      nextAt: number | undefined;
+      ageFact?: SessionEntryMaintenanceAgeFact;
     };
 
 export type SqliteSessionReclamationPlan =
@@ -245,12 +251,7 @@ export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {
       agentId: string;
       kind: "lifecycle-projection-commit";
-      input: ProjectedLifecycleRemovalCommitInput;
-    })
-  | (SessionReclamationPlanBase & { kind: "lifecycle-projection-count" })
-  | (SessionReclamationPlanBase & {
-      kind: "deletion-plan";
-      planning: SessionDeletionPlanningOperation;
+      input: ProjectedLifecycleCommitInput;
     })
   | (SessionReclamationPlanBase & {
       kind: "archive-publish-prepare";
@@ -301,8 +302,6 @@ export type SqliteArchiveReclamationPlan = Exclude<
 export type SqliteSessionReclamationResult =
   | { kind: "lifecycle-projection-plan"; value: ProjectedLifecycleMutation }
   | { kind: "lifecycle-projection-commit"; value: ProjectedLifecycleCommitResult }
-  | { kind: "lifecycle-projection-count"; value: number }
-  | { kind: "deletion-plan"; value: SessionDeletionPlanningResult }
   | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }
   | { kind: "archive-publish-record"; value: true }
   | { kind: "maintenance-pages"; value: SqliteWalReclamationResult }
@@ -311,11 +310,14 @@ export type SqliteSessionReclamationResult =
       kind: "maintenance-finalize";
       value: {
         archivedTranscripts: SessionLifecycleArchivedTranscript[];
-        changedEntries: SessionEntryRemovalPlan[];
-        committedEntries: SessionEntryRemovalPlan[];
+        /** Positions in the captured plan; never echo its saved entry snapshots. */
+        committedEntryIndices: number[];
       };
     }
-  | { kind: "entry"; value: DeleteSessionEntryLifecycleResult }
+  | {
+      kind: "entry";
+      value: DeleteSessionEntryLifecycleResult & { transcriptInventoryUnchanged?: true };
+    }
   | {
       kind: "lifecycle-artifacts";
       value: {
@@ -349,9 +351,10 @@ type SessionEntryMaintenanceCounts = {
   capped: number;
 };
 export type SessionEntryMaintenancePlan = SessionEntryMaintenanceCounts & {
+  /** An exhaustive over-cap scan found only durable protection, without runtime/recent guards. */
+  durableNoCandidates?: true;
   /** Exact rows written by planning; parent publication must not rescan the store. */
-  archivedSessionKeys: string[];
-  archivedWorktrees?: Array<{ entry: SessionEntry; sessionKey: string; storePath: string }>;
+  archivedEntries: Array<{ sessionKey: string; sessionId?: string }>;
   entryRemovals: SessionEntryRemovalPlan[];
   stateDeletePlans: SessionStateDeletePlan[];
 };

@@ -31,50 +31,63 @@ afterEach(async () => {
 });
 
 describe("Code Mode loop protection", () => {
-  it("blocks repeated catalog discovery despite new titles and receipt counters", async () => {
-    const { exec } = createLoopHarness();
-    const code = 'return (await catalog.search("loop_fixture")).map(tool => tool.callableName);';
-    for (let index = 0; index < 20; index++) {
-      const result = resultDetails(
-        await exec.execute(`discover-${index}`, {
-          title: `Inspect available tools ${index}`,
-          code,
-        }),
-      );
-      expect(result).toMatchObject({ status: "completed", value: ["loop_fixture"] });
-      expect(result.telemetry).toMatchObject({ searchCount: index + 1 });
-    }
-    expect(
-      resultDetails(
-        await exec.execute("discover-blocked", {
-          title: "Recover available tool handles",
-          code,
-        }),
-      ),
-    ).toMatchObject({ status: "blocked", deniedReason: "tool-loop" });
-  });
-
-  it("blocks equivalent retained results without replacing their delivered references", async () => {
-    const { exec } = createLoopHarness(1024);
-    const code = 'return { data: "x".repeat(4096) };';
-    const references = new Set<string>();
-    for (let index = 0; index < 20; index++) {
-      const result = resultDetails(
-        await exec.execute("retained-" + index, { title: "Inspect retained data", code }),
-      );
-      expect(result).toMatchObject({
-        status: "completed",
-        value: { reference: { id: expect.any(String) } },
-      });
-      references.add(JSON.stringify(result.value));
-    }
-    expect(references.size).toBe(20);
-    expect(
-      resultDetails(
-        await exec.execute("retained-blocked", { title: "Inspect retained data", code }),
-      ),
-    ).toMatchObject({ status: "blocked", deniedReason: "tool-loop" });
-  });
+  it.each([
+    {
+      kind: "discovery",
+      code: 'return (await catalog.search("loop_fixture")).map(tool => tool.callableName);',
+    },
+    { kind: "retained", code: 'return { data: "x".repeat(4096) };' },
+    { kind: "guest metadata", code: "return await loop_fixture({});" },
+  ] as const)(
+    "compares actual $kind outcomes independently of bookkeeping",
+    async ({ kind, code }) => {
+      const progress = kind === "guest metadata";
+      const { exec, fixture } = createLoopHarness(kind === "retained" ? 1024 : undefined);
+      let completed = 0;
+      if (progress) {
+        fixture.execute = async () =>
+          jsonResult({
+            telemetry: { callCount: ++completed },
+            pendingToolCalls: [{ id: `work-${completed}` }],
+          });
+      }
+      const references = new Set<string>();
+      for (let index = 0; index < (progress ? 22 : 20); index++) {
+        const result = resultDetails(
+          await exec.execute(`${kind}-${index}`, {
+            title: kind === "discovery" ? `Inspect available tools ${index}` : "Inspect result",
+            code,
+          }),
+        );
+        expect(result.status).toBe("completed");
+        if (kind === "retained") {
+          expect(result.value).toMatchObject({ reference: { id: expect.any(String) } });
+          references.add(JSON.stringify(result.value));
+        } else if (kind === "discovery") {
+          expect(result.value).toEqual(["loop_fixture"]);
+          expect(result.telemetry).toMatchObject({ searchCount: index + 1 });
+        } else {
+          expect(result.value).toEqual({
+            telemetry: { callCount: index + 1 },
+            pendingToolCalls: [{ id: `work-${index + 1}` }],
+          });
+        }
+      }
+      if (kind === "retained") {
+        expect(references.size).toBe(20);
+      }
+      if (!progress) {
+        expect(
+          resultDetails(
+            await exec.execute("blocked", {
+              title: kind === "discovery" ? "Recover available tool handles" : "Inspect result",
+              code,
+            }),
+          ),
+        ).toMatchObject({ status: "blocked", deniedReason: "tool-loop" });
+      }
+    },
+  );
 
   it.each([false, true])(
     "compares resumed work rather than bridge ids; changing output=%s",
@@ -146,28 +159,5 @@ describe("Code Mode loop protection", () => {
       result = resultDetails(await next);
     }
     expect(result).toMatchObject({ status: "completed", value: "finished" });
-  });
-
-  it("preserves guest telemetry and pending ids as meaningful result data", async () => {
-    const { exec, fixture } = createLoopHarness();
-    let completed = 0;
-    fixture.execute = async () =>
-      jsonResult({
-        telemetry: { callCount: ++completed },
-        pendingToolCalls: [{ id: `work-${completed}` }],
-      });
-    for (let index = 0; index < 22; index++) {
-      const result = resultDetails(
-        await exec.execute(`guest-${index}`, {
-          title: "Read user result data",
-          code: "return await loop_fixture({});",
-        }),
-      );
-      expect(result.status).toBe("completed");
-      expect(result.value).toEqual({
-        telemetry: { callCount: index + 1 },
-        pendingToolCalls: [{ id: `work-${index + 1}` }],
-      });
-    }
   });
 });

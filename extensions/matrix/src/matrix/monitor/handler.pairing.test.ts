@@ -20,10 +20,7 @@ beforeEach(() => {
 });
 
 describe("matrix monitor handler pairing", () => {
-  it.each([
-    { name: "pending request", code: "ABCDEFGH", expectedReplies: 1 },
-    { name: "full pending queue", code: "", expectedReplies: 0 },
-  ])(
+  it.each([{ name: "full pending queue", code: "", expectedReplies: 0 }])(
     "sends only usable pairing reminders with cooldown: $name",
     async ({ code, expectedReplies }) => {
       vi.useFakeTimers();

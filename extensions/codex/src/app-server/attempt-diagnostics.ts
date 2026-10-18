@@ -3,9 +3,13 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticModelCallContent,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./config.js";
+import type { CodexUsageProjection } from "./event-projector-usage.js";
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
+type ModelCallDiagnosticBase = Omit<
+  Extract<TrustedDiagnosticEventInput, { type: "model.call.started" }>,
+  "type"
+>;
 
 export function utf8JsonByteLength(value: unknown): number | undefined {
   try {
@@ -23,45 +27,9 @@ function fingerprintCodexLogValue(namespace: string, value: string): string {
   return `sha256:${hash.digest("hex").slice(0, 16)}`;
 }
 
-export function buildCodexPluginThreadConfigEligibilityLogData(params: {
-  sessionId: string;
-  sessionKey: string;
-  pluginThreadConfigRequired: boolean;
-  resolvedPluginPolicy: ReturnType<typeof resolveCodexPluginsPolicy> | undefined;
-  enabledPluginConfigKeys: string[] | undefined;
-  pluginAppCacheKey: string;
-  startupAuthProfileId: string | undefined;
-  appServer: CodexAppServerRuntimeOptions;
-}): Record<string, unknown> {
-  return {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    enabled: params.pluginThreadConfigRequired,
-    policyConfigured: params.resolvedPluginPolicy?.configured === true,
-    policyEnabled: params.resolvedPluginPolicy?.enabled === true,
-    allowAllPlugins: params.resolvedPluginPolicy?.allowAllPlugins === true,
-    pluginConfigKeys: params.resolvedPluginPolicy?.pluginPolicies
-      .map((plugin) => plugin.configKey)
-      .toSorted(),
-    enabledPluginConfigKeys: params.enabledPluginConfigKeys,
-    appCacheKeyFingerprint: fingerprintCodexLogValue(
-      "openclaw:codex:plugin-app-cache-key:v1",
-      params.pluginAppCacheKey,
-    ),
-    authProfileId: params.startupAuthProfileId,
-    appServerTransport: params.appServer.start.transport,
-    appServerCommandSource: params.appServer.start.commandSource,
-  };
-}
-
 type CodexModelCallFailureKind = "aborted" | "timeout";
 
-type CodexModelCallDiagnosticCapture = {
-  inputMessages?: boolean;
-  outputMessages?: boolean;
-  systemPrompt?: boolean;
-  toolDefinitions?: boolean;
-};
+type CodexModelCallDiagnosticCapture = Partial<Record<keyof DiagnosticModelCallContent, boolean>>;
 
 type CodexModelCallDiagnosticTool = {
   name: string;
@@ -71,7 +39,7 @@ type CodexModelCallDiagnosticTool = {
 };
 
 export function createCodexModelCallDiagnosticEmitter(params: {
-  baseFields: Record<string, unknown>;
+  baseFields: ModelCallDiagnosticBase;
   capture: CodexModelCallDiagnosticCapture;
   tools: readonly CodexModelCallDiagnosticTool[];
   buildInputMessages: () => unknown;
@@ -92,13 +60,17 @@ export function createCodexModelCallDiagnosticEmitter(params: {
   let terminalEmitted = false;
   let requestPayloadBytes: number | undefined;
 
-  const privateData = (modelContent: DiagnosticModelCallContent | undefined) =>
-    modelContent && Object.keys(modelContent).length > 0 ? { modelContent } : undefined;
-  const buildContent = (): DiagnosticModelCallContent => ({
-    ...(params.capture.inputMessages ? { inputMessages: params.buildInputMessages() } : {}),
-    ...(params.capture.systemPrompt ? { systemPrompt: params.buildSystemPrompt() } : {}),
-    ...(toolDefinitions ? { toolDefinitions } : {}),
-  });
+  const buildPrivateData = (
+    terminalOutput?: Pick<DiagnosticModelCallContent, "outputMessages">,
+  ) => {
+    const modelContent: DiagnosticModelCallContent = {
+      ...(params.capture.inputMessages ? { inputMessages: params.buildInputMessages() } : {}),
+      ...(params.capture.systemPrompt ? { systemPrompt: params.buildSystemPrompt() } : {}),
+      ...(toolDefinitions ? { toolDefinitions } : {}),
+      ...(terminalOutput && params.capture.outputMessages ? terminalOutput : {}),
+    };
+    return Object.keys(modelContent).length > 0 ? { modelContent } : undefined;
+  };
   const emitTerminal = (
     type: "model.call.completed" | "model.call.error",
     outputMessages: unknown,
@@ -108,18 +80,17 @@ export function createCodexModelCallDiagnosticEmitter(params: {
       return false;
     }
     terminalEmitted = true;
+    const event = {
+      ...params.baseFields,
+      durationMs: Math.max(0, now() - startedAt),
+      ...fields,
+      ...(requestPayloadBytes !== undefined ? { requestPayloadBytes } : {}),
+    };
     emitTrustedDiagnosticEventWithPrivateData(
-      {
-        type,
-        ...params.baseFields,
-        durationMs: Math.max(0, now() - startedAt),
-        ...fields,
-        ...(requestPayloadBytes !== undefined ? { requestPayloadBytes } : {}),
-      } as TrustedDiagnosticEventInput,
-      privateData({
-        ...buildContent(),
-        ...(params.capture.outputMessages ? { outputMessages } : {}),
-      }),
+      type === "model.call.error"
+        ? { ...event, type, errorCategory: fields.errorCategory ?? "error" }
+        : { ...event, type },
+      buildPrivateData({ outputMessages }),
     );
     return true;
   };
@@ -135,8 +106,8 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         {
           type: "model.call.started",
           ...params.baseFields,
-        } as TrustedDiagnosticEventInput,
-        privateData(buildContent()),
+        },
+        buildPrivateData(),
       );
     },
     emitCompleted(result: { assistantTexts?: unknown; lastAssistant?: unknown }): void {
@@ -144,6 +115,28 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         "model.call.completed",
         result.lastAssistant ? [result.lastAssistant] : result.assistantTexts,
       );
+    },
+    emitResponseObserved(
+      this: void,
+      response: NonNullable<ReturnType<CodexUsageProjection["record"]>>,
+    ): void {
+      if (!started || terminalEmitted) {
+        return;
+      }
+      const { observationUnit: _unit, promptStats: _stats, ...baseFields } = params.baseFields;
+      const usage = response.usage;
+      emitTrustedDiagnosticEventWithPrivateData({
+        ...baseFields,
+        type: "model.response.observed",
+        timestampSource: "receipt",
+        usageSource: "native-normalized",
+        usageScope: "response",
+        upstreamRequestIdHash: fingerprintCodexLogValue(
+          "openclaw:codex:response-id:v1",
+          response.responseId,
+        ),
+        ...(usage ? { usage } : {}),
+      });
     },
     emitError(error: unknown, fields: { failureKind?: CodexModelCallFailureKind } = {}): void {
       if (

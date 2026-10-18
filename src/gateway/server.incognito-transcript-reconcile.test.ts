@@ -2,21 +2,18 @@ import fs from "node:fs";
 import { expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
-import {
-  isSessionTranscriptIndexReconcileRunning,
-  waitForSessionTranscriptIndexReconcile,
-} from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
-  getOpenClawAgentDatabaseIfOpen,
   resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
-it("serves authorized incognito descriptions, events, and reconciled history", async () => {
+it("serves authorized incognito descriptions, events, and active-branch history", async () => {
   const state = await createOpenClawTestState({
     label: "incognito-reconcile-gateway",
     env: {
@@ -83,13 +80,6 @@ it("serves authorized incognito descriptions, events, and reconciled history", a
         agentId: "main",
         path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
       };
-      const database = getOpenClawAgentDatabaseIfOpen(options)!;
-      const projection = () =>
-        database.db
-          .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
-          .get(created.sessionId);
-      let committedProjection: unknown;
-      let scheduled = false;
       // Incognito state belongs to this process. Seed the branch through its
       // canonical writer, then exercise the authenticated public history route.
       await persistSessionTranscriptTurn(
@@ -109,16 +99,8 @@ it("serves authorized incognito descriptions, events, and reconciled history", a
               message: { role: "assistant", content: "active" },
             },
           ],
-          onMessageCommitted: () => {
-            committedProjection = projection();
-            scheduled = isSessionTranscriptIndexReconcileRunning(options);
-          },
         },
       );
-      expect(committedProjection).toEqual({ needs_rebuild: 1 });
-      expect(scheduled).toBe(true);
-      await waitForSessionTranscriptIndexReconcile(options);
-      expect(projection()).toEqual({ needs_rebuild: 0 });
       const history = await gateway.client.request<{
         sessionId: string;
         sessionInfo?: {
@@ -192,11 +174,25 @@ it("serves authorized incognito descriptions, events, and reconciled history", a
         }),
         { agentId: "main" },
       );
-      expect(durable).toEqual(
-        durable.found
-          ? { found: true, value: { events: { count: 0 }, nodes: { count: 0 } } }
-          : { found: false, reason: "database-missing" },
-      );
+      if (durable.found) {
+        expect(durable.value).toEqual({ events: { count: 0 }, nodes: { count: 0 } });
+      } else {
+        expect(["database-missing", "schema-missing"]).toContain(durable.reason);
+        if (durable.reason === "schema-missing") {
+          // Admission may reserve an empty file without creating durable session storage.
+          using empty = openNodeSqliteDatabase(
+            resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+            { readOnly: true },
+          );
+          expect(
+            empty
+              .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('transcript_events', 'session_nodes')",
+              )
+              .all(),
+          ).toEqual([]);
+        }
+      }
     },
     async () => {
       if (gateway) {

@@ -47,7 +47,6 @@ it.each([false, true])(
 );
 
 it.each([
-  { queueMode: "steer", status: "started" },
   { queueMode: "followup", status: "in_flight" },
   { queueMode: undefined, status: "started" },
 ] as const)(

@@ -3,9 +3,9 @@ import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-co
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
-  isRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { withInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
 import {
@@ -41,7 +41,9 @@ const SUBAGENT_AGENT_RECONCILE_INTERVAL_MS = 800;
 const SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS = 6_400;
 
 type SubagentGatewayResponse = Awaited<ReturnType<typeof callGateway>>;
-type SubagentGatewayDispatchMode = "in_process" | "out_of_process";
+export type SubagentGatewayRequest = Parameters<typeof callGateway>[0] & {
+  params: Record<string, unknown>;
+};
 
 /** Captures the request's Gateway binding and operator owner before spawn preparation awaits. */
 export function captureSubagentSpawnGatewayContext() {
@@ -57,15 +59,15 @@ export function captureSubagentSpawnGatewayContext() {
   return { gatewayContextResolver, operatorAuthority };
 }
 
-async function callSubagentGatewayWithDispatchMode(
-  params: Parameters<typeof callGateway>[0],
+async function dispatchSubagentGateway(
+  params: SubagentGatewayRequest,
   authorization?: SubagentLaunchAuthorization,
   options?: {
     agentRunTracking?: "native_subagent";
     gatewayContextResolver?: GatewayContextResolver;
     preparedLaunch?: PreparedSessionRun;
   },
-): Promise<{ response: SubagentGatewayResponse; dispatchMode: SubagentGatewayDispatchMode }> {
+): Promise<{ response: SubagentGatewayResponse; registrationRequired: boolean }> {
   const { sessionSpawnContext, parentExecutionIdentityToken } =
     readSubagentGatewayExecutionIdentity(params) ?? {};
   // Subagent lifecycle requires methods spanning multiple scope tiers
@@ -78,9 +80,7 @@ async function callSubagentGatewayWithDispatchMode(
   // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
   // "agent" -> write) keep their least-privilege scope. Apply the trusted
   // launch authorization before resolving the request's required scope.
-  const authorizedParams = isRecord(params.params)
-    ? applySubagentLaunchAuthorization(params.params, authorization)
-    : params.params;
+  const authorizedParams = applySubagentLaunchAuthorization(params.params, authorization);
   const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
     params.method,
     authorizedParams,
@@ -104,7 +104,7 @@ async function callSubagentGatewayWithDispatchMode(
     params: authorizedParams,
     ...(scopes != null ? { scopes } : {}),
   };
-  if (hasInProcessGateway && isRecord(request.params)) {
+  if (hasInProcessGateway) {
     const requestParams =
       request.method === "agent" && options?.preparedLaunch
         ? bindInProcessSessionRun(request.params, options.preparedLaunch)
@@ -118,10 +118,10 @@ async function callSubagentGatewayWithDispatchMode(
     const dispatch = async (workerIdentity?: WorkerTurnExecutionIdentity) => {
       // Cleanup can lose its worker claim while awaiting a session lifecycle drain.
       const assertDispatchCurrent = workerIdentity
-        ? () => {
-            request.assertDispatchCurrent?.();
-            workerIdentity.receiptAuthority();
-          }
+        ? composeSessionSourceAssertion([
+            request.assertDispatchCurrent,
+            workerIdentity.receiptAuthority,
+          ])
         : request.assertDispatchCurrent;
       assertDispatchCurrent?.();
       const operationalRunInstance = gatewayCaller?.workerTurnClaim
@@ -181,7 +181,7 @@ async function callSubagentGatewayWithDispatchMode(
           return await dispatch(identity);
         })
       : await dispatch();
-    return { response, dispatchMode: "in_process" };
+    return { response, registrationRequired: true };
   }
   const dispatchAgentRequest = (timeoutMs?: number | null) => {
     request.assertDispatchCurrent?.();
@@ -217,7 +217,7 @@ async function callSubagentGatewayWithDispatchMode(
     request.method === "agent"
       ? await reconcileSubagentAgentDispatch(dispatchAgentRequest, request.timeoutMs)
       : await dispatchAgentRequest(request.timeoutMs);
-  return { response, dispatchMode: "out_of_process" };
+  return { response, registrationRequired: false };
 }
 
 async function reconcileSubagentAgentDispatch(
@@ -262,32 +262,25 @@ async function reconcileSubagentAgentDispatch(
 }
 
 export async function callSubagentGateway(
-  params: Parameters<typeof callGateway>[0],
+  params: SubagentGatewayRequest,
   authorization?: SubagentLaunchAuthorization,
 ): Promise<SubagentGatewayResponse> {
-  return (await callSubagentGatewayWithDispatchMode(params, authorization)).response;
+  return (await dispatchSubagentGateway(params, authorization)).response;
 }
 
 export async function callNativeSubagentGateway(
-  params: Parameters<typeof callGateway>[0],
+  params: SubagentGatewayRequest,
   authorization?: SubagentLaunchAuthorization,
   gatewayContextResolver?: GatewayContextResolver,
   preparedLaunch?: PreparedSessionRun,
-): Promise<{
-  response: SubagentGatewayResponse;
-  registrationRequired: boolean;
-}> {
-  const result = await callSubagentGatewayWithDispatchMode(params, authorization, {
+) {
+  // The trusted marker exists only on direct dispatch. A WebSocket fallback keeps the
+  // ordinary Gateway CLI policy: tracking is best-effort and never rejects an accepted run.
+  return await dispatchSubagentGateway(params, authorization, {
     agentRunTracking: "native_subagent",
     gatewayContextResolver,
     preparedLaunch,
   });
-  return {
-    response: result.response,
-    // The trusted marker exists only on direct dispatch. A WebSocket fallback keeps the
-    // ordinary Gateway CLI policy: tracking is best-effort and never rejects an accepted run.
-    registrationRequired: result.dispatchMode === "in_process",
-  };
 }
 
 export function readGatewayRunId(

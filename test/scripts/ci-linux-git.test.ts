@@ -1,6 +1,5 @@
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, expect, it, vi } from "vitest";
+import { beforeAll, expect, it, vi, type TestContext, type TestFunction } from "vitest";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
 
 beforeAll(() => {
@@ -13,44 +12,69 @@ const harness = "b".repeat(40);
 const base = "c".repeat(40);
 const moved = "d".repeat(40);
 const merge = "e".repeat(40);
-const linuxIt = it.skipIf(process.platform !== "linux").concurrent;
+function timed(test: typeof it.concurrent) {
+  return Object.assign((name: string, fn: TestFunction) => test(name, fn, 55_000), {
+    for:
+      <T>(cases: readonly T[]) =>
+      (name: string, fn: (entry: T, context: TestContext) => Promise<void>) =>
+        test.for(cases)(name, { timeout: 55_000 }, fn),
+  });
+}
+const linuxIt = timed(it.skipIf(process.platform !== "linux").concurrent);
 // Raw owner lifecycle checks use the shared POSIX census on Linux and macOS.
-const posixIt = it.skipIf(process.platform === "win32").concurrent;
+const posixIt = timed(it.skipIf(process.platform === "win32").concurrent);
+const noOutputs = { githubOutput: "", githubEnv: "", githubSummary: "", githubPath: "" };
+const docsClone = "Clone publish repo";
+const docsCommit = "Commit publish repo sync";
+const command = (words: string, ...args: string[]) => [...words.split(" "), ...args];
+const length = (value: number) => expect.objectContaining({ length: value });
+const fetchCase = (label: string, code: number, ...fetchResults: FetchResult[]) => ({
+  label,
+  code,
+  fetchResults,
+  attempts: fetchResults.length,
+});
 
-const resetProfiles = [
-  {
-    job: "android",
-    step: "Checkout",
-    target: `+${candidate}:refs/remotes/origin/ci-target`,
-    remote: "fixture/checkout",
-  },
-  {
-    job: "check-docs",
-    step: "Checkout ClawHub docs source",
-    target: "+refs/heads/main:refs/remotes/origin/checkout",
-    remote: "openclaw/clawhub",
-  },
-];
-const resetCases: { label: string; fetchResults: FetchResult[]; code: number; attempts: number }[] =
+function runCheckout(
+  signal: AbortSignal,
+  job: string,
+  fetchResults: FetchResult[],
+  options: Partial<Parameters<typeof runCiGitStep>[0]> = {},
+) {
+  return runCiGitStep({ signal, job, fetchResults, ...options });
+}
+
+const resetProfiles = (
   [
-    { label: "leader exit", fetchResults: [0], code: 0, attempts: 1 },
-    { label: "timeout recovery", fetchResults: ["hang", 0], code: 0, attempts: 2 },
-    { label: "timeouts exhausted", fetchResults: Array(5).fill("hang"), code: 1, attempts: 5 },
-    { label: "unverified cleanup", fetchResults: ["cleanup-failure"], code: 125, attempts: 1 },
-  ];
+    ["android", "Checkout", `+${candidate}:refs/remotes/origin/ci-target`, "fixture/checkout"],
+    [
+      "check-docs",
+      "Checkout ClawHub docs source",
+      "+refs/heads/main:refs/remotes/origin/checkout",
+      "openclaw/clawhub",
+    ],
+  ] as const
+).map(([job, step, target, remote]) => ({ job, step, target, remote }));
+const resetCases = [
+  fetchCase("leader exit", 0, 0),
+  fetchCase("timeout recovery", 0, "hang", 0),
+  fetchCase("timeouts exhausted", 1, "hang", "hang", "hang", "hang", "hang"),
+  fetchCase("unverified cleanup", 125, "cleanup-failure"),
+];
 linuxIt.for(resetProfiles.flatMap((profile) => resetCases.map((entry) => ({ profile, entry }))))(
   "$profile.job drains descendants before reset/reuse ($entry.label)",
-  { timeout: 55_000 },
   async (
     { profile: { job, step, target, remote }, entry: { fetchResults, code, attempts } },
     { signal },
   ) => {
     const report = await runCiGitStep({ signal, job, step, fetchResults });
-    expect(report.code).toBe(code);
-    expect(report.readyAttempts).toHaveLength(attempts);
-    expect(report.fetches).toHaveLength(attempts);
+    expect(report).toMatchObject({
+      code,
+      readyAttempts: length(attempts),
+      fetches: length(attempts),
+      checkouts: length(code === 0 ? 1 : 0),
+    });
     expect(report.boundaries.filter(({ name }) => name === "delete")).toHaveLength(attempts);
-    expect(report.checkouts).toHaveLength(code === 0 ? 1 : 0);
     for (const fetch of report.fetches) {
       expect(fetch.args).toEqual(
         expect.arrayContaining([target, "--depth=1", "--no-tags", "--no-recurse-submodules"]),
@@ -68,23 +92,24 @@ linuxIt.for(resetProfiles.flatMap((profile) => resetCases.map((entry) => ({ prof
 );
 
 linuxIt.for([
-  { label: "timeout recovery", fetchResults: ["hang", 0], code: 0, attempts: 2 },
-  { label: "timeouts exhausted", fetchResults: ["hang", "hang", "hang"], code: 124, attempts: 3 },
-  { label: "ordinary Git failure", fetchResults: [23], code: 23, attempts: 1 },
-] satisfies { label: string; fetchResults: FetchResult[]; code: number; attempts: number }[])(
+  fetchCase("timeout recovery", 0, "hang", 0),
+  fetchCase("timeouts exhausted", 124, "hang", "hang", "hang"),
+  fetchCase("ordinary Git failure", 23, 23),
+])(
   "skills preserves exact-SHA retries without a fallback ($label)",
-  { timeout: 55_000 },
   async ({ fetchResults, code, attempts }, { signal }) => {
     const report = await runCiGitStep({ signal, job: "skills-python", fetchResults });
-    expect(report.code).toBe(code);
-    expect(report.fetches).toHaveLength(attempts);
+    expect(report).toMatchObject({
+      code,
+      fetches: length(attempts),
+      checkouts: length(code === 0 ? 1 : 0),
+    });
     expect(
       report.fetches.every(
         ({ args }) =>
           args.includes(`+${candidate}:refs/remotes/origin/checkout`) && args.includes("--depth=1"),
       ),
     ).toBe(true);
-    expect(report.checkouts).toHaveLength(code === 0 ? 1 : 0);
     expect(report.boundaries.some(({ name }) => name === "delete")).toBe(false);
   },
 );
@@ -94,12 +119,10 @@ linuxIt.for([
   { phase: "checkout", fetchResults: [0, 0], checkoutResults: [23, 0], firstCheckout: true },
 ])(
   "Android resets only after safely joined $phase failure",
-  { timeout: 55_000 },
   async ({ fetchResults, checkoutResults, firstCheckout }, { signal }) => {
     const report = await runCiGitStep({ signal, job: "android", fetchResults, checkoutResults });
-    expect(report.code).toBe(0);
-    expect(report.readyAttempts).toEqual([1, 2]);
-    expect(report.fetches.map(({ args }) => args.at(-1))).toEqual([
+    expect(report).toMatchObject({ code: 0, readyAttempts: [1, 2] });
+    expect(lastArgs(report.fetches)).toEqual([
       `+${candidate}:refs/remotes/origin/ci-target`,
       `+${candidate}:refs/remotes/origin/ci-target`,
     ]);
@@ -123,24 +146,15 @@ const manualProfiles = [
   { job: "security-fast", step: "Checkout manual target", depth: 2 },
 ];
 linuxIt.for(
-  manualProfiles.flatMap((profile) => [
-    { ...profile, label: "missing branch", fetchResults: [128, 0] as FetchResult[], code: 0 },
-    {
-      ...profile,
-      label: "timeout is not missing",
-      fetchResults: ["hang", "hang", "hang"] as FetchResult[],
-      code: 124,
-    },
-    {
-      ...profile,
-      label: "cleanup is not missing",
-      fetchResults: ["cleanup-failure"] as FetchResult[],
-      code: 125,
-    },
-  ]),
+  manualProfiles.flatMap((profile) =>
+    [
+      fetchCase("missing branch", 0, 128, 0),
+      fetchCase("timeout is not missing", 124, "hang", "hang", "hang"),
+      fetchCase("cleanup is not missing", 125, "cleanup-failure"),
+    ].map((entry) => Object.assign({}, profile, entry)),
+  ),
 )(
   "$job only falls back after a safely joined unavailable target ($label)",
-  { timeout: 55_000 },
   async ({ job, step, depth, fetchResults, code }, { signal }) => {
     const report = await runCiGitStep({
       signal,
@@ -172,15 +186,12 @@ linuxIt.for(
 linuxIt(
   "preflight pins a moved exact SHA and retries only its parent metadata",
   async ({ signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      job: "preflight",
-      fetchResults: [0, 0, 23, 0],
+    const report = await runCheckout(signal, "preflight", [0, 0, 23, 0], {
       env: { GITHUB_EVENT_NAME: "workflow_dispatch" },
       poisonPython: true,
     });
     expect(report.code).toBe(0);
-    expect(report.fetches.map(({ args }) => args.at(-1))).toEqual([
+    expect(lastArgs(report.fetches)).toEqual([
       "+refs/heads/main:refs/remotes/origin/checkout",
       `+${candidate}:refs/remotes/origin/checkout`,
       candidate,
@@ -189,84 +200,56 @@ linuxIt(
     for (const fetch of report.fetches.slice(2)) {
       expect(fetch.args).toEqual(expect.arrayContaining(["--depth=2", "--filter=blob:none"]));
     }
-    expect(report.checkouts.map(({ args }) => args)).toEqual([
+    expect(argsOf(report.checkouts)).toEqual([
       ["checkout", "--detach", "refs/remotes/origin/checkout"],
     ]);
   },
-  55_000,
 );
 
-linuxIt(
-  "manual security never refetches an unavailable equal fallback",
-  async ({ signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      job: "security-fast",
-      step: "Checkout manual target",
-      env: { GITHUB_EVENT_NAME: "workflow_dispatch" },
-      fetchResults: [128],
-    });
-    expect(report.code).toBe(128);
-    expect(report.fetches.map(({ args }) => args.at(-1))).toEqual([
-      `+${candidate}:refs/remotes/origin/checkout`,
-    ]);
-    expect(report.checkouts).toEqual([]);
-  },
-  55_000,
-);
+linuxIt("manual security never refetches an unavailable equal fallback", async ({ signal }) => {
+  const report = await runCheckout(signal, "security-fast", [128], {
+    step: "Checkout manual target",
+    env: { GITHUB_EVENT_NAME: "workflow_dispatch" },
+  });
+  expect(report.code).toBe(128);
+  expect(lastArgs(report.fetches)).toEqual([`+${candidate}:refs/remotes/origin/checkout`]);
+  expect(report.checkouts).toEqual([]);
+});
 
 linuxIt(
   "preflight rejects a fallback that cannot satisfy the requested exact SHA",
   async ({ signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      job: "preflight",
+    const report = await runCheckout(signal, "preflight", [128, 0], {
       env: { GITHUB_EVENT_NAME: "workflow_dispatch", CHECKOUT_REF: moved },
-      fetchResults: [128, 0],
     });
     expect(report.code).toBe(1);
-    expect(report.fetches.map(({ args }) => args.at(-1))).toEqual([
+    expect(lastArgs(report.fetches)).toEqual([
       `+${moved}:refs/remotes/origin/checkout`,
       `+${candidate}:refs/remotes/origin/checkout`,
     ]);
     expect(report.checkouts).toEqual([]);
   },
-  55_000,
 );
 
-const preflightCases: {
-  label: string;
-  env: Record<string, string>;
-  fetchResults: FetchResult[];
-  code: number;
-}[] = [
+const preflightCases: (ReturnType<typeof fetchCase> & { env: Record<string, string> })[] = [
   {
-    label: "push never substitutes another ref",
+    ...fetchCase("push never substitutes another ref", 128, 128),
     env: { GITHUB_EVENT_NAME: "push", CHECKOUT_REF: "refs/heads/missing" },
-    fetchResults: [128],
-    code: 128,
   },
   {
-    label: "unavailable fallback does not recurse",
+    ...fetchCase("unavailable fallback does not recurse", 128, 128),
     env: { GITHUB_EVENT_NAME: "workflow_dispatch" },
-    fetchResults: [128],
-    code: 128,
   },
   {
-    label: "parent metadata failure prevents checkout",
+    ...fetchCase("parent metadata failure prevents checkout", 1, 0, 23, 23, 23),
     env: {},
-    fetchResults: [0, 23, 23, 23],
-    code: 1,
   },
 ];
 linuxIt.for(preflightCases)(
   "preflight fails closed: $label",
-  { timeout: 55_000 },
   async ({ env, fetchResults, code }, { signal }) => {
     const report = await runCiGitStep({ signal, job: "preflight", env, fetchResults });
-    expect(report.code).toBe(code);
-    expect(report.fetches).toHaveLength(fetchResults.length);
-    expect(report.checkouts).toEqual([]);
+    expect(report).toMatchObject({ code, fetches: length(fetchResults.length), checkouts: [] });
   },
 );
 
@@ -279,7 +262,13 @@ const historyProfiles: {
   {
     job: "preflight",
     step: "Resolve exact diff base",
-    env: { GITHUB_EVENT_NAME: "workflow_dispatch", RELEASE_GATE: "true" },
+    env: {
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      RELEASE_GATE: "true",
+      DISPATCH_ID: "",
+      TARGET_CONTEXT_REF: "",
+      WORKFLOW_REVISION: harness,
+    },
     target: "+refs/pull/17/merge:refs/remotes/origin/release-gate-merge",
   },
   {
@@ -291,37 +280,29 @@ const historyProfiles: {
 ];
 
 linuxIt.for(
-  historyProfiles.flatMap((profile) => [
-    { ...profile, label: "successful leader exit", fetchResults: [0] as FetchResult[], code: 0 },
-    {
-      ...profile,
-      label: "unverified cleanup",
-      fetchResults: ["cleanup-failure"] as FetchResult[],
-      code: 125,
-    },
-  ]),
+  historyProfiles.flatMap((profile) =>
+    [
+      fetchCase("successful leader exit", 0, 0),
+      fetchCase("unverified cleanup", 125, "cleanup-failure"),
+    ].map((entry) => Object.assign({}, profile, entry)),
+  ),
 )(
   "$job/$step joins supplemental history before consumption ($label, $target)",
-  { timeout: 55_000 },
   async ({ job, step, env, target, fetchResults, code }, { signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      job,
+    const report = await runCheckout(signal, job, fetchResults, {
       step,
       env,
-      fetchResults,
       prepare: true,
       poisonPython: true,
     });
-    expect(report.code).toBe(code);
-    expect(report.fetches).toHaveLength(1);
+    expect(report).toMatchObject({ code, fetches: length(1) });
     expect(report.fetches[0]?.args).toEqual(expect.arrayContaining([target, "--depth=2"]));
     if (step === "Resolve exact diff base") {
       expect(report.githubOutput).toBe(code === 0 ? `sha=${base}\nhead_sha=${merge}\n` : "");
     }
     if (step === "Prepare release-gate ratchet merge tree") {
       expect(report.githubEnv).toBe(code === 0 ? `RATCHET_BASE_REF=${base}\n` : "");
-      expect(report.checkouts.map(({ args }) => args.at(-1))).toEqual(code === 0 ? [merge] : []);
+      expect(lastArgs(report.checkouts)).toEqual(code === 0 ? [merge] : []);
     }
   },
 );
@@ -329,11 +310,8 @@ linuxIt.for(
 linuxIt(
   "ratchet retries a stale merge parent before checkout and base publication",
   async ({ signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      job: "checks-fast-core",
+    const report = await runCheckout(signal, "checks-fast-core", [0, 0], {
       step: "Prepare release-gate ratchet merge tree",
-      fetchResults: [0, 0],
       mergeSnapshots: [
         { sha: "f".repeat(40), head: moved },
         { sha: merge, head: candidate },
@@ -341,7 +319,7 @@ linuxIt(
       prepare: true,
     });
     expect(report.code).toBe(0);
-    expect(report.fetches.map(({ args }) => args.at(-1))).toEqual([
+    expect(lastArgs(report.fetches)).toEqual([
       "+refs/pull/17/merge:refs/remotes/origin/ci-ratchet-merge",
       "+refs/pull/17/merge:refs/remotes/origin/ci-ratchet-merge",
     ]);
@@ -352,58 +330,44 @@ linuxIt(
         )
         .map(({ name }) => name),
     ).toEqual(["fetch:1", "show-parents", "fetch:2", "show-parents", "checkout"]);
-    expect(report.checkouts.map(({ args }) => args.at(-1))).toEqual([merge]);
+    expect(lastArgs(report.checkouts)).toEqual([merge]);
     expect(report.githubEnv).toBe(`RATCHET_BASE_REF=${base}\n`);
   },
-  55_000,
 );
 
-posixIt(
-  "fetches the CI harness without a second full-repository snapshot",
-  async ({ signal }) => {
-    const report = await runCiGitStep({ signal, job: "checks-fast-core", fetchResults: [0, 0] });
-    expect(report.code).toBe(0);
-    const harnessDirectory = path.join(report.workspace, ".ci-harness");
-    const harnessCommands = report.commands.filter(
-      ({ tool, cwd }) => tool === "git" && cwd === harnessDirectory,
-    );
-    // The harness supplies only .github/actions: narrowing must be in place before the
-    // fetch runs, so it never downloads the blobs the sparse checkout discards.
-    expect(harnessCommands.map(({ args }) => args[0])).toEqual([
-      "init",
-      "remote",
-      "sparse-checkout",
-      "fetch",
-      "checkout",
-    ]);
-    const harnessFetch = expectDefined(
-      harnessCommands.find(({ args }) => args[0] === "fetch"),
-      "harness fetch",
-    );
-    expect(harnessFetch.args).toEqual(expect.arrayContaining(["--filter=blob:none"]));
-    expect(harnessFetch.args.at(-1)).toBe(`+${harness}:refs/remotes/origin/ci-harness`);
-    const sparseCheckout = expectDefined(
-      harnessCommands.find(({ args }) => args[0] === "sparse-checkout"),
-      "harness sparse checkout",
-    );
-    for (const file of [
-      "scripts/ci-npm-lock-admission.mjs",
-      "scripts/generate-npm-package-lock.mjs",
-      "scripts/generate-npm-package-lock.mts",
-      "scripts/changed-lanes.mts",
-      "scripts/lib/merge-head-diff-base.mjs",
-    ]) {
-      expect(sparseCheckout.args).toContain(`/${file}`);
-    }
-    // The selected checkout still needs real file contents, so it must stay unfiltered.
-    const workspaceFetch = expectDefined(
-      report.fetches.find(({ cwd }) => cwd === report.workspace),
-      "workspace fetch",
-    );
-    expect(workspaceFetch.args).not.toContain("--filter=blob:none");
-  },
-  55_000,
-);
+posixIt("fetches the CI harness without a second full-repository snapshot", async ({ signal }) => {
+  const report = await runCiGitStep({ signal, job: "checks-fast-core", fetchResults: [0, 0] });
+  expect(report.code).toBe(0);
+  const harnessDirectory = path.join(report.workspace, ".ci-harness");
+  const harnessCommands = report.commands.filter(
+    ({ tool, cwd }) => tool === "git" && cwd === harnessDirectory,
+  );
+  expect(harnessCommands.map(({ args }) => args[0])).toEqual(
+    command("init remote sparse-checkout fetch checkout"),
+  );
+  expect(harnessCommands.find(({ args }) => args[0] === "fetch")?.args).toEqual(
+    expect.arrayContaining(["--filter=blob:none", `+${harness}:refs/remotes/origin/ci-harness`]),
+  );
+  expect(harnessCommands.find(({ args }) => args[0] === "fetch")?.args.at(-1)).toBe(
+    `+${harness}:refs/remotes/origin/ci-harness`,
+  );
+  expect(harnessCommands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
+    expect.arrayContaining(
+      [
+        "scripts/ci-npm-lock-admission.mjs",
+        "scripts/generate-npm-package-lock.mjs",
+        "scripts/generate-npm-package-lock.mts",
+        "scripts/changed-lanes.mts",
+        "scripts/lib/merge-head-diff-base.mjs",
+        "scripts/stage-openclaw-bun.sh",
+        "scripts/lib/openclaw-bun.json",
+      ].map((file) => `/${file}`),
+    ),
+  );
+  expect(report.fetches.find(({ cwd }) => cwd === report.workspace)).toMatchObject({
+    args: expect.not.arrayContaining(["--filter=blob:none"]),
+  });
+});
 
 type QaGitCase = {
   label: string;
@@ -416,63 +380,45 @@ type QaGitCase = {
   selected?: boolean;
   reason?: string;
 };
-const qaMainFetch = ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"];
-const qaBootstrapFetch = ["fetch", "--no-tags", "--no-recurse-submodules", "--depth=1", "origin"];
+const qaMainFetch = command("fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
+const qaBootstrapFetch = command("fetch --no-tags --no-recurse-submodules --depth=1 origin");
+const qaValidation = { job: "validate_selected_ref", step: "Validate selected ref" };
+const qaPlan = { job: "plan_qa_profile", readbacks: ["HEAD"] };
+function releaseValidation(input: string, remote: string, reason: string): QaGitCase {
+  return {
+    label: reason,
+    ...qaValidation,
+    env: { INPUT_REF: input },
+    fetches: [qaMainFetch, command("fetch --no-tags origin", `+${input}:${remote}`)],
+    readbacks: ["HEAD", remote.startsWith("refs/tags/") ? `${remote}^{commit}` : remote],
+    reason,
+  };
+}
+function qaCheckout(
+  label: string,
+  step: string,
+  ref: string,
+  checkout: string,
+  selected = false,
+): QaGitCase {
+  return { label, ...qaPlan, step, fetches: [[...qaBootstrapFetch, ref]], checkout, selected };
+}
 const qaGitCases: QaGitCase[] = [
   {
     label: "main validation",
-    job: "validate_selected_ref",
-    step: "Validate selected ref",
+    ...qaValidation,
     fetches: [qaMainFetch],
     readbacks: ["HEAD", `${candidate}^1`],
     reason: "main-ancestor",
   },
-  {
-    label: "release tag validation",
-    job: "validate_selected_ref",
-    step: "Validate selected ref",
-    env: { INPUT_REF: "refs/tags/v2026.8.1" },
-    fetches: [
-      qaMainFetch,
-      ["fetch", "--no-tags", "origin", "+refs/tags/v2026.8.1:refs/tags/v2026.8.1"],
-    ],
-    readbacks: ["HEAD", "refs/tags/v2026.8.1^{commit}"],
-    reason: "release-tag",
-  },
-  {
-    label: "release branch validation",
-    job: "validate_selected_ref",
-    step: "Validate selected ref",
-    env: { INPUT_REF: "refs/heads/release/2026.8.1" },
-    fetches: [
-      qaMainFetch,
-      [
-        "fetch",
-        "--no-tags",
-        "origin",
-        "+refs/heads/release/2026.8.1:refs/remotes/origin/release/2026.8.1",
-      ],
-    ],
-    readbacks: ["HEAD", "refs/remotes/origin/release/2026.8.1"],
-    reason: "release-branch-head",
-  },
-  {
-    label: "trusted harness restore",
-    job: "plan_qa_profile",
-    step: "Restore trusted QA harness revision",
-    fetches: [[...qaBootstrapFetch, harness]],
-    readbacks: ["HEAD"],
-    checkout: harness,
-  },
-  {
-    label: "selected checkout",
-    job: "plan_qa_profile",
-    step: "Checkout selected ref",
-    fetches: [[...qaBootstrapFetch, candidate]],
-    readbacks: ["HEAD"],
-    checkout: "FETCH_HEAD",
-    selected: true,
-  },
+  releaseValidation("refs/tags/v2026.8.1", "refs/tags/v2026.8.1", "release-tag"),
+  releaseValidation(
+    "refs/heads/release/2026.8.1",
+    "refs/remotes/origin/release/2026.8.1",
+    "release-branch-head",
+  ),
+  qaCheckout("trusted harness restore", "Restore trusted QA harness revision", harness, harness),
+  qaCheckout("selected checkout", "Checkout selected ref", candidate, "FETCH_HEAD", true),
   {
     label: "protocol comparison base",
     job: "run_qa_profile_shard",
@@ -492,8 +438,6 @@ function runQaGitCase(signal: AbortSignal, profile: QaGitCase, fetchResults: Fet
       step: profile.step,
     },
     fetchResults,
-    // Keep real command deadlines and ready descendant cleanup; these boundary
-    // checks do not need the TERM grace covered by the owner lifecycle tests.
     realClock: true,
     realDrain: false,
     poisonPython: true,
@@ -518,36 +462,33 @@ function runQaGitCase(signal: AbortSignal, profile: QaGitCase, fetchResults: Fet
 
 posixIt.for(qaGitCases)(
   "QA Git owner drains descendants before the next boundary: $label",
-  { timeout: 55_000 },
   async (profile, { signal }) => {
     const report = await runQaGitCase(
       signal,
       profile,
       profile.fetches.map(() => 0),
     );
-    expect(report.code, report.output).toBe(0);
-    expect(report.readyAttempts).toEqual(profile.fetches.map((_, index) => index + 1));
-    expect(report.fetches.map(({ args }) => args)).toEqual(profile.fetches);
+    expect(report).toMatchObject({
+      code: 0,
+      readyAttempts: attempts(profile.fetches),
+      githubEnv: "",
+      githubPath: "",
+    });
+    expect(argsOf(report.fetches)).toEqual(profile.fetches);
     const cwd = profile.selected ? path.join(report.workspace, "selected") : report.workspace;
     expect(
       report.fetches.every((fetch) => fetch.cwd === cwd && fetch.configuration?.length === 0),
     ).toBe(true);
-    expect(
-      report.commands
-        .filter(({ args }) => args[0] === "rev-parse")
-        .map(({ args, cwd: commandCwd }) => ({ args, cwd: commandCwd })),
-    ).toEqual(profile.readbacks.map((ref) => ({ args: ["rev-parse", ref], cwd })));
-    expect(
-      report.checkouts.map(({ args, cwd: commandCwd }) => ({ args, cwd: commandCwd })),
-    ).toEqual(profile.checkout ? [{ args: ["checkout", "--detach", profile.checkout], cwd }] : []);
+    expect(locations(report.commands.filter(({ args }) => args[0] === "rev-parse"))).toEqual(
+      profile.readbacks.map((ref) => ({ args: ["rev-parse", ref], cwd })),
+    );
+    expect(locations(report.checkouts)).toEqual(
+      profile.checkout ? [{ args: ["checkout", "--detach", profile.checkout], cwd }] : [],
+    );
     if (profile.step === "Checkout selected ref") {
-      expect(report.commands.map(({ args }) => args[0])).toEqual([
-        "init",
-        "remote",
-        "fetch",
-        "checkout",
-        "rev-parse",
-      ]);
+      expect(report.commands.map(({ args }) => args[0])).toEqual(
+        command("init remote fetch checkout rev-parse"),
+      );
       expect(report.commands.slice(0, 2)).toMatchObject([
         { cwd: report.workspace, args: ["init", "selected"] },
         { cwd, args: ["remote", "add", "origin", "https://github.com/fixture/checkout"] },
@@ -562,39 +503,28 @@ posixIt.for(qaGitCases)(
       expect(report.githubSummary).toContain(`Trust reason: \`${profile.reason}\``);
       expect(report.githubSummary).toContain(`Protocol base: \`${base}\``);
     }
-    expect(report.githubEnv).toBe("");
-    expect(report.githubPath).toBe("");
   },
 );
 
 posixIt.for(qaGitCases.filter(({ label, reason }) => !reason || label === "main validation"))(
   "QA Git owner stops without downstream work after cleanup failure: $label",
-  { timeout: 55_000 },
   async (profile, { signal }) => {
     const report = await runQaGitCase(signal, profile, ["cleanup-failure"]);
-    expect(report.code, report.output).toBe(125);
-    expect(report.readyAttempts).toEqual([1]);
-    expect(report.fetches.map(({ args }) => args)).toEqual([profile.fetches[0]]);
+    expect(report).toMatchObject({ code: 125, readyAttempts: [1], checkouts: [], ...noOutputs });
+    expect(argsOf(report.fetches)).toEqual([profile.fetches[0]]);
     expect(report.commands.at(-1)?.args[0]).toBe("fetch");
-    expect(report.checkouts).toEqual([]);
-    expect(
-      report.commands.filter(({ args }) => args[0] === "rev-parse").map(({ args }) => args),
-    ).toEqual(profile.reason ? [["rev-parse", "HEAD"]] : []);
-    expect(report.githubOutput).toBe("");
-    expect(report.githubEnv).toBe("");
-    expect(report.githubSummary).toBe("");
-    expect(report.githubPath).toBe("");
+    expect(argsOf(report.commands.filter(({ args }) => args[0] === "rev-parse"))).toEqual(
+      profile.reason ? [["rev-parse", "HEAD"]] : [],
+    );
     expect(report.output).toContain("Git ownership/setup failed");
   },
 );
 
 const mantisReleaseRef = "release/2026.8.1";
-const mantisReleaseFetch = [
-  "fetch",
-  "--no-tags",
-  "origin",
+const mantisReleaseFetch = command(
+  "fetch --no-tags origin",
   `+refs/heads/${mantisReleaseRef}:refs/remotes/origin/${mantisReleaseRef}`,
-];
+);
 const mantisCases = [
   { label: "candidate main ancestor", shared: true },
   { label: "baseline before candidate", shared: true, baseline: true },
@@ -625,7 +555,6 @@ posixIt.for([
   ),
 ])(
   "Mantis ref Git owner drains before trust probes and publication: $label",
-  { timeout: 55_000 },
   async (profile, { signal }) => {
     const { shared, failure } = profile;
     const baseline = "baseline" in profile && profile.baseline;
@@ -660,9 +589,13 @@ posixIt.for([
       mergeBase: { ancestor: !release, revision: base },
     });
     const code = failure === "cleanup-failure" ? 125 : failure || (mismatch ? 1 : 0);
-    expect(report.code, report.output).toBe(code);
-    expect(report.readyAttempts).toEqual(fetches.map((_, index) => index + 1));
-    expect(report.fetches.map(({ args }) => args)).toEqual(fetches);
+    expect(report).toMatchObject({
+      code,
+      readyAttempts: attempts(fetches),
+      githubEnv: "",
+      githubPath: "",
+    });
+    expect(argsOf(report.fetches)).toEqual(fetches);
     expect(
       report.fetches.every(
         ({ cwd, configuration }) => cwd === report.workspace && configuration?.length === 0,
@@ -688,7 +621,7 @@ posixIt.for([
               ]
             : []),
         ];
-    expect(report.commands.map(({ args }) => args)).toEqual([
+    expect(argsOf(report.commands)).toEqual([
       ...(!shared ? [["rev-parse", "HEAD"]] : []),
       qaMainFetch,
       ...probes,
@@ -708,8 +641,6 @@ posixIt.for([
           ? `${baseline ? `baseline: \`baseline\`\nbaseline SHA: \`${base}\`\nbaseline trust reason: \`main-ancestor\`\n` : ""}candidate: \`candidate\`\ncandidate SHA: \`${candidate}\`\ncandidate trust reason: \`main-ancestor\`\n`
           : `Validated ref: \`${release ? mantisReleaseRef : "main"}\`\nResolved SHA: \`${candidate}\`\nTrust reason: \`${reason}\`\n`,
     );
-    expect(report.githubEnv).toBe("");
-    expect(report.githubPath).toBe("");
     if (failure === "cleanup-failure") {
       expect(report.output).toContain("Git ownership/setup failed");
     }
@@ -719,28 +650,19 @@ posixIt.for([
   },
 );
 
+function mantisWorktree(workflow: string, job: string, offline: boolean, build: boolean) {
+  return {
+    workflow,
+    job,
+    offline,
+    build,
+    lanes: offline ? ["candidate"] : ["baseline", "candidate"],
+  };
+}
 const mantisWorktrees = [
-  {
-    workflow: "discord-status-reactions",
-    job: "run_status_reactions",
-    lanes: ["baseline", "candidate"],
-    offline: false,
-    build: true,
-  },
-  {
-    workflow: "slack-desktop-smoke",
-    job: "run_slack_desktop",
-    lanes: ["candidate"],
-    offline: true,
-    build: true,
-  },
-  {
-    workflow: "web-ui-chat-proof",
-    job: "run_web_ui_chat",
-    lanes: ["candidate"],
-    offline: true,
-    build: false,
-  },
+  mantisWorktree("discord-status-reactions", "run_status_reactions", false, true),
+  mantisWorktree("slack-desktop-smoke", "run_slack_desktop", true, true),
+  mantisWorktree("web-ui-chat-proof", "run_web_ui_chat", true, false),
 ];
 
 posixIt.for([
@@ -748,7 +670,6 @@ posixIt.for([
   { ...mantisWorktrees[0]!, failure: true },
 ])(
   "Mantis worktree Git owner drains before next worktree/install/build: $workflow (cleanup failure=$failure)",
-  { timeout: 55_000 },
   async ({ workflow, job, lanes, offline, build, failure }, { signal }) => {
     const report = await runCiGitStep({
       signal,
@@ -762,8 +683,6 @@ posixIt.for([
       },
       fetchResults: [],
       worktreeResults: failure ? ["cleanup-failure"] : lanes.map(() => 0),
-      // The runner hands off the earlier allocation's output; keep setup logs
-      // inside this fixture's fresh invocation directory.
       stepOutputs:
         workflow === "web-ui-chat-proof"
           ? { prepare_evidence: { output_dir: "${RUNNER_TEMP}" } }
@@ -773,60 +692,49 @@ posixIt.for([
       poisonPython: true,
       env: { BASELINE_SHA: base, CANDIDATE_SHA: candidate },
     });
-    expect(report.code, report.output).toBe(failure ? 125 : 0);
     const attempted = failure ? lanes.slice(0, 1) : lanes;
-    expect(report.readyAttempts).toEqual(attempted.map((_, index) => index + 1));
+    expect(report).toMatchObject({
+      code: failure ? 125 : 0,
+      readyAttempts: attempts(attempted),
+      clones: [],
+      fetches: [],
+      ...noOutputs,
+    });
     const lanePath = (lane: string) => `.artifacts/qa-e2e/mantis/${workflow}-worktrees/${lane}`;
+    const record = (tool: string, args: string[]) => ({ tool, cwd: report.workspace, args });
     expect(report.worktrees).toEqual(
       attempted.map((lane) => ({
-        tool: "git",
-        cwd: report.workspace,
+        ...record(
+          "git",
+          command("worktree add --detach", lanePath(lane), lane === "baseline" ? base : candidate),
+        ),
         configuration: [],
-        args: [
-          "worktree",
-          "add",
-          "--detach",
-          lanePath(lane),
-          lane === "baseline" ? base : candidate,
-        ],
       })),
     );
     expect(report.commands.filter(({ tool }) => tool === "pnpm")).toEqual(
       failure
         ? []
         : lanes.flatMap((lane) => [
-            {
-              tool: "pnpm",
-              cwd: report.workspace,
-              args: [
-                "--dir",
-                lanePath(lane),
-                "install",
-                "--frozen-lockfile",
-                ...(offline ? ["--prefer-offline"] : []),
-              ],
-            },
-            ...(build
-              ? [{ tool: "pnpm", cwd: report.workspace, args: ["--dir", lanePath(lane), "build"] }]
-              : []),
+            record("pnpm", [
+              "--dir",
+              lanePath(lane),
+              "install",
+              "--frozen-lockfile",
+              ...(offline ? ["--prefer-offline"] : []),
+            ]),
+            ...(build ? [record("pnpm", ["--dir", lanePath(lane), "build"])] : []),
           ]),
     );
     expect(report.commands).toHaveLength(
       attempted.length + (failure ? 0 : lanes.length * (build ? 2 : 1)),
     );
-    expect(report.clones).toEqual([]);
-    expect(report.fetches).toEqual([]);
-    expect(report.boundaries.map(({ name }) => name)).toEqual([
+    expect(boundaryNames(report)).toEqual([
       ...attempted.map((_, index) => `worktree:${index + 1}`),
       ...(failure
         ? []
         : lanes.flatMap(() => (build ? ["consumer:pnpm", "consumer:pnpm"] : ["consumer:pnpm"]))),
       "exit",
     ]);
-    expect(report.githubPath).toBe("");
-    expect(report.githubOutput).toBe("");
-    expect(report.githubEnv).toBe("");
-    expect(report.githubSummary).toBe("");
     if (failure) {
       expect(report.output).toContain("Git ownership/setup failed");
     }
@@ -835,20 +743,12 @@ posixIt.for([
 
 const newer = "d".repeat(40);
 const sourceObject = "refs/remotes/origin/main:.openclaw-sync/source.json";
-const fetch = ["fetch", "origin", "main:refs/remotes/origin/main"];
+const fetch = command("fetch origin main:refs/remotes/origin/main");
 const show = ["show", sourceObject];
-const rebase = ["rebase", "-X", "theirs", "origin/main"];
-const push = ["push", "origin", "HEAD:main"];
-const abort = ["rebase", "--abort"];
-const diff = [
-  "diff",
-  "--quiet",
-  "--",
-  "docs",
-  ".openclaw-sync",
-  "package.json",
-  "package-lock.json",
-];
+const rebase = command("rebase -X theirs origin/main");
+const push = command("push origin HEAD:main");
+const abort = command("rebase --abort");
+const diff = command("diff --quiet -- docs .openclaw-sync package.json package-lock.json");
 const dependencyReads = [
   ["show", "refs/remotes/origin/main:package.json"],
   ["show", "refs/remotes/origin/main:package-lock.json"],
@@ -859,6 +759,9 @@ const commit = [
   ["add", "docs", ".openclaw-sync", "package.json", "package-lock.json"],
   ["commit", "-m", `chore(sync): mirror docs from fixture/checkout@${candidate}`],
 ];
+
+const publishAttempt = [fetch, show, rebase, ...dependencyReads, push];
+const committed = [diff, fetch, show, ...commit];
 
 function runDocs(
   signal: AbortSignal,
@@ -875,8 +778,19 @@ function runDocs(
   });
 }
 
-function gitArgs(report: Awaited<ReturnType<typeof runDocs>>) {
-  return report.commands.filter(({ tool }) => tool === "git").map(({ args }) => args);
+type GitReport = Awaited<ReturnType<typeof runCiGitStep>>;
+const attempts = (entries: readonly unknown[]) => entries.map((_, index) => index + 1);
+const locations = (commands: GitReport["commands"]) =>
+  commands.map(({ args, cwd }) => ({ args, cwd }));
+const argsOf = (commands: GitReport["commands"]) => commands.map(({ args }) => args);
+const lastArgs = (commands: GitReport["commands"]) => commands.map(({ args }) => args.at(-1));
+const boundaryNames = (report: GitReport) => report.boundaries.map(({ name }) => name);
+const toolArgs = (report: GitReport, tool: string) =>
+  argsOf(report.commands.filter((entry) => entry.tool === tool));
+const gitArgs = (report: GitReport) => toolArgs(report, "git");
+function expectGit(report: GitReport, code: number, commands: string[][]) {
+  expect(report.code, report.output).toBe(code);
+  expect(gitArgs(report)).toEqual(commands);
 }
 
 function backoffs(report: Awaited<ReturnType<typeof runDocs>>) {
@@ -885,14 +799,12 @@ function backoffs(report: Awaited<ReturnType<typeof runDocs>>) {
 
 posixIt.for(["directory", "file", "symlink"] as const)(
   "docs clone drains an ordinary failure before deleting/retrying (%s)",
-  { timeout: 55_000 },
   async (publishPath, { signal }) => {
-    const report = await runDocs(signal, "Clone publish repo", {
+    const report = await runDocs(signal, docsClone, {
       cloneResults: [23, 0],
       publishPath,
     });
-    expect(report.code, report.output).toBe(0);
-    expect(report.readyAttempts).toEqual([1, 2]);
+    expect(report).toMatchObject({ code: 0, readyAttempts: [1, 2] });
     expect(gitArgs(report)).toEqual(
       [1, 2].map(() => [
         "clone",
@@ -900,13 +812,7 @@ posixIt.for(["directory", "file", "symlink"] as const)(
         path.join(report.workspace, "publish"),
       ]),
     );
-    expect(report.boundaries.map(({ name }) => name)).toEqual([
-      "delete",
-      "clone:1",
-      "delete",
-      "clone:2",
-      "exit",
-    ]);
+    expect(boundaryNames(report)).toEqual(["delete", "clone:1", "delete", "clone:2", "exit"]);
     expect(backoffs(report)).toEqual([2]);
     expect(report.output).toContain("Clone attempt 1 failed; retrying.");
     expect(report.output).not.toContain("fixture-docs-token");
@@ -916,37 +822,24 @@ posixIt.for(["directory", "file", "symlink"] as const)(
 posixIt(
   "docs clone cleanup uncertainty is terminal before another deletion or clone",
   async ({ signal }) => {
-    const report = await runDocs(signal, "Clone publish repo", {
+    const report = await runDocs(signal, docsClone, {
       cloneResults: ["cleanup-failure"],
     });
-    expect(report.code, report.output).toBe(125);
-    expect(report.clones).toHaveLength(1);
-    expect(report.boundaries.map(({ name }) => name)).toEqual(["delete", "clone:1", "exit"]);
+    expect(report).toMatchObject({ code: 125, clones: length(1) });
+    expect(boundaryNames(report)).toEqual(["delete", "clone:1", "exit"]);
     expect(backoffs(report)).toEqual([]);
     expect(report.output).toContain("Git ownership/setup failed");
     expect(report.output).not.toContain("fixture-docs-token");
   },
-  55_000,
 );
 
 posixIt.for([125, "hang"] satisfies FetchResult[])(
   "docs advisory fetch drains before config/add/commit and still continues (%s)",
-  { timeout: 55_000 },
   async (failure, { signal }) => {
-    const report = await runDocs(signal, "Commit publish repo sync", {
+    const report = await runDocs(signal, docsCommit, {
       fetchResults: [failure, 0],
     });
-    expect(report.code, report.output).toBe(0);
-    expect(gitArgs(report)).toEqual([
-      diff,
-      fetch,
-      ...commit,
-      fetch,
-      show,
-      rebase,
-      ...dependencyReads,
-      push,
-    ]);
+    expectGit(report, 0, [diff, fetch, ...commit, ...publishAttempt]);
     expect(backoffs(report)).toEqual([]);
     expect(
       report.commands.every(
@@ -958,22 +851,12 @@ posixIt.for([125, "hang"] satisfies FetchResult[])(
       ),
     ).toBe(true);
     expect(report.commands.filter(({ tool }) => tool === "node")).toHaveLength(2);
-    expect(report.boundaries.map(({ name }) => name)).toEqual([
-      "diff",
-      "fetch:1",
-      "config",
-      "config",
-      "add",
-      "commit",
-      "fetch:2",
+    expect(boundaryNames(report)).toEqual([
+      ...command("diff fetch:1 config config add commit fetch:2"),
       `show:${sourceObject}`,
       "rebase:1",
       ...dependencyReads.map((args) => `show:${args[1]}`),
-      "consumer:node",
-      "consumer:npm",
-      "consumer:node",
-      "push:1",
-      "exit",
+      ...command("consumer:node consumer:npm consumer:node push:1 exit"),
     ]);
   },
 );
@@ -984,33 +867,23 @@ posixIt.for([
   { operation: "push", failure: 143, lockChange: false },
 ])(
   "docs publication drains failed $operation ($failure) before abort/next fetch and then succeeds",
-  { timeout: 55_000 },
   async ({ operation, failure, lockChange }, { signal }) => {
-    const report = await runDocs(signal, "Commit publish repo sync", {
+    const report = await runDocs(signal, docsCommit, {
       env: lockChange ? { FIXTURE_DOCS_LOCK_AFTER_REBASE: "1" } : {},
       rebaseResults: operation === "rebase" ? [failure, 0] : [],
       pushResults: operation === "push" ? [failure, 0] : [],
     });
-    expect(report.code, report.output).toBe(0);
-    expect(gitArgs(report)).toEqual([
-      diff,
-      fetch,
-      show,
-      ...commit,
+    expectGit(report, 0, [
+      ...committed,
       fetch,
       show,
       rebase,
       ...(operation === "push" ? [...dependencyReads, push] : []),
       abort,
-      fetch,
-      show,
-      rebase,
-      ...dependencyReads,
-      push,
+      ...publishAttempt,
     ]);
     expect(backoffs(report)).toEqual([2]);
     expect(report.output).toContain("Publish sync attempt 1 failed; retrying.");
-    expect(report.pushes).toHaveLength(operation === "push" ? 2 : 1);
     expect(report.commands.filter(({ tool }) => tool === "npm")).toHaveLength(lockChange ? 2 : 1);
     if (operation === "push" && !lockChange) {
       expect(report.output).toContain("Reused 1 unchanged successful page check(s).");
@@ -1021,22 +894,20 @@ posixIt.for([
 posixIt(
   "docs publication rejects invalid content introduced by the final rebase",
   async ({ signal }) => {
-    const report = await runDocs(signal, "Commit publish repo sync", {
+    const report = await runDocs(signal, docsCommit, {
       env: { FIXTURE_DOCS_MDX_AFTER_REBASE: "# Rebased page\n\n{unfinished\n" },
     });
     expect(report.code, report.output).toBe(125);
     expect(report.output).toContain("Docs MDX check failed");
     expect(report.pushes).toEqual([]);
-    expect(report.rebases.map(({ args }) => args)).toEqual([rebase]);
+    expect(argsOf(report.rebases)).toEqual([rebase]);
   },
-  55_000,
 );
 
 posixIt.for(["advisory fetch", "fetch", "rebase", "manifest", "lock", "push"] as const)(
   "docs publication cleanup uncertainty at %s prevents abort/retry/next Git",
-  { timeout: 55_000 },
   async (operation, { signal }) => {
-    const report = await runDocs(signal, "Commit publish repo sync", {
+    const report = await runDocs(signal, docsCommit, {
       fetchResults:
         operation === "advisory fetch"
           ? ["cleanup-failure"]
@@ -1055,40 +926,18 @@ posixIt.for(["advisory fetch", "fetch", "rebase", "manifest", "lock", "push"] as
           : {},
     });
     expect(report.code, report.output).toBe(125);
-    expect(gitArgs(report)).toEqual([
-      diff,
-      fetch,
-      ...(operation === "advisory fetch"
-        ? []
-        : [
-            show,
-            ...commit,
-            fetch,
-            ...(operation === "fetch"
-              ? []
-              : [
-                  show,
-                  rebase,
-                  ...dependencyReads.slice(
-                    0,
-                    operation === "rebase" ? 0 : operation === "manifest" ? 1 : 2,
-                  ),
-                  ...(operation === "push" ? [push] : []),
-                ]),
-          ]),
-    ]);
-    expect(report.rebases.some(({ args }) => args.includes("--abort"))).toBe(false);
+    const stop = { "advisory fetch": 2, fetch: 8, rebase: 10, manifest: 11, lock: 12, push: 13 };
+    expect(gitArgs(report)).toEqual([...committed, ...publishAttempt].slice(0, stop[operation]));
     expect(backoffs(report)).toEqual([]);
     expect(report.output).toContain("Git ownership/setup failed");
     expect(report.output).not.toContain("retrying");
   },
 );
 
-posixIt.for(["Clone publish repo", "Commit publish repo sync"])(
+posixIt.for([docsClone, docsCommit])(
   "docs %s preserves five attempts and every backoff including the terminal one",
-  { timeout: 55_000 },
   async (step, { signal }) => {
-    const cloning = step === "Clone publish repo";
+    const cloning = step === docsClone;
     const report = await runDocs(signal, step, {
       cloneResults: cloning ? Array<FetchResult>(5).fill(23) : [],
       fetchResults: cloning ? [] : [0, ...Array<FetchResult>(5).fill(23)],
@@ -1097,7 +946,7 @@ posixIt.for(["Clone publish repo", "Commit publish repo sync"])(
     expect(backoffs(report)).toEqual([2, 4, 6, 8, 10]);
     expect(report.clones).toHaveLength(cloning ? 5 : 0);
     expect(report.fetches).toHaveLength(cloning ? 0 : 6);
-    expect(report.rebases.map(({ args }) => args)).toEqual(
+    expect(argsOf(report.rebases)).toEqual(
       cloning ? [] : Array.from({ length: 5 }, () => [...abort]),
     );
     expect(report.pushes).toEqual([]);
@@ -1118,15 +967,15 @@ posixIt.for([
   { label: "stale source", diffResult: 1, stale: true },
 ])(
   "docs publication exits successfully without committing for $label",
-  { timeout: 55_000 },
   async ({ diffResult, stale }, { signal }) => {
-    const report = await runDocs(signal, "Commit publish repo sync", {
+    const report = await runDocs(signal, docsCommit, {
       diffResult,
       objects: { [sourceObject]: { text: JSON.stringify({ sha: newer }) } },
       mergeBase: { ancestor: true, revision: candidate },
     });
-    expect(report.code, report.output).toBe(0);
-    expect(gitArgs(report)).toEqual(
+    expectGit(
+      report,
+      0,
       stale ? [diff, fetch, show, ["merge-base", "--is-ancestor", candidate, newer]] : [diff],
     );
     expect(report.output).toContain(
@@ -1149,9 +998,8 @@ posixIt.for([
   { label: "unrelated source", text: JSON.stringify({ sha: newer }), code: 0, ancestor: false },
 ])(
   "docs publication retains the changed path for $label",
-  { timeout: 55_000 },
   async ({ text, code, ancestor, label }, { signal }) => {
-    const report = await runDocs(signal, "Commit publish repo sync", {
+    const report = await runDocs(signal, docsCommit, {
       objects: { [sourceObject]: { text, code } },
       mergeBase: { ancestor, revision: candidate },
     });
@@ -1193,20 +1041,15 @@ posixIt.for([
   },
 ])(
   "docs publication rejects $label before push without Git retries",
-  { timeout: 55_000 },
   async ({ text, validates, error }, { signal }) => {
-    const report = await runDocs(signal, "Commit publish repo sync", {
+    const report = await runDocs(signal, docsCommit, {
       objects: {
         [sourceObject]: { text: JSON.stringify({ sha: candidate }) },
         [dependencyReads[0]![1]!]: { text },
       },
     });
-    expect(report.code, report.output).toBe(125);
-    expect(gitArgs(report)).toEqual([
-      diff,
-      fetch,
-      show,
-      ...commit,
+    expectGit(report, 125, [
+      ...committed,
       fetch,
       show,
       rebase,
@@ -1214,15 +1057,12 @@ posixIt.for([
     ]);
     expect(report.commands.filter(({ tool }) => tool === "node")).toHaveLength(validates ? 1 : 0);
     expect(report.output).toContain(error);
-    expect(report.pushes).toEqual([]);
-    expect(report.rebases.map(({ args }) => args)).toEqual([rebase]);
     expect(backoffs(report)).toEqual([]);
   },
 );
 
 posixIt.for([0, 23, "cleanup-failure"] satisfies FetchResult[])(
   "docs ClawHub HEAD is owned before Node consumption (%s)",
-  { timeout: 55_000 },
   async (revParseResult, { signal }) => {
     const report = await runDocs(signal, "Sync docs into publish repo", { revParseResult });
     expect(report.code, report.output).toBe(
@@ -1230,7 +1070,7 @@ posixIt.for([0, 23, "cleanup-failure"] satisfies FetchResult[])(
     );
     expect(gitArgs(report)).toEqual([["rev-parse", "HEAD"]]);
     expect(report.commands[0]?.cwd).toBe(path.join(report.workspace, "clawhub-source"));
-    expect(report.commands.filter(({ tool }) => tool === "node").map(({ args }) => args)).toEqual(
+    expect(toolArgs(report, "node")).toEqual(
       revParseResult === 0
         ? [
             [
@@ -1254,9 +1094,8 @@ posixIt.for([0, 23, "cleanup-failure"] satisfies FetchResult[])(
   },
 );
 
-posixIt.for(["Clone publish repo", "Commit publish repo sync"])(
+posixIt.for([docsClone, docsCommit])(
   "docs %s cancellation never reaches retry, abort, or the next Git call",
-  { timeout: 55_000 },
   async (step, { signal }) => {
     const report = await runDocs(signal, step, {
       scenario: "cancel-SIGTERM",
@@ -1268,25 +1107,26 @@ posixIt.for(["Clone publish repo", "Commit publish repo sync"])(
     expect(report.code, report.output).toBe(143);
     expect(report.readyAttempts).toEqual([1]);
     expect(report.commands.filter(({ tool }) => tool === "git")).toHaveLength(
-      step === "Clone publish repo" ? 1 : 2,
+      step === docsClone ? 1 : 2,
     );
     expect(report.rebases).toEqual([]);
     expect(report.pushes).toEqual([]);
     expect(report.output).not.toContain("retrying");
     expect(report.boundaries.filter(({ name }) => name === "delete")).toHaveLength(
-      step === "Clone publish repo" ? 1 : 0,
+      step === docsClone ? 1 : 0,
     );
   },
 );
 
+const agentRunsRequest = command(
+  "api --method GET repos/fixture/checkout/actions/workflows/docs-agent.yml/runs -f branch=main -f event=workflow_run -f per_page=100",
+);
 const agentGate = "Gate trusted main activity and hourly cadence";
 const agentCommit = "Commit docs updates";
 const agentFetch = ["fetch", "--no-tags", "origin", "main"];
-const agentPush = [
-  "push",
-  "https://x-access-token:fixture-docs-agent-token@github.com/fixture/checkout.git",
-  "HEAD:main",
-];
+const agentPush = command(
+  "push https://x-access-token:fixture-docs-agent-token@github.com/fixture/checkout.git HEAD:main",
+);
 const agentCommitCommands = [
   ["diff", "HEAD", "--quiet"],
   ["config", "user.name", "openclaw-docs-agent[bot]"],
@@ -1322,80 +1162,57 @@ function runDocsAgent(
 
 posixIt.for([0, 128, 125])(
   "Docs Agent manual gate owns HEAD and parent before exact outputs (parent=%s)",
-  { timeout: 55_000 },
   async (code, { signal }) => {
     const report = await runDocsAgent(signal, agentGate, {
       env: { EVENT_NAME: "workflow_dispatch" },
       commandResults: { "rev-parse HEAD": { code: 0 }, [`rev-parse ${candidate}^`]: { code } },
     });
-    expect(report.code, report.output).toBe(0);
-    expect(gitArgs(report)).toEqual([
+    expectGit(report, 0, [
       ["rev-parse", "HEAD"],
       ["rev-parse", `${candidate}^`],
     ]);
-    expect(report.commands.filter(({ tool }) => tool === "gh")).toEqual([]);
+    expect(toolArgs(report, "gh")).toEqual([]);
     expect(report.githubOutput).toBe(agentOutput(code === 0 ? base : candidate));
   },
 );
 
 posixIt.for([125, "hang"] satisfies FetchResult[])(
   "Docs Agent gate drains failed fetch before retry, remote read, gh and output (%s)",
-  { timeout: 55_000 },
   async (failure, { signal }) => {
     const report = await runDocsAgent(signal, agentGate, { fetchResults: [failure, 0] });
     expect(report.code, report.output).toBe(0);
-    expect(report.fetches.map(({ args }) => args)).toEqual([agentFetch, agentFetch]);
+    expect(argsOf(report.fetches)).toEqual([agentFetch, agentFetch]);
     expect(backoffs(report)).toEqual([2]);
     expect(report.output).toContain("Fetch attempt 1 failed; retrying.");
     expect(report.githubOutput).toBe(agentOutput());
-    expect(report.commands.filter(({ tool }) => tool === "gh").map(({ args }) => args)).toEqual([
-      [
-        "api",
-        "--method",
-        "GET",
-        "repos/fixture/checkout/actions/workflows/docs-agent.yml/runs",
-        "-f",
-        "branch=main",
-        "-f",
-        "event=workflow_run",
-        "-f",
-        "per_page=100",
-      ],
-    ]);
+    expect(toolArgs(report, "gh")).toEqual([agentRunsRequest]);
   },
 );
 
 posixIt.for([false, true])(
   "Docs Agent gate stops before gh/output/retry on fatal cleanup (cancel=%s)",
-  { timeout: 55_000 },
   async (cancel, { signal }) => {
     const report = await runDocsAgent(signal, agentGate, {
       fetchResults: cancel ? ["hang"] : ["cleanup-failure"],
       ...(cancel ? { scenario: "cancel-SIGTERM", cooperativeTrees: true, realClock: true } : {}),
     });
-    expect(report.code, report.output).toBe(cancel ? 143 : 125);
-    expect(gitArgs(report)).toEqual([agentFetch]);
-    expect(report.commands.filter(({ tool }) => tool === "gh")).toEqual([]);
+    expectGit(report, cancel ? 143 : 125, [agentFetch]);
+    expect(toolArgs(report, "gh")).toEqual([]);
     expect(report.githubOutput).toBe("");
     expect(backoffs(report)).toEqual([]);
     expect(report.output).not.toContain("retrying");
   },
 );
 
-posixIt(
-  "Docs Agent superseded gate drains before false output without gh",
-  async ({ signal }) => {
-    const report = await runDocsAgent(signal, agentGate, { revisions: { "origin/main": moved } });
-    expect(report.code, report.output).toBe(0);
-    expect(gitArgs(report)).toEqual([agentFetch, ["rev-parse", "origin/main"]]);
-    expect(report.githubOutput).toBe("run_agent=false\n");
-    expect(report.commands.filter(({ tool }) => tool === "gh")).toEqual([]);
-    expect(report.output).toContain(
-      `CI run is superseded by ${moved}; skipping docs agent for ${candidate}.`,
-    );
-  },
-  55_000,
-);
+posixIt("Docs Agent superseded gate drains before false output without gh", async ({ signal }) => {
+  const report = await runDocsAgent(signal, agentGate, { revisions: { "origin/main": moved } });
+  expectGit(report, 0, [agentFetch, ["rev-parse", "origin/main"]]);
+  expect(report.githubOutput).toBe("run_agent=false\n");
+  expect(toolArgs(report, "gh")).toEqual([]);
+  expect(report.output).toContain(
+    `CI run is superseded by ${moved}; skipping docs agent for ${candidate}.`,
+  );
+});
 
 posixIt.for([
   { probe: 128, parent: 0, code: 0, reviewBase: base },
@@ -1405,7 +1222,6 @@ posixIt.for([
   { probe: 128, parent: "cleanup-failure", code: 125, reviewBase: "" },
 ] satisfies { probe: FetchResult; parent: FetchResult; code: number; reviewBase: string }[])(
   "Docs Agent review base only falls back after ordinary Git failure ($probe/$parent)",
-  { timeout: 55_000 },
   async ({ probe, parent, code, reviewBase }, { signal }) => {
     const report = await runDocsAgent(signal, agentGate, {
       workflowRuns: [
@@ -1437,27 +1253,15 @@ posixIt.for([
         [`rev-parse ${candidate}^`]: { code: parent },
       },
     });
-    expect(report.code, report.output).toBe(code);
-    expect(gitArgs(report)).toEqual([
+    expectGit(report, code, [
       agentFetch,
       ["rev-parse", "origin/main"],
       ["cat-file", "-e", `${moved}^{commit}`],
       ...(probe === 128 ? [["rev-parse", `${candidate}^`]] : []),
     ]);
     expect(report.githubOutput).toBe(code === 0 ? agentOutput(reviewBase) : "");
-    expect(report.commands.filter(({ tool }) => tool === "gh").map(({ args }) => args)).toEqual([
-      [
-        "api",
-        "--method",
-        "GET",
-        "repos/fixture/checkout/actions/workflows/docs-agent.yml/runs",
-        "-f",
-        "branch=main",
-        "-f",
-        "event=workflow_run",
-        "-f",
-        "per_page=100",
-      ],
+    expect(toolArgs(report, "gh")).toEqual([
+      agentRunsRequest,
       [
         "api",
         "--paginate",
@@ -1469,29 +1273,22 @@ posixIt.for([
   },
 );
 
-posixIt(
-  "Docs Agent no-change commit owns diff before successful exit",
-  async ({ signal }) => {
-    const report = await runDocsAgent(signal, agentCommit, {
-      commandResults: { "diff HEAD --quiet": { code: 0 } },
-    });
-    expect(report.code, report.output).toBe(0);
-    expect(gitArgs(report)).toEqual([["diff", "HEAD", "--quiet"]]);
-    expect(report.output).toBe("No docs changes.\n");
-  },
-  55_000,
-);
+posixIt("Docs Agent no-change commit owns diff before successful exit", async ({ signal }) => {
+  const report = await runDocsAgent(signal, agentCommit, {
+    commandResults: { "diff HEAD --quiet": { code: 0 } },
+  });
+  expectGit(report, 0, [["diff", "HEAD", "--quiet"]]);
+  expect(report.output).toBe("No docs changes.\n");
+});
 
 posixIt.for([125, "hang"] satisfies FetchResult[])(
   "Docs Agent commit drains diff before config/commit and failed fetch before retry (%s)",
-  { timeout: 55_000 },
   async (failure, { signal }) => {
     const report = await runDocsAgent(signal, agentCommit, {
       commandResults: { "diff HEAD --quiet": { code: failure === 125 ? 125 : 1 } },
       fetchResults: [failure, 0],
     });
-    expect(report.code, report.output).toBe(0);
-    expect(gitArgs(report)).toEqual([...agentCommitCommands, agentFetch, agentFetch, agentPush]);
+    expectGit(report, 0, [...agentCommitCommands, agentFetch, agentFetch, agentPush]);
     expect(backoffs(report)).toEqual([2]);
     expect(report.output).toContain("Fetch attempt 1 failed; retrying.");
     expect(report.output).not.toContain("fixture-docs-agent-token");
@@ -1500,15 +1297,13 @@ posixIt.for([125, "hang"] satisfies FetchResult[])(
 
 posixIt.for([false, true])(
   "Docs Agent push failure drains before owned read and retry/stale success (advanced=%s)",
-  { timeout: 55_000 },
   async (advanced, { signal }) => {
     const report = await runDocsAgent(signal, agentCommit, {
       pushResults: [143, 0],
       revParseResult: 0,
       revisions: { "origin/main": advanced ? moved : candidate },
     });
-    expect(report.code, report.output).toBe(0);
-    expect(gitArgs(report)).toEqual([
+    expectGit(report, 0, [
       ...agentCommitCommands,
       agentFetch,
       agentPush,
@@ -1526,7 +1321,6 @@ posixIt.for([false, true])(
 
 posixIt.for(["diff", "config", "commit", "fetch", "push", "read"])(
   "Docs Agent commit cleanup failure at %s is terminal before retry/stale success",
-  { timeout: 55_000 },
   async (operation, { signal }) => {
     const index = operation === "diff" ? 0 : operation === "config" ? 1 : 4;
     const report = await runDocsAgent(signal, agentCommit, {
@@ -1538,8 +1332,9 @@ posixIt.for(["diff", "config", "commit", "fetch", "push", "read"])(
       revParseResult: operation === "read" ? "cleanup-failure" : undefined,
       revisions: { "origin/main": moved },
     });
-    expect(report.code, report.output).toBe(125);
-    expect(gitArgs(report)).toEqual(
+    expectGit(
+      report,
+      125,
       ["diff", "config", "commit"].includes(operation)
         ? agentCommitCommands.slice(0, index + 1)
         : [
@@ -1556,7 +1351,6 @@ posixIt.for(["diff", "config", "commit", "fetch", "push", "read"])(
 
 posixIt.for(["gate", "commit fetch", "commit push"])(
   "Docs Agent %s preserves five attempts and terminal backoff contract",
-  { timeout: 55_000 },
   async (phase, { signal }) => {
     const gate = phase === "gate";
     const report = await runDocsAgent(signal, gate ? agentGate : agentCommit, {
@@ -1594,13 +1388,11 @@ const agentProducers = [
 ];
 posixIt.for(agentProducers.map((args, index) => ({ args, index })))(
   "Docs Agent enforcement stops on failed producer $args before consuming partial output",
-  { timeout: 55_000 },
   async ({ args, index }, { signal }) => {
     const report = await runDocsAgent(signal, "Enforce existing-docs-only patch", {
       commandResults: { [args.join(" ")]: { code: 23, output: "src/forbidden.ts\n" } },
     });
-    expect(report.code, report.output).toBe(23);
-    expect(gitArgs(report)).toEqual(agentProducers.slice(0, index + 1));
+    expectGit(report, 23, agentProducers.slice(0, index + 1));
     expect(report.output).not.toContain("forbidden");
   },
 );

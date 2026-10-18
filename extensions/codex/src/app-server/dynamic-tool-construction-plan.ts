@@ -1,10 +1,45 @@
-import type { resolveSandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  EmbeddedRunAttemptParamsV2,
+  resolveSandboxContext,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { runWithCronCreatorAuthorityCapabilityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isCodexPairedNodeRemoteExecPlacementSandbox } from "./config.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
-  Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
+  Parameters<
+    (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingToolsAsync"]
+  >[0]
 >;
 type OpenClawSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
+
+/** Constructs through the live host while preserving the originating cron authority scope. */
+export function createCodexHostToolSurface(
+  params: Pick<
+    EmbeddedRunAttemptParamsV2,
+    "hostCapabilities" | "cronCreatorAuthorityCapability" | "runId"
+  >,
+  options: OpenClawCodingToolsOptions,
+  bindingOptions: Readonly<{ cwd: string }>,
+  resolveCronCreatorToolAuthority?: Parameters<
+    typeof runWithCronCreatorAuthorityCapabilityResolver
+  >[0]["resolve"],
+) {
+  const construct = () => {
+    const createToolSurfaceAsync = params.hostCapabilities.createToolSurfaceAsync;
+    if (!createToolSurfaceAsync) {
+      throw new Error("Codex tool construction requires a current host capability");
+    }
+    return createToolSurfaceAsync(options, bindingOptions);
+  };
+  return resolveCronCreatorToolAuthority
+    ? runWithCronCreatorAuthorityCapabilityResolver({
+        capability: params.cronCreatorAuthorityCapability,
+        runId: params.runId,
+        resolve: resolveCronCreatorToolAuthority,
+        run: construct,
+      })
+    : construct();
+}
 
 /** Keeps node filesystem and process ownership on its native exec-server. */
 export function resolveCodexToolConstructionPlan(

@@ -52,58 +52,36 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     },
   );
 
-  it.each(["external", "unknown"])("blocks rewritten %s squash before intent", (access) => {
-    const f = fixture();
-    f.setPrivacyProvenance("true", access);
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(1);
-    expect(run.output).toContain("maintainer-owned replacement PR");
-    expect(f.state().mutations).toBe(0);
-    expect(f.captures()).toEqual([]);
-    expect(() => f.record()).toThrow();
-  });
-
   it.each([
-    { rewrite: "true", access: "maintainer" },
-    { rewrite: "false", access: "unknown" },
-  ])("allows squash with valid privacy provenance: %j", ({ rewrite, access }) => {
-    const f = fixture();
-    f.setPrivacyProvenance(rewrite, access);
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(0);
-    expect(f.state().mutations).toBe(1);
-    expect(f.record().phase).toBe("complete");
-  });
-
-  it.each([
-    ["missing", "PREP_REPLACED_HOSTED_ANCESTRY=false\n"],
-    ["malformed access", "PREP_AUTHOR_ACCESS=external", "PREP_AUTHOR_ACCESS=write"],
-  ])("requires prepare rerun for %s squash provenance", (_label, from, to = "") => {
-    const f = fixture();
-    const prepPath = join(f.worktree, ".local/prep.env");
-    writeFileSync(prepPath, readFileSync(prepPath, "utf8").replace(from, to));
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(1);
-    expect(run.output).toContain("scripts/pr prepare-run");
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
-
-  it("leaves merge mechanics independent of squash provenance", () => {
-    const f = fixture();
-    f.setPrivacyProvenance(null, null);
-
-    const run = f.run(false, f.repo, "merge");
-
-    expect(run.status, run.output).toBe(0);
-    expect(f.state().mutations).toBe(1);
-  });
+    ["true", "external", "squash", "replacement"],
+    ["true", "unknown", "squash", "replacement"],
+    ["true", "maintainer", "squash", "complete"],
+    ["false", "unknown", "squash", "complete"],
+    [null, "external", "squash", "prepare"],
+    ["false", "write", "squash", "prepare"],
+    [null, null, "merge", "merge"],
+  ] as const)(
+    "checks rewrite=%s author=%s for %s provenance: %s",
+    (rewrite, access, method, outcome) => {
+      const f = fixture();
+      f.setPrivacyProvenance(rewrite, access);
+      const run = f.run(false, f.repo, method);
+      const rejected = outcome === "replacement" || outcome === "prepare";
+      expect(run.status, run.output).toBe(rejected ? 1 : 0);
+      expect(f.state().mutations).toBe(rejected ? 0 : 1);
+      if (rejected) {
+        expect(run.output).toContain(
+          outcome === "replacement" ? "maintainer-owned replacement PR" : "scripts/pr prepare-run",
+        );
+        expect(() => f.record()).toThrow();
+      }
+      if (outcome === "replacement") {
+        expect(f.captures()).toEqual([]);
+      } else if (outcome === "complete") {
+        expect(f.record().phase).toBe("complete");
+      }
+    },
+  );
 
   it("reconciles a prior outcome before reading squash privacy provenance", () => {
     const f = fixture();

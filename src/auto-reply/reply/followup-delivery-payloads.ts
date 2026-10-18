@@ -53,24 +53,17 @@ export function resolveFollowupDeliveryPayloads(params: {
         ...(accountId ? { accountId } : {}),
       }
     : undefined;
-  const deliverablePayloads = params.payloads.filter(
-    (payload) =>
-      !(payload.isReasoning === true && params.reasoningPayloadsEnabled !== true) &&
-      !(payload.isCommentary === true && params.commentaryPayloadsEnabled !== true),
+  const sanitizedPayloads = params.payloads.flatMap((payload) =>
+    (payload.isReasoning === true && params.reasoningPayloadsEnabled !== true) ||
+    (payload.isCommentary === true && params.commentaryPayloadsEnabled !== true)
+      ? []
+      : (normalizeReplyPayload(payload, { applyChannelTransforms: false }) ?? []),
   );
-  const sanitizedPayloads: ReplyPayload[] = [];
-  for (const payload of deliverablePayloads) {
-    const normalized = normalizeReplyPayload(payload, { applyChannelTransforms: false });
-    if (normalized) {
-      sanitizedPayloads.push(normalized);
-    }
-  }
-  const originatingTo = params.originatingTo;
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   return sanitizedPayloads.flatMap((payload) =>
     filterMessagingToolReplyPayload({
       payload: applyReplyToMode.preview(
-        setReplyPayloadMetadata(applyReplyTagsToPayload(payload), {
+        setReplyPayloadMetadata(applyReplyTagsToPayload({ payload }), {
           replyDelivery,
           ...(replyDeliverySource ? { replyDeliverySource } : {}),
         }),
@@ -78,7 +71,7 @@ export function resolveFollowupDeliveryPayloads(params: {
       config: params.cfg,
       messageProvider: replyMessageProvider,
       messagingToolSentTargets: params.sentTargets,
-      originatingTo,
+      originatingTo: params.originatingTo,
       originatingThreadId: params.originatingThreadId,
       accountId,
       sentMediaUrls: params.sentMediaUrls,

@@ -7,6 +7,7 @@ read_when:
   - You need the durable admitted-turn contract for context engines
   - You are exposing memory embedding or public-artifact adapters
   - You need to authorize provider memory by owner or conversation audience
+  - You are implementing provider-owned pre-compaction persistence
 ---
 
 The registrars that allow only one active implementation at a time, and the
@@ -15,19 +16,21 @@ memory adapter contracts that sit on top of them. Part of the
 
 ## Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                                                                                        |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Use `info.acceptedHostParams` to restrict accepted host-added lifecycle fields, including optional `maintain()` cancellation; undeclared engines receive all current host fields. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                |
+| Method                                     | What it registers                                                                                                                                                                                                                                          |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Use `info.acceptedHostParams` to restrict accepted host-added lifecycle fields, including optional `maintain()` cancellation; undeclared engines receive current host fields except opt-in compaction `onProgress`. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                                                  |
 
 To participate in durable admitted turns, context engines must declare
 `currentTurnFence: "before-current-turn-entry-v1"` and
 `turnAdvancementIdempotency: "atomic-idempotent-v1"` under
-`info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic,
-idempotent write keyed by `advancementKey`. OpenClaw supplies only the inclusive
+`info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic
+write keyed by `advancementKey` that has no additional effect when repeated. OpenClaw supplies only the inclusive
 accepted turn, from its admitted user entry through its terminal entry; use the
-`readSessionTranscriptVisibleMessageDelta(...)` cursor API to bootstrap or
-rebuild earlier history. Without the full contract, OpenClaw uses the legacy
+`readSessionTranscriptVisibleMessageDelta(...)` cursor API from
+`openclaw/plugin-sdk/context-engine-transcript-runtime` to bootstrap or rebuild
+earlier history (see
+[Context engine transcript cursor](/plugins/sdk-runtime/agent#context-engine-transcript-cursor)). Without the full contract, OpenClaw uses the legacy
 context path for the whole logical turn and its retries, leaves the configured
 engine unchanged, and tries that engine again on the next logical turn.
 
@@ -51,15 +54,98 @@ engine unchanged, and tries that engine again on the next logical turn.
   return that agent's own session hits and no other agent's. When a session
   caller carries a host-granted conversation recall pass, the host forwards it
   as `conversationRecall`; admit only the hits that pass allows. If the hook
-  is absent, OpenClaw fails closed by withholding session-source hits while
+  is absent, OpenClaw withholds session-source hits while
   retaining ordinary memory hits. Keep transcript identity and visibility
   policy in the owning memory plugin; callers must not infer authorization from
   paths or duplicate plugin-specific rules.
-- `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
-  reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
-  chain.
 - Embedding providers use `api.registerEmbeddingProvider(...)` and
   `contracts.embeddingProviders`; there is no separate memory-only registry.
+
+Memory Core implements `runtime.searchForCli(...)` for Gateway-routed CLI
+searches. The host passes the acquired manager, requested agent, query, and
+current mutation guard to that same runtime instance. This keeps recall
+recording in the instance's configured state store so later dreaming sweeps
+can promote it. Other memory plugins continue to expose their own search tools.
+
+## Pre-compaction memory flush
+
+Register a flush resolver on `MemoryPluginCapability` to supply the silent
+turn that saves durable context before compaction. OpenClaw resolves flush
+timing first from `agents.defaults.compaction.memoryFlush` and the active
+context window. When `enabled` is `false`, the host does not invoke the
+resolver. Return `null` to skip the flush for provider-specific reasons.
+
+There are two resolver fields:
+
+- `flushPlanResolver` returns a complete `MemoryFlushPlan` or `null`. Its
+  contract is unchanged from earlier releases. Memory Core uses it.
+- `providerFlushPlanResolver` returns a plan the host completes: a
+  `MemoryFlushFilePlanDraft` (a complete `MemoryFlushPlan` is one such draft)
+  or a `MemoryFlushToolsPlan`. When a plugin registers both, the host uses
+  `providerFlushPlanResolver`.
+
+Each plan has `prompt`, `systemPrompt`, and one persistence arm. In plans from
+`providerFlushPlanResolver`, the `softThresholdTokens`,
+`forceFlushTranscriptBytes`, `reserveTokensFloor`, and `model` fields are
+deliberate provider overrides. The host fills omitted timing fields from its
+resolved timing, and fills an omitted `model` from `memoryFlush.model` for the
+tools arm only; a file plan without `model` keeps the session's model. A `model` override pins the turn
+to an exact `provider/model` reference, such as `ollama/qwen3:8b`, without
+inheriting the active fallback chain.
+
+Choose exactly one persistence arm:
+
+| Arm   | Plan fields                                                                                                      | Flush tools and storage                                                                                                                                                                                        |
+| ----- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File  | `relativePath: string`                                                                                           | `read` and an append-only `write` restricted to the target file. The host creates the target and requires writable workspace access. Memory Core uses this arm.                                                |
+| Tools | `persistenceToolNames: readonly string[]` (non-empty), optional `lookupToolNames: readonly string[]` (read-only) | `read` plus the declared persistence and lookup tools owned by the selected memory plugin. The host creates no target file and does not require writable workspace access. Lookup tools cannot persist memory. |
+
+Only the selected memory slot owner may supply a tools-arm plan, through
+`providerFlushPlanResolver`. The host tracks which plugin supplied the effective
+resolver, including when sidecar capability fields are merged; an owner's
+resolver of either kind wins over a sidecar's. A tools-arm plan from a non-owner is skipped with a warning
+naming that plugin.
+
+For the tools arm, ownership comes from registered tool metadata. A same-named
+tool from another plugin is excluded. Normal message, model, sandbox, allowlist,
+and authorization policies still apply after this projection. Persistence and
+lookup tool names must not overlap; the host skips an overlapping plan and warns
+with the plugin name. If none of the declared persistence tools survives, the
+host skips inference and logs a warning naming the missing tools. If policy
+removes any lookup tools, the flush still runs with its surviving persistence
+tools and logs one warning naming the unavailable lookup tools. Compaction can
+continue after a skipped flush.
+
+### Audience and flush identity
+
+The flush runs in a detached internal session so its maintenance transcript does
+not enter later user turns. For a tools-arm turn, the host resolves the source
+turn's `memoryAudience` from its trusted session entry, session key, session ID,
+and the source turn's sender ownership, including for a flush scheduled after the
+turn completes. It delegates that audience to the detached session key,
+retaining the source lineage and revocation checks. Persistence and lookup tools
+receive this delegated audience and the source sandbox state. If the source has
+no valid audience, the host skips the tools-arm flush with a debug log. The
+maintenance copy still has `senderIsOwner: false`; providers authorize memory
+access through the supplied audience and its current-authority check.
+
+Only tools-arm flush contexts include `memoryFlush: { flushId: string }` on
+`OpenClawPluginToolContext`. The host computes `flushId` from
+the source session incarnation (its `sessionId` and lifecycle revision) and its
+pre-compaction `compactionCount` (zero when absent). The count advances after a
+completed compaction, so model fallback attempts and later retries within the
+same cycle share an ID; a later cycle or a new session incarnation, including a
+reset that keeps the session ID, gets a different ID. Providers can combine this ID with
+their mutation's identity to deduplicate retries. The ID does not grant authority.
+
+### Completion evidence
+
+A tools-arm flush succeeds only when at least one declared persistence tool
+completes without error, or the assistant's final output is the silent token
+`NO_REPLY`. A successful lookup call is not persistence evidence. Without either
+valid completion signal, the host records a failed flush with the reason `no
+persistence tool call succeeded`. Run errors still fail the flush. The file arm
+retains its file-writing and completion behavior.
 
 ## Provider-neutral memory runtime
 
@@ -202,9 +288,12 @@ changes incarnation or lifecycle, or when the run that owns it ends. The host
 checks audience currency before and after opening a provider and around every
 provider call. The `context.assertCurrent()` passed to `open()` includes audience
 currency, so a provider that calls it immediately before I/O, including after its
-own awaited work, is refused instead of acting under stale authority. Audience
-revocation does not abort `context.signal`; call `assertCurrent()` before each
-effect.
+own awaited work, is refused instead of acting under stale authority. Session
+writes that keep the session ID and lifecycle revision, such as a turn's own
+activity and usage bookkeeping, do not interrupt these checks while they publish;
+a pending reset, replacement, or deletion still reports currency as unavailable
+until it settles, then revokes the audience. Audience revocation does not abort
+`context.signal`; call `assertCurrent()` before each effect.
 
 ### Compatibility and host integration
 
@@ -249,6 +338,14 @@ Dreaming is not a provider runtime capability. Selecting another memory plugin c
 still activate Memory Core as a dreaming sidecar under the existing loader policy.
 Explicitly disabling Memory Core prevents that sidecar. The Dreams UI and file-backed
 maintenance methods do not imply that the selected provider implements dreaming.
+
+## Memory host event diagnostics
+
+`readMemoryHostEventRecords` from `openclaw/plugin-sdk/memory-host-events`
+accepts an optional `type` filter. Storage applies it before `limit`, so a
+diagnostic can request the latest `memory.dream.completed` event with `limit: 1`
+without loading unrelated recall history. Omitting `type` preserves the full
+retained event stream.
 
 ## Bundled Memory Core workers
 

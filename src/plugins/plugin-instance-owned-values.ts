@@ -12,16 +12,16 @@ export class PluginHostObject {
   }
 }
 
-export class PluginCallToken extends PluginHostObject {
-  #hostCleanup: boolean;
+export class PluginFactoryBinding extends PluginHostObject {
+  #factory: object;
 
-  constructor(value: object, hostCleanup: boolean) {
+  constructor(value: object, factory: object) {
     super(value);
-    this.#hostCleanup = hostCleanup;
+    this.#factory = factory;
   }
 
-  static isHostCleanup(token: object): boolean {
-    return #hostCleanup in token && token.#hostCleanup;
+  static belongsTo(value: object, factory: object): boolean {
+    return #factory in value && value.#factory === factory;
   }
 }
 
@@ -70,6 +70,27 @@ export function createPluginValueInstances<TInstance extends object>() {
         foreign.set(value, instance);
       }
       return this;
+    },
+    adopt<T>(value: T, instance: TInstance): T {
+      const seen = new Set<object>();
+      const visit = (candidate: unknown) => {
+        if (
+          !candidate ||
+          (typeof candidate !== "object" && typeof candidate !== "function") ||
+          seen.has(candidate)
+        ) {
+          return;
+        }
+        seen.add(candidate);
+        this.set(candidate, instance);
+        for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(candidate))) {
+          if ("value" in descriptor) {
+            visit(descriptor.value);
+          }
+        }
+      };
+      visit(value);
+      return value;
     },
     setHost(value: object, instance: TInstance) {
       install(value).instance = instance;

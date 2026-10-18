@@ -2,6 +2,7 @@ import { formatByteSize } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
@@ -17,7 +18,6 @@ import { formatPairingApproveCommand } from "../pairing-command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { formatVersionLabel } from "../version-format.js";
 import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { formatPermissions } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
   callNodesGatewayCli,
@@ -29,6 +29,22 @@ import type { NodesRpcOpts } from "./types.js";
 
 type PairedNodeListRow = PairedNode & Partial<NodeListNode>;
 type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
+
+/** Format node permission maps as a stable `[permission=yes|no]` label. */
+function formatPermissions(raw: unknown) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const entries = Object.entries(raw)
+    .map(([key, value]) => [normalizeStringifiedOptionalString(key) ?? "", value === true] as const)
+    .filter(([key]) => key.length > 0)
+    .toSorted((a, b) => a[0].localeCompare(b[0]));
+  if (entries.length === 0) {
+    return null;
+  }
+  const parts = entries.map(([key, granted]) => `${key}=${granted ? "yes" : "no"}`);
+  return `[${parts.join(", ")}]`;
+}
 
 function formatNodeStatsBytes(bytes: number): string {
   return formatByteSize(bytes, {
@@ -93,17 +109,13 @@ function formatNodeVersions(
   );
 }
 
-function isWindowsNodePlatform(platform?: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(platform) ?? "";
-  return normalized === "win32" || normalized === "windows";
-}
-
 function formatPathEnv(raw?: string, platform?: string): string | null {
   const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
-  const delimiter = isWindowsNodePlatform(platform) ? ";" : ":";
+  const normalizedPlatform = normalizeOptionalLowercaseString(platform);
+  const delimiter = normalizedPlatform === "win32" || normalizedPlatform === "windows" ? ";" : ":";
   const parts = trimmed.split(delimiter).filter(Boolean);
   const display =
     parts.length <= 3
@@ -155,14 +167,14 @@ function isPendingApprovalState(
   return state === "pending-approval" || state === "pending-reapproval";
 }
 
-function parseSinceMs(raw: string | undefined, label: string): number | undefined {
+function parseSinceMs(raw: string | undefined): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
   try {
     return parseDurationMs(raw);
   } catch (err) {
-    throw new Error(`${label}: ${formatErrorMessage(err)}`, { cause: err });
+    throw new Error(`Invalid --last-connected: ${formatErrorMessage(err)}`, { cause: err });
   }
 }
 
@@ -257,7 +269,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("status", async () => {
           const connectedOnly = Boolean(opts.connected);
-          const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
+          const sinceMs = parseSinceMs(opts.lastConnected);
           const result = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
           const obj: Record<string, unknown> =
             typeof result === "object" && result !== null ? result : {};
@@ -493,7 +505,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("list", async () => {
           const connectedOnly = Boolean(opts.connected);
-          const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
+          const sinceMs = parseSinceMs(opts.lastConnected);
           const result = await callNodesGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
           const { heading, muted } = getNodesTheme();

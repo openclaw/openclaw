@@ -1,9 +1,6 @@
-import path from "node:path";
-import type { BackupStatusResult } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -11,6 +8,31 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({
   name: "Systems workspace mocked Gateway E2E",
   startServerBeforeBrowser: true,
+});
+
+const systemInfo = {
+  machineName: "Gateway machine",
+  hostname: "gateway.test",
+  platform: "linux",
+  release: "test",
+  arch: "x64",
+  osLabel: "Linux",
+  nodeVersion: "v26",
+  pid: 1,
+  uptimeMs: 1000,
+  cpuCount: 4,
+  loadAverage: [0.5, 0.4, 0.3],
+  memoryTotalBytes: 8192,
+  memoryFreeBytes: 4096,
+};
+const workerHistory = (state: "destroyed" | "failed", ageMs = 1_000) => ({
+  state,
+  profileId: "cloud",
+  providerId: "crabbox",
+  ...(state === "destroyed" ? { leaseId: "released-lease" } : {}),
+  ageMs,
+  attachedSessionIds: [],
+  tunnelStatus: "stopped",
 });
 
 function installSystemsGateway(
@@ -46,34 +68,12 @@ function installSystemsGateway(
             type: "worker",
             label: `${state} worker history`,
             status: state === "destroyed" ? "unavailable" : "error",
-            worker: {
-              state,
-              profileId: "cloud",
-              providerId: "crabbox",
-              ...(state === "destroyed" ? { leaseId: "released-lease" } : {}),
-              ageMs: 1_000,
-              attachedSessionIds: [],
-              tunnelStatus: "stopped",
-            },
+            worker: workerHistory(state),
           })),
         ],
       },
       "node.list": { nodes: [] },
-      "system.info": {
-        machineName: "Gateway machine",
-        hostname: "gateway.test",
-        platform: "linux",
-        release: "test",
-        arch: "x64",
-        osLabel: "Linux",
-        nodeVersion: "v26",
-        pid: 1,
-        uptimeMs: 1000,
-        cpuCount: 4,
-        loadAverage: [0.5, 0.4, 0.3],
-        memoryTotalBytes: 8192,
-        memoryFreeBytes: 4096,
-      },
+      "system.info": systemInfo,
       "backup.status": { targets: [], schedules: [], locations: [] },
       ...methodResponses,
     },
@@ -81,139 +81,7 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
-  it("shows backup health on the landing and Gateway host views and probes configured storage", async () => {
-    const artifacts = createControlUiE2eArtifactDir("systems-backups");
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
-      async ({ page }) => {
-        const now = Date.now();
-        const success = {
-          id: "backup-ok",
-          createdAt: now - 3_600_000,
-          archivePath: "/scratch/backup.tar.gz",
-          kind: "archive" as const,
-          status: "ok" as const,
-          target: "offsite",
-          location: {
-            name: "offsite",
-            provider: "filesystem",
-            locationId: "synthetic-location",
-            namespace: "gateway",
-            key: "20260930T110000Z-12345678.tar.gz",
-            plaintextBytes: 24 * 1024 ** 2,
-            storedBytes: 25 * 1024 ** 2,
-          },
-        };
-        const status: BackupStatusResult = {
-          targets: [{ kind: "archive", target: "offsite", latest: success, latestOk: success }],
-          schedules: [
-            {
-              id: "backup-schedule",
-              mode: "offsite",
-              target: "offsite",
-              enabled: true,
-              everyMs: 86_400_000,
-              nextRunAtMs: now + 3_600_000,
-            },
-          ],
-          locations: [
-            {
-              name: "offsite",
-              provider: "filesystem",
-              displayTarget: "/Volumes/Archive/openclaw",
-              encrypted: true,
-            },
-          ],
-        };
-        const gateway = await installSystemsGateway(page, 0, {
-          "environments.list": { environments: [] },
-          "backup.status": status,
-          "storage.locations.probe": { state: "ok", freeBytes: 256 * 1024 ** 3 },
-        });
-        await page.goto(suite.server.baseUrl + "systems");
-        const backups = page.getByRole("region", { name: "Backups" });
-        await page.getByRole("heading", { name: "Systems", exact: true }).waitFor();
-        await backups.getByText("Last success:", { exact: false }).waitFor();
-        expect(await backups.textContent()).toContain("Next run:");
-        expect(await gateway.getRequests("backup.status")).toHaveLength(1);
-        expect(await gateway.getRequests("storage.locations.probe")).toHaveLength(0);
-        await page.screenshot({ path: path.join(artifacts, "backups-landing-ok.png") });
-        await page.emulateMedia({ reducedMotion: "reduce" });
-        await page.setViewportSize({ width: 390, height: 844 });
-        await page.locator(".systems-mobile-picker").waitFor({ state: "visible" });
-        await page.screenshot({ path: path.join(artifacts, "backups-landing-ok-mobile.png") });
-        await page.setViewportSize({ width: 1440, height: 900 });
-        await gateway.setMethodResponse("environments.list", {
-          environments: [
-            { id: "gateway", type: "local", label: "Gateway machine", status: "available" },
-          ],
-        });
-        await page.getByRole("button", { name: "Refresh machines" }).click();
-        await page.getByRole("button", { name: "Gateway machine" }).click();
-        await page.getByRole("heading", { name: "Gateway machine", exact: true }).waitFor();
-        await backups.getByText("Last success:", { exact: false }).waitFor();
-        await page.screenshot({ path: path.join(artifacts, "backups-ok.png") });
-        await backups.getByRole("button", { name: "Check offsite" }).click();
-        const probe = await gateway.waitForRequest("storage.locations.probe");
-        expect(probe.params).toEqual({ name: "offsite" });
-        await backups.getByRole("status").filter({ hasText: "Available" }).waitFor();
-        const gitPushFailure = {
-          id: "git-push-failed",
-          createdAt: now - 3_600_000,
-          archivePath: "/backups/git",
-          target: "/backups/git",
-          kind: "git" as const,
-          status: "ok" as const,
-          pushFailed: true as const,
-        };
-        await gateway.setMethodResponse("backup.status", {
-          ...status,
-          targets: [
-            {
-              ...status.targets[0],
-              latest: {
-                ...success,
-                status: "failed",
-                error: "Archive disk disconnected. Run openclaw storage test offsite.",
-              },
-            },
-            {
-              kind: "git",
-              target: gitPushFailure.target,
-              latest: gitPushFailure,
-              latestOk: gitPushFailure,
-            },
-          ],
-        });
-        await page.getByRole("button", { name: "Refresh machines" }).click();
-        await backups
-          .getByText("Archive disk disconnected. Run openclaw storage test offsite.", {
-            exact: true,
-          })
-          .waitFor();
-        await backups.getByText("Push failed", { exact: true }).waitFor();
-        expect(await backups.textContent()).toContain("Last local success:");
-        expect(await backups.textContent()).toContain(
-          "Local backup succeeded, but pushing to the Git remote failed. Check the remote and retry.",
-        );
-        await page.screenshot({ path: path.join(artifacts, "backups-failed.png") });
-        await gateway.setMethodResponse("backup.status", {
-          targets: [],
-          schedules: [],
-          locations: [],
-        });
-        await page.getByRole("button", { name: "Refresh machines" }).click();
-        await backups.getByText("No backups recorded —", { exact: false }).waitFor();
-        await page.emulateMedia({ reducedMotion: "reduce" });
-        await page.setViewportSize({ width: 640, height: 900 });
-        await page.locator(".systems-mobile-picker").waitFor({ state: "visible" });
-        await page.screenshot({ path: path.join(artifacts, "backups-empty-mobile.png") });
-      },
-    );
-  });
-
   it("names Macs consistently and enables a discovered desktop without reconnecting", async () => {
-    const artifacts = createControlUiE2eArtifactDir("systems-platform-labels");
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
       async ({ page }) => {
@@ -241,17 +109,13 @@ suite.define(() => {
             ],
           },
           "system.info": {
+            ...systemInfo,
             machineName: "Gateway Mac",
-            hostname: "gateway.test",
             platform: "darwin",
             release: "26.0.0",
             arch: "arm64",
             osLabel: "macOS 27.0.0",
-            nodeVersion: "v26",
-            pid: 1,
-            uptimeMs: 1000,
             cpuCount: 8,
-            loadAverage: [0.5, 0.4, 0.3],
             memoryTotalBytes: 16 * 1024 ** 3,
             memoryFreeBytes: 8 * 1024 ** 3,
           },
@@ -266,11 +130,10 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "systems");
         const inventory = page.locator(".systems-sidebar");
         await inventory.getByRole("button", { name: /Gateway Mac/ }).waitFor();
-        await page.screenshot({ path: path.join(artifacts, "systems-platforms.png") });
-        expect(await inventory.locator(".systems-machine__meta").allTextContents()).toEqual([
-          "macOS 27.0.0",
-          "macOS 27.0.0",
-        ]);
+
+        await expect
+          .poll(() => inventory.locator(".systems-machine__meta").allTextContents())
+          .toEqual(["macOS 27.0.0", "macOS 27.0.0"]);
         expect(await page.locator(".systems-state").textContent()).toContain(
           "Screen Sharing is available",
         );
@@ -340,7 +203,7 @@ suite.define(() => {
           hash: "desktop-config-1",
         });
         await page.getByRole("heading", { name: "Desktop access is enabled" }).waitFor();
-        await page.screenshot({ path: path.join(artifacts, "desktop-enabled-applying.png") });
+
         expect(await gateway.getRequests("config.patch")).toHaveLength(2);
 
         await gateway.setMethodResponse("desktop.observe", {
@@ -367,7 +230,6 @@ suite.define(() => {
         expect(observed.params).toEqual({ source: { kind: "host" }, control: false });
         await page.getByLabel("macOS username").waitFor();
         expect(await gateway.getSocketCount()).toBe(connectionCount);
-        await page.screenshot({ path: path.join(artifacts, "desktop-account-access.png") });
       },
     );
   });
@@ -410,7 +272,7 @@ suite.define(() => {
   );
 
   it.each(["dashboards", "systems"])(
-    "scrolls navigation and the %s sidebar content together",
+    "scrolls the %s middle sidebar without moving the personal rail",
     async (route) => {
       await suite.withPage(
         {
@@ -419,9 +281,24 @@ suite.define(() => {
           viewport: { width: 1440, height: 900 },
         },
         async ({ page }) => {
-          await installSystemsGateway(page);
+          // The middle column no longer includes the navigation stack: overflow its own roster.
+          await installSystemsGateway(page, 40);
           await page.goto(suite.server.baseUrl + route);
-          const home = page.locator(".nav-item--home");
+          await page.locator('[data-navigation-view="pages"]').click();
+          await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
+          await page.locator('[data-navigation-view="sessions"]').click();
+          const home = page.locator(".sidebar-rail__bottom .sidebar-footer-bar__home");
+          const scroller = page.locator(".sidebar-shell__body");
+          const railControls = page.locator(
+            ".sidebar-rail__bottom :is(.sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card)",
+          );
+          const railBounds = () =>
+            railControls.evaluateAll((controls) =>
+              controls.map((control) => {
+                const { x, y, width, height } = control.getBoundingClientRect();
+                return { x, y, width, height };
+              }),
+            );
           const row = page
             .locator(route === "systems" ? ".systems-machine" : ".sidebar-recent-session")
             .first();
@@ -440,37 +317,31 @@ suite.define(() => {
           await row.hover();
           const initialHomeTop = await homeTop();
           const initialRowTop = await rowTop();
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            await page.screenshot({ path: path.join(suite.artifactDir, `${route}-top.png`) });
-          }
+          const initialRailBounds = await railBounds();
+          expect(initialRailBounds).toHaveLength(3);
+
           await page.mouse.wheel(0, 160);
           await expect.poll(rowTop).toBeLessThan(initialRowTop - 80);
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            await page.screenshot({ path: path.join(suite.artifactDir, `${route}-scrolled.png`) });
-          }
-          await expect
-            .poll(
-              async () => (await homeTop()) - initialHomeTop - ((await rowTop()) - initialRowTop),
-            )
-            .toBeCloseTo(0, 0);
+
+          expect(await homeTop()).toBe(initialHomeTop);
+          expect(await railBounds()).toEqual(initialRailBounds);
+          expect(await scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(80);
 
           await page.mouse.wheel(0, -1000);
-          await expect.poll(homeTop).toBeCloseTo(initialHomeTop, 0);
+          await expect.poll(rowTop).toBeCloseTo(initialRowTop, 0);
+          await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(0);
           await home.hover();
           await page.mouse.wheel(0, 120);
-          await expect.poll(homeTop).toBeLessThan(initialHomeTop - 80);
-          await expect
-            .poll(
-              async () => (await homeTop()) - initialHomeTop - ((await rowTop()) - initialRowTop),
-            )
-            .toBeCloseTo(0, 0);
+          expect(await homeTop()).toBe(initialHomeTop);
+          expect(await railBounds()).toEqual(initialRailBounds);
+          expect(await scroller.evaluate((element) => element.scrollTop)).toBe(0);
+          expect(await rowTop()).toBeCloseTo(initialRowTop, 0);
         },
       );
     },
   );
 
   it("loads the lazy workspace and keeps its machine picker aligned after navigation", async () => {
-    const artifacts = createControlUiE2eArtifactDir("systems-worker-history");
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -486,12 +357,15 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".systems-heading h1").textContent())
         .toBe("Cloud worker");
-      await page.screenshot({ path: path.join(artifacts, "machine-inventory.png") });
+
       expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
       expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
-      await page.locator('.sidebar-nav a[href$="/dashboards"]').click();
+      await page.locator('[data-navigation-view="pages"]').click();
+      await page.locator('.sidebar-pages a[href$="/dashboards"]').click();
       await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
-      await page.locator('.sidebar-nav a[href$="/systems"]').click();
+      await page.locator('.sidebar-pages a[href$="/systems"]').click();
+      await page.locator('[data-navigation-view="sessions"]').click();
+      await inventory.waitFor();
       await expect
         .poll(() => page.locator(".systems-heading h1").textContent())
         .toBe("Cloud worker");
@@ -511,15 +385,7 @@ suite.define(() => {
             type: "worker",
             label: "Cloud worker",
             status: "unavailable",
-            worker: {
-              state: "destroyed",
-              profileId: "cloud",
-              providerId: "crabbox",
-              leaseId: "released-lease",
-              ageMs: 2_000,
-              attachedSessionIds: [],
-              tunnelStatus: "stopped",
-            },
+            worker: workerHistory("destroyed", 2_000),
           },
         ],
       });

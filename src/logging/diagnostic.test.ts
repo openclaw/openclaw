@@ -12,6 +12,7 @@ import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../infra/net/undici-global-dispatcher.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   beginDiagnosticBackendActivity,
@@ -51,11 +52,10 @@ import {
   logMessageQueued,
   logSessionStateChange,
   markDiagnosticSessionProgress,
+  startGatewayDiagnosticHeartbeat,
 } from "./diagnostic.js";
 import {
   resetDiagnosticStateForTest,
-  resolveStuckSessionAbortMs,
-  resolveStuckSessionWarnMs,
   startDiagnosticHeartbeatForTest as startDiagnosticHeartbeat,
   startEnabledDiagnosticHeartbeatForTest as startEnabledDiagnosticHeartbeat,
 } from "./diagnostic.test-support.js";
@@ -238,7 +238,6 @@ describe("diagnostic session activity aliases", () => {
       sessionId: "s1",
       sessionKey: "main",
       workKey: "reply:main",
-      clearRunActivity: false,
     });
 
     expect(getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" })).toEqual(
@@ -259,6 +258,7 @@ describe("stuck session diagnostics threshold", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.setSystemTime(0);
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
     events = [];
@@ -292,7 +292,10 @@ describe("stuck session diagnostics threshold", () => {
     expectRecoveryCall(recoverStuckSession, { ...session, sessionFile, queueDepth: 0 });
   });
 
-  it("defers a material heartbeat stall even when elapsed time is below the abort threshold", () => {
+  it.each([
+    { name: "material stall", progressAt: 20_000, tickAt: 35_000, warns: true },
+    { name: "ordinary jitter", progressAt: 15_500, tickAt: 30_999, warns: false },
+  ])("preserves the remaining abort budget after $name", ({ progressAt, tickAt, warns }) => {
     const recoverStuckSession = vi.fn();
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
@@ -301,46 +304,22 @@ describe("stuck session diagnostics threshold", () => {
     logSessionStateChange({ ...session, state: "processing" });
     markDiagnosticEmbeddedRunStarted(session);
 
-    vi.advanceTimersByTime(20_000);
+    vi.advanceTimersByTime(progressAt);
     markDiagnosticSessionProgress(session);
     markDiagnosticRunProgress({
       ...session,
       reason: "embedded_run:progress",
     });
-    vi.advanceTimersByTime(10_000);
+    vi.advanceTimersByTime(30_000 - progressAt);
 
-    vi.setSystemTime(35_000);
+    vi.setSystemTime(tickAt);
     vi.advanceTimersByTime(30_000);
 
-    expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
-    expect(recoverStuckSession).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(30_000);
-
-    expectRecoveryCall(recoverStuckSession, { ...session, queueDepth: 0, allowActiveAbort: true });
-  });
-
-  it("does not let ordinary heartbeat jitter consume the remaining abort budget", () => {
-    const recoverStuckSession = vi.fn();
-    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
-
-    vi.setSystemTime(0);
-    startEnabledDiagnosticHeartbeat({ recoverStuckSession });
-    logSessionStateChange({ ...session, state: "processing" });
-    markDiagnosticEmbeddedRunStarted(session);
-
-    vi.advanceTimersByTime(15_500);
-    markDiagnosticSessionProgress(session);
-    markDiagnosticRunProgress({
-      ...session,
-      reason: "embedded_run:progress",
-    });
-    vi.advanceTimersByTime(14_500);
-
-    vi.setSystemTime(30_999);
-    vi.advanceTimersByTime(30_000);
-
-    expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    if (warns) {
+      expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    } else {
+      expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    }
     expect(recoverStuckSession).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(30_000);
@@ -368,16 +347,14 @@ describe("stuck session diagnostics threshold", () => {
     ).toEqual([60_000, 90_000, 120_000]);
   });
 
-  it("aborts and drains embedded runs after an extended no-progress stall", () => {
+  it("aborts and drains embedded runs after the default no-progress stall", () => {
     const recoverStuckSession = vi.fn();
-    const stuckSessionWarnMs = resolveStuckSessionWarnMs() / 4;
-    const stuckSessionAbortMs = resolveStuckSessionAbortMs(stuckSessionWarnMs);
-    expect(stuckSessionWarnMs).toBe(30_000);
-    expect(stuckSessionAbortMs).toBe(300_000);
-    startEnabledDiagnosticHeartbeat({
-      recoverStuckSession,
-      testTimings: { stuckSessionWarnMs, stuckSessionAbortMs },
-    });
+    const stuckSessionAbortMs = 360_000;
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
+      { diagnostics: { enabled: true } },
+      { recoverStuckSession },
+    );
     logSessionStateChange({ ...session, state: "processing" });
     markDiagnosticEmbeddedRunStarted(session);
 
@@ -545,7 +522,7 @@ describe("stuck session diagnostics threshold", () => {
         reason: "repeated_model_requests_without_progress",
         repeatedRequestNoProgressAgeMs: stuckSessionAbortMs,
         activeWorkKind,
-        activeToolAgeMs: activeWorkKind === "tool_call" ? stuckSessionAbortMs : undefined,
+        activeToolAgeMs: activeWorkKind === "tool_call" ? (stuckSessionAbortMs * 4) / 3 : undefined,
       });
       expect(recoverStuckSession).toHaveBeenCalledTimes(1);
       expectRecoveryCall(recoverStuckSession, {
@@ -681,10 +658,10 @@ describe("stuck session diagnostics threshold", () => {
     );
     await vi.advanceTimersByTimeAsync(0);
 
-    // Semantic progress gives the next request its full provider allowance.
-    vi.advanceTimersByTime(30_000);
+    // Semantic progress grants the full allowance; recovery waits for the next heartbeat.
+    vi.advanceTimersByTime(requestTimeoutMs - 30_000);
     expect(recoverStuckSession).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(120_000);
+    vi.advanceTimersByTime(60_000);
 
     expectRecoveryCall(recoverStuckSession, { ...ref, queueDepth: 0, allowActiveAbort: true });
   });
@@ -1465,10 +1442,11 @@ describe("stuck session recovery activity reconciliation", () => {
     const state = startSession();
     markStaleActivity();
     const reply = { ...ref, sessionId: "reply-run-1" };
+    const replyOwner = createDiagnosticEmbeddedRunOwner(reply);
     const replyTool = { ...reply, toolName: "ReplyTool", toolCallId: "fresh-tool" };
 
     await recoverStalledSession(state.generation, () => {
-      markDiagnosticEmbeddedRunStarted(reply);
+      markDiagnosticEmbeddedRunStarted({ ...reply, owner: replyOwner });
       emitDiagnosticEvent({
         type: "tool.execution.started",
         ...replyTool,
@@ -1492,7 +1470,7 @@ describe("stuck session recovery activity reconciliation", () => {
       activeToolName: undefined,
     });
 
-    markDiagnosticEmbeddedRunEnded({ ...reply, clearRunActivity: false });
+    closeDiagnosticEmbeddedRunOwner(replyOwner);
     const activity = getDiagnosticSessionActivitySnapshot(ref);
     expect(activity.activeWorkKind).toBeUndefined();
     expect(activity.activeToolName).toBeUndefined();

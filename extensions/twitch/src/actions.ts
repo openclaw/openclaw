@@ -10,13 +10,9 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: () => ({ actions: ["send"] }),
   supportsAction: ({ action }) => action === "send",
   extractToolSend: ({ args }) => {
-    try {
-      const to = readSendValue(args.to);
-      const message = readSendValue(args.message);
-      return to && message ? { to, message } : null;
-    } catch {
-      return null;
-    }
+    const to = readSendValue(args.to);
+    const message = readSendValue(args.message);
+    return to && message ? { to, message } : null;
   },
   // Core owns send execution so receipts, queue settlement, and mirrors agree.
 };

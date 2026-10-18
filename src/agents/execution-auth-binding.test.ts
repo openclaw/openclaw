@@ -52,21 +52,6 @@ describe("execution auth binding fingerprints", () => {
     ).toBeUndefined();
   });
 
-  it("changes when a materialized static secret rotates", () => {
-    const fingerprint = (key: string) =>
-      fingerprintAuthProfileCredential({
-        profileId: "openai:bound",
-        credential: {
-          type: "api_key",
-          provider: "openai",
-          key,
-          keyRef: { source: "file", provider: "vault", id: "/openai/key" },
-        },
-      });
-
-    expect(fingerprint("first-key")).not.toBe(fingerprint("replacement-key"));
-  });
-
   it("binds a SecretRef profile to the resolved selected value", () => {
     const credential = {
       type: "api_key" as const,

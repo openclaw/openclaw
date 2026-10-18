@@ -10,7 +10,7 @@ import {
 } from "../plugins/memory-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { compactionWatchdogResets } from "./compaction-watchdog.js";
+import { compactionWatchdogs } from "./compaction-watchdog.js";
 import type {
   ContextEngine,
   CompactResult,
@@ -88,6 +88,7 @@ export async function delegateCompactionToRuntime(
     sessionTarget,
   });
   const { compactEmbeddedAgentSessionOnDemand } = await loadCompactRuntime();
+  const watchdog = params.abortSignal && compactionWatchdogs.get(params.abortSignal);
   const currentTokenCount =
     params.currentTokenCount ??
     (typeof runtimeContext.currentTokenCount === "number" &&
@@ -109,7 +110,8 @@ export async function delegateCompactionToRuntime(
     force: params.force,
     customInstructions: params.customInstructions,
     abortSignal: params.abortSignal,
-    compactionTimeoutReset: params.abortSignal && compactionWatchdogResets.get(params.abortSignal),
+    compactionTimeoutReset: watchdog?.reset,
+    compactionDeadlineAt: watchdog?.deadlineAt,
     workspaceDir:
       typeof runtimeContext.workspaceDir === "string" ? runtimeContext.workspaceDir : process.cwd(),
   });
@@ -166,6 +168,7 @@ export function buildMemorySystemPromptAddition(
     agentId: params.agentId ?? prepared.context.agentId,
     agentSessionKey: params.agentSessionKey ?? prepared.context.agentSessionKey,
     sandboxed: params.sandboxed ?? prepared.context.sandboxed,
+    projectKey: params.projectKey ?? prepared.context.projectKey,
   };
   return renderMemorySystemPromptAddition(contextParams, prepared);
 }

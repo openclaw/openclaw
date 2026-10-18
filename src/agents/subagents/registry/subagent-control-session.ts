@@ -1,6 +1,5 @@
 import { cloneEnvWithPlatformSemantics } from "../../../config/config-env-vars.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
-import { withSessionEntryWorker } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import {
   isSessionDeliveryGenerationRevokedError,
   prepareSessionGenerationFacts,
@@ -11,20 +10,13 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { logVerbose } from "../../../globals.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
-import type {
-  AgentDatabaseGenerationClaim,
-  OpenClawAgentDatabaseExecution,
-} from "../../../state/openclaw-agent-execution-contract.js";
-import {
-  captureOpenClawAgentDatabaseExecution,
-  supportsOpenClawAgentDatabaseExecution,
-} from "../../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type SubagentKillSession = {
   agentId: string;
@@ -36,6 +28,49 @@ export type SubagentKillSession = {
   release: () => void | Promise<void>;
 };
 
+export function prepareSubagentKillSessionReads(
+  preparations: Array<SubagentKillSession["prepareRead"] | undefined>,
+  assertCurrent: () => void,
+): Promise<void> | undefined {
+  const failures: unknown[] = [];
+  const publications = preparations.flatMap((prepare) => {
+    try {
+      const publication = prepare?.();
+      return publication ? [publication] : [];
+    } catch (error) {
+      if (!isSessionDeliveryGenerationRevokedError(error)) {
+        failures.push(error);
+      }
+      return [];
+    }
+  });
+  const throwFailures = () => {
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Subagent publication readiness failed");
+    }
+  };
+  if (publications.length === 0) {
+    throwFailures();
+    return undefined;
+  }
+  return Promise.allSettled(publications).then((results) => {
+    try {
+      assertCurrent();
+    } catch (error) {
+      failures.push(error);
+    }
+    for (const result of results) {
+      if (result.status === "rejected" && !isSessionDeliveryGenerationRevokedError(result.reason)) {
+        failures.push(result.reason);
+      }
+    }
+    throwFailures();
+  });
+}
+
 /** Retain the original session generation before native cancellation can yield. */
 export async function prepareSubagentKillSession(
   cfg: OpenClawConfig,
@@ -43,6 +78,8 @@ export async function prepareSubagentKillSession(
   assertOwner: () => void,
   expected?: AgentRunSessionTarget,
   childAgentId?: string,
+  original?: SubagentRunRecord["childSessionIdentity"],
+  requesterOwnedRun?: SubagentRunRecord,
 ): Promise<SubagentKillSession> {
   const childOwner = resolveSubagentChildSessionOwner(
     { childSessionKey: sessionKey, childAgentId },
@@ -52,16 +89,43 @@ export async function prepareSubagentKillSession(
   const env = cloneEnvWithPlatformSemantics(process.env);
   const selected = expected?.sessionKey === sessionKey ? { ...expected } : undefined;
   const storePath = selected?.storePath ?? childOwner.storePath;
-  let releaseLifetime: (() => void) | undefined;
-  let execution: OpenClawAgentDatabaseExecution | undefined;
-  let nativeGeneration: AgentDatabaseGenerationClaim | undefined;
-  const assertNativeCurrent = () => {
+  const taskAuthority = requesterOwnedRun && resolveSubagentChildAuthority(requesterOwnedRun);
+  const prepareLegacySession = (
+    currentSession?: Pick<SessionEntry, "sessionId">,
+  ): SubagentKillSession | undefined => {
+    if (
+      requesterOwnedRun?.childSessionKey !== sessionKey ||
+      taskAuthority?.status !== "legacy-unverified" ||
+      taskAuthority.childAgentId !== agentId
+    ) {
+      return undefined;
+    }
+    if (resolveSubagentChildAuthority(requesterOwnedRun, currentSession).status === "mismatch") {
+      throw new Error(
+        "Subagent original session incarnation is unresolved or changed; no child work was changed.",
+      );
+    }
     assertOwner();
-    nativeGeneration?.assertCurrent();
+    return {
+      agentId,
+      storePath,
+      assertCurrent: assertOwner,
+      prepareRead: () => undefined,
+      withPublication: (run) => run(),
+      release: () => {},
+    };
   };
-  const release = async () => {
+  const legacySession = !requesterOwnedRun?.childSessionIdentity?.sessionId
+    ? prepareLegacySession()
+    : selected?.sessionId
+      ? prepareLegacySession({ sessionId: selected.sessionId })
+      : undefined;
+  if (legacySession) {
+    return legacySession;
+  }
+  let releaseLifetime: (() => void) | undefined;
+  const release = () => {
     releaseLifetime?.();
-    await execution?.release();
   };
   try {
     return await withSessionEntryReadOnlyInWorker(
@@ -72,11 +136,34 @@ export async function prepareSubagentKillSession(
           throw read.error;
         }
         const entry = read.value;
+        // An absent child row is missing evidence, not a conflicting incarnation.
+        const readLegacySession = prepareLegacySession(entry);
+        if (readLegacySession) {
+          return readLegacySession;
+        }
+        if (
+          resolveSubagentChildAuthority(
+            { childSessionKey: sessionKey, childAgentId: agentId, childSessionIdentity: original },
+            entry,
+          ).status !== "verified"
+        ) {
+          throw new Error(
+            "Subagent original session incarnation is unresolved or changed; no child work was changed.",
+          );
+        }
         if (
           selected?.sessionId &&
-          (entry?.sessionId !== selected.sessionId ||
-            (selected.expectedLifecycleRevision !== undefined &&
-              entry?.lifecycleRevision !== selected.expectedLifecycleRevision))
+          resolveSubagentChildAuthority(
+            {
+              childSessionKey: sessionKey,
+              childAgentId: agentId,
+              childSessionIdentity: {
+                sessionId: selected.sessionId,
+                lifecycleRevision: selected.expectedLifecycleRevision,
+              },
+            },
+            entry ?? null,
+          ).status !== "verified"
         ) {
           throw new Error("Subagent session changed during cancellation preparation");
         }
@@ -88,47 +175,6 @@ export async function prepareSubagentKillSession(
           path: owner.scope?.storePath ?? generationStorePath,
           env: owner.scope?.env ?? env,
         };
-        if (entry && owner.kind === "file" && supportsOpenClawAgentDatabaseExecution(database)) {
-          const identity = readDatabasePathIdentitySync(database.path);
-          if (!identity.key.startsWith("file:")) {
-            throw new Error(
-              "Subagent session database disappeared before cancellation preparation",
-            );
-          }
-          execution = captureOpenClawAgentDatabaseExecution(database, {
-            expectedIdentity: {
-              kind: "file",
-              physicalIdentity: identity.key.slice("file:".length),
-              nativeLocation: identity.canonicalPath,
-              birthtime: identity.birthtime,
-            },
-          });
-          nativeGeneration = execution.capturePreparedGenerationClaim();
-          if (nativeGeneration) {
-            await owner.refreshBeforeDispatch?.(assertNativeCurrent);
-          } else {
-            // Cold registration publishes topology before generation facts are retained.
-            await withSessionEntryWorker(
-              database,
-              undefined,
-              () => {
-                assertOwner();
-                owner.assertCurrent();
-              },
-              async (writer, source) => {
-                await owner.refreshBeforeDispatch?.(() => writer.assertCurrent());
-                await writer.runExisting(
-                  { ...source, onRegistryChange: owner.onRegistryChange },
-                  async () => undefined,
-                );
-              },
-              undefined,
-              execution,
-            );
-            nativeGeneration = execution.captureGenerationClaim();
-          }
-          await owner.revalidateTarget?.();
-        }
         const lifetime = await prepareSessionGenerationFacts({
           storePath: generationStorePath,
           sessionKey,
@@ -140,18 +186,13 @@ export async function prepareSubagentKillSession(
         releaseLifetime = lifetime.release;
         owner.assertCurrent();
         const assertCurrent = () => {
-          assertNativeCurrent();
+          assertOwner();
           lifetime.assertCurrent();
         };
         const prepareRead = () => {
-          assertNativeCurrent();
-          return lifetime.prepareRead()?.then(assertNativeCurrent);
+          assertOwner();
+          return lifetime.prepareRead();
         };
-        for (let pending = prepareRead(); pending; pending = prepareRead()) {
-          await pending;
-          owner.assertCurrent();
-        }
-        assertCurrent();
         return {
           agentId,
           storePath,
@@ -171,31 +212,30 @@ export async function prepareSubagentKillSession(
                 }
               }
               // The consumer publishes a truthful revoked-owner outcome under the FIFO.
-              assertNativeCurrent();
+              assertOwner();
               return run();
             }),
         };
       },
     );
   } catch (error) {
-    await release();
+    release();
     throw error;
   }
 }
 
 export async function persistSubagentAbortedLastRun(params: {
   childSessionKey: string;
-  storePath: string;
-  hasSessionEntry: boolean;
-  expectedSessionId?: string;
-  expectedLifecycleRevision?: string;
+  session: Pick<SubagentKillSession, "storePath" | "entry">;
   abortedLastRun: boolean;
   isCurrent?: (current: SessionEntry) => boolean;
   assertCommitAllowed?: () => void;
 }): Promise<boolean> {
-  if (!params.hasSessionEntry) {
+  const { storePath, entry } = params.session;
+  if (!entry) {
     return true;
   }
+  const { sessionId, lifecycleRevision } = entry;
   try {
     let selected: SessionEntry | undefined;
     const assertCommitAllowed = () => {
@@ -205,7 +245,7 @@ export async function persistSubagentAbortedLastRun(params: {
       }
     };
     await applySessionEntryExactReplacements({
-      storePath: params.storePath,
+      storePath,
       sessionKeys: [params.childSessionKey],
       activeSessionKey: params.childSessionKey,
       requireWriteSuccess: true,
@@ -216,8 +256,8 @@ export async function persistSubagentAbortedLastRun(params: {
         const current = selected;
         const changed =
           current &&
-          current.sessionId === params.expectedSessionId &&
-          current.lifecycleRevision === params.expectedLifecycleRevision &&
+          current.sessionId === sessionId &&
+          current.lifecycleRevision === lifecycleRevision &&
           params.isCurrent?.(current) !== false;
         if (changed && current.abortedLastRun === params.abortedLastRun) {
           assertCommitAllowed();

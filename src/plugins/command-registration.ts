@@ -3,7 +3,6 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { isOperatorScope } from "../gateway/operator-scopes.js";
-import { logVerbose } from "../globals.js";
 import { isRecord } from "../utils.js";
 import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
@@ -189,7 +188,7 @@ function validatePluginCommandDefinition(
       }
     }
   }
-  const nameError = validateCommandName(command.name.trim(), opts);
+  const nameError = validateCommandName(command.name, opts);
   if (nameError) {
     return nameError;
   }
@@ -200,7 +199,7 @@ function validatePluginCommandDefinition(
     if (typeof alias !== "string") {
       continue;
     }
-    const aliasError = validateCommandName(alias.trim());
+    const aliasError = validateCommandName(alias);
     if (aliasError) {
       return `Native command alias "${label}" invalid: ${aliasError}`;
     }
@@ -274,23 +273,12 @@ function normalizeAgentPromptGuidance(
 }
 
 function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
-  const keys = new Set<string>();
-  const push = (value: string | undefined) => {
-    const normalized = normalizeOptionalLowercaseString(value);
-    if (!normalized) {
-      return;
-    }
-    keys.add(`/${normalized}`);
-  };
-
-  push(command.name);
-  for (const alias of Object.values(command.nativeNames ?? {})) {
-    if (typeof alias === "string") {
-      push(alias);
-    }
-  }
-
-  return [...keys];
+  const names = [command.name, ...Object.values(command.nativeNames ?? {})];
+  const keys = names.flatMap((name) => {
+    const normalized = normalizeOptionalLowercaseString(name);
+    return normalized ? [`/${normalized}`] : [];
+  });
+  return [...new Set(keys)];
 }
 
 export function registerPluginCommand(
@@ -334,7 +322,6 @@ export function registerPluginCommandInRegistry(
   }
 
   const name = command.name.trim();
-  const normalizedName = normalizeLowercaseStringOrEmpty(name);
   const description = command.description.trim();
   const normalizedCommand = {
     ...command,
@@ -361,7 +348,6 @@ export function registerPluginCommandInRegistry(
       : {}),
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
-  const key = `/${normalizedName}`;
 
   for (const invocationKey of invocationKeys) {
     const existing = registry.commands.find((entry) =>
@@ -385,7 +371,6 @@ export function registerPluginCommandInRegistry(
       ? { trustedOwnerStatusExposure: true as const }
       : {}),
   });
-  logVerbose(`Registered plugin command: ${key} (plugin: ${pluginId})`);
   return { ok: true };
 }
 

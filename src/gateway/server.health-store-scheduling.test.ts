@@ -139,7 +139,7 @@ test.each(["separate", "shared"] as const)(
             const response = await rpcReq<StatusSummary>(ws, "status", {
               includeChannelSummary: false,
             });
-            expect(response.ok).toBe(true);
+            expect(response).toMatchObject({ ok: true });
             const sessions = expectDefined(response.payload?.sessions, "status sessions");
             expect(sessions.count).toBe(agentCount * 12 + (layout === "shared" ? 2 : 0));
             expect(sessions.recent).toHaveLength(10);

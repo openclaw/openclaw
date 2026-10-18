@@ -13,21 +13,12 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
 
-type XaiRealtimeVoice = "eve" | "ara" | "rex" | "sal" | "leo";
+type XaiRealtimeVoice = (typeof XAI_REALTIME_VOICES)[number];
 type XaiRealtimeReasoningEffort = "high" | "none";
 
-type XaiRealtimeVoiceProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-  voice?: string;
-  vadThreshold?: number;
-  silenceDurationMs?: number;
-  prefixPaddingMs?: number;
-  interruptResponseOnInputAudio?: boolean;
-  reasoningEffort?: XaiRealtimeReasoningEffort;
-  sessionResumption?: boolean;
-};
+type XaiRealtimeVoiceProviderConfig = Partial<
+  ReturnType<typeof normalizeXaiRealtimeProviderConfig>
+>;
 
 export type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
   Omit<XaiRealtimeVoiceProviderConfig, "interruptResponseOnInputAudio"> & {
@@ -111,13 +102,7 @@ export const XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
 export const XAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
 
-export const XAI_REALTIME_VOICES = [
-  "eve",
-  "ara",
-  "rex",
-  "sal",
-  "leo",
-] as const satisfies readonly XaiRealtimeVoice[];
+export const XAI_REALTIME_VOICES = ["eve", "ara", "rex", "sal", "leo"] as const;
 
 export function serializeXaiRealtimeToolResult(result: unknown): string {
   const message = "xAI realtime voice tool result is not JSON-serializable";
@@ -168,9 +153,7 @@ function asXaiReasoningEffort(value: unknown): XaiRealtimeReasoningEffort | unde
   throw new Error('xAI realtime voice reasoningEffort must be "high" or "none"');
 }
 
-export function normalizeXaiRealtimeProviderConfig(
-  config: RealtimeVoiceProviderConfig,
-): XaiRealtimeVoiceProviderConfig {
+export function normalizeXaiRealtimeProviderConfig(config: RealtimeVoiceProviderConfig) {
   const raw = readNestedXaiConfig(config);
   return {
     apiKey: normalizeResolvedSecretInputString({

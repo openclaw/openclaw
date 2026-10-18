@@ -1,7 +1,12 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../internal-runtime-context.js";
 import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
@@ -22,6 +27,8 @@ let registry: typeof import("../../subagents/registry/subagent-registry.test-hel
 
 async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
   resetEmbeddedAttemptHarness();
+  const config = { session: { store: sessionStore } };
+  setRuntimeConfigSnapshot(config);
   getHoisted().createOpenClawCodingToolsMock.mockReturnValue([
     {
       name: "sessions_spawn",
@@ -37,7 +44,7 @@ async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
     sessionKey,
     tempPaths,
     attemptOverrides: {
-      config: { session: { store: sessionStore } },
+      config,
       sessionTarget: {
         agentId: "main",
         sessionId: "embedded-session",
@@ -57,7 +64,12 @@ async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
       };
     },
   });
-  expect(result.terminal.kind).toBe("ok");
+  expect(
+    result.terminal.kind,
+    result.terminal.kind === "failed"
+      ? `${result.terminal.source}: ${result.terminal.error instanceof Error ? result.terminal.error.stack : String(result.terminal.error)}`
+      : undefined,
+  ).toBe("ok");
   if (!captured) {
     throw new Error("Expected a provider submission after history and prompt preparation");
   }
@@ -65,14 +77,12 @@ async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
 }
 
 function expectSubagentCarrier(messages: unknown[], state: string) {
-  expect(messages).toContainEqual(
-    expect.objectContaining({
-      role: "custom",
-      customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-      display: false,
-      content: expect.stringContaining(state),
-    }),
-  );
+  expect(messages.at(-1)).toMatchObject({
+    role: "custom",
+    customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+    display: false,
+    content: expect.stringContaining(state),
+  });
 }
 
 describe("subagent facts through full attempt history preparation", () => {
@@ -84,6 +94,7 @@ describe("subagent facts through full attempt history preparation", () => {
   afterEach(async () => {
     await registry.resetSubagentRegistryForTests({ persist: false });
     await cleanupTempPaths(tempPaths);
+    clearRuntimeConfigSnapshot();
   });
 
   it("preserves the complete system prompt across child state in code mode", async () => {
@@ -109,6 +120,7 @@ describe("subagent facts through full attempt history preparation", () => {
     } satisfies SubagentRunRecord;
     registry.seedSubagentRunForReadTest(run);
     const queued = await captureAttempt(codeModeOverride, sessionStore);
+    expect(existsSync(storePath)).toBe(false);
     registry.seedSubagentRunForReadTest({
       ...run,
       execution: { status: "running", startedAt: Date.now() },
@@ -123,6 +135,11 @@ describe("subagent facts through full attempt history preparation", () => {
     expect(queued.systemPrompt).not.toContain("run-worker");
     expectSubagentCarrier(queued.messages, "status=queued");
     expectSubagentCarrier(running.messages, "status=running");
-    expectSubagentCarrier(empty.messages, "## Active Subagents\nnone");
+    expectSubagentCarrier(empty.messages, "## Temporal Context\n");
+    expect(empty.messages.at(-1)).toMatchObject({
+      content: expect.stringMatching(
+        /^## Temporal Context\nCurrent date: \d{4}-\d{2}-\d{2}\nTime zone: [^\n]+$/,
+      ),
+    });
   });
 });

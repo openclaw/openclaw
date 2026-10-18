@@ -16,18 +16,38 @@ export type UserProfile = Omit<
 
 export type UserProfileOwnerErrorCode = "merge" | "role" | "repair-required";
 
-export type UserProfileDisplay = {
-  id: string;
-  displayName: string | null;
+export type UserProfileDisplay = Pick<UserProfileListItem, "id" | "displayName" | "hasAvatar"> & {
   avatarRevision: string;
-  hasAvatar: boolean;
 };
+
+type UserProfileAuthority = {
+  profileId: string;
+  role: string | null;
+  githubLogin?: string | null;
+  aliases: string[];
+  display: UserProfileDisplay;
+};
+
+export type UserProfileRoleAuthority = Pick<
+  UserProfileAuthority,
+  "profileId" | "role" | "githubLogin"
+>;
 
 export type CachedGitHubIdentity = { profileId: string; updatedAt: number };
 
+/** A sign-in binding verified earlier: Access email + immutable account ID, or a GitHub login alias. */
+export type CachedGitHubIdentityBinding = { accountId: number; email: string } | { login: string };
+
 export type StoredGitHubIdentity = { accountId: number; login: string };
 
-export type UserProfileGitHubAttribution = Map<string, StoredGitHubIdentity | null>;
+export type EnterpriseGitHubIdentity = StoredGitHubIdentity & {
+  host: string;
+  verifiedEmail?: string;
+};
+export type UserProfileGitHubAttribution = Map<
+  string,
+  StoredGitHubIdentity | EnterpriseGitHubIdentity | null
+>;
 
 export type UserProfileGitHubAttributionRead = {
   identities: UserProfileGitHubAttribution;
@@ -101,10 +121,7 @@ export type UserProfileAccessFacts = Readonly<{
   githubLogin?: string | null;
 }>;
 
-export type UserProfileIdentity = {
-  profileId: string;
-  role: string | null;
-  githubLogin?: string | null;
+export type UserProfileIdentity = Omit<UserProfileAuthority, "aliases" | "display"> & {
   aliases: ReadonlySet<string>;
 };
 
@@ -152,5 +169,19 @@ export type UserProfilesDatabase = {
 
 export type ProfileDisplayRow = Pick<
   UserProfilesDatabase["user_profiles"],
-  "id" | "display_name" | "avatar_mime" | "avatar_sha256" | "merged_into" | "updated_at" | "role"
-> & { has_avatar: SqlBool; githubAccountIds?: readonly number[]; githubLogin?: string | null };
+  | "id"
+  | "display_name"
+  | "avatar_mime"
+  | "avatar_sha256"
+  | "merged_into"
+  | "created_at"
+  | "updated_at"
+  | "role"
+> & {
+  has_avatar: SqlBool;
+  githubAccountIds?: readonly number[];
+  githubLogin?: string | null;
+  githubIdentity?: UserProfileListItem["githubIdentity"];
+  /** Present only for the canonical row with its exact local-owner identity binding. */
+  gatewayOwnerCreatedAt?: number;
+};

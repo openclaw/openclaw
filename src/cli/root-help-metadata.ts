@@ -1,4 +1,3 @@
-// Cached startup metadata readers for precomputed root and subcommand help text.
 import {
   PRECOMPUTED_SUBCOMMAND_HELP_NAMES,
   type PrecomputedSubcommandHelpName,
@@ -19,24 +18,17 @@ function loadPrecomputedHelpText(key: PrecomputedHelpTextKey): string | null {
   if (cached !== undefined) {
     return cached;
   }
-  let helpText: string | null = null;
-  try {
-    const parsed = readCliStartupMetadata(import.meta.url);
-    let value: unknown;
-    if (isPrecomputedSubcommandHelpName(key)) {
-      const subcommandHelpText = parsed?.subcommandHelpText;
-      if (isSubcommandHelpTextRecord(subcommandHelpText)) {
-        value = subcommandHelpText[key];
-      }
-    } else if (parsed) {
-      value = parsed[key];
+  const parsed = readCliStartupMetadata(import.meta.url);
+  let value: unknown;
+  if (isPrecomputedSubcommandHelpName(key)) {
+    const subcommandHelpText = parsed?.subcommandHelpText;
+    if (isSubcommandHelpTextRecord(subcommandHelpText)) {
+      value = subcommandHelpText[key];
     }
-    if (typeof value === "string" && value.length > 0) {
-      helpText = value;
-    }
-  } catch {
-    // Missing metadata is expected in source checkouts; fall back to live Commander help.
+  } else if (parsed) {
+    value = parsed[key];
   }
+  const helpText = typeof value === "string" && value.length > 0 ? value : null;
   // Entry can retry command help through run-main; keep a miss even if the
   // metadata reader advances from a falsy direct record to the parent layout.
   precomputedHelpText.set(key, helpText);

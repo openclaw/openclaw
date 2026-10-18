@@ -6,7 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   BUILD_ALL_STEPS,
-  formatBuildAllDuration,
   formatBuildAllTimingSummary,
   parseBuildAllArgs,
   resolveBuildAllEnvironment,
@@ -15,25 +14,31 @@ import {
   runBuildAllSteps,
 } from "../../scripts/build-all.mts";
 import {
+  hashInputFiles,
   resolveBuildStepCacheState,
   writeBuildStepCacheStamp,
   resolveBuildStepCacheStampState,
   restoreBuildStepCacheOutputs,
   finalizeBuildStepCache,
+  resetBuildCacheInputs,
+  writeBuildCacheInputs,
   type BuildCache,
 } from "../../scripts/lib/build-artifact-cache.mts";
-import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { collectBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { createManagedCommandInvocation } from "../../scripts/lib/managed-child-process.mts";
-import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
-import { runNodeMain } from "../../scripts/run-node.mts";
+import { TSDOWN_UNIFIED_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
+import { cleanTsdownOutputRoots } from "../../scripts/tsdown-build.mts";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runNodeMain } from "./run-node-boundary.test-support.js";
 import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
+import { createFixture } from "./tsdown-declaration-fixture.js";
 
 beforeEach(() => {
   const fence = vi
@@ -132,87 +137,52 @@ describe("resolveBuildAllStep", () => {
     );
   });
 
-  it("pins the first explicit full commit alias and rejects malformed values", () => {
-    const gitSha = "A".repeat(40);
-    expect(
-      resolveBuildAllEnvironment(
-        { GIT_SHA: gitSha, GITHUB_SHA: "b".repeat(40) },
-        () => new Date("2026-07-10T12:34:56.000Z"),
-        () => "c".repeat(40),
-      ).GIT_COMMIT,
-    ).toBe(gitSha.toLowerCase());
-    expect(() =>
-      resolveBuildAllEnvironment({ GIT_COMMIT: "deadbeef" }, undefined, () => null),
-    ).toThrow("full 40-character hexadecimal SHA");
-  });
-
-  it.each([false, true])(
-    "routes pnpm steps through the npm_execpath pnpm runner on Windows (defer isolated: %s)",
-    (deferIsolatedAssets) => {
-      const step = getBuildAllStep("plugins:assets:build");
-      const tempDir = tempDirs.make("openclaw-pnpm-runner-");
-      const npmExecPath = path.join(tempDir, "pnpm.cjs");
-      fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
-      const result = resolveBuildAllStep(step, {
-        platform: "win32",
-        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-        npmExecPath,
-        env: {},
-        deferIsolatedAssets,
-      });
-
-      expect(result).toEqual({
-        command: "C:\\Program Files\\nodejs\\node.exe",
-        args: [
-          npmExecPath,
-          "plugins:assets:build",
-          ...(deferIsolatedAssets ? ["--defer-isolated"] : []),
-        ],
-        options: {
-          stdio: "inherit",
-          env: {},
-          shell: false,
-          windowsVerbatimArguments: undefined,
+  it.each([
+    { heapMb: "4352", concurrency: "1" },
+    { heapMb: "12288", concurrency: "2" },
+  ])(
+    "passes encoded import URLs literally to managed Node on Windows (heap $heapMb)",
+    ({ heapMb, concurrency }) => {
+      const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
+      const result = resolveBuildAllStep(
+        {
+          ...getBuildAllStep("tsdown"),
+          args: ["--import", importUrl, ...getBuildAllStep("tsdown").args.slice(2)],
         },
+        {
+          nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+          env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: heapMb },
+        },
+      );
+
+      expect(
+        createManagedCommandInvocation({
+          bin: result.command,
+          args: result.args,
+          ...result.options,
+          platform: "win32",
+        }),
+      ).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: ["--import", importUrl, "scripts/tsdown-build.mts", "--concurrency", concurrency],
+        shell: false,
+        windowsVerbatimArguments: undefined,
       });
     },
   );
 
-  it("passes encoded import URLs literally to managed Node on Windows", () => {
-    const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
-    const result = resolveBuildAllStep(
-      { label: "tsdown-unified", args: ["--import", importUrl, "scripts/tsdown-build.mts"] },
-      { platform: "win32", nodeExecPath: "C:\\Program Files\\nodejs\\node.exe", env: {} },
-    );
-
-    expect(
-      createManagedCommandInvocation({
-        bin: result.command,
-        args: result.args,
-        ...result.options,
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["--import", importUrl, "scripts/tsdown-build.mts"],
-      shell: false,
-      windowsVerbatimArguments: undefined,
-    });
-  });
-
   it.each([false, true])(
-    "runs pnpm-free plugin builds through managed Node on Windows (defer isolated: %s)",
+    "runs plugin builds through managed Node on Windows (defer isolated: %s)",
     (deferIsolatedAssets) => {
       const args = [
         "--import",
-        "tsx",
+        "./scripts/tsx.mjs",
         "scripts/bundled-plugin-assets.mts",
         "--phase",
         "build",
         ...(deferIsolatedAssets ? ["--defer-isolated"] : []),
       ];
       const result = resolveBuildAllStep(getBuildAllStep("plugins:assets:build"), {
-        platform: "win32",
         nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
         env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
         deferIsolatedAssets,
@@ -240,6 +210,41 @@ describe("resolveBuildAllStep", () => {
 });
 
 describe("resolveBuildAllSteps", () => {
+  it.each(["full", "package", "strictSmoke", "pluginSdkStrictSmoke"])(
+    "keeps generated plugin artifacts from invalidating %s declaration inputs",
+    async (profile) => {
+      const cwd = tempDirs.make("openclaw-build-declaration-inputs-");
+      writeFixture(cwd, "tsconfig.json", '{"compilerOptions":{"types":[]},"include":["src"]}');
+      writeFixture(cwd, "src/index.ts", "export const value = 1;\n");
+      const signatures: string[] = [];
+      const runner = buildRunner();
+      runner.runStep.mockImplementation(({ args, options }) => {
+        if (args.includes("scripts/tsdown-build.mts") && !args.includes("--config")) {
+          cleanTsdownOutputRoots({ cwd, roots: ["dist", "dist-runtime"], env: options.env });
+        }
+        if (args.includes("scripts/build-external-plugin-local-dist.mts")) {
+          writeFixture(cwd, "extensions/example/assets/runtime.js", "export const asset = 1;\n");
+        }
+        if (args.includes("scripts/write-unified-entry-dts.ts")) {
+          const inputs = new CompilerInputSnapshot(cwd, {
+            toolchainFiles: [],
+            generatorInputs: [],
+          });
+          signatures.push(inputs.signature("tsconfig.json", [], ["src/index.ts"]));
+        }
+        if (args.includes("scripts/runtime-postbuild.mts")) {
+          writeFixture(cwd, "dist-runtime/extensions/example/index.d.ts", "export {};\n");
+        }
+        return { status: 0 };
+      });
+      for (let build = 0; build < 2; build++) {
+        expect((await runBuildAllSteps(profile, { ...runner, cwd })).exitCode).toBe(0);
+      }
+      expect(signatures).toHaveLength(2);
+      expect(signatures[1]).toBe(signatures[0]);
+    },
+  );
+
   it.each([
     ["full", "0"],
     ["full", "1"],
@@ -275,7 +280,6 @@ describe("resolveBuildAllSteps", () => {
       steps.find(({ label }) => label === "ui:build"),
       "UI build",
     );
-    expect(ui.pnpmArgs).toEqual(["ui:build"]);
     expect(ui.cache).toBeUndefined();
     expect(labels.indexOf("ui:build")).toBeGreaterThan(labels.indexOf("runtime-postbuild-stamp"));
     expect(labels.indexOf("ui:build")).toBeLessThan(labels.indexOf("write-build-info"));
@@ -283,6 +287,7 @@ describe("resolveBuildAllSteps", () => {
 
   it("parses build-all CLI args before any build work", () => {
     expect(parseBuildAllArgs([])).toEqual({ help: false, profile: "full" });
+    expect(parseBuildAllArgs(["runtime"])).toEqual({ help: false, profile: "runtime" });
     expect(parseBuildAllArgs(["cliStartup"])).toEqual({ help: false, profile: "cliStartup" });
     expect(parseBuildAllArgs(["cliStartup", "--help"])).toEqual({
       help: true,
@@ -340,14 +345,11 @@ describe("resolveBuildAllSteps", () => {
       const cwd = tempDirs.make("openclaw-phase-stamp-");
       const steps = resolveBuildAllSteps(profile, {})
         .filter((step) => ["runtime-postbuild", "runtime-postbuild-stamp"].includes(step.label))
-        .map((step) => {
-          if (step.kind === "pnpm") {
-            throw new Error("Runtime metadata steps must use the native Node owner");
-          }
-          return step.label === "runtime-postbuild"
+        .map((step) =>
+          step.label === "runtime-postbuild"
             ? Object.assign({}, step, { args: ["-e", "process.exit(0)"] })
-            : step;
-        });
+            : step,
+        );
       const result = await runBuildAllSteps(profile, {
         cwd,
         env: {},
@@ -406,7 +408,8 @@ describe("resolveBuildAllSteps", () => {
   it("admits package once and freezes its heap for every child", async () => {
     const profile = "package";
     const tsdownSteps = resolveBuildAllSteps(profile).filter(
-      (step) => step.label.startsWith("tsdown-") || step.label === "write-unified-entry-dts",
+      (step) =>
+        step.args.includes("scripts/tsdown-build.mts") || step.label === "write-unified-entry-dts",
     );
     const tsdownInvocations: ReturnType<typeof resolveBuildAllStep>[] = [];
     const executionOrder: string[] = [];
@@ -452,8 +455,8 @@ describe("resolveBuildAllSteps", () => {
       "run:tsdown-ai",
       "cache:tsdown-packages",
       "run:tsdown-packages",
-      "cache:tsdown-unified",
-      "run:tsdown-unified",
+      "cache:tsdown",
+      "run:tsdown",
       "cache:write-unified-entry-dts",
       "run:write-unified-entry-dts",
     ]);
@@ -534,7 +537,7 @@ describe("resolveBuildAllSteps", () => {
         memoryLimit: buildMemoryLimit(5),
         resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
         runStep: (invocation) => ({
-          status: invocation.args.includes("scripts/write-plugin-sdk-entry-dts.ts") ? 23 : 0,
+          status: invocation.args.includes("scripts/write-unified-entry-dts.ts") ? 23 : 0,
         }),
       });
       const labels = result.timings.map((timing) => timing.label);
@@ -544,18 +547,165 @@ describe("resolveBuildAllSteps", () => {
         expect.arrayContaining([
           "tsdown-ai",
           "tsdown-packages",
-          "tsdown-unified",
+          "tsdown",
           "write-unified-entry-dts",
-          "runtime-postbuild",
         ]),
       );
-      expect(labels.at(-1)).toBe("write-plugin-sdk-entry-dts");
+      expect(labels.at(-1)).toBe("write-unified-entry-dts");
       expect(labels).not.toContain("check-plugin-sdk-exports");
       for (const step of ["write-build-info", "write-cli-startup-metadata"]) {
         expect(resolveBuildAllSteps(profile).some(({ label }) => label === step)).toBe(false);
       }
     },
   );
+  it.each([
+    { runtimeExit: 0, uiExit: 0, expectedExit: 0, throws: false },
+    { runtimeExit: 0, uiExit: 7, expectedExit: 7, throws: false },
+    { runtimeExit: 8, uiExit: 0, expectedExit: 8, throws: false },
+    { runtimeExit: 0, uiExit: 0, expectedExit: 0, throws: true },
+  ])(
+    "joins independent UI and runtime writers before final metadata ($runtimeExit/$uiExit/$throws)",
+    async ({ runtimeExit, uiExit, expectedExit, throws }) => {
+      const ui = Promise.withResolvers<{ status: number }>();
+      const runtimeReached = Promise.withResolvers<void>();
+      const calls: string[] = [];
+      let settled = false;
+      const build = runBuildAllSteps("runtime", {
+        ...buildRunner(),
+        steps: [
+          "tsdown",
+          "external-plugins:local-dist",
+          "check-cli-bootstrap-imports",
+          "ui:build",
+          "write-build-info",
+        ].map((label) => ({ label, args: [label] })),
+        runStep({ args: [label] }) {
+          calls.push(label!);
+          if (label === "ui:build") {
+            return ui.promise;
+          }
+          if (label === "check-cli-bootstrap-imports") {
+            runtimeReached.resolve();
+            if (throws) {
+              throw new Error("runtime writer failed");
+            }
+            return { status: runtimeExit };
+          }
+          return { status: 0 };
+        },
+      });
+      void build.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+      try {
+        await runtimeReached.promise;
+        expect(calls).toEqual([
+          "tsdown",
+          "external-plugins:local-dist",
+          "check-cli-bootstrap-imports",
+          "ui:build",
+        ]);
+        expect(settled).toBe(false);
+      } finally {
+        ui.resolve({ status: uiExit });
+      }
+      if (throws) {
+        await expect(build).rejects.toThrow("runtime writer failed");
+      } else {
+        expect((await build).exitCode).toBe(expectedExit);
+      }
+      expect(calls.includes("write-build-info")).toBe(!throws && expectedExit === 0);
+    },
+  );
+  it.each(["write-unified-entry-dts", "write-plugin-sdk-entry-dts"])(
+    "finishes late %s compiler work before starting the independent UI build",
+    async (compiler) => {
+      const started = Promise.withResolvers<void>();
+      const finished = Promise.withResolvers<{ status: number }>();
+      const calls: string[] = [];
+      const build = runBuildAllSteps("full", {
+        ...buildRunner(),
+        steps: [
+          "tsdown",
+          "external-plugins:local-dist",
+          compiler,
+          "check-cli-bootstrap-imports",
+          "ui:build",
+        ].map((label) => ({ label, args: [label] })),
+        runStep({ args: [label] }) {
+          calls.push(label!);
+          if (label === compiler) {
+            started.resolve();
+            return finished.promise;
+          }
+          return { status: 0 };
+        },
+      });
+      try {
+        await started.promise;
+        expect(calls).toEqual(["tsdown", "external-plugins:local-dist", compiler]);
+      } finally {
+        finished.resolve({ status: 0 });
+      }
+      expect((await build).exitCode).toBe(0);
+      expect(calls).toEqual([
+        "tsdown",
+        "external-plugins:local-dist",
+        compiler,
+        "check-cli-bootstrap-imports",
+        "ui:build",
+      ]);
+    },
+  );
+  it("waits for copied assets and emitted runtime metadata before UI, then joins independent checks", async () => {
+    const copied = Promise.withResolvers<{ status: number }>();
+    const metadata = Promise.withResolvers<{ status: number }>();
+    const copyStarted = Promise.withResolvers<void>();
+    const metadataStarted = Promise.withResolvers<void>();
+    const checkStarted = Promise.withResolvers<void>();
+    const check = Promise.withResolvers<{ status: number }>();
+    const calls: string[] = [];
+    const build = runBuildAllSteps("full", {
+      ...buildRunner(),
+      steps: [
+        "tsdown",
+        "plugins:assets:copy",
+        "runtime-postbuild",
+        "check-plugin-sdk-exports",
+        "ui:build",
+        "write-build-info",
+      ].map((label) => ({ label, args: [label] })),
+      runStep({ args: [label] }) {
+        calls.push(label!);
+        if (label === "plugins:assets:copy") {
+          copyStarted.resolve();
+          return copied.promise;
+        }
+        if (label === "runtime-postbuild") {
+          metadataStarted.resolve();
+          return metadata.promise;
+        }
+        if (label === "check-plugin-sdk-exports") {
+          checkStarted.resolve();
+          return check.promise;
+        }
+        return { status: 0 };
+      },
+    });
+    await copyStarted.promise;
+    expect(calls).not.toContain("ui:build");
+    copied.resolve({ status: 0 });
+    await metadataStarted.promise;
+    expect(calls).not.toContain("ui:build");
+    metadata.resolve({ status: 0 });
+    await checkStarted.promise;
+    await Promise.resolve();
+    expect(calls).toContain("ui:build");
+    expect(calls).not.toContain("write-build-info");
+    check.resolve({ status: 0 });
+    expect((await build).exitCode).toBe(0);
+  });
   it.each([undefined, "0"])(
     "preserves source-run declaration choice %s through the canonical runtime build",
     async (skipDts) => {
@@ -624,6 +774,13 @@ describe("resolveBuildAllSteps", () => {
   it.each([
     { name: "ordinary build", profile: "full", env: {}, runtimeOnly: false, skipDts: undefined },
     {
+      name: "explicit runtime build overrides ambient declarations",
+      profile: "runtime",
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
+      runtimeOnly: true,
+      skipDts: "1",
+    },
+    {
       name: "runtime override",
       profile: "package",
       env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
@@ -634,8 +791,8 @@ describe("resolveBuildAllSteps", () => {
       name: "legacy updater marker",
       profile: "full",
       env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-      runtimeOnly: true,
-      skipDts: "1",
+      runtimeOnly: false,
+      skipDts: undefined,
     },
     {
       name: "explicit declarations during update",
@@ -660,7 +817,7 @@ describe("resolveBuildAllSteps", () => {
           OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: runtimeOnly ? "1" : "0",
         }).map((step) => step.label),
       );
-      expect(labels.includes("write-plugin-sdk-entry-dts")).toBe(!runtimeOnly);
+      expect(labels).not.toContain("write-plugin-sdk-entry-dts");
       expect(labels.includes("write-unified-entry-dts")).toBe(!runtimeOnly);
       expect(labels.includes("check-plugin-sdk-exports")).toBe(!runtimeOnly);
       expect(labels.includes("clean:dist")).toBe(profile === "package");
@@ -668,9 +825,12 @@ describe("resolveBuildAllSteps", () => {
         call.args.includes("scripts/tsdown-build.mts"),
       );
       expect(compilers).toHaveLength(runtimeOnly ? 1 : 3);
+      const runtimeCompiler = compilers.at(-1)!;
+      expect(runtimeCompiler.args).not.toContain("--config");
+      expect(runtimeCompiler.args).toContain("--concurrency");
       for (const compiler of compilers) {
         expect(compiler.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(
-          compiler.args.includes(TSDOWN_UNIFIED_CONFIG_GROUP) ? "1" : skipDts,
+          compiler === runtimeCompiler ? "1" : skipDts,
         );
       }
       for (const invocation of invocations) {
@@ -681,17 +841,8 @@ describe("resolveBuildAllSteps", () => {
       expect(env).toEqual(originalEnv);
     },
   );
-  it("rejects unknown build profiles", () => {
-    expect(() => resolveBuildAllSteps("wat")).toThrow("Unknown build profile: wat");
-  });
 });
 describe("build-all timing output", () => {
-  it("formats short and long phase durations compactly", () => {
-    expect(formatBuildAllDuration(42.4)).toBe("42ms");
-    expect(formatBuildAllDuration(1234)).toBe("1.23s");
-    expect(formatBuildAllDuration(12345)).toBe("12.3s");
-  });
-
   it("summarizes phases slowest first with total time and status", () => {
     expect(
       formatBuildAllTimingSummary([
@@ -706,6 +857,76 @@ describe("build-all timing output", () => {
 });
 
 describe("resolveBuildStepCacheState", () => {
+  it("validates the saved snapshot only when live outputs need restoration", () => {
+    const f = buildCacheFixture();
+    const cached = f.publish();
+    let savedReads = 0;
+    const readFile = fs.readFileSync.bind(fs);
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      if (String(file).startsWith(`${cached.outputRoot}${path.sep}`)) {
+        savedReads++;
+      }
+      return readFile(file, options);
+    });
+    try {
+      expect(f.lookup()).toMatchObject({ fresh: true, restorable: false });
+      expect(savedReads).toBe(0);
+      fs.writeFileSync(f.outputPath, "changed live bytes");
+      expect(f.lookup()).toMatchObject({ fresh: true, restorable: true });
+      expect(savedReads).toBeGreaterThan(0);
+      fs.writeFileSync(path.join(cached.outputRoot!, "dist/output.js"), "changed saved bytes");
+      expect(f.lookup()).toMatchObject({ fresh: false, restorable: false });
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it("hashes static inputs once on warm lookup and invalidates changed or removed compiler inputs", () => {
+    const f = buildCacheFixture();
+    const consumed = writeFixture(f.rootDir, "shared/consumed.ts", "consumed");
+    const params = {
+      ...f.params,
+      inputSignature: (inputs: string[]) =>
+        hashInputFiles(
+          f.rootDir,
+          [f.inputPath, ...inputs.map((file) => path.join(f.rootDir, file))],
+          fs,
+        ),
+    };
+    const lookup = () => resolveBuildStepCacheState(f.step, params);
+    expect(lookup().fresh).toBe(false);
+    const inputs = ["shared/consumed.ts"];
+    writeBuildStepCacheStamp(
+      f.step,
+      {
+        ...lookup(),
+        signature: params.inputSignature(inputs),
+        consumedInputs: inputs,
+      },
+      params,
+    );
+    let staticBytesRead = 0;
+    const readFile = fs.readFileSync.bind(fs);
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const bytes = readFile(file, options);
+      if (file === f.inputPath) {
+        staticBytesRead += Buffer.byteLength(bytes);
+      }
+      return bytes;
+    });
+    try {
+      expect(lookup()).toMatchObject({ fresh: true, consumedInputs: inputs });
+      expect(staticBytesRead).toBe(Buffer.byteLength("input"));
+    } finally {
+      read.mockRestore();
+    }
+    fs.writeFileSync(consumed, "changed");
+    expect(lookup().fresh).toBe(false);
+    fs.rmSync(consumed);
+    expect(lookup()).toMatchObject({ fresh: false, signature: params.inputSignature([]) });
+    expect(lookup().consumedInputs).toBeUndefined();
+  });
+
   it("lists large nested inventories without an argument-count limit", () => {
     const { rootDir } = buildCacheFixture();
     // Builds run on the main Node thread; Vitest workers have a different stack budget.
@@ -812,20 +1033,40 @@ describe("resolveBuildStepCacheState", () => {
     expect(restore).toMatchObject({ fresh: true, restorable: true });
     expect(restore.outputRoot).toBe(path.join(cacheRoot, "tsdown-unified", "outputs"));
     expect(restoreBuildStepCacheOutputs(restore, targetParams)).toBe(true);
+    const cachedFile = path.join(restore.outputRoot!, "dist/plugin-sdk/current.d.ts");
+    const restoredFile = path.join(target.rootDir, "dist/plugin-sdk/current.d.ts");
+    expect(fs.statSync(restoredFile).ino).not.toBe(fs.statSync(cachedFile).ino);
     expect(fs.readFileSync(path.join(target.rootDir, "dist/plugin-sdk/current.d.ts"), "utf8")).toBe(
       "export declare const current: true;",
     );
     expect(fs.existsSync(removedDts)).toBe(false);
     expect(fs.readFileSync(removedJs, "utf8")).toBe("runtime");
+    writeBuildCacheInputs(target.rootDir);
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(target.rootDir, "dist/build-cache-inputs.json"), "utf8"),
+      ),
+    ).toEqual({
+      version: 1,
+      steps: { "tsdown-unified": state.signature },
+    });
+    resetBuildCacheInputs(target.rootDir);
+    writeBuildCacheInputs(target.rootDir);
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(target.rootDir, "dist/build-cache-inputs.json"), "utf8"),
+      ),
+    ).toEqual({ version: 1, steps: {} });
+    fs.writeFileSync(cachedFile, "changed writable cache");
+    expect(fs.readFileSync(restoredFile, "utf8")).toBe("export declare const current: true;");
   });
 
-  it("keeps workspace declaration caches independent of core inputs", () => {
+  it("keys workspace declarations by their producer closure and package sources", () => {
     const rootDir = tempDirs.make("openclaw-tsdown-group-cache-");
+    createFixture(TSDOWN_UNIFIED_DTS_CONFIG_GROUPS, rootDir, ["tsdown.ai.config.ts"]);
     const steps = [getBuildAllStep("tsdown-ai"), getBuildAllStep("tsdown-packages")];
     for (const [file, contents] of [
-      ["package.json", "{}"],
       ["src/index.ts", "export const core = 1;"],
-      ["extensions/example/index.ts", "export const extension = 1;"],
       ["packages/ai/src/index.ts", "export const ai = 1;"],
       ["packages/net-policy/src/index.ts", "export const net = 1;"],
       ["packages/ai/dist/index.d.ts", "export declare const ai = 1;"],
@@ -833,34 +1074,6 @@ describe("resolveBuildStepCacheState", () => {
     ] as const) {
       writeFixture(rootDir, file, contents);
     }
-    for (const step of steps) {
-      const state = resolveBuildStepCacheState(step, { rootDir });
-      writeBuildStepCacheStamp(step, resolveBuildStepCacheStampState(step, state, { rootDir }), {
-        rootDir,
-      });
-    }
-    writeFixture(rootDir, "src/index.ts", "export const core = 2;");
-    expect(steps.map((step) => resolveBuildStepCacheState(step, { rootDir }).fresh)).toEqual([
-      true,
-      true,
-    ]);
-    writeFixture(rootDir, "packages/net-policy/src/index.ts", "export const net = 2;");
-    expect(steps.map((step) => resolveBuildStepCacheState(step, { rootDir }).fresh)).toEqual([
-      false,
-      false,
-    ]);
-  });
-
-  it.each<{ name: string; before: NodeJS.ProcessEnv; after: NodeJS.ProcessEnv }>([
-    { name: "bounded plugins", before: { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "plain" }, after: {} },
-    { name: "optional plugins", before: { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" }, after: {} },
-    {
-      name: "Docker plugins",
-      before: {},
-      after: { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "external" },
-    },
-  ])("keeps workspace declaration signatures independent of $name", ({ before, after }) => {
-    const { rootDir } = buildCacheFixture();
     for (const id of ["plain", "acpx", "external"]) {
       writeFixture(rootDir, `extensions/${id}/openclaw.plugin.json`, JSON.stringify({ id }));
       writeFixture(rootDir, `extensions/${id}/index.ts`, "export {};\n");
@@ -873,15 +1086,63 @@ describe("resolveBuildStepCacheState", () => {
         }),
       );
     }
-    expect(listBundledPluginBuildEntries({ cwd: rootDir, env: after })).not.toEqual(
-      listBundledPluginBuildEntries({ cwd: rootDir, env: before }),
-    );
-    for (const label of ["tsdown-ai", "tsdown-packages"]) {
-      const step = getBuildAllStep(label);
-      expect(resolveBuildStepCacheState(step, { rootDir, env: after }).signature).toBe(
-        resolveBuildStepCacheState(step, { rootDir, env: before }).signature,
+    const variants: { name: string; before: NodeJS.ProcessEnv; after: NodeJS.ProcessEnv }[] = [
+      {
+        name: "bounded plugins",
+        before: { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "plain" },
+        after: {},
+      },
+      { name: "optional plugins", before: { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" }, after: {} },
+      {
+        name: "Docker plugins",
+        before: {},
+        after: { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "external" },
+      },
+    ];
+    for (const { name, before, after } of variants) {
+      expect(collectBundledPluginBuildEntries({ cwd: rootDir, env: after }), name).not.toEqual(
+        collectBundledPluginBuildEntries({ cwd: rootDir, env: before }),
       );
+      for (const step of steps) {
+        expect(resolveBuildStepCacheState(step, { rootDir, env: after }).signature, name).toBe(
+          resolveBuildStepCacheState(step, { rootDir, env: before }).signature,
+        );
+      }
     }
+    for (const step of steps) {
+      const state = resolveBuildStepCacheState(step, { rootDir });
+      writeBuildStepCacheStamp(step, resolveBuildStepCacheStampState(step, state, { rootDir }), {
+        rootDir,
+      });
+    }
+    writeFixture(rootDir, "src/index.ts", "export const core = 2;");
+    expect(steps.map((step) => resolveBuildStepCacheState(step, { rootDir }).fresh)).toEqual([
+      true,
+      true,
+    ]);
+    for (const file of [
+      "scripts/lib/native-declaration-emitter.mts",
+      "scripts/lib/native-declaration-filesystem.mts",
+      "scripts/lib/native-typescript-config.mts",
+      "scripts/lib/native-typescript-toolchain.mts",
+    ]) {
+      const original = fs.readFileSync(path.join(rootDir, file), "utf8");
+      writeFixture(rootDir, file, original + "\n// changed generator bytes\n");
+      expect(
+        steps.map((step) => resolveBuildStepCacheState(step, { rootDir }).fresh),
+        file,
+      ).toEqual([false, false]);
+      writeFixture(rootDir, file, original);
+    }
+    expect(steps.map((step) => resolveBuildStepCacheState(step, { rootDir }).fresh)).toEqual([
+      true,
+      true,
+    ]);
+    writeFixture(rootDir, "packages/net-policy/src/index.ts", "export const net = 2;");
+    expect(steps.map((step) => resolveBuildStepCacheState(step, { rootDir }).fresh)).toEqual([
+      false,
+      false,
+    ]);
   });
 
   it("rejects a matching legacy stamp that omits a required output", () => {

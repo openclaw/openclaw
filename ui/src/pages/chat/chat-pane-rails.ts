@@ -14,7 +14,6 @@ import {
 } from "./sidebar-layout.ts";
 
 type ChatPaneSidebarLayout = Parameters<typeof isSidebarSlotVisible>[0];
-type ChatPaneGatewaySnapshot = Parameters<typeof isDesktopPanelAvailable>[0];
 
 /** Shared by rail clicks and keyboard shortcuts; opening a panel is not a preference write. */
 export function openPreferredSidebarPanel(
@@ -54,7 +53,7 @@ export function createChatPaneRails(params: {
   sessionTitle?: string;
   paneLabel?: string;
   presented: boolean;
-  gatewaySnapshot: ChatPaneGatewaySnapshot;
+  gatewaySnapshot: Parameters<typeof isDesktopPanelAvailable>[0];
   setObserverVisibility: (visible: boolean) => void;
   updateSidebarLayout: ChatPageHost["updateSidebarLayout"];
 }) {
@@ -75,28 +74,26 @@ export function createChatPaneRails(params: {
   };
   const togglePanelSlot = (slot: SidebarSlotId) =>
     isPanelVisible(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
-  const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
-    draftScope: params.presentationId,
-    draftContext: {
-      sessionTitle: params.sessionTitle,
-      paneLabel: params.paneLabel,
-    },
-    expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
-    presented: params.presented,
-  });
-  const sessionWorkspace = {
-    ...sessionWorkspaceBase,
-    collapsed: !isPanelVisible("workspace"),
-    onToggleCollapsed: () => togglePanelSlot("workspace"),
-    onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,
-    onToggleBrowser: state.browserPanelAvailable ? () => togglePanelSlot("browser") : undefined,
-    onToggleDesktop: isDesktopPanelAvailable(params.gatewaySnapshot)
-      ? () => togglePanelSlot("desktop")
-      : undefined,
-  };
   return {
     closePanelSlot,
     openPanelSlot,
-    sessionWorkspace,
+    sessionWorkspace: {
+      ...createSessionWorkspaceProps(state, {
+        draftScope: params.presentationId,
+        draftContext: {
+          sessionTitle: params.sessionTitle,
+          paneLabel: params.paneLabel,
+        },
+        expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
+        presented: params.presented,
+      }),
+      collapsed: !isPanelVisible("workspace"),
+      onToggleCollapsed: () => togglePanelSlot("workspace"),
+      onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,
+      onToggleBrowser: state.browserPanelAvailable ? () => togglePanelSlot("browser") : undefined,
+      onToggleDesktop: isDesktopPanelAvailable(params.gatewaySnapshot)
+        ? () => togglePanelSlot("desktop")
+        : undefined,
+    },
   };
 }

@@ -32,10 +32,7 @@ const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
 export function createDiffsHttpHandler(params: {
   store: DiffArtifactStore;
   logger?: PluginLogger;
-  allowRemoteViewer?: boolean;
-  trustedProxies?: readonly string[];
-  allowRealIpFallback?: boolean;
-  resolveAccessConfig?: () => {
+  resolveAccessConfig: () => {
     allowRemoteViewer?: boolean;
     trustedProxies?: readonly string[];
     allowRealIpFallback?: boolean;
@@ -64,11 +61,7 @@ export function createDiffsHttpHandler(params: {
       return false;
     }
 
-    const accessConfig = params.resolveAccessConfig?.() ?? {
-      allowRemoteViewer: params.allowRemoteViewer,
-      trustedProxies: params.trustedProxies,
-      allowRealIpFallback: params.allowRealIpFallback,
-    };
+    const accessConfig = params.resolveAccessConfig();
     const access = resolveViewerAccess(req, {
       trustedProxies: accessConfig.trustedProxies,
       allowRealIpFallback: accessConfig.allowRealIpFallback,

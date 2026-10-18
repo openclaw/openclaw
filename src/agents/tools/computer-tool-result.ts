@@ -120,12 +120,11 @@ async function projectComputerImage(params: {
   image?: { base64: string; mimeType: string };
   action: ComputerToolAction;
   referenceWidth: number;
-  modelHasVision?: boolean;
 }) {
   // Keep the delivered pixels within the replay cap so later turns cannot
   // resize the image underneath the coordinates bound to it.
   const content = await sanitizeContentBlocksImages(
-    params.image && params.modelHasVision !== false
+    params.image
       ? [{ type: "image", data: params.image.base64, mimeType: params.image.mimeType }]
       : [],
     `computer:${params.action}`,
@@ -142,7 +141,6 @@ export async function projectScreenshotResult(params: {
   target: ComputerTarget;
   action: ComputerToolAction;
   referenceWidth: number;
-  modelHasVision?: boolean;
 }): Promise<{
   result: AgentToolResult<unknown>;
   frameId: string;
@@ -156,12 +154,6 @@ export async function projectScreenshotResult(params: {
     ...params.noteLines,
     `screenshot ${dims} (screen ${target.screenIndex}, frameId ${frameId})`,
   ].join("\n");
-  if (params.modelHasVision === false) {
-    content.push({
-      type: "text",
-      text: "[model has no vision; screenshot omitted — use a vision-capable model for computer use]",
-    });
-  }
   const result = {
     content: [{ type: "text" as const, text }, ...content],
     details: {
@@ -184,7 +176,6 @@ export async function projectComputerActResult(params: {
   target: ComputerTarget;
   action: ComputerToolAction;
   referenceWidth: number;
-  modelHasVision?: boolean;
 }): Promise<{
   result: AgentToolResult<unknown>;
   imageCoordinates?: ComputerObservationState["imageCoordinates"];

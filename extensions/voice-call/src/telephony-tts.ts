@@ -11,22 +11,9 @@ export type TelephonyTtsRuntime = Pick<
 >;
 
 /** Provider facade used by Twilio/webhook code for telephony synthesis. */
-export type TelephonyTtsProvider = {
-  synthesisTimeoutMs: number;
-  synthesizeForTelephony: (text: string) => Promise<Buffer>;
-};
+export type TelephonyTtsProvider = Awaited<ReturnType<typeof createTelephonyTtsProvider>>;
 
 export const TELEPHONY_DEFAULT_TTS_TIMEOUT_MS = 8000;
-
-class UnsupportedTelephonyTtsOutputFormatError extends Error {
-  constructor(
-    readonly outputFormat: string,
-    readonly provider: string,
-  ) {
-    super(`Unsupported telephony TTS output format "${outputFormat}" from provider "${provider}"`);
-    this.name = "UnsupportedTelephonyTtsOutputFormatError";
-  }
-}
 
 function convertTelephonyTtsOutput(result: {
   audioBuffer: Buffer;
@@ -51,9 +38,13 @@ function convertTelephonyTtsOutput(result: {
   if (isPcm) {
     return convertPcmToMulaw8k(result.audioBuffer, result.sampleRate);
   }
-  throw new UnsupportedTelephonyTtsOutputFormatError(
-    result.outputFormat ?? "absent",
-    result.provider ?? "unknown",
+  const outputFormat = result.outputFormat ?? "absent";
+  const provider = result.provider ?? "unknown";
+  throw Object.assign(
+    new Error(
+      `Unsupported telephony TTS output format "${outputFormat}" from provider "${provider}"`,
+    ),
+    { outputFormat, provider, name: "UnsupportedTelephonyTtsOutputFormatError" },
   );
 }
 
@@ -65,7 +56,7 @@ export async function createTelephonyTtsProvider(params: {
   logger?: {
     warn?: (message: string) => void;
   };
-}): Promise<TelephonyTtsProvider> {
+}) {
   const { coreConfig, ttsOverride, runtime, logger } = params;
   const preparedConfig = await runtime.prepareTtsRequest({
     cfg: coreConfig,

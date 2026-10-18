@@ -73,7 +73,9 @@ function transcriptMethod<T>(
           throw new Error("Transcript archive access changed");
         }
       };
-      respond(true, await read(store, params, cfg, assertCurrent));
+      const result = await read(store, params, cfg, assertCurrent);
+      assertCurrent();
+      respond(true, result);
     } catch (error) {
       if (!(error instanceof TranscriptLibraryError)) {
         context.logGateway.warn(`${method} failed: ${formatForLog(error)}`);

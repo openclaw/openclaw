@@ -1,4 +1,5 @@
 import type { AgentToolParam } from "openai/resources/beta/agents/agents";
+import { resolveStoredSessionPermissionPolicy } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   applyEmbeddedAttemptToolsAllow,
   buildAgentHookContextChannelFields,
@@ -77,12 +78,12 @@ export type AgentsApiToolSurface = {
 };
 
 /** Gateway functions retain host authority; shell and file tools stay in the hosted VM. */
-export function buildAgentsApiToolSurface(
+export async function buildAgentsApiToolSurface(
   params: AgentHarnessAttemptParamsV2,
   signal: AbortSignal,
   assertCurrent: () => void,
   registerCleanup: (cleanup: (reason: string) => Promise<void>) => void,
-): AgentsApiToolSurface {
+): Promise<AgentsApiToolSurface> {
   assertCurrent();
   const agentId = params.agentId;
   if (!agentId) {
@@ -98,13 +99,13 @@ export function buildAgentsApiToolSurface(
     ...params,
     sessionKey: policySessionKey,
   }).channelId;
-  const createToolSurface = params.hostCapabilities.createToolSurface;
-  if (!createToolSurface) {
+  const createToolSurfaceAsync = params.hostCapabilities.createToolSurfaceAsync;
+  if (!createToolSurfaceAsync) {
     throw new Error("Agents API tool construction requires a current host capability");
   }
   const constructed = params.disableTools
     ? []
-    : createToolSurface(
+    : await createToolSurfaceAsync(
         {
           ...runContext,
           agentId,
@@ -117,6 +118,12 @@ export function buildAgentsApiToolSurface(
           agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, agentId),
           workspaceDir: params.workspaceDir,
           cwd,
+          sessionPermissionPolicy: resolveStoredSessionPermissionPolicy(
+            params,
+            params.workspaceDir,
+          ),
+          requireWorkspaceOnly: params.requireWorkspaceOnly,
+          exec: { ...params.execOverrides, config: params.config, elevated: params.bashElevated },
           spawnWorkspaceDir: params.workspaceDir,
           preparedModelRuntime: params.preparedModelRuntime,
           skillsSnapshot: params.skillsSnapshot,
@@ -168,6 +175,8 @@ export function buildAgentsApiToolSurface(
         },
         { cwd },
       );
+  assertCurrent();
+  signal.throwIfAborted();
   const tools = applyEmbeddedAttemptToolsAllow(
     // Search stays native; requester yields and image generation are outside this prototype.
     constructed.filter(
@@ -237,9 +246,9 @@ export function buildAgentsApiToolSurface(
   const executionBoundaries = createAgentHarnessToolExecutionBoundaryRegistry();
   const contextTokens = params.contextTokenBudget ?? params.model.contextWindow;
   const maxChars =
-    typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0
-      ? resolveLiveToolResultMaxChars({ contextWindowTokens: contextTokens })
-      : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+    contextTokens === undefined
+      ? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS
+      : resolveLiveToolResultMaxChars({ contextWindowTokens: contextTokens });
 
   return {
     declarations,
@@ -254,7 +263,7 @@ export function buildAgentsApiToolSurface(
       signal.throwIfAborted();
       const entry = toolMap.get(call.name);
       let startedAt: number;
-      let executedArgs = isRecord(call.arguments) ? call.arguments : {};
+      let executedArgs: Record<string, unknown> = {};
       let executionBoundary: ReturnType<
         ReturnType<typeof createAgentHarnessToolExecutionBoundaryRegistry>["begin"]
       >;
@@ -504,9 +513,7 @@ export function buildAgentsApiToolSurface(
           executionBoundary = boundary;
           executedArgs = executedArguments;
           startedAt = invocationStartedAt;
-          const message = sanitizeToolResult(
-            formatToolExecutionErrorMessage(error, "OpenClaw tool failed"),
-          );
+          const message = formatToolExecutionErrorMessage(error, "OpenClaw tool failed");
           const disposition =
             getBeforeToolCallFailureDisposition(error) ??
             (signal.aborted ? "cancelled" : resolveToolExecutionErrorKind(error));
@@ -616,9 +623,7 @@ function serializeToolText(
       break;
     }
     const next =
-      block.type === "text"
-        ? sanitizeToolResult(block.text)
-        : "[Image result omitted from Agents API function output]";
+      block.type === "text" ? block.text : "[Image result omitted from Agents API function output]";
     text += `${text ? "\n" : ""}${sliceToolResultTextToBudget(next, maxChars - text.length)}`;
   }
   return sliceToolResultTextToBudget(text || "Tool completed with no text output.", maxChars);

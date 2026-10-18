@@ -17,7 +17,7 @@ import {
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-persistence.js";
 import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export function registerQueuedUnknownKillAuthorityTest() {

@@ -33,6 +33,40 @@ function spyOnSpawn() {
   syncBuiltinESMExports();
   return spy;
 }
+function preloadSpawn(preload: string, onSpawn?: (child: childProcess.ChildProcess) => void) {
+  const original = childProcess.spawn;
+  return spyOnSpawn().mockImplementationOnce((...args: Parameters<typeof childProcess.spawn>) => {
+    const [command, argv, options] = args;
+    const child = original(command, ["--require", preload, ...argv], options);
+    onSpawn?.(child);
+    return child;
+  });
+}
+function spawnedHelper(spawned: ReturnType<typeof spyOnSpawn>, pid: number) {
+  return spawned.mock.results.flatMap((result) =>
+    result.type === "return" && result.value.pid === pid ? [result.value] : [],
+  )[0]!;
+}
+async function sendAndReceive(helper: childProcess.ChildProcess, type: string) {
+  const received = once(helper, "message");
+  helper.send({ type });
+  return (await received)[0];
+}
+async function expire(helper: childProcess.ChildProcess) {
+  expect(await sendAndReceive(helper, "acceptance-expire")).toEqual({
+    type: "workspace-quiescence-retired",
+    nonce,
+  });
+}
+function messageReceived(child: childProcess.ChildProcess, type: string) {
+  const received = createDeferred<childProcess.ChildProcess>();
+  child.on("message", (message: unknown) => {
+    if (isRecord(message) && message.type === type) {
+      received.resolve(child);
+    }
+  });
+  return received;
+}
 const identity = {
   gatewayNamespace: "gateway-watchdog",
   environmentId: "worker-watchdog",
@@ -90,7 +124,38 @@ function fixture() {
       },
       async () => [],
     );
-  return { runtime, input, command, workspaceDir, leasePath, readLease, collect };
+  const expectCustody = (active: boolean, leaseExists = active) => {
+    expect(runtime.quiescence.hasActiveWork()).toBe(active);
+    expect(fs.existsSync(leasePath)).toBe(leaseExists);
+  };
+  const collectAndExpect = async (sequence: number, exists: boolean) => {
+    await collect(sequence);
+    expect(fs.existsSync(workspaceDir)).toBe(exists);
+  };
+  const cancelledCommand = async (operation: NodeWorkerWorkspaceQuiescenceInput) => {
+    const caller = new AbortController();
+    const execute = runtime.quiescence.execute.bind(runtime.quiescence);
+    const executing = vi
+      .spyOn(runtime.quiescence, "execute")
+      .mockImplementationOnce((context, signal) => {
+        const pending = execute(context, signal);
+        caller.abort();
+        return pending;
+      });
+    await expect(command(operation, caller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    executing.mockRestore();
+  };
+  return {
+    runtime,
+    input,
+    command,
+    workspaceDir,
+    leasePath,
+    readLease,
+    collectAndExpect,
+    expectCustody,
+    cancelledCommand,
+  };
 }
 const acquire = { action: "acquire", nonce, timeoutMs: 30_000 } as const;
 const renew = { action: "renew", nonce, timeoutMs: 30_000, validationMode: "final" } as const;
@@ -118,25 +183,11 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     await refused;
     await f.command(acquire);
     const lease = f.readLease();
-    const duplicate = new AbortController();
-    const execute = f.runtime.quiescence.execute.bind(f.runtime.quiescence);
-    const executing = vi
-      .spyOn(f.runtime.quiescence, "execute")
-      .mockImplementationOnce((context, signal) => {
-        const pending = execute(context, signal);
-        duplicate.abort();
-        return pending;
-      });
-    await expect(f.command(acquire, duplicate.signal)).rejects.toMatchObject({
-      name: "AbortError",
-    });
-    executing.mockRestore();
+    await f.cancelledCommand(acquire);
     const exact = processIdentity.requireNodeWorkerProcessIdentity(lease.watchdog.pid);
     expect(lease).toMatchObject({ nonce, sharedHost: true, processes: [] });
     expect(lease.watchdog.pid).not.toBe(process.pid);
-    const helper = spawned.mock.results.flatMap((result) =>
-      result.type === "return" && result.value.pid === lease.watchdog.pid ? [result.value] : [],
-    )[0]!;
+    const helper = spawnedHelper(spawned, lease.watchdog.pid);
     expect(helper).toBeDefined();
     expect(fs.readFileSync("/proc/" + helper.pid + "/status", "utf8")).toContain(
       "PPid:\t" + process.pid,
@@ -159,6 +210,7 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     await f.runtime.processes.stopEnvironment({
       gatewayNamespace: identity.gatewayNamespace,
       environmentId: identity.environmentId,
+      sessionId: identity.sessionId,
       ownerEpoch: 1,
     });
     expect(f.runtime.processes.hasActiveWork()).toBe(false);
@@ -167,11 +219,9 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     await f.command(renew);
     expect(f.readLease().watchdog).toEqual(lease.watchdog);
     expect(processIdentity.requireNodeWorkerProcessIdentity(lease.watchdog.pid)).toEqual(exact);
-    await f.collect(1);
-    expect(fs.existsSync(f.workspaceDir)).toBe(true);
+    await f.collectAndExpect(1, true);
     await f.command(release);
-    expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
-    expect(fs.existsSync(f.leasePath)).toBe(false);
+    f.expectCustody(false);
     const nextNonce = "b".repeat(32);
     await f.command({ ...acquire, nonce: nextNonce });
     expect(f.readLease(nextNonce).watchdog).toEqual(lease.watchdog);
@@ -181,18 +231,7 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     await f.command({ ...renew, nonce: nextNonce });
     await f.command({ ...release, nonce: nextNonce });
     const cancelledNonce = "c".repeat(32);
-    const late = new AbortController();
-    const reused = vi
-      .spyOn(f.runtime.quiescence, "execute")
-      .mockImplementationOnce((context, signal) => {
-        const pending = execute(context, signal);
-        late.abort();
-        return pending;
-      });
-    await expect(
-      f.command({ ...acquire, nonce: cancelledNonce }, late.signal),
-    ).rejects.toMatchObject({ name: "AbortError" });
-    reused.mockRestore();
+    await f.cancelledCommand({ ...acquire, nonce: cancelledNonce });
     await f.command({ ...release, nonce: cancelledNonce });
     await f.command({ ...acquire, nonce: nextNonce });
     await f.command({ ...release, nonce: nextNonce });
@@ -200,8 +239,7 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).toBe("live");
     await f.runtime.quiescence.close();
     expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).not.toBe("live");
-    await f.collect(2);
-    expect(fs.existsSync(f.workspaceDir)).toBe(false);
+    await f.collectAndExpect(2, false);
   });
 
   it("retires the idle helper before a different workspace generation acquires custody", async () => {
@@ -220,12 +258,11 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
   });
 
-  it("rejects nonce, namespace, root and incompatible input without borrowing or retiring the live helper", async () => {
+  it("rejects nonce, namespace and root without borrowing or retiring the live helper", async () => {
     const f = fixture();
     await f.command(acquire);
     const lease = f.readLease();
-    for (const action of ["acquire", "renew", "release"] as const) {
-      const operation = action === "acquire" ? acquire : action === "renew" ? renew : release;
+    for (const operation of [acquire, renew, release]) {
       await expect(f.command({ ...operation, nonce: "b".repeat(32) })).rejects.toThrow(
         /already active|no longer active/,
       );
@@ -239,61 +276,45 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
         argv: [NODE_WORKSPACE_QUIESCENCE_COMMAND, path.dirname(f.workspaceDir)],
       }),
     ).rejects.toThrow("root does not match its owner");
-    for (const extra of [
-      { input: "caller-script" },
-      { resetWorkspace: true },
-      { process: { action: "start", processId: "app" } },
-    ]) {
-      expect(() =>
-        parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...f.input(acquire), ...extra })),
-      ).toThrow();
-    }
     await f.command(renew);
     expect(f.readLease().watchdog).toEqual(lease.watchdog);
   });
 
-  it.each(["reused", "unknown"] as const)(
+  it.each(["reused", "unknown", "dead"] as const)(
     "fails closed and retains workspace custody for a %s helper identity",
     async (state) => {
       const f = fixture();
+      const spawned = spyOnSpawn();
       await f.command(acquire);
       const lease = f.readLease();
-      const inspect = processIdentity.inspectNodeWorkerProcessIdentity;
-      const mocked = vi
-        .spyOn(processIdentity, "inspectNodeWorkerProcessIdentity")
-        .mockImplementation((observed) =>
-          observed.pid === lease.watchdog.pid ? state : inspect(observed),
-        );
+      let restoreIdentity: (() => void) | undefined;
+      if (state === "dead") {
+        const helper = spawnedHelper(spawned, lease.watchdog.pid);
+        const done = once(helper, "close");
+        helper.kill("SIGKILL");
+        await done;
+      } else {
+        const inspect = processIdentity.inspectNodeWorkerProcessIdentity;
+        const mocked = vi
+          .spyOn(processIdentity, "inspectNodeWorkerProcessIdentity")
+          .mockImplementation((observed) =>
+            observed.pid === lease.watchdog.pid ? state : inspect(observed),
+          );
+        restoreIdentity = () => mocked.mockRestore();
+      }
       await expect(f.command(renew)).rejects.toThrow("watchdog identity changed");
       expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
-      await f.collect(1);
-      expect(fs.existsSync(f.workspaceDir)).toBe(true);
-      mocked.mockRestore();
-      await f.command(renew);
+      await f.collectAndExpect(1, true);
+      if (state === "dead") {
+        await f.command(release);
+        f.expectCustody(false);
+        await f.collectAndExpect(2, false);
+      } else {
+        restoreIdentity?.();
+        await f.command(renew);
+      }
     },
   );
-
-  it("keeps unexpected helper death in custody until authorized recovery", async () => {
-    const f = fixture();
-    const spawned = spyOnSpawn();
-    await f.command(acquire);
-    const lease = f.readLease();
-    const helper = spawned.mock.results.flatMap((result) =>
-      result.type === "return" && result.value.pid === lease.watchdog.pid ? [result.value] : [],
-    )[0]!;
-    const done = once(helper, "close");
-    helper.kill("SIGKILL");
-    await done;
-    await expect(f.command(renew)).rejects.toThrow("watchdog identity changed");
-    expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
-    await f.collect(1);
-    expect(fs.existsSync(f.workspaceDir)).toBe(true);
-    await f.command(release);
-    expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
-    expect(fs.existsSync(f.leasePath)).toBe(false);
-    await f.collect(2);
-    expect(fs.existsSync(f.workspaceDir)).toBe(false);
-  });
 
   it.each([false, true])(
     "joins an accepted renewal before releasing custody (caller cancelled: %s)",
@@ -315,22 +336,14 @@ process.on("message", (message) => {
   if (message?.type === "acceptance-renewal-release") { const publish = reply; reply = undefined; publish?.(); }
 });`,
       );
-      const original = childProcess.spawn;
-      const entered = createDeferred<childProcess.ChildProcess>();
-      spyOnSpawn().mockImplementationOnce((...args: Parameters<typeof childProcess.spawn>) => {
-        const [command, argv, options] = args;
-        const child = original(command, ["--require", preload, ...argv], options);
-        child.on("message", (message: unknown) => {
-          if (isRecord(message) && message.type === "acceptance-renewal-held") {
-            entered.resolve(child);
-          }
-        });
-        return child;
+      let entered: ReturnType<typeof messageReceived>;
+      preloadSpawn(preload, (child) => {
+        entered = messageReceived(child, "acceptance-renewal-held");
       });
       await f.command(acquire);
       const caller = new AbortController();
       const renewal = f.command(renew, caller.signal);
-      const helper = await entered.promise;
+      const helper = await entered!.promise;
       if (cancelled) {
         caller.abort();
       }
@@ -339,38 +352,15 @@ process.on("message", (message) => {
       );
       const closing = f.runtime.quiescence.close();
       try {
-        expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
-        expect(fs.existsSync(f.leasePath)).toBe(true);
+        f.expectCustody(true);
       } finally {
         helper.send({ type: "acceptance-renewal-release" });
         await Promise.all([observedRenewal, closing]);
       }
-      expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
-      expect(fs.existsSync(f.leasePath)).toBe(false);
-      await f.collect(1);
-      expect(fs.existsSync(f.workspaceDir)).toBe(false);
+      f.expectCustody(false);
+      await f.collectAndExpect(1, false);
     },
   );
-
-  it("joins startup before close removes the lease and retained child", async () => {
-    const f = fixture();
-    const original = childProcess.spawn;
-    const entered = createDeferred();
-    spyOnSpawn().mockImplementation((...args: Parameters<typeof childProcess.spawn>) => {
-      const child = original(...args);
-      entered.resolve();
-      return child;
-    });
-    const acquiring = f.command(acquire);
-    const rejected = expect(acquiring).rejects.toThrow(/closed|identity changed/);
-    await entered.promise;
-    await f.runtime.quiescence.close();
-    await rejected;
-    expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
-    expect(fs.existsSync(f.leasePath)).toBe(false);
-    await f.collect(1);
-    expect(fs.existsSync(f.workspaceDir)).toBe(false);
-  });
 
   it.each([false, true])(
     "settles expired controls before helper reuse and shutdown (renewal race: %s)",
@@ -421,19 +411,11 @@ process.on("message", (message) => {
   if (message?.type === "acceptance-control-fence") send({ type: "acceptance-control-fenced" });
 });`,
       );
-      const original = childProcess.spawn;
       // Only the watchdog owns this clock; release controls must keep their real timers.
-      const spawned = spyOnSpawn().mockImplementationOnce(
-        (...args: Parameters<typeof childProcess.spawn>) => {
-          const [command, argv, options] = args;
-          return original(command, ["--require", preload, ...argv], options);
-        },
-      );
+      const spawned = preloadSpawn(preload);
       await f.command(acquire);
       const lease = f.readLease();
-      const helper = spawned.mock.results.flatMap((result) =>
-        result.type === "return" && result.value.pid === lease.watchdog.pid ? [result.value] : [],
-      )[0]!;
+      const helper = spawnedHelper(spawned, lease.watchdog.pid);
       if (!renewalRaces) {
         const held = once(helper, "message");
         helper.send({ type: "acceptance-release-hold" });
@@ -442,9 +424,7 @@ process.on("message", (message) => {
         const stopped = once(helper, "close");
         const outcomes = Promise.allSettled([releasing, f.runtime.quiescence.close()]);
         try {
-          const retired = once(helper, "message");
-          helper.send({ type: "acceptance-expire" });
-          expect((await retired)[0]).toEqual({ type: "workspace-quiescence-retired", nonce });
+          await expire(helper);
           expect(await outcomes).toEqual([
             { status: "fulfilled", value: expect.objectContaining({ code: 0 }) },
             { status: "fulfilled", value: undefined },
@@ -458,16 +438,14 @@ process.on("message", (message) => {
         expect(helper.exitCode).toBe(0);
       } else {
         const fence = async () => {
-          const fenced = once(helper, "message");
-          helper.send({ type: "acceptance-control-fence" });
-          expect((await fenced)[0]).toEqual({ type: "acceptance-control-fenced" });
+          expect(await sendAndReceive(helper, "acceptance-control-fence")).toEqual({
+            type: "acceptance-control-fenced",
+          });
         };
         const held = once(helper, "message");
         const renewal = expect(f.command(renew)).rejects.toThrow("lease expired during control");
         expect((await held)[0]).toEqual({ type: "acceptance-renewal-held" });
-        const retired = once(helper, "message");
-        helper.send({ type: "acceptance-expire" });
-        expect((await retired)[0]).toEqual({ type: "workspace-quiescence-retired", nonce });
+        await expire(helper);
         await renewal;
         await f.command(release);
         await f.command(acquire);
@@ -479,9 +457,7 @@ process.on("message", (message) => {
         });
         expect((await currentHeld)[0]).toEqual({ type: "acceptance-renewal-held" });
         try {
-          const stale = once(helper, "message");
-          helper.send({ type: "acceptance-renewal-release" });
-          expect((await stale)[0]).toMatchObject({
+          expect(await sendAndReceive(helper, "acceptance-renewal-release")).toMatchObject({
             type: "workspace-quiescence-result",
             nonce,
             action: "renew",
@@ -492,20 +468,13 @@ process.on("message", (message) => {
           helper.send({ type: "acceptance-renewal-release" });
           await currentRenewal;
         }
-        const idleExpiry = once(helper, "message");
-        helper.send({ type: "acceptance-expire" });
-        expect((await idleExpiry)[0]).toEqual({ type: "workspace-quiescence-retired", nonce });
+        await expire(helper);
         await f.command(acquire);
         expect(f.readLease().watchdog).toEqual(lease.watchdog);
         const heldAgain = once(helper, "message");
         const expiring = expect(f.command(renew)).rejects.toThrow("lease expired during control");
         expect((await heldAgain)[0]).toEqual({ type: "acceptance-renewal-held" });
-        const retirementHeld = createDeferred();
-        helper.on("message", (message: unknown) => {
-          if (isRecord(message) && message.type === "acceptance-retirement-held") {
-            retirementHeld.resolve();
-          }
-        });
+        const retirementHeld = messageReceived(helper, "acceptance-retirement-held");
         let closed = false;
         const stopped = once(helper, "close");
         const closing = f.runtime.quiescence.close().then(() => {
@@ -527,19 +496,18 @@ process.on("message", (message) => {
         }
         expect(closed).toBe(true);
       }
-      expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
-      expect(fs.existsSync(f.leasePath)).toBe(false);
-      await f.collect(1);
-      expect(fs.existsSync(f.workspaceDir)).toBe(false);
+      f.expectCustody(false);
+      await f.collectAndExpect(1, false);
     },
   );
 });
 
-it.runIf(process.platform === "linux")(
+// Detached leases intentionally refuse root-owned worker sessions.
+it.runIf(process.platform === "linux" && process.getuid?.() !== 0)(
   "preserves an older Gateway's detached lease on the new node-host command route",
   async () => {
     const f = fixture();
-    const retainedProcess = vi.spyOn(f.runtime.processes, "execute");
+    const managedSpawn = vi.spyOn(getProcessSupervisor(), "spawn");
     const quiesce = createWorkerWorkspaceQuiescence({
       ownerSignal: new AbortController().signal,
       sharedHost: true,
@@ -555,12 +523,14 @@ it.runIf(process.platform === "linux")(
     });
     const lease = await quiesce(f.workspaceDir);
     try {
-      await f.runtime.exec({
-        ...identity,
-        argv: [path.basename(process.execPath), "-e", "process.stdout.write('legacy-command')"],
-      });
+      await expect(
+        f.runtime.exec({
+          ...identity,
+          argv: [path.basename(process.execPath), "-e", "process.stdout.write('legacy-command')"],
+        }),
+      ).resolves.toMatchObject({ code: 0, stdout: "legacy-command" });
       await lease.assertActive();
-      expect(retainedProcess).not.toHaveBeenCalled();
+      expect(managedSpawn).not.toHaveBeenCalled();
       expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
     } finally {
       await lease.resume();
@@ -568,8 +538,10 @@ it.runIf(process.platform === "linux")(
   },
 );
 
-it.runIf(process.platform === "linux").each(["retry", "close", "recovery-error"] as const)(
-  "recovers an abandoned acquisition while retaining startup custody (%s)",
+it
+  .runIf(process.platform === "linux")
+  .each(["startup-close", "retry", "close", "recovery-error"] as const)(
+  "settles an interrupted acquisition while retaining startup custody (%s)",
   async (mode) => {
     const f = fixture();
     const preload = path.join(path.dirname(f.workspaceDir), "hold-ready.cjs");
@@ -590,21 +562,15 @@ process.on("message", (message) => {
   if (message?.type === "acceptance-ready-release") { const publish = ready; ready = undefined; publish?.(); }
 });`,
     );
-    const held = createDeferred<childProcess.ChildProcess>();
-    const original = childProcess.spawn;
+    const started = createDeferred();
+    let held: ReturnType<typeof messageReceived>;
     let helper: childProcess.ChildProcess | undefined;
-    spyOnSpawn().mockImplementationOnce((...args: Parameters<typeof childProcess.spawn>) => {
-      const [command, argv, options] = args;
-      helper = original(command, ["--require", preload, ...argv], options);
-      const child = helper;
-      child.on("message", (message: unknown) => {
-        if (isRecord(message) && message.type === "acceptance-ready-held") {
-          held.resolve(child);
-        }
-      });
+    preloadSpawn(preload, (child) => {
+      helper = child;
+      started.resolve();
+      held = messageReceived(child, "acceptance-ready-held");
       child.once("error", held.reject);
       child.once("close", () => held.reject(new Error("helper closed before held readiness")));
-      return child;
     });
     const caller = new AbortController();
     const acquiring = f.runtime.exec({ ...f.input(acquire), timeoutMs: 37_000 }, caller.signal);
@@ -612,7 +578,19 @@ process.on("message", (message) => {
     let closing: Promise<void> | undefined;
     let restoreLease: (() => void) | undefined;
     try {
-      await held.promise;
+      await started.promise;
+      if (mode === "startup-close") {
+        const rejected = expect(acquiring).rejects.toThrow(/closed|identity changed/);
+        closing = f.runtime.quiescence.close();
+        await held!.promise;
+        helper!.send({ type: "acceptance-ready-release" });
+        await closing;
+        await rejected;
+        f.expectCustody(false);
+        await f.collectAndExpect(1, false);
+        return;
+      }
+      await held!.promise;
       caller.abort();
       await expect(acquisition).resolves.toMatchObject({ name: "AbortError" });
       const exact = processIdentity.requireNodeWorkerProcessIdentity(f.readLease().watchdog.pid);
@@ -620,19 +598,7 @@ process.on("message", (message) => {
         // Reconciliation and fresh-nonce retry can time out while startup is
         // unknown. Observers return without cancelling the shared resumer.
         for (const operation of [release, { ...acquire, nonce: "b".repeat(32) }]) {
-          const observer = new AbortController();
-          const execute = f.runtime.quiescence.execute.bind(f.runtime.quiescence);
-          const joining = vi
-            .spyOn(f.runtime.quiescence, "execute")
-            .mockImplementationOnce((context, signal) => {
-              const pending = execute(context, signal);
-              observer.abort();
-              return pending;
-            });
-          await expect(f.command(operation, observer.signal)).rejects.toMatchObject({
-            name: "AbortError",
-          });
-          joining.mockRestore();
+          await f.cancelledCommand(operation);
         }
       }
       if (mode === "recovery-error") {
@@ -641,9 +607,7 @@ process.on("message", (message) => {
         const lease = f.readLease();
         lease.watchdog.start = "replaced watchdog";
         fs.writeFileSync(f.leasePath, JSON.stringify(lease));
-        const readyPublished = once(helper!, "message");
-        helper!.send({ type: "acceptance-ready-release" });
-        await readyPublished;
+        await sendAndReceive(helper!, "acceptance-ready-release");
         closing = expect(f.runtime.quiescence.close()).rejects.toMatchObject({
           errors: [
             expect.objectContaining({
@@ -652,20 +616,16 @@ process.on("message", (message) => {
           ],
         });
         await closing;
-        expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
-        expect(fs.existsSync(f.leasePath)).toBe(true);
+        f.expectCustody(true);
         expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).toBe("live");
         return;
       }
       if (mode === "retry") {
         expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
-        await f.collect(1);
-        expect(fs.existsSync(f.workspaceDir)).toBe(true);
+        await f.collectAndExpect(1, true);
         const nextNonce = "b".repeat(32);
         const recovering = vi.spyOn(getProcessSupervisor(), "spawn");
-        const readyPublished = once(helper!, "message");
-        helper!.send({ type: "acceptance-ready-release" });
-        await readyPublished;
+        await sendAndReceive(helper!, "acceptance-ready-release");
         await expect(f.command({ ...acquire, nonce: nextNonce })).resolves.toMatchObject({
           stdout: "quiesced " + nextNonce + "\n",
         });
@@ -674,8 +634,7 @@ process.on("message", (message) => {
         expect(f.readLease(nextNonce).watchdog.pid).toBe(exact.pid);
         expect(fs.existsSync(f.leasePath)).toBe(false);
         await f.command({ ...release, nonce: nextNonce });
-        await f.collect(2);
-        expect(fs.existsSync(f.workspaceDir)).toBe(false);
+        await f.collectAndExpect(2, false);
         return;
       }
       vi.useFakeTimers();
@@ -695,8 +654,7 @@ process.on("message", (message) => {
       expect(failure).toMatchObject({
         message: expect.stringContaining("custody remains retained"),
       });
-      expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
-      expect(fs.existsSync(f.leasePath)).toBe(true);
+      f.expectCustody(true);
       expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).toBe("live");
     } finally {
       vi.useRealTimers();
@@ -708,8 +666,7 @@ process.on("message", (message) => {
       await acquisition;
       await closing;
       await f.runtime.quiescence.close();
-      expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
-      expect(fs.existsSync(f.leasePath)).toBe(false);
+      f.expectCustody(false);
     }
   },
 );

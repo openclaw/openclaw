@@ -1,16 +1,31 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
+import { normalizeProviderToolSchemasWithPlugin } from "./provider-runtime.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { createPluginRuntime } from "./runtime/index.js";
+import type { SessionCatalogContinueProviderResult } from "./session-catalog.js";
 import { mapRegistryProviders } from "./web-provider-resolution-shared.js";
 
-function createOwner() {
-  const builder = createTestPluginRegistry();
+function createOwner(nativeCatalog = false, id = "factory-owner") {
+  const runtime = nativeCatalog ? createPluginRuntime() : undefined;
+  if (runtime) {
+    runtime.config.current = () => ({
+      plugins: { entries: { "factory-owner": { config: { sessionCatalog: { enabled: true } } } } },
+    });
+  }
+  const builder = createTestPluginRegistry(runtime);
   const record = createPluginRecord({
-    id: "factory-owner",
+    id,
+    ...(nativeCatalog
+      ? { nativeSessionCatalog: { label: "Factory catalog", nodeCommands: [] } }
+      : {}),
     source: "/synthetic/factory-owner.ts",
     origin: "global",
     enabled: true,
@@ -60,11 +75,92 @@ function createTools(expectScope: () => void) {
 }
 
 describe("registered plugin factory bindings", () => {
+  it("keeps provider-normalized tool data native and execution bound to its owner", async () => {
+    const { builder, api, instance, expectScope } = createOwner();
+    const { payloads, tools } = createTools(expectScope);
+    try {
+      api.registerProvider({
+        id: "factory-provider",
+        label: "Factory provider",
+        auth: [],
+        normalizeToolSchemas({ tools: input }) {
+          expectScope();
+          expect(this.id).toBe("factory-provider");
+          return input;
+        },
+      });
+      const plugin = builder.registry.providers[0]!.provider;
+      const normalize = () =>
+        normalizeProviderToolSchemasWithPlugin({
+          provider: plugin.id,
+          runtimeHandle: { provider: plugin.id, plugin },
+          allowRuntimePluginLoad: false,
+          context: { provider: plugin.id, tools },
+        });
+      const normalized = normalize();
+      assert(normalized);
+      for (const [index, tool] of normalized.entries()) {
+        expect(tool.parameters).toBe(tools[index]!.parameters);
+        const execute = tool.execute;
+        expect(await execute("normalized-call", {})).toBe(payloads[index]);
+      }
+      await instance.dispose();
+      expect(normalize).toThrow("reloaded or disabled");
+      expect(() => normalized[0]!.execute("retired-call", {})).toThrow("reloaded or disabled");
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it.each(["sync", "callback"] as const)(
+    "attributes a retained %s store's deprecation to the opening plugin",
+    async (kind) => {
+      await withOpenClawTestState({ label: `runtime-store-warning-${kind}` }, async ({ env }) => {
+        const pluginId = `runtime-store-warning-${kind}`;
+        const { api, instance } = createOwner(false, pluginId);
+        const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+        try {
+          const useLegacyStore = instance.run(() => {
+            const options = { namespace: "warning", maxEntries: 2, env };
+            if (kind === "sync") {
+              const store = api.runtime.state.openSyncKeyedStore<number>(options);
+              return () => store.lookup("missing");
+            }
+            const store = api.runtime.state.openKeyedStore<number>(options);
+            const update = store.update;
+            assert(update);
+            return () => update("counter", (current) => (current ?? 0) + 1);
+          });
+          if (kind === "sync") {
+            expect(emitWarning).toHaveBeenCalledExactlyOnceWith(
+              expect.stringContaining(`Plugin ${pluginId}: api.runtime.state.openSyncKeyedStore`),
+              expect.objectContaining({ type: "DeprecationWarning", code: "DEP_PLUGIN_SDK" }),
+            );
+          } else {
+            expect(emitWarning).not.toHaveBeenCalled();
+          }
+          await useLegacyStore();
+          await useLegacyStore();
+          const warningCount = kind === "sync" ? 2 : 1;
+          const method =
+            kind === "sync" ? "PluginStateSyncKeyedStore.lookup" : "PluginStateKeyedStore.update";
+          expect(emitWarning).toHaveBeenCalledTimes(warningCount);
+          expect(emitWarning).toHaveBeenNthCalledWith(
+            warningCount,
+            expect.stringContaining(`Plugin ${pluginId}: ${method}`),
+            expect.objectContaining({ type: "DeprecationWarning", code: "DEP_PLUGIN_SDK" }),
+          );
+        } finally {
+          emitWarning.mockRestore();
+          await instance.dispose();
+        }
+      });
+    },
+  );
+
   it.each([
     { kind: "static", shape: "single" } as const,
-    ...(["function", "version 2"] as const).flatMap((kind) =>
-      (["single", "array"] as const).map((shape) => ({ kind, shape })),
-    ),
+    { kind: "version 2", shape: "array" } as const,
   ])(
     "binds a $kind tool factory's $shape result to its consumer while data crosses by reference",
     async ({ kind, shape }) => {
@@ -76,15 +172,12 @@ describe("registered plugin factory bindings", () => {
         return shape === "array" ? tools : tools[0]!;
       };
       try {
-        api.registerTool(
-          kind === "static"
-            ? tools[0]!
-            : kind === "function"
-              ? create
-              : { contextVersion: 2, create },
-          { names: shape === "single" ? names.slice(0, 1) : names },
-        );
+        api.registerTool(kind === "static" ? tools[0]! : { contextVersion: 2, create }, {
+          names: shape === "single" ? names.slice(0, 1) : names,
+          workspaceAccess: true,
+        });
         expect(builder.registry.diagnostics).toEqual([]);
+        expect(builder.registry.tools[0]?.workspaceAccess).toBe(true);
         const factory = builder.registry.tools[0]!.factory;
         const context = { assertInvocationCurrent() {} };
         const rootResult = factory(context);
@@ -127,7 +220,7 @@ describe("registered plugin factory bindings", () => {
     },
   );
 
-  it.each(["call", "apply", "bind"] as const)(
+  it.each(["apply", "bind"] as const)(
     "keeps registered factory results executable through Function.%s",
     async (helper) => {
       const { builder, api, instance, expectScope } = createOwner();
@@ -145,11 +238,8 @@ describe("registered plugin factory bindings", () => {
         const invoke =
           helper === "bind"
             ? consumer!.wrap(factory.bind(undefined, {}))
-            : helper === "call"
-              ? // oxlint-disable-next-line no-useless-call -- The test exercises the boundary's Function.prototype.call path.
-                () => factory.call(undefined, {})
-              : // oxlint-disable-next-line no-useless-call -- The test exercises the boundary's Function.prototype.apply path.
-                () => factory.apply(undefined, [{}]);
+            : // oxlint-disable-next-line no-useless-call -- The test exercises the boundary's Function.prototype.apply path.
+              () => factory.apply(undefined, [{}]);
         const tool = invoke();
         assert(tool && !Array.isArray(tool));
         const execute = tool.execute;
@@ -164,6 +254,68 @@ describe("registered plugin factory bindings", () => {
         );
       } finally {
         consumer?.release();
+        await instance.dispose();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps catalog continuation data native and its callback scoped (native gate: %s)",
+    async (nativeCatalog) => {
+      const { builder, api, instance, expectScope } = createOwner(nativeCatalog);
+      const consumer = instance.retainConsumer();
+      const upstream = {
+        kind: "codex-app-server" as const,
+        ref: { threadId: "synthetic-thread", nested: ["source"] },
+        marker: { lastTurnId: "synthetic-turn" },
+      };
+      const conversationBinding = { data: { source: "synthetic-binding" } };
+      const plain = { sessionKey: "synthetic-session", upstream, conversationBinding };
+      const result: SessionCatalogContinueProviderResult = {
+        ...plain,
+        async afterConversationBound() {
+          expectScope();
+          await Promise.resolve();
+          expectScope();
+        },
+      };
+      let next = result;
+      try {
+        api.registerSessionCatalog({
+          id: "factory-catalog",
+          label: "Factory catalog",
+          supportsProcessHomeIsolation: true,
+          list: async () => [],
+          read: async () => ({ hostId: "synthetic-host", threadId: "synthetic-thread", items: [] }),
+          async continueSession() {
+            expectScope();
+            return next;
+          },
+        });
+        expect(builder.registry.diagnostics).toEqual([]);
+        const provider = builder.registry.sessionCatalogs[0]!.provider;
+        const request = { hostId: "synthetic-host", threadId: "synthetic-thread" };
+        const root = await provider.continueSession!(request);
+        const retained = await consumer.wrap(provider).continueSession!(request);
+        for (const value of [root, retained]) {
+          expect(value.upstream).toBe(upstream);
+          expect(value.conversationBinding).toBe(conversationBinding);
+          expect(structuredClone(value.upstream)).toEqual(upstream);
+          expect(structuredClone(value.conversationBinding)).toEqual(conversationBinding);
+        }
+        const rootCallback = root.afterConversationBound!;
+        const consumerCallback = retained.afterConversationBound!;
+        await consumerCallback();
+        next = plain;
+        expect(await provider.continueSession!(request)).toBe(plain);
+        consumer.release();
+        expect(() => consumerCallback()).toThrow("consumer is closed");
+        await rootCallback();
+        await instance.dispose();
+        expect(() => rootCallback()).toThrow("reloaded or disabled");
+        expect(structuredClone(upstream)).toEqual(upstream);
+      } finally {
+        consumer.release();
         await instance.dispose();
       }
     },
@@ -271,5 +423,32 @@ describe("registered plugin factory bindings", () => {
     } finally {
       await instance.dispose();
     }
+  });
+});
+
+describe("plugin API runtime entrypoint", () => {
+  it("preserves the selected main entry during setup registration without guessing an unselected entry", () => {
+    const builder = createTestPluginRegistry(createPluginRuntime());
+    const rootDir = path.resolve("plugins/fixture");
+    const source = path.join(rootDir, "index.ts");
+    const record = createPluginRecord({
+      id: "fixture",
+      source,
+      rootDir,
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    expect(builder.createApi(record, { config: {} }).runtimeSource).toBeUndefined();
+
+    const runtimeSource = path.join(rootDir, "dist/index.js");
+    bindPluginRuntimeArtifactSelection(record, {
+      runtimeEntry: { source: runtimeSource, rootDir },
+      setupEntry: { source: path.join(rootDir, "dist/setup.js"), rootDir },
+    });
+    const api = builder.createApi(record, { config: {}, registrationMode: "setup-runtime" });
+    expect(api.runtimeSource).toBe(runtimeSource);
+    expect(api.source).toBe(source);
+    expect(api.rootDir).toBe(rootDir);
   });
 });

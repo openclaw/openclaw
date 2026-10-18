@@ -8,7 +8,6 @@ import {
   validateNodePairRemoveParams,
   validateNodeRenameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { captureNodePairingState } from "../../infra/device-pairing-node-state.js";
 import {
   approveNodePairing,
   getPendingNodePairing,
@@ -23,6 +22,7 @@ import {
 } from "../../infra/device-pairing.js";
 import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
+import type { NodeSession } from "../node-session.types.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
 import { PAIRING_SCOPE } from "../operator-scopes.js";
 import {
@@ -120,78 +120,6 @@ function emitNodeRoleRemovalSecurityEvent(params: {
   });
 }
 
-async function removePairedDeviceBackedNode(params: {
-  nodeId: string;
-  client: GatewayClient | null;
-  context: Pick<GatewayRequestContext, "invalidateClientsForDevice" | "logGateway">;
-}): Promise<
-  | {
-      status: "removed";
-      nodeId: string;
-    }
-  | { status: "denied"; message: string }
-  | { status: "unknown" }
-> {
-  const nodeId = params.nodeId.trim();
-  if (!nodeId) {
-    return { status: "unknown" };
-  }
-  const paired = await getPairedDevice(nodeId);
-  if (!paired || !listApprovedPairedDeviceRoles(paired).includes("node")) {
-    return { status: "unknown" };
-  }
-
-  const authz = resolveDeviceManagementAuthz(params.client, nodeId);
-  if (deniesCrossDeviceManagement(authz)) {
-    params.context.logGateway.warn(
-      `node pairing removal denied node=${nodeId} reason=device-ownership-mismatch`,
-    );
-    emitNodeRoleRemovalSecurityEvent({
-      authz,
-      deviceId: nodeId,
-      reason: "device-ownership-mismatch",
-    });
-    return { status: "denied", message: "node pairing removal denied" };
-  }
-  // Mirror device.pair.remove: the admin requirement for mixed-role rows only
-  // applies to device-token self-service callers (callerDeviceId set). Shared-auth
-  // / CLI operators holding operator.pairing manage pairings on others' behalf and
-  // are allowed to remove non-operator (e.g. node) rows without operator.admin.
-  if (authz.callerDeviceId && !authz.isAdminCaller && pairedDeviceHasNonOperatorRole(paired)) {
-    params.context.logGateway.warn(
-      `node pairing removal denied node=${nodeId} reason=role-management-requires-admin`,
-    );
-    emitNodeRoleRemovalSecurityEvent({
-      authz,
-      deviceId: nodeId,
-      reason: "role-management-requires-admin",
-    });
-    return { status: "denied", message: "node pairing removal denied" };
-  }
-
-  const removed = await removePairedDeviceRole({ deviceId: nodeId, role: "node" });
-  if (!removed) {
-    return { status: "unknown" };
-  }
-  params.context.logGateway.info(`node pairing removed device-backed node=${removed.deviceId}`);
-  emitNodeRoleRemovalSecurityEvent({
-    authz,
-    deviceId: removed.deviceId,
-    removedDevice: removed.removedDevice,
-  });
-  // Match device.pair.remove: invalidate before responding so pipelined frames
-  // on the affected device token are rejected. The caller queues the hard close
-  // only after the success response is emitted.
-  params.context.invalidateClientsForDevice?.(removed.deviceId, {
-    role: "node",
-    reason: "device-pair-removed",
-  });
-  return {
-    status: "removed",
-    nodeId: removed.deviceId,
-  };
-}
-
 export const nodePairingHandlers: GatewayRequestHandlers = {
   "node.pair.list": async ({ params, respond, client }) => {
     if (!assertValidParams(params, validateNodePairListParams, "node.pair.list", respond)) {
@@ -216,7 +144,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateNodePairApproveParams, "node.pair.approve", respond)) {
       return;
     }
-    const { requestId } = params;
+    const requestId = params.requestId.trim();
     // Intentionally fail closed for RPC callers without an explicit scoped session.
     const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     await respondUnavailableOnThrow(respond, async () => {
@@ -232,13 +160,29 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
         return;
       }
       const pendingApproval = await getPendingNodePairing(requestId);
-      const pairingStateBeforeApproval = pendingApproval
-        ? await captureNodePairingState(pendingApproval.nodeId)
-        : null;
       const sessionBeforeApproval = pendingApproval
         ? context.nodeRegistry.get(pendingApproval.nodeId)
         : undefined;
-      const approved = await approveNodePairing(requestId, { callerScopes });
+      const promotion: { node: NodeSession | null } = { node: null };
+      const approved = await approveNodePairing(requestId, {
+        callerScopes,
+        onApproved: (committed) => {
+          // Publish the live surface with its committed binding, before background
+          // readers can mistake this approval for a replacement of the device.
+          promotion.node = sessionBeforeApproval
+            ? context.nodeRegistry.updateSurface(committed.nodeId, committed.surface, {
+                expectedConnId: sessionBeforeApproval.connId,
+                expectedPairingIdentity: committed.pairingIdentity,
+                ...(committed.previousPairingGeneration
+                  ? { expectedPairingGeneration: committed.previousPairingGeneration }
+                  : {}),
+                nextPairingGeneration: committed.nextPairingGeneration,
+              })
+            : null;
+          // Abort wakes admitted under the retired surface before they can send.
+          invalidateNodeWakeState(committed.nodeId);
+        },
+      });
       if (!approved) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
         return;
@@ -262,48 +206,13 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
         return;
       }
       const approvedNode = approved.node;
-      // Surface approval rotates the persistent generation. Abort any wake
-      // already admitted under the prior command surface before it can send.
-      invalidateNodeWakeState(approvedNode.nodeId);
-      // Only the exact generation committed by this approval may inherit the
-      // authenticated live session. A later re-pair must reconnect instead.
-      const persistedApprovedState = await captureNodePairingState(approvedNode.nodeId);
-      const previousGenerationKey = pairingStateBeforeApproval?.generation?.key;
-      const liveSessionOwnsPreviousPairingState = Boolean(
-        sessionBeforeApproval &&
-        pairingStateBeforeApproval?.identity.key === approved.pairingIdentity &&
-        sessionBeforeApproval.pairingIdentity === approved.pairingIdentity &&
-        approved.previousPairingGeneration === previousGenerationKey &&
-        sessionBeforeApproval.pairingGeneration === previousGenerationKey,
-      );
-      const updatedNode =
-        liveSessionOwnsPreviousPairingState &&
-        sessionBeforeApproval &&
-        persistedApprovedState?.identity.key === approved.pairingIdentity &&
-        persistedApprovedState.generation?.key === approved.nextPairingGeneration
-          ? context.nodeRegistry.updateSurface(
-              approvedNode.nodeId,
-              {
-                caps: approvedNode.caps ?? [],
-                commands: approvedNode.commands ?? [],
-                permissions: approvedNode.permissions,
-              },
-              {
-                expectedConnId: sessionBeforeApproval.connId,
-                expectedPairingIdentity: approved.pairingIdentity,
-                ...(previousGenerationKey
-                  ? { expectedPairingGeneration: previousGenerationKey }
-                  : {}),
-                nextPairingGeneration: approved.nextPairingGeneration,
-              },
-            )
-          : null;
       const resolved = {
         requestId,
         nodeId: approvedNode.nodeId,
         decision: "approved",
         ts: Date.now(),
       };
+      const updatedNode = promotion.node;
       if (updatedNode) {
         refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode });
         const notified = await context.nodeRegistry.sendEventForPairingIdentity({
@@ -327,7 +236,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateNodePairRejectParams, "node.pair.reject", respond)) {
       return;
     }
-    const { requestId } = params;
+    const requestId = params.requestId.trim();
     await respondUnavailableOnThrow(respond, async () => {
       if (
         !(await enforcePendingNodePairingOwnership({
@@ -365,41 +274,72 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
   // node-only device row is deleted. Authz mirrors device.pair.remove:
   // operator.pairing may remove non-operator node rows; a device-token caller
   // revoking its own node role on a mixed-role device additionally needs
-  // operator.admin (see removePairedDeviceBackedNode).
+  // operator.admin.
   "node.pair.remove": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateNodePairRemoveParams, "node.pair.remove", respond)) {
       return;
     }
-    const { nodeId } = params;
+    const nodeId = params.nodeId.trim();
     await respondUnavailableOnThrow(respond, async () => {
-      const deviceBacked = await removePairedDeviceBackedNode({ nodeId, client, context });
-      if (deviceBacked.status === "denied") {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, deviceBacked.message));
-        return;
-      }
-      if (deviceBacked.status !== "removed") {
+      const paired = nodeId ? await getPairedDevice(nodeId) : null;
+      if (!paired || !listApprovedPairedDeviceRoles(paired).includes("node")) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
       }
+      const authz = resolveDeviceManagementAuthz(client, nodeId);
+      // Shared-auth operators manage node roles on others' behalf. Only device-token
+      // self-service callers need admin scope to remove a mixed-role pairing.
+      const reason = deniesCrossDeviceManagement(authz)
+        ? "device-ownership-mismatch"
+        : authz.callerDeviceId && !authz.isAdminCaller && pairedDeviceHasNonOperatorRole(paired)
+          ? "role-management-requires-admin"
+          : undefined;
+      if (reason) {
+        context.logGateway.warn(`node pairing removal denied node=${nodeId} reason=${reason}`);
+        emitNodeRoleRemovalSecurityEvent({ authz, deviceId: nodeId, reason });
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "node pairing removal denied"),
+        );
+        return;
+      }
+      const removed = await removePairedDeviceRole({ deviceId: nodeId, role: "node" });
+      if (!removed) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+        return;
+      }
+      context.logGateway.info(`node pairing removed device-backed node=${removed.deviceId}`);
+      emitNodeRoleRemovalSecurityEvent({
+        authz,
+        deviceId: removed.deviceId,
+        removedDevice: removed.removedDevice,
+      });
+      // Invalidate before responding so pipelined frames using the retired token fail.
+      // The hard close below stays after the success response.
+      context.invalidateClientsForDevice?.(removed.deviceId, {
+        role: "node",
+        reason: "device-pair-removed",
+      });
       try {
-        clearRemovedNodeRuntimeState({ nodeId: deviceBacked.nodeId, context });
-        await reconcileRevokedDeviceWorker(context, deviceBacked.nodeId);
+        clearRemovedNodeRuntimeState({ nodeId: removed.deviceId, context });
+        await reconcileRevokedDeviceWorker(context, removed.deviceId);
         context.broadcast(
           "node.pair.resolved",
           {
             requestId: "",
-            nodeId: deviceBacked.nodeId,
+            nodeId: removed.deviceId,
             decision: "removed",
             ts: Date.now(),
           },
           { dropIfSlow: true },
         );
-        respond(true, { nodeId: deviceBacked.nodeId }, undefined);
+        respond(true, { nodeId: removed.deviceId }, undefined);
       } finally {
         // Preserve response-first shutdown on success, while guaranteeing the
         // hard close when runtime cleanup or later bookkeeping throws.
         queueMicrotask(() => {
-          context.disconnectClientsForDevice?.(deviceBacked.nodeId, {
+          context.disconnectClientsForDevice?.(removed.deviceId, {
             role: "node",
           });
         });

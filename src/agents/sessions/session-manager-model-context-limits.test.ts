@@ -1,18 +1,20 @@
-import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
-  upsertSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { transcriptEventJsonSql } from "../../config/sessions/transcript-payload.js";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
 async function withHistory(
@@ -23,14 +25,7 @@ async function withHistory(
     verifyRead: (read: () => void | Promise<void>) => Promise<void>;
   }) => Promise<void>,
 ) {
-  await withOpenClawTestState({ label }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: label,
-      sessionKey: `agent:main:${label}`,
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  await withSessionState(label, async ({ scope }) => {
     const source = SessionManager.open(scope);
     const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
     const snapshot = () =>
@@ -53,10 +48,14 @@ async function withHistory(
   });
 }
 
-function appendCall(source: SessionManager, id: string) {
+function toolCall(id: string) {
+  return { type: "toolCall" as const, id, name: "read", arguments: { path: `${id}.txt` } };
+}
+
+function appendCalls(source: SessionManager, ...ids: string[]) {
   return source.appendMessage(
     makeAgentAssistantMessage({
-      content: [{ type: "toolCall", id, name: "read", arguments: { path: `${id}.txt` } }],
+      content: ids.map(toolCall),
       stopReason: "toolUse",
     }),
   );
@@ -138,57 +137,53 @@ it("retires prior-series operators through bounded and detached transcript reads
 });
 
 it.each([false, true])(
-  "bounds payload sizing by the event budget with retained compaction=%s",
+  "bounds selected context by the event budget with retained compaction=%s",
   async (compacted) => {
-    await withHistory(
-      `context-sizing-limit-${compacted}`,
-      async ({ scope, source, verifyRead }) => {
-        const first = source.appendMessage(makeUserMessage("first retained request", 0));
-        for (let index = 1; index < 40; index++) {
-          source.appendMessage(makeUserMessage(`retained request ${index}`, index));
-        }
-        const boundary = compacted
-          ? source.appendCompaction("required summary", first, 100)
-          : undefined;
-        source.appendMessage(makeUserMessage("current request", 40));
-        const full = source.buildSessionContext().messages;
-        await verifyRead(() => {
-          const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
-          const reads = trackSqliteStatementExecutions(database.db, ["sizes"], (query) =>
-            query.includes("octet_length(") && query.includes('as "bytes"') ? "sizes" : null,
-          );
-          try {
-            const selected = SessionManager.openModelContext(scope, {
-              limits: { maxBytes: 16_384, maxEvents: 3 },
-            });
-            expect(selected.buildSessionContext().messages).toEqual(
-              compacted ? [full[0], ...full.slice(-2)] : full.slice(-3),
-            );
-            if (boundary) {
-              expect(selected.getBranch().find((entry) => entry.id === boundary)).toMatchObject({
-                type: "compaction",
-                summary: "required summary",
-              });
-            }
-            expect(reads.rowCounts.sizes).toBeGreaterThan(0);
-            expect(reads.rowCounts.sizes).toBeLessThanOrEqual(compacted ? 4 : 3);
-          } finally {
-            reads.restore();
-          }
+    await withHistory(`context-event-limit-${compacted}`, async ({ scope, source, verifyRead }) => {
+      const first = source.appendMessage(makeUserMessage("first retained request", 0));
+      for (let index = 1; index < 40; index++) {
+        source.appendMessage(makeUserMessage(`retained request ${index}`, index));
+      }
+      const boundary = compacted
+        ? source.appendCompaction("required summary", first, 100)
+        : undefined;
+      source.appendMessage(makeUserMessage("current request", 40));
+      const full = source.buildSessionContext().messages;
+      await verifyRead(() => {
+        const selected = SessionManager.openModelContext(scope, {
+          limits: { maxBytes: 16_384, maxEvents: 3 },
         });
-      },
-    );
+        expect(selected.buildSessionContext().messages).toEqual(
+          compacted ? [full[0], ...full.slice(-2)] : full.slice(-3),
+        );
+        if (boundary) {
+          expect(selected.getBranch().find((entry) => entry.id === boundary)).toMatchObject({
+            type: "compaction",
+            summary: "required summary",
+          });
+        }
+      });
+    });
   },
 );
 
 it("applies the aggregate byte budget before hydrating omitted message bodies", async () => {
   await withHistory("context-byte-limit", async ({ scope, source, verifyRead }) => {
     for (let index = 0; index < 8; index++) {
-      source.appendMessage(makeUserMessage(`body-payload-${index}:` + "x".repeat(1024), index));
+      source.appendMessage(makeUserMessage(`body-payload-${index}:` + "x".repeat(4096), index));
     }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
+    expect(
+      database.db
+        .prepare(
+          "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
+        )
+        .get(scope.sessionId),
+    ).toEqual({ count: 8 });
     const full = source.buildSessionContext().messages;
     await verifyRead(() => {
       const hydrated = new Set<string>();
+      const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
       const parse = JSON.parse;
       const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
         for (const match of text.matchAll(/body-payload-\d+:/gu)) {
@@ -199,15 +194,17 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
       let messages: typeof full;
       try {
         messages = SessionManager.openModelContext(scope, {
-          limits: { maxBytes: 4096, maxEvents: 20 },
+          limits: { maxBytes: 16_384, maxEvents: 20 },
         }).buildSessionContext().messages;
+        expect(decompress).toHaveBeenCalledTimes(messages.length);
       } finally {
         spy.mockRestore();
+        decompress.mockRestore();
       }
       expect(messages.length).toBeGreaterThan(0);
       expect(messages.length).toBeLessThan(full.length);
       expect(messages).toEqual(full.slice(-messages.length));
-      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(4096);
+      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(16_384);
       expect(hydrated).toEqual(
         new Set(
           messages.flatMap((message) => {
@@ -250,13 +247,17 @@ it("avoids text copies of omitted message objects when SQLite supports binary JS
       ).toBe(1);
       let messageObjectCopies = 0;
       // Preserve SQLite extraction while observing whole-message text intermediates.
-      database.db.function("json_extract", { deterministic: true }, (json, jsonPath) => {
-        const value = extract.get(json, jsonPath)?.value ?? null;
-        if (typeof value === "string" && value.startsWith("{") && value.includes(marker)) {
-          messageObjectCopies++;
-        }
-        return value;
-      });
+      requireNativeSqliteDatabase(database.db).function(
+        "json_extract",
+        { deterministic: true },
+        (json, jsonPath) => {
+          const value = extract.get(json, jsonPath)?.value ?? null;
+          if (typeof value === "string" && value.startsWith("{") && value.includes(marker)) {
+            messageObjectCopies++;
+          }
+          return value;
+        },
+      );
       await verifyRead(() => {
         const context = SessionManager.openModelContext(scope, {
           limits: { maxBytes: 4096, maxEvents: 1 },
@@ -281,7 +282,7 @@ it("budgets projected context without hydrating large private evidence", async (
       ...makeUserMessage("keep the request", 1),
       __openclaw: { upstreamUserText: privateText },
     } as Parameters<SessionManager["appendMessage"]>[0]);
-    appendCall(source, "read");
+    appendCalls(source, "read");
     source.appendMessage({
       role: "toolResult",
       toolCallId: "read",
@@ -329,7 +330,7 @@ it.each(["compaction", "reset"])(
       source.appendMessage(makeUserMessage("obsolete", 0));
       const firstKept = source.appendMessage(makeUserMessage("older retained request", 1));
       source.appendMessage(makeUserMessage("newer retained request", 2));
-      const callId = appendCall(source, "retained");
+      const callId = appendCalls(source, "retained");
       const resultId = appendResult(source, "retained");
       await appendTranscriptEvent(scope, {
         type: "opaque-synthetic",
@@ -420,9 +421,9 @@ it.each([
   async ({ maxEvents, kept }) => {
     await withHistory(`context-displaced-${maxEvents}`, async ({ scope, source, verifyRead }) => {
       source.appendMessage(makeUserMessage("old request", 0));
-      appendCall(source, "x");
+      appendCalls(source, "x");
       source.appendMessage(makeUserMessage("intervening request", 1));
-      appendCall(source, "y");
+      appendCalls(source, "y");
       appendResult(source, "y");
       appendResult(source, "x");
       source.appendMessage(makeUserMessage("latest", 2));
@@ -444,9 +445,9 @@ it.each([
   "distinguishes repeated tool-call occurrences with a $maxEvents event budget",
   async ({ maxEvents, kept }) => {
     await withHistory(`context-repeated-${maxEvents}`, async ({ scope, source, verifyRead }) => {
-      appendCall(source, "repeat");
+      appendCalls(source, "repeat");
       appendResult(source, "repeat", "first occurrence");
-      appendCall(source, "repeat");
+      appendCalls(source, "repeat");
       appendResult(source, "repeat", "second occurrence");
       source.appendMessage(makeUserMessage("latest", 2));
       const full = source.buildSessionContext().messages;
@@ -462,10 +463,9 @@ it.each([
 
 it("rejects a cut that would give an ambiguous result a new unique owner", async () => {
   await withHistory("context-ambiguous-owner", async ({ scope, source, verifyRead }) => {
-    appendCall(source, "repeat");
-    appendCall(source, "other");
-    appendCall(source, "repeat");
-    appendCall(source, "last");
+    for (const id of ["repeat", "other", "repeat", "last"]) {
+      appendCalls(source, id);
+    }
     appendResult(source, "repeat");
     source.appendMessage(makeUserMessage("latest", 2));
     const full = source.buildSessionContext();
@@ -506,7 +506,7 @@ it.each(["latest message", "compaction boundary", "latest tool pair", "latest to
           );
           appendResult(source, "latest");
         } else {
-          appendCall(source, "latest");
+          appendCalls(source, "latest");
           appendResult(source, "latest");
         }
         await verifyRead(async () => {
@@ -556,15 +556,7 @@ it.each(["sync", "async"])(
       source.appendMessage(
         makeUserMessage("newest request: preserve both completed operations", 1),
       );
-      source.appendMessage(
-        makeAgentAssistantMessage({
-          content: [
-            { type: "toolCall", id: "large", name: "read", arguments: { path: "large.txt" } },
-            { type: "toolCall", id: "small", name: "read", arguments: { path: "small.txt" } },
-          ],
-          stopReason: "toolUse",
-        }),
-      );
+      appendCalls(source, "large", "small");
       const oversized = "oversized-tool-body:" + "x".repeat(32_768);
       const largeResultId = appendResult(source, "large", oversized);
       appendResult(source, "small", "completed operation receipt: synthetic-42");
@@ -579,6 +571,18 @@ it.each(["sync", "async"])(
           .get(scope.sessionId, largeResultId),
       ).toEqual({ event_json: null, compressed: 1 });
       const full = source.buildSessionContext();
+      runOpenClawAgentWriteTransaction(
+        (writeDatabase) => {
+          writeDatabase.db
+            .prepare(`UPDATE transcript_events
+          SET navigation_type = NULL, navigation_custom_type = NULL,
+              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+              navigation_last_custom_type = NULL, navigation_valid = 1
+          WHERE session_id = ?`)
+            .run(scope.sessionId);
+        },
+        { agentId: database.agentId, path: database.path },
+      );
       await verifyRead(async () => {
         const limits = { maxBytes: 4096, maxEvents: 8 };
         expect(() => SessionManager.openModelContext(scope, { limits })).toThrow(
@@ -594,31 +598,37 @@ it.each(["sync", "async"])(
           return parse(text, reviver);
         });
         let selected: SessionManager;
+        const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
         try {
           selected =
             mode === "async"
               ? await SessionManager.openModelContextAsync(scope, options)
               : SessionManager.openModelContext(scope, options);
+          if (mode === "sync") {
+            // One decode to size the omission, then one to hydrate the selected result.
+            expect(decompress).toHaveBeenCalledTimes(2);
+          }
         } finally {
           spy.mockRestore();
+          decompress.mockRestore();
         }
         const messages = selected.buildSessionContext().messages;
         expect(messages.map((message) => message.role)).toEqual([
+          "user",
           "user",
           "assistant",
           "toolResult",
           "toolResult",
         ]);
-        expect(messages[0]).toEqual(full.messages[1]);
-        expect(messages[1]).toEqual(full.messages[2]);
-        expect(messages[2]).toMatchObject({
+        expect(messages.slice(0, 3)).toEqual(full.messages.slice(0, 3));
+        expect(messages[3]).toMatchObject({
           role: "toolResult",
           toolCallId: "large",
           toolName: "read",
           isError: false,
           content: [{ type: "text", text: expect.stringMatching(/omitted.*\d+ bytes/u) }],
         });
-        expect(messages[3]).toEqual(full.messages[4]);
+        expect(messages[4]).toEqual(full.messages[4]);
         expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(limits.maxBytes);
         expect(oversizedPayloadReads).toBe(0);
         expect(selected.isPersisted()).toBe(false);
@@ -631,11 +641,11 @@ it.each(["sync", "async"])(
 it("retains a displaced repeated-ID owner when omitting an oversized result body", async () => {
   await withHistory("context-overflow-displaced", async ({ scope, source, verifyRead }) => {
     source.appendMessage(makeUserMessage("older request", 0));
-    appendCall(source, "repeat");
+    appendCalls(source, "repeat");
     appendResult(source, "repeat", "first completed occurrence");
-    appendCall(source, "repeat");
+    appendCalls(source, "repeat");
     source.appendMessage(makeUserMessage("newest request while the second call is pending", 1));
-    appendCall(source, "other");
+    appendCalls(source, "other");
     appendResult(source, "other", "newer completed receipt");
     appendResult(source, "repeat", "x".repeat(32_768));
     const full = source.buildSessionContext().messages;
@@ -643,14 +653,130 @@ it("retains a displaced repeated-ID owner when omitting an oversized result body
       const selected = SessionManager.openModelContext(scope, {
         limits: { maxBytes: 4096, maxEvents: 8, toolResultOverflow: "omit" },
       }).buildSessionContext().messages;
-      expect(selected.slice(0, -1)).toEqual(full.slice(3, -1));
+      expect(selected.slice(0, -1)).toEqual(full.slice(0, -1));
       expect(selected.at(-1)).toMatchObject({
         role: "toolResult",
         toolCallId: "repeat",
         content: [{ type: "text", text: expect.stringContaining("body omitted") }],
       });
-      expect(selected[1]).toEqual(full[4]);
+      expect(selected[4]).toEqual(full[4]);
       expect(Buffer.byteLength(JSON.stringify(selected))).toBeLessThanOrEqual(4096);
     });
   });
 });
+
+it.each([
+  { label: "oversized result", toolResultBodySizes: [32_768] },
+  { label: "cumulative results", toolResultBodySizes: [2_000, 2_000] },
+])(
+  "preserves early requests under $label pressure with a nonempty recent suffix",
+  async ({ label, toolResultBodySizes }) => {
+    await withHistory(
+      `context-history-pressure-${toolResultBodySizes.length}`,
+      async ({ scope, source, verifyRead }) => {
+        source.appendMessage(makeUserMessage("original goal: migrate the blue database", 0));
+        source.appendMessage(
+          makeUserMessage("constraint: verify the checksum before switching reads", 1),
+        );
+        for (const [index, bodySizeBytes] of toolResultBodySizes.entries()) {
+          appendCalls(source, `pressure-${index}`);
+          appendResult(
+            source,
+            `pressure-${index}`,
+            `pressure-body-${index}:` + "x".repeat(bodySizeBytes),
+          );
+        }
+        source.appendMessage(
+          makeAgentAssistantMessage({ content: [{ type: "text", text: "recent explanation" }] }),
+        );
+        source.appendMessage(makeUserMessage("summarize the plan", 2));
+        const contextLimits = { maxBytes: 4096, maxEvents: 20 };
+        const strictContextMessages = SessionManager.openModelContext(scope, {
+          limits: contextLimits,
+        }).buildSessionContext().messages;
+        expect(strictContextMessages.length).toBeGreaterThan(0);
+        expect(JSON.stringify(strictContextMessages)).not.toContain("original goal:");
+        await verifyRead(async () => {
+          const hydratedBodies = new Set<string>();
+          const parseJson = JSON.parse;
+          const parseJsonSpy = vi
+            .spyOn(JSON, "parse")
+            .mockImplementation((serializedJson, reviver) => {
+              for (const match of serializedJson.matchAll(/pressure-body-\d+:/gu)) {
+                hydratedBodies.add(match[0]);
+              }
+              return parseJson(serializedJson, reviver);
+            });
+          let contextMessages: ReturnType<SessionManager["buildSessionContext"]>["messages"];
+          try {
+            contextMessages = SessionManager.openModelContext(scope, {
+              limits: { ...contextLimits, toolResultOverflow: "omit" },
+            }).buildSessionContext().messages;
+          } finally {
+            parseJsonSpy.mockRestore();
+          }
+          const serializedMessages = JSON.stringify(contextMessages);
+          expect(serializedMessages, label).toContain("original goal: migrate the blue database");
+          expect(serializedMessages).toContain(
+            "constraint: verify the checksum before switching reads",
+          );
+          expect(serializedMessages).toContain("recent explanation");
+          expect(serializedMessages).toContain("summarize the plan");
+          expect(serializedMessages).toContain("body omitted");
+          expect(contextMessages).toHaveLength(4 + toolResultBodySizes.length * 2);
+          expect(Buffer.byteLength(serializedMessages)).toBeLessThanOrEqual(contextLimits.maxBytes);
+          expect(hydratedBodies).toEqual(
+            new Set(
+              Array.from(serializedMessages.matchAll(/pressure-body-\d+:/gu), (match) => match[0]),
+            ),
+          );
+          const asyncSessionManager = await SessionManager.openModelContextAsync(scope, {
+            limits: { ...contextLimits, toolResultOverflow: "omit" },
+          });
+          expect(asyncSessionManager.buildSessionContext().messages).toEqual(contextMessages);
+        });
+      },
+    );
+  },
+);
+
+it.each([false, true])(
+  "retains affordable tool bodies after dropping an oversized prefix (compacted=%s)",
+  async (hasCompactionBoundary) => {
+    await withHistory(
+      `context-retained-results-${hasCompactionBoundary}`,
+      async ({ scope, source, verifyRead }) => {
+        const oversizedRequestId = source.appendMessage(
+          makeUserMessage("old request:" + "x".repeat(32_768), 0),
+        );
+        if (hasCompactionBoundary) {
+          source.appendCompaction("required summary", oversizedRequestId, 100);
+        }
+        source.appendMessage(makeUserMessage("verify the recent checksum", 1));
+        appendCalls(source, "checksum");
+        appendResult(source, "checksum", "verified checksum: synthetic-42 " + "x".repeat(1024));
+        source.appendMessage(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "verification completed" }],
+          }),
+        );
+        const contextLimits = { maxBytes: 4096, maxEvents: 20 };
+        const expectedMessages = SessionManager.openModelContext(scope, {
+          limits: contextLimits,
+        }).buildSessionContext().messages;
+        expect(JSON.stringify(expectedMessages)).toContain("verified checksum: synthetic-42");
+        expect(JSON.stringify(expectedMessages)).not.toContain("old request:");
+        await verifyRead(async () => {
+          const options = { limits: { ...contextLimits, toolResultOverflow: "omit" as const } };
+          const selected = SessionManager.openModelContext(scope, options);
+          expect(selected.buildSessionContext().messages).toEqual(expectedMessages);
+          const asyncSelected = await SessionManager.openModelContextAsync(scope, options);
+          expect(asyncSelected.buildSessionContext().messages).toEqual(expectedMessages);
+          expect(Buffer.byteLength(JSON.stringify(expectedMessages))).toBeLessThanOrEqual(
+            contextLimits.maxBytes,
+          );
+        });
+      },
+    );
+  },
+);

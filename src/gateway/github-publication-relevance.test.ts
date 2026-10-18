@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { ControlUiSessionPullRequest } from "./control-ui-contract.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 import { isGitHubPublicationSuperseded } from "./github-publication-relevance.js";
@@ -32,45 +36,100 @@ beforeEach(() => {
   vi.spyOn(gitHubPublicApi, "resolveGitHubApiCredentialScope").mockReturnValue({
     token: "synthetic-test-token",
     cacheScope: "fixture",
+    apiBaseUrl: "https://api.github.com",
   });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  clearRuntimeConfigSnapshot();
+  vi.unstubAllGlobals();
+});
 
-function requestUrl(input: RequestInfo | URL): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-}
-
+const requestUrl = (input: RequestInfo | URL) =>
+  typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+const json = (value: unknown) => new Response(JSON.stringify(value));
+const published = (sha = head, publishedTree: string | null = tree) => ({
+  sha,
+  tree: publishedTree === null ? null : { sha: publishedTree },
+});
 function responses(publishedTree = "4".repeat(40), compared: unknown = comparison) {
-  return vi.fn(
-    async (input: RequestInfo | URL) =>
-      new Response(
-        JSON.stringify(
-          requestUrl(input).includes("/compare/")
-            ? compared
-            : { sha: head, tree: { sha: publishedTree } },
-        ),
-        { status: 200 },
-      ),
+  return vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
+    json(requestUrl(input).includes("/compare/") ? compared : published(head, publishedTree)),
   );
 }
-const current = () => {};
+const check = (
+  fetchImpl: typeof fetch,
+  accepted: Scenario["snapshot"] = {},
+  pullRequests = [pr],
+  assertCurrent = () => {},
+) => {
+  vi.stubGlobal("fetch", fetchImpl);
+  return isGitHubPublicationSuperseded({ ...snapshot, ...accepted }, pullRequests, {
+    assertCurrent,
+  });
+};
 
-it.each(["open", "draft", "merged"] as const)(
-  "recognizes a failed committed snapshot in %s PR history",
-  async (state) => {
-    const fetchImpl = responses();
-    expect(
-      await isGitHubPublicationSuperseded(snapshot, [{ ...pr, state }], {
-        fetchImpl,
-        assertCurrent: current,
-      }),
-    ).toBe(true);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+it.each(["github.com", "ghe.example.test"])(
+  "reads publication history at the recorded %s host on an Enterprise Gateway",
+  async (host) => {
+    vi.mocked(gitHubPublicApi.resolveGitHubApiCredentialScope).mockRestore();
+    vi.stubEnv("GH_TOKEN", "synthetic-unrelated-public-token");
+    vi.stubEnv("GITHUB_TOKEN", "");
+    setRuntimeConfigSnapshot({
+      gateway: {
+        github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+        controlUi: {
+          github: { host: "ghe.example.test", token: "synthetic-enterprise-history-token" },
+        },
+      },
+    });
+    const fetchImpl = responses(tree);
+    expect(await check(fetchImpl, {}, [{ ...pr, url: `https://${host}/owner/repo/pull/1` }])).toBe(
+      true,
+    );
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    const publicHost = host === "github.com";
+    const api = publicHost ? "https://api.github.com" : "https://ghe.example.test/api/v3";
+    expect({ url, authorization: new Headers(init?.headers).get("Authorization") }).toEqual({
+      url: `${api}/repos/owner/repo/git/commits/${head}`,
+      authorization: publicHost ? null : "Bearer synthetic-enterprise-history-token",
+    });
+  },
+);
+
+type Scenario = {
+  snapshot?: Partial<Parameters<typeof isGitHubPublicationSuperseded>[0]>;
+  pr?: Partial<ControlUiSessionPullRequest>;
+  tree?: string;
+  compared?: unknown;
+};
+it.each<[name: string, input: Scenario, superseded: boolean, calls?: number]>([
+  ["committed open history", { pr: { state: "open" } }, true, 2],
+  ["committed draft history", { pr: { state: "draft" } }, true, 2],
+  ["committed merged history", { pr: { state: "merged" } }, true, 2],
+  ["uncommitted exact tree", { snapshot: { source_head_commit: null }, tree }, true, 1],
+  ["another branch", { pr: { branch: "another-branch" }, tree }, false, 0],
+  ["another repository", { pr: { repo: "another-repo" }, tree }, false, 0],
+  ["closed PR", { pr: { state: "closed" }, tree }, false, 0],
+  ["unpublished PR", { pr: { headSha: undefined }, tree }, false, 0],
+  ["newer unpublished snapshot", { snapshot: { workspace_tree: "5".repeat(40) } }, false],
+  ["diverged history", { compared: { ...comparison, status: "diverged" } }, false],
+  ["wrong merge base", { compared: { ...comparison, merge_base_commit: { sha: head } } }, false],
+  ["unreadable comparison", { compared: null }, false],
+])("checks publication coverage for %s", async (_name, input, superseded, calls) => {
+  const fetchImpl = responses(input.tree, input.compared);
+  expect(await check(fetchImpl, input.snapshot, [{ ...pr, ...input.pr }])).toBe(superseded);
+  if (calls !== undefined) {
+    expect(fetchImpl).toHaveBeenCalledTimes(calls);
+  }
+  if (superseded && calls === 2) {
     expect(fetchImpl.mock.calls[1]?.[0]).toEqual(
       expect.stringContaining(`compare/${source}...${head}?per_page=1&page=2`),
     );
-  },
-);
+  }
+});
 
 it.each(["missing", "malformed"])("checks later matching PRs after a %s head", async (failure) => {
   const missingHead = "6".repeat(40);
@@ -78,66 +137,12 @@ it.each(["missing", "malformed"])("checks later matching PRs after a %s head", a
     if (requestUrl(input).endsWith(missingHead)) {
       return failure === "missing"
         ? new Response("missing", { status: 404 })
-        : new Response(JSON.stringify({ sha: missingHead, tree: null }));
+        : json(published(missingHead, null));
     }
-    return new Response(JSON.stringify({ sha: head, tree: { sha: tree } }));
+    return json(published());
   });
-  expect(
-    await isGitHubPublicationSuperseded(snapshot, [{ ...pr, headSha: missingHead }, pr], {
-      fetchImpl,
-      assertCurrent: current,
-    }),
-  ).toBe(true);
+  expect(await check(fetchImpl, {}, [{ ...pr, headSha: missingHead }, pr])).toBe(true);
   expect(fetchImpl).toHaveBeenCalledTimes(2);
-});
-
-it("recognizes an exact published tree even when the accepted work was uncommitted", async () => {
-  const fetchImpl = responses(tree);
-  expect(
-    await isGitHubPublicationSuperseded({ ...snapshot, source_head_commit: null }, [pr], {
-      fetchImpl,
-      assertCurrent: current,
-    }),
-  ).toBe(true);
-  expect(fetchImpl).toHaveBeenCalledOnce();
-});
-
-it.each([
-  { branch: "another-branch" },
-  { repo: "another-repo" },
-  { state: "closed" as const },
-  { headSha: undefined },
-])("does not use an unrelated or unpublished PR: %j", async (change) => {
-  const fetchImpl = responses(tree);
-  expect(
-    await isGitHubPublicationSuperseded(snapshot, [{ ...pr, ...change }], {
-      fetchImpl,
-      assertCurrent: current,
-    }),
-  ).toBe(false);
-  expect(fetchImpl).not.toHaveBeenCalled();
-});
-
-it.each([
-  {
-    name: "newer unpublished snapshot",
-    accepted: { ...snapshot, workspace_tree: "5".repeat(40) },
-    compared: comparison,
-  },
-  { name: "diverged history", accepted: snapshot, compared: { ...comparison, status: "diverged" } },
-  {
-    name: "wrong merge base",
-    accepted: snapshot,
-    compared: { ...comparison, merge_base_commit: { sha: head } },
-  },
-  { name: "unreadable comparison", accepted: snapshot, compared: null },
-])("retains failure for $name", async ({ accepted, compared }) => {
-  expect(
-    await isGitHubPublicationSuperseded(accepted, [pr], {
-      fetchImpl: responses(undefined, compared),
-      assertCurrent: current,
-    }),
-  ).toBe(false);
 });
 
 it("honors rate-limit cooldown without retrying anonymously or treating it as completion", async () => {
@@ -145,9 +150,7 @@ it("honors rate-limit cooldown without retrying anonymously or treating it as co
     async () => new Response("limited", { status: 429, headers: { "retry-after": "60" } }),
   );
   for (let attempt = 0; attempt < 2; attempt++) {
-    expect(
-      await isGitHubPublicationSuperseded(snapshot, [pr], { fetchImpl, assertCurrent: current }),
-    ).toBe(false);
+    expect(await check(fetchImpl)).toBe(false);
   }
   expect(fetchImpl).toHaveBeenCalledOnce();
 });
@@ -156,16 +159,13 @@ it("revalidates session authority after an awaited response before retiring a fa
   let active = true;
   const fetchImpl = vi.fn(async () => {
     active = false;
-    return new Response(JSON.stringify({ sha: head, tree: { sha: tree } }));
+    return json(published());
   });
   await expect(
-    isGitHubPublicationSuperseded(snapshot, [pr], {
-      fetchImpl,
-      assertCurrent: () => {
-        if (!active) {
-          throw new Error("Session retired");
-        }
-      },
+    check(fetchImpl, {}, [pr], () => {
+      if (!active) {
+        throw new Error("Session retired");
+      }
     }),
   ).rejects.toThrow("Session retired");
   expect(fetchImpl).toHaveBeenCalledOnce();

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
@@ -15,6 +15,7 @@ import {
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { withEnv } from "../../src/test-utils/env.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
 import {
   gatewayDatabaseWorkerTestFiles,
@@ -55,9 +56,10 @@ const VITEST_NODE_PREFIX = [
 ];
 
 describe("test-projects args", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeAll(() => {
     for (const target of [
-      "src/gateway/gateway-connection.test-mocks.ts",
       "extensions/memory-core/src/memory/test-runtime-mocks.ts",
       "test/helpers/temp-dir.ts",
       "src/commands/onboard-non-interactive.test-helpers.ts",
@@ -238,8 +240,18 @@ describe("test-projects args", () => {
     },
     {
       title: "routes fake-timer unit-fast targets to the serial fake-timer config",
-      target: "src/acp/translator.stop-reason.test.ts",
+      target: "src/utils.test.ts",
       config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+    },
+    {
+      title: "routes Gemini embedding auth to its host broker owner",
+      target: "extensions/google/embedding-provider.test.ts",
+      config: "test/vitest/vitest.extension-database-workers.config.ts",
+    },
+    {
+      title: "routes ACP event ledger consumers to their host broker owner",
+      target: "src/acp/translator.stop-reason.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
     },
     {
       title: "routes ACP session signals to their host broker owner",
@@ -352,13 +364,19 @@ describe("test-projects args", () => {
         watchMode: false,
       },
     ]);
-    for (const target of [
-      "src/auto-reply/reply/dispatch-from-config.test.ts",
-      "src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts",
-    ]) {
+    for (const [target, config] of [
+      [
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "test/vitest/vitest.auto-reply.config.ts",
+      ],
+      [
+        "src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts",
+        "test/vitest/vitest.infra.config.ts",
+      ],
+    ] as const) {
       expect(buildVitestRunPlans([target])).toEqual([
         {
-          config: "test/vitest/vitest.auto-reply.config.ts",
+          config,
           forwardedArgs: [],
           includePatterns: [target],
           watchMode: false,
@@ -376,7 +394,6 @@ describe("test-projects args", () => {
           "src/agents/openai-transport-stream.base.test.ts",
           "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
           "src/agents/openai-transport-stream.failed-sse.test.ts",
-          "src/agents/openai-transport-stream.incomplete-sse.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
         ],
         watchMode: false,
@@ -518,7 +535,21 @@ describe("test-projects args", () => {
   });
 
   it("routes non-test helper file targets to importing tests inside the routed suites", () => {
-    expect(buildVitestRunPlans(["src/gateway/gateway-connection.test-mocks.ts"])).toEqual([
+    const tempDir = tempDirs.make("openclaw-helper-routing-");
+    const helper = "src/gateway/gateway-connection.test-mocks.ts";
+    fs.mkdirSync(path.join(tempDir, "src/gateway"), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, "src/tui"), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, helper), "export const fixture = 1;\n");
+    fs.writeFileSync(
+      path.join(tempDir, "src/gateway/call.test.ts"),
+      'import { fixture } from "./gateway-connection.test-mocks.js";\nvoid fixture;\n',
+    );
+    fs.writeFileSync(
+      path.join(tempDir, "src/tui/gateway-chat.connection.test.ts"),
+      'import { fixture } from "../gateway/gateway-connection.test-mocks.js";\nvoid fixture;\n',
+    );
+
+    expect(buildVitestRunPlans([helper], tempDir)).toEqual([
       {
         config: "test/vitest/vitest.gateway.config.ts",
         forwardedArgs: [],

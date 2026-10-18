@@ -10,6 +10,7 @@ import {
   type QaNativeWorkspaceBehavior,
 } from "./native-workspace-behavior.js";
 import { isWorkspaceBoundaryFailureToolOutput } from "./runtime-tool-evidence.js";
+import type { runAgentPrompt } from "./suite-runtime-agent-process.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 type NativeToolOutput = { hardFailure?: boolean; text: string };
@@ -26,24 +27,16 @@ type NativeWorkspaceFixtureParams = {
   required: boolean;
   happySessionKey: string;
   failureSessionKey: string;
-  runAgentPrompt: (
-    env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
-    params: {
-      sessionKey: string;
-      message: string;
-      timeoutMs?: number;
-      transcriptToolName?: string;
-      requireSuccessfulTranscriptToolResult?: boolean;
-    },
-  ) => Promise<unknown>;
+  runAgentPrompt: (...args: Parameters<typeof runAgentPrompt>) => Promise<unknown>;
   readEvidence: (sessionKey: string, toolName: string) => Promise<NativeToolEvidence>;
   fixtureError: (error: unknown) => Error;
   failFixture: (details: string) => never;
 };
 
-function canonicalWorkspacePath(workspaceDir: string, filePath: string): string {
+export function canonicalWorkspacePath(workspaceDir: string, filePath: string): string {
   const resolvedPath = path.resolve(workspaceDir, filePath);
   try {
+    // Native patch paths resolve platform aliases after the target leaf is removed.
     return path.join(realpathSync.native(path.dirname(resolvedPath)), path.basename(resolvedPath));
   } catch {
     return resolvedPath;
@@ -91,7 +84,7 @@ function matchesNativeWorkspaceArguments(params: {
   );
 }
 
-async function readOptionalUtf8(filePath: string) {
+export async function readOptionalUtf8(filePath: string) {
   return fs.readFile(filePath, "utf8").catch((error: unknown) => {
     if (isRecord(error) && error.code === "ENOENT") {
       return undefined;

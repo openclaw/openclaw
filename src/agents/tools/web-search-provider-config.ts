@@ -27,12 +27,7 @@ export function setScopedCredentialValue(
   key: string,
   value: unknown,
 ): void {
-  const scoped = asOptionalRecord(searchConfigTarget[key]);
-  if (!scoped) {
-    searchConfigTarget[key] = { apiKey: value };
-    return;
-  }
-  scoped.apiKey = value;
+  ensureObject(searchConfigTarget, key).apiKey = value;
 }
 
 /** Projects plugin web-search config into the provider-scoped tool-local shape. */

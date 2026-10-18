@@ -10,6 +10,7 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../../scripts/lib/local-build-metadata.mts";
+import { resolveRunNodeInputSignature } from "../../scripts/lib/run-node-input-state.mts";
 import {
   acquireRunNodeBuildLock,
   resolveBuildRequirement,
@@ -41,7 +42,6 @@ import {
   firstMockCall,
   writeRuntimePostBuildScaffold,
   expectedBuildSpawn,
-  statusCommandSpawn,
   resolvePath,
   isTsxScriptArgs,
   touchProjectFiles,
@@ -111,42 +111,58 @@ describe("run-node script", () => {
     },
   );
 
-  it("starts the CLI only after the canonical runtime build completes", async ({ tmp }) => {
-    const build = new EventEmitter();
-    const fakeProcess = createFakeProcess();
-    const { promise: buildSpawned, resolve: markBuildSpawned } = createDeferred();
-    const spawn = vi.fn((_cmd: string, args: string[]) => {
-      if (!isTsxScriptArgs(args, "scripts/build-all.mts")) {
-        return createExitedProcess(0);
-      }
-      markBuildSpawned();
-      return build;
-    });
-    const runRuntimePostBuild = vi.fn();
-    const result = runNodeCommand(tmp, {
-      spawn,
-      process: fakeProcess,
-      env: { OPENCLAW_FORCE_BUILD: "1" },
-      runRuntimePostBuild,
-    });
-    await Promise.race([buildSpawned, result]);
-    expect(spawn).toHaveBeenCalledOnce();
-    const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
-    expect(fsSync.existsSync(lockDir)).toBe(true);
-    expect(fakeProcess.listenerCount("exit")).toBe(1);
-    build.emit("exit", 0, null);
+  it.for([undefined, "node", "bun"])(
+    "starts the %s CLI only after the Node runtime build completes",
+    async (runtime, { tmp }) => {
+      const bunPath = path.join(tmp, "fixture-bun");
+      await fs.writeFile(bunPath, "", { mode: 0o755 });
+      const build = new EventEmitter();
+      const fakeProcess = createFakeProcess();
+      const { promise: buildSpawned, resolve: markBuildSpawned } = createDeferred();
+      const spawn = vi.fn((_cmd: string, args: string[]) => {
+        if (!isTsxScriptArgs(args, "scripts/build-all.mts")) {
+          return createExitedProcess(0);
+        }
+        markBuildSpawned();
+        return build;
+      });
+      const runRuntimePostBuild = vi.fn();
+      const result = runNodeCommand(tmp, {
+        spawn,
+        process: fakeProcess,
+        env: {
+          CI: "",
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_BUN_PATH: bunPath,
+          OPENCLAW_VITEST_RUNTIME: runtime,
+          OPENCLAW_TRACE_SYNC_IO: "1",
+        },
+        runRuntimePostBuild,
+      });
+      await Promise.race([buildSpawned, result]);
+      expect(spawn).toHaveBeenCalledOnce();
+      const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+      expect(fsSync.existsSync(lockDir)).toBe(true);
+      expect(fakeProcess.listenerCount("exit")).toBe(1);
+      build.emit("exit", 0, null);
 
-    expect(await result).toBe(0);
-    expect(spawn.mock.calls.map(([cmd, args]) => [cmd].concat(args))).toEqual([
-      expectedBuildSpawn(),
-      statusCommandSpawn(),
-    ]);
-    // The canonical profile owns metadata and both stamps; the local runner
-    // only invokes postbuild directly on its separate metadata-only path.
-    expect(runRuntimePostBuild).not.toHaveBeenCalled();
-    expect(fsSync.existsSync(lockDir)).toBe(false);
-    expect(fakeProcess.listenerCount("exit")).toBe(0);
-  });
+      expect(await result).toBe(0);
+      expect(spawn.mock.calls.map(([cmd, args]) => [cmd].concat(args))).toEqual([
+        expectedBuildSpawn(),
+        [
+          runtime === "node" ? process.execPath : bunPath,
+          "--trace-sync-io",
+          "openclaw.mjs",
+          "status",
+        ],
+      ]);
+      // The canonical profile owns metadata and both stamps; the local runner
+      // only invokes postbuild directly on its separate metadata-only path.
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
+      expect(fsSync.existsSync(lockDir)).toBe(false);
+      expect(fakeProcess.listenerCount("exit")).toBe(0);
+    },
+  );
 
   it("routes local build stdout to stderr before JSON command output", async ({ tmp }) => {
     await writeRuntimePostBuildScaffold(tmp);
@@ -351,7 +367,13 @@ describe("run-node script", () => {
   it.runIf(process.platform !== "win32").for([false, true])(
     "force-cleans the active child process group after SIGTERM (rebuild: %s)",
     async (rebuild, { tmp }) => {
+      vi.stubEnv("CI", "true");
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
       await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+      const bunPath = path.join(tmp, "fixture-bun");
+      await fs.writeFile(bunPath, "", { mode: 0o755 });
 
       const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: false } });
       const child = Object.assign(new EventEmitter(), {
@@ -366,7 +388,12 @@ describe("run-node script", () => {
       });
 
       const exitCodePromise = runNodeCommand(tmp, {
-        env: { OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0" },
+        env: {
+          CI: "",
+          OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0",
+          OPENCLAW_VITEST_RUNTIME: "bun",
+          OPENCLAW_BUN_PATH: bunPath,
+        },
         platform: "darwin",
         process: fakeProcess,
         signalProcess: (pid: number, signal?: string | number) => {
@@ -387,6 +414,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(143);
       const spawnCall = firstMockCall(spawn);
+      expect(spawnCall?.[0]).toBe(rebuild ? process.execPath : bunPath);
       expect(spawnCall?.[1]).toEqual(
         rebuild ? expectedBuildSpawn().slice(1) : ["openclaw.mjs", "status"],
       );
@@ -509,17 +537,17 @@ describe("run-node script", () => {
       env: { OPENCLAW_RUNNER_LOG: "0" },
       fs: fsSync,
       process: lockProcess,
-      stderr: { write: () => true } as unknown as NodeJS.WriteStream,
+      stderr: { write: () => true },
     });
     const { promise: waitingForLock, resolve: markWaiting } = createDeferred();
     const stderr = {
-      write: (chunk: string | Buffer) => {
+      write: (chunk: string | Uint8Array) => {
         if (String(chunk).includes("Waiting for TypeScript/runtime artifact lock")) {
           markWaiting();
         }
         return true;
       },
-    } as unknown as NodeJS.WriteStream;
+    };
     const runRuntimePostBuild = vi.fn();
     const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
       gitStatus: ` M ${ROOT_SRC}\0`,
@@ -550,6 +578,48 @@ describe("run-node script", () => {
     ]);
     expect(runRuntimePostBuild).not.toHaveBeenCalled();
   });
+
+  it.for([false, true])(
+    "reuses prepared dirty runtime inputs for Gateway status unless they changed (changed: %s)",
+    async (changed, { tmp }) => {
+      const input = "scripts/runtime-postbuild.mts";
+      await setupStampedProject(tmp, {
+        files: { [input]: "export {};\n" },
+        trackConfig: true,
+      });
+      const { deps } = await trackProjectWithGit(tmp);
+      const env = {
+        ...process.env,
+        OPENCLAW_DEV_SOURCE_ROOT: tmp,
+        OPENCLAW_VITEST_RUNTIME: "node",
+      };
+      await fs.appendFile(resolvePath(tmp, input), "\n");
+      writeRuntimePostBuildStamp({
+        cwd: tmp,
+        env,
+        inputSignature: resolveRunNodeInputSignature({ ...deps, env }, "runtime"),
+      });
+      if (changed) {
+        await fs.appendFile(resolvePath(tmp, input), "\n");
+      }
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn } = createSpawnRecorder();
+
+      expect(
+        await runNodeCommand(tmp, {
+          args: ["gateway", "status", "--deep"],
+          env,
+          spawn,
+          spawnSync: realSpawnSync,
+          runRuntimePostBuild,
+        }),
+      ).toBe(0);
+      expect(spawnCalls).toEqual([
+        [process.execPath, "openclaw.mjs", "gateway", "status", "--deep"],
+      ]);
+      expect(runRuntimePostBuild).toHaveBeenCalledTimes(changed ? 1 : 0);
+    },
+  );
 
   it.for([false, true])(
     "keeps legacy client stamps subject to required output checks (missing: %s)",
@@ -667,7 +737,7 @@ describe("run-node script", () => {
       env: { OPENCLAW_RUNNER_LOG: "0" },
       fs: fsSync,
       process: fakeProcess,
-      stderr: { write: () => true } as unknown as NodeJS.WriteStream,
+      stderr: { write: () => true },
     });
 
     it("releases the lock directory on process exit", async ({ tmp }) => {

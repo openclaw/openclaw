@@ -66,7 +66,6 @@ describe("browser runtime shutdown profile races", () => {
     try {
       await stopBrowserRuntime({
         current: state,
-        getState: () => state,
         clearState,
         onWarn: vi.fn(),
       });
@@ -97,7 +96,6 @@ describe("browser runtime shutdown profile races", () => {
       enqueueProfileStart({
         state,
         runtime,
-        configRevision: 0,
         key: "default",
         run: async (signal) => {
           startSignals[index] = signal;
@@ -120,7 +118,6 @@ describe("browser runtime shutdown profile races", () => {
 
     const stopping = stopBrowserBridgeRuntime({
       current: state,
-      getState: () => state,
       clearState,
       onWarn: vi.fn(),
     });
@@ -131,7 +128,6 @@ describe("browser runtime shutdown profile races", () => {
       enqueueProfileStart({
         state,
         runtime: runtimes[0]!,
-        configRevision: 0,
         key: "after-shutdown",
         run: async () => {},
       }),

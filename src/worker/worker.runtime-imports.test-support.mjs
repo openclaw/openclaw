@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { stat } from "node:fs/promises";
 import { registerHooks } from "node:module";
-import { setImmediate } from "node:timers/promises";
 import { WebSocketServer } from "ws";
 const [mode, workspaceDir, runtimeUrl, launchDescriptorUrl, admissionUrl, websocketDataUrl] =
   process.argv.slice(2);
@@ -14,7 +13,7 @@ const { rawDataToString } = await import(websocketDataUrl);
 assert(["rejected", "cancelled", "import-error", "accepted"].includes(mode));
 const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-const names = ["embedded", "inference", "bootstrap"];
+const names = ["embedded", "inference"];
 const importsStarted = new Map(names.map((name) => [name, Promise.withResolvers()]));
 const importsFinished = new Map(names.map((name) => [name, Promise.withResolvers()]));
 const work = [];
@@ -26,7 +25,7 @@ process.on("worker-import:finished", (name, stateDir) =>
 process.on("worker-import:work", (name) => work.push(name));
 
 // The runtime, connection, abort controller, and environment cleanup remain real.
-// Controlled preparation proves imports and workspace reads wait for admission and join cleanup.
+// Controlled preparation proves imports wait for admission and join cleanup.
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
     const name =
@@ -34,7 +33,6 @@ const hooks = registerHooks({
         ? {
             "embedded-agent.runtime.js": "embedded",
             "inference-stream.runtime.js": "inference",
-            "workspace.js": "bootstrap",
           }[new URL(specifier, context.parentURL).pathname.split("/").at(-1)]
         : undefined;
     if (!name) {
@@ -56,13 +54,10 @@ const hooks = registerHooks({
     `;
     const source =
       `import { once } from "node:events";` +
-      (name === "bootstrap"
-        ? `export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
-         export async function loadWorkspaceBootstrapFiles() { ${preparation} return []; }`
-        : `${preparation}
+      `${preparation}
          export function ${name === "embedded" ? "runWorkerEmbeddedTurn" : "createWorkerInferenceStreamAdapter"}() {
            process.emit("worker-import:work", "${name}");
-         }`);
+         }`;
     return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
   },
 });
@@ -160,6 +155,28 @@ try {
           type: "worker-hello-ok",
           toolSurface: {
             generation: "import-surface",
+            presentation: {
+              codeMode: {
+                enabled: false,
+                executor: "node",
+                mode: "only",
+                timeoutMs: 10000,
+                memoryLimitBytes: 67108864,
+                maxOutputBytes: 65536,
+                maxSnapshotBytes: 10485760,
+                maxPendingToolCalls: 16,
+                snapshotTtlSeconds: 900,
+                searchDefaultLimit: 8,
+                maxSearchLimit: 50,
+              },
+              toolSearch: {
+                enabled: false,
+                mode: "tools",
+                searchDefaultLimit: 8,
+                maxSearchLimit: 50,
+              },
+              forceDirectMessageTool: false,
+            },
             tools: [],
             policy: {
               workspaceOnly: false,
@@ -194,14 +211,6 @@ try {
     assert((await stat(runtimeStateDir)).isDirectory());
     release("inference");
     assert.equal(await importsFinished.get("inference").promise, runtimeStateDir);
-    // Cross an unhandled-rejection checkpoint while the workspace read is pending.
-    // The child runs with --unhandled-rejections=strict.
-    await setImmediate();
-    assert.equal(settled, false, "Cleanup must also join the pending workspace read");
-    assert.deepEqual(work, [], "The turn must wait for its workspace bootstrap files");
-    assert.equal(process.env.OPENCLAW_STATE_DIR, runtimeStateDir);
-    release("bootstrap");
-    assert.equal(await importsFinished.get("bootstrap").promise, runtimeStateDir);
   }
   await disconnected.promise;
   const outcome = await run;

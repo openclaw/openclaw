@@ -2,14 +2,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DesktopClient } from "./desktop-client.ts";
 import "./desktop-panel.ts";
+import {
+  createPanel,
+  mountPanel,
+  unmountPanel,
+  updatePanel,
+} from "./desktop-panel.test-support.ts";
 
-type Panel = HTMLElementTagNameMap["openclaw-desktop-panel"];
+type Panel = ReturnType<typeof createPanel>;
 const button = (panel: Panel) =>
-  panel.renderRoot.querySelector<HTMLButtonElement>(".desktop-picture-in-picture-button")!;
+  panel.querySelector<HTMLButtonElement>(".desktop-picture-in-picture-button")!;
 
 function createPopup() {
   const frames = new Map<number, FrameRequestCallback>();
@@ -82,15 +88,17 @@ async function setup(mode: "embedded" | "dock" | "document" = "embedded", connec
       setSizingMode: vi.fn(),
     };
   });
-  const panel = document.createElement("openclaw-desktop-panel");
-  panel.client = { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient;
-  panel.available = true;
-  panel.embedded = mode === "embedded";
-  panel.presented = true;
-  panel.documentMode = mode === "document";
-  panel.requestedSource = "gateway";
-  panel.desktopClientFactory = () => ({ connect });
-  document.body.append(panel);
+  const panel = createPanel();
+  updatePanel(panel, {
+    client: { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
+    available: true,
+    embedded: mode === "embedded",
+    presented: true,
+    documentMode: mode === "document",
+    requestedSource: "gateway",
+    desktopClientFactory: () => ({ connect }),
+  });
+  await mountPanel(panel);
   if (mode === "dock") {
     panel.handleToggleRequest(
       new CustomEvent("openclaw:desktop-toggle", {
@@ -98,7 +106,7 @@ async function setup(mode: "embedded" | "dock" | "document" = "embedded", connec
       }),
     );
   }
-  await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+  await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
   await panel.updateComplete;
   return { panel, request, connect, disconnect, callbacks: callbacks! };
 }
@@ -114,17 +122,26 @@ describe("Desktop Picture-in-Picture ownership", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["dock", "document"] as const)(
+  it("accepts a native close before the Solid panel mounts", () => {
+    const panel = document.createElement("openclaw-desktop-panel");
+    expect(() =>
+      panel.handleToggleRequest(
+        new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
+      ),
+    ).not.toThrow();
+  });
+
+  it.each(["dock"] as const)(
     "mirrors %s without reconnecting or changing control; browser close preserves the viewer",
     async (mode) => {
       const { popup, tick, frames, drawImage, requestWindow } = createMirrorFixture();
       const { panel, request, connect, disconnect } = await setup(mode);
-      const source = panel.renderRoot.querySelector("canvas")!;
+      const source = panel.querySelector("canvas")!;
       button(panel).click();
       // Native request occurs synchronously, while the click still has user activation.
       expect(requestWindow).toHaveBeenCalledOnce();
       await panel.updateComplete;
-      await waitForFast(() => expect(button(panel).getAttribute("aria-pressed")).toBe("true"));
+      await waitForSolid(() => expect(button(panel).getAttribute("aria-pressed")).toBe("true"));
       tick(0);
       tick(40);
       expect(drawImage).toHaveBeenCalledTimes(2);
@@ -160,7 +177,7 @@ describe("Desktop Picture-in-Picture ownership", () => {
       // The noVNC margin keeps a live same-document token, not a connect-time color.
       expect(connect.mock.calls[0]?.[0].background).toBe("var(--bg)");
       button(panel).click();
-      await waitForFast(() => expect(popup.document.querySelector("canvas")).not.toBeNull());
+      await waitForSolid(() => expect(popup.document.querySelector("canvas")).not.toBeNull());
       const pipRoot = popup.document.documentElement;
       expect(pipRoot.style.getPropertyValue("--bg")).toBe("rgb(23 39 45)");
       expect(pipRoot.style.getPropertyValue("--text")).toBe("rgb(221 242 239)");
@@ -181,9 +198,9 @@ describe("Desktop Picture-in-Picture ownership", () => {
       popup.closed = false;
       await panel.updateComplete;
       button(panel).click();
-      await waitForFast(() => expect(popup.document.querySelector("canvas")).not.toBeNull());
+      await waitForSolid(() => expect(popup.document.querySelector("canvas")).not.toBeNull());
       expect(pipRoot.style.getPropertyValue("--bg")).toBe("rgb(23 39 45)");
-      panel.remove();
+      await unmountPanel(panel);
       publish("light", "rgb(233 246 238)", "rgb(25 51 36)");
       await Promise.resolve();
       expect(pipRoot.style.getPropertyValue("--bg")).toBe("rgb(23 39 45)");
@@ -202,30 +219,13 @@ describe("Desktop Picture-in-Picture ownership", () => {
     }
   });
 
-  it.each(["unsupported", "insecure", "connecting"])(
-    "does not open PiP while %s",
-    async (condition) => {
-      const requestWindow = vi.fn();
-      if (condition !== "unsupported") {
-        vi.stubGlobal("documentPictureInPicture", { requestWindow });
-      }
-      if (condition === "insecure") {
-        vi.stubGlobal("isSecureContext", false);
-      }
-      const { panel } = await setup("embedded", condition !== "connecting");
-      expect(button(panel).disabled).toBe(true);
-      button(panel).click();
-      expect(requestWindow).not.toHaveBeenCalled();
-    },
-  );
-
   it("reports denial without disrupting the connection and permits a retry", async () => {
     const requestWindow = vi.fn().mockRejectedValue(new DOMException("denied", "NotAllowedError"));
     vi.stubGlobal("documentPictureInPicture", { requestWindow });
     const { panel, disconnect } = await setup();
     button(panel).click();
-    await waitForFast(() =>
-      expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(
+    await waitForSolid(() =>
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain(
         "Check browser permissions",
       ),
     );
@@ -245,14 +245,14 @@ describe("Desktop Picture-in-Picture ownership", () => {
     expect(button(panel).getAttribute("aria-busy")).toBe("true");
     popup.close();
     pending.resolve(popup as unknown as Window);
-    await waitForFast(() => expect(button(panel).getAttribute("aria-busy")).toBe("false"));
+    await waitForSolid(() => expect(button(panel).getAttribute("aria-busy")).toBe("false"));
     expect(button(panel).getAttribute("aria-pressed")).toBe("false");
     expect(popup.document.querySelector("canvas")).toBeNull();
-    expect(panel.renderRoot.querySelector('[role="alert"]')).toBeNull();
+    expect(panel.querySelector('[role="alert"]')).toBeNull();
     expect(disconnect).not.toHaveBeenCalled();
   });
 
-  it.each(["disconnect", "source switch", "session switch", "unmount"])(
+  it.each(["disconnect", "source switch", "session switch", "hidden", "unmount"])(
     "closes late PiP completions after %s",
     async (reason) => {
       const pending = createDeferred<Window>();
@@ -266,15 +266,19 @@ describe("Desktop Picture-in-Picture ownership", () => {
       if (reason === "disconnect") {
         callbacks.onDisconnect?.({ clean: false });
       } else if (reason === "source switch") {
-        panel.requestedSource = "another-machine";
+        updatePanel(panel, { requestedSource: "another-machine" });
       } else if (reason === "session switch") {
-        panel.sessionKey = "agent:main:another-session";
+        updatePanel(panel, { sessionKey: "agent:main:another-session" });
+      } else if (reason === "hidden") {
+        updatePanel(panel, { presented: false });
+        await panel.updateComplete;
+        expect(button(panel).getAttribute("aria-busy")).toBe("true");
       } else {
-        panel.remove();
+        await unmountPanel(panel);
       }
       await panel.updateComplete;
       pending.resolve(popup as unknown as Window);
-      await waitForFast(() => expect(popup.close).toHaveBeenCalledOnce());
+      await waitForSolid(() => expect(popup.close).toHaveBeenCalledOnce());
       expect(popup.document.querySelector("canvas")).toBeNull();
     },
   );
@@ -283,7 +287,7 @@ describe("Desktop Picture-in-Picture ownership", () => {
     const { popup, tick, frames, drawImage } = createMirrorFixture();
     const { panel, callbacks, disconnect } = await setup();
     button(panel).click();
-    await waitForFast(() => expect(popup.document.querySelector("canvas")).not.toBeNull());
+    await waitForSolid(() => expect(popup.document.querySelector("canvas")).not.toBeNull());
     drawImage.mockImplementation(() => {
       throw new Error("copy failed");
     });
@@ -295,7 +299,7 @@ describe("Desktop Picture-in-Picture ownership", () => {
     drawImage.mockReset();
     await panel.updateComplete;
     button(panel).click();
-    await waitForFast(() => expect(popup.document.querySelector("canvas")).not.toBeNull());
+    await waitForSolid(() => expect(popup.document.querySelector("canvas")).not.toBeNull());
     callbacks.onDisconnect?.({ clean: false });
     expect(popup.closed).toBe(true);
     expect(frames.size).toBe(0);

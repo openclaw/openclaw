@@ -16,7 +16,6 @@ import {
   qualifyNpmPackageBundle,
   validatePreparedNpmBundleDescriptor,
   verifyNpmBundleProducer,
-  verifyPreparedNpmBundleFiles,
   verifyNpmSourceCheck,
 } from "../../scripts/npm-prepared-bundle.mjs";
 import { validatePreflightManifest } from "../../scripts/release-candidate-checklist.mts";
@@ -69,6 +68,29 @@ function packageProducer(callerWorkflowPath = workflowPath) {
   };
 }
 
+function packSourcePackage(directory: string, destination: string) {
+  const { name, version } = JSON.parse(readFileSync(join(directory, "package.json"), "utf8")) as {
+    name: string;
+    version: string;
+  };
+  const staging = tempDirs.make("npm-package-staging-");
+  mkdirSync(join(staging, "package"));
+  copyFileSync(join(directory, "package.json"), join(staging, "package/package.json"));
+  if (existsSync(join(directory, "npm-shrinkwrap.json"))) {
+    copyFileSync(
+      join(directory, "npm-shrinkwrap.json"),
+      join(staging, "package/npm-shrinkwrap.json"),
+    );
+  }
+  return execFileSync("tar", [
+    "-czf",
+    join(destination, `${name.replace(/^@/u, "").replace("/", "-")}-${version}.tgz`),
+    "-C",
+    staging,
+    "package",
+  ]);
+}
+
 function packageSourceFixture(
   packageVersion: string,
   baseTag?: "same-source" | "different-source",
@@ -104,24 +126,7 @@ function packageSourceFixture(
       git("commit", "--quiet", "--allow-empty", "-m", "different release source");
     }
   }
-  const runPack = vi.fn((directory: string, destination: string) => {
-    const staging = tempDirs.make("npm-package-staging-");
-    mkdirSync(join(staging, "package"));
-    copyFileSync(join(directory, "package.json"), join(staging, "package/package.json"));
-    if (existsSync(join(directory, "npm-shrinkwrap.json"))) {
-      copyFileSync(
-        join(directory, "npm-shrinkwrap.json"),
-        join(staging, "package/npm-shrinkwrap.json"),
-      );
-    }
-    return execFileSync("tar", [
-      "-czf",
-      join(destination, `openclaw-${packageVersion}.tgz`),
-      "-C",
-      staging,
-      "package",
-    ]);
-  });
+  const runPack = vi.fn(packSourcePackage);
   return {
     sourceDir,
     outputDir,
@@ -490,6 +495,47 @@ describe("prepared npm bundle", () => {
   });
 
   it.each([
+    ["carried-forward copy", "2026-08-01T00:00:00Z", true],
+    ["re-executed job", "2026-08-01T01:00:00Z", false],
+  ] as const)("checks later attempts for the producer job: %s", async (_, startedAt, accepted) => {
+    const fixture = await bundleFixture();
+    Object.assign(fixture.run, { status: "completed", conclusion: "success" });
+    Object.assign(fixture.job, {
+      started_at: "2026-08-01T00:00:00Z",
+      completed_at: "2026-08-01T00:10:00Z",
+    });
+    const current = { ...fixture.run, run_attempt: 3 };
+    const later = { ...fixture.job, id: 47, run_attempt: 3, started_at: startedAt };
+    const runGh = (args: string[]) => {
+      const endpoint = args[1] ?? "";
+      if (endpoint.endsWith("/runs/12")) {
+        return JSON.stringify(current);
+      }
+      if (endpoint.includes("/attempts/3/jobs?")) {
+        // Apply the production --jq projection so dropped execution fields fail here.
+        return execFileSync("jq", ["-c", args[args.indexOf("--jq") + 1]!], {
+          input: JSON.stringify({ total_count: 1, jobs: [later] }),
+          encoding: "utf8",
+        });
+      }
+      return fixture.runGh(args);
+    };
+    const verify = () =>
+      verifyNpmBundleProducer({
+        producer: fixture.descriptor.producer,
+        repository,
+        toolingSha,
+        requireCompletedParent: true,
+        runGh,
+      });
+    if (accepted) {
+      expect(verify().job.id).toBe(fixture.job.id);
+    } else {
+      expect(verify).toThrow("superseded by a later attempt");
+    }
+  });
+
+  it.each([
     "superseded qualifier",
     "missing attempt jobs",
     "mismatched attempt jobs",
@@ -589,40 +635,7 @@ describe("prepared npm bundle", () => {
     },
   );
 
-  it("packs bundled dependencies under the hoisted linker with prepack scripts enabled", () => {
-    const { runPack, runRootPack: _runRootPack, ...fixture } = packageSourceFixture("2026.9.6");
-    pnpmPack.impl = runPack;
-    try {
-      expect(
-        prepareNpmPackageBundle({
-          ...fixture,
-          sanitizeRootDeclarations: vi.fn(),
-          refreshRootDistInventory: vi.fn(),
-        }).packageVersion,
-      ).toBe("2026.9.6");
-    } finally {
-      pnpmPack.impl = undefined;
-    }
-    expect(pnpmPack.calls.map((call) => call.args)).toEqual([
-      ["run", "prepack"],
-      [
-        "pack",
-        "--config.ignore-scripts=true",
-        "--config.node-linker=hoisted",
-        "--pack-destination",
-        fixture.outputDir,
-      ],
-      ["run", "--if-present", "postpack"],
-    ]);
-    expect(pnpmPack.calls.map((call) => call.cwd)).toEqual([
-      fixture.sourceDir,
-      fixture.sourceDir,
-      fixture.sourceDir,
-    ]);
-    expect(pnpmPack.calls.every((call) => call.env.OPENCLAW_PREPACK_PREPARED === "1")).toBe(true);
-  });
-
-  it("sanitizes declarations after the frozen root prepack rebuild", () => {
+  it("seals sanitized declarations under the hoisted linker after root prepack", () => {
     const { runRootPack: _runRootPack, runPack, ...fixture } = packageSourceFixture("2026.8.33");
     const distRoot = join(fixture.sourceDir, "dist");
     mkdirSync(distRoot);
@@ -640,11 +653,13 @@ describe("prepared npm bundle", () => {
       steps.push(args.includes("pack") ? "pack" : String(args.at(-1)));
     };
     try {
-      prepareNpmPackageBundle({
-        ...fixture,
-        sanitizeRootDeclarations,
-        refreshRootDistInventory,
-      });
+      expect(
+        prepareNpmPackageBundle({
+          ...fixture,
+          sanitizeRootDeclarations,
+          refreshRootDistInventory,
+        }).packageVersion,
+      ).toBe("2026.8.33");
     } finally {
       pnpmPack.impl = undefined;
       pnpmPack.observer = undefined;
@@ -653,6 +668,23 @@ describe("prepared npm bundle", () => {
     expect(sanitizeRootDeclarations).toHaveBeenCalledOnce();
     expect(refreshRootDistInventory).toHaveBeenCalledOnce();
     expect(steps).toEqual(["prepack", "sanitize", "inventory", "pack", "postpack"]);
+    expect(pnpmPack.calls.map((call) => call.args)).toEqual([
+      ["run", "prepack"],
+      [
+        "pack",
+        "--config.ignore-scripts=true",
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        fixture.outputDir,
+      ],
+      ["run", "--if-present", "postpack"],
+    ]);
+    expect(pnpmPack.calls.map((call) => call.cwd)).toEqual([
+      fixture.sourceDir,
+      fixture.sourceDir,
+      fixture.sourceDir,
+    ]);
+    expect(pnpmPack.calls.every((call) => call.env.OPENCLAW_PREPACK_PREPARED === "1")).toBe(true);
   });
 
   it("does not load the declaration parser from the frozen candidate", () => {
@@ -723,31 +755,6 @@ describe("prepared npm bundle", () => {
           }),
         );
       }
-      const runPack = vi.fn((directory: string, destination: string) => {
-        const manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8")) as {
-          name: string;
-        };
-        const staging = tempDirs.make("npm-package-staging-");
-        mkdirSync(join(staging, "package"));
-        copyFileSync(join(directory, "package.json"), join(staging, "package/package.json"));
-        if (manifest.name === "openclaw" && existsSync(join(directory, "npm-shrinkwrap.json"))) {
-          copyFileSync(
-            join(directory, "npm-shrinkwrap.json"),
-            join(staging, "package/npm-shrinkwrap.json"),
-          );
-        }
-        const tarballName =
-          manifest.name === "@openclaw/ai"
-            ? `openclaw-ai-${version}.tgz`
-            : `openclaw-${version}.tgz`;
-        return execFileSync("tar", [
-          "-czf",
-          join(destination, tarballName),
-          "-C",
-          staging,
-          "package",
-        ]);
-      });
       const prepareRootShrinkwrap = vi.fn(({ aiTarballPath }: { aiTarballPath: string }) => {
         expect(existsSync(aiTarballPath)).toBe(true);
         const shrinkwrapPath = join(fixture.sourceDir, "npm-shrinkwrap.json");
@@ -760,7 +767,6 @@ describe("prepared npm bundle", () => {
       const prepared = prepareNpmPackageBundle({
         ...fixture,
         prepareRootShrinkwrap,
-        runPack,
       });
 
       expect(prepareRootShrinkwrap).toHaveBeenCalledTimes(hasShrinkwrap ? 1 : 0);
@@ -873,19 +879,6 @@ describe("prepared npm bundle", () => {
     },
   );
 
-  it("accepts descriptor JSON whose object keys were reordered without changing its contents", async () => {
-    const { descriptor, files, manifest } = await bundleFixture();
-    const reordered = JSON.parse(
-      JSON.stringify(descriptor, (_key, value: unknown) =>
-        value !== null && typeof value === "object" && !Array.isArray(value)
-          ? Object.fromEntries(Object.entries(value).toReversed())
-          : value,
-      ),
-    );
-    expect(JSON.stringify(reordered.producer)).not.toBe(JSON.stringify(descriptor.producer));
-    expect(verifyPreparedNpmBundleFiles({ descriptor: reordered, files })).toEqual(manifest);
-  });
-
   it("qualifies exact package bytes with large SDK and npm lock evidence", async () => {
     const fixture = await bundleFixture();
     const directory = tempDirs.make("npm-bundle-");
@@ -968,9 +961,16 @@ describe("prepared npm bundle", () => {
     });
   });
 
-  it("rejects a valid bundle for another publication tag before extracting artifacts", async () => {
+  it.each([
+    ["wrong publication tag", "release tag mismatch"],
+    ["unfinished producer", "unique exact completed producer job"],
+  ])("rejects %s before extracting artifacts", async (scenario, error) => {
     const fixture = await bundleFixture();
-    const outputDir = join(tempDirs.make("npm-wrong-release-"), "output");
+    const unfinished = scenario === "unfinished producer";
+    if (unfinished) {
+      fixture.job.status = "in_progress";
+    }
+    const outputDir = join(tempDirs.make("npm-rejected-download-"), "output");
     await expect(
       downloadPreparedNpmBundle({
         ...fixture,
@@ -980,31 +980,14 @@ describe("prepared npm bundle", () => {
         outputDir,
         token: "test-token",
         npmDistTag: "beta",
-        releaseTag: "v2026.8.1-2",
+        releaseTag: unfinished ? fixture.manifest.releaseTag : "v2026.8.1-2",
+        fetchImpl: unfinished
+          ? async () => {
+              throw new Error("must not download before producer success");
+            }
+          : fixture.fetchImpl,
       }),
-    ).rejects.toThrow("release tag mismatch");
-    expect(existsSync(outputDir)).toBe(false);
-  });
-
-  it("rejects an unfinished package producer before downloading or extracting artifacts", async () => {
-    const fixture = await bundleFixture();
-    fixture.job.status = "in_progress";
-    const outputDir = join(tempDirs.make("npm-unfinished-"), "output");
-    await expect(
-      downloadPreparedNpmBundle({
-        ...fixture,
-        repository,
-        sourceSha,
-        toolingSha,
-        outputDir,
-        token: "test-token",
-        npmDistTag: "beta",
-        releaseTag: fixture.manifest.releaseTag,
-        fetchImpl: async () => {
-          throw new Error("must not download before producer success");
-        },
-      }),
-    ).rejects.toThrow("unique exact completed producer job");
+    ).rejects.toThrow(error);
     expect(existsSync(outputDir)).toBe(false);
   });
 

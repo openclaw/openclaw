@@ -6,9 +6,9 @@ import {
   decorativeEmoji,
   supportsDecorativeEmoji,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
-import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
+import { sleep as defaultSleep } from "../utils/sleep.js";
 
 // Mascot and wordmark are separate so they can be tinted independently; the
 // wordmark starts on mascot row 3, keeping the claws above the text line.
@@ -91,11 +91,6 @@ function plainTitleLine(): string {
   return supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
 }
 
-const defaultSleep = (ms: number) =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-
 // One combined entrance: a left-to-right molt wipe reveals the color, a
 // shimmer band sweeps the wordmark, and the claws snip once. The 330ms sequence
 // ends on the exact static banner.
@@ -106,6 +101,7 @@ async function animateBanner(opts: {
 }): Promise<Exclude<ClawBannerResult, "static">> {
   const { settleWhen, sleep, write } = opts;
   let settleRequested = false;
+  let interruptedExitCode: number | undefined;
   const settleSignal = settleWhen
     ? Promise.resolve(settleWhen).then(
         () => {
@@ -117,11 +113,14 @@ async function animateBanner(opts: {
       )
     : null;
   const pause = async (ms: number): Promise<boolean> => {
-    if (!settleSignal) {
+    if (settleSignal) {
+      await Promise.race([sleep(ms), settleSignal]);
+    } else {
       await sleep(ms);
-      return true;
     }
-    await Promise.race([sleep(ms), settleSignal]);
+    if (interruptedExitCode !== undefined) {
+      throw new ExitError(interruptedExitCode);
+    }
     return !settleRequested;
   };
   let drewFrame = false;
@@ -130,13 +129,10 @@ async function animateBanner(opts: {
     drewFrame = true;
     write(`${prefix}${lines.map((line) => `\x1b[K${line}`).join("\n")}\n`);
   };
-  // Ctrl-C during the short sequence would otherwise kill the process with the
-  // cursor still hidden: default signal death skips the finally block. The
-  // banner runs before any other component installs signal handlers, so a
-  // scoped restore-and-exit handler is safe here and removed right after.
+  // Record interruption here and unwind at the next short animation pause.
+  // Throwing from the signal callback would bypass this owner’s cursor cleanup.
   const onSignal = (signal: "SIGINT" | "SIGTERM") => {
-    restoreTerminalState(`claw banner ${signal}`);
-    process.exit(signal === "SIGINT" ? 130 : 143);
+    interruptedExitCode ??= signal === "SIGINT" ? 130 : 143;
   };
   const onSigint = () => onSignal("SIGINT");
   const onSigterm = () => onSignal("SIGTERM");
@@ -185,7 +181,7 @@ async function animateBanner(opts: {
     try {
       // Parallel work owns startup latency; leave a complete banner instead of
       // an interrupted frame before its logs or errors take over the terminal.
-      if (settleRequested && drewFrame) {
+      if (settleRequested && drewFrame && interruptedExitCode === undefined) {
         draw(composeFrame({}));
       }
     } finally {
@@ -196,10 +192,6 @@ async function animateBanner(opts: {
   }
 }
 
-/**
- * Prints the OpenClaw banner: animated on rich interactive terminals, static
- * otherwise, plain title on terminals too narrow for the art.
- */
 export async function printClawBanner(
   runtime: RuntimeEnv,
   options: ClawBannerOptions = {},

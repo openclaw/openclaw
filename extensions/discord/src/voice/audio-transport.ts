@@ -5,7 +5,7 @@ import type {
   DiscordGatewayAdapterCreator,
   DiscordGatewayAdapterImplementerMethods,
 } from "@discordjs/voice";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { toErrorObject, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -123,7 +123,7 @@ export class DiscordAudioTransport extends EventEmitter<{
     try {
       this.worker.postMessage(command, transferList);
     } catch (error) {
-      this.finish(error instanceof Error ? error : new Error(String(error)));
+      this.finish(toStringifiedError(error));
     }
   }
 
@@ -155,10 +155,9 @@ export class DiscordAudioTransport extends EventEmitter<{
     }
     const id = this.allocateId();
     const abort = new AbortController();
-    const complete = new Promise<void>((resolve, reject) => {
-      this.files.set(id, { resolve, reject, abort });
-    });
-    void complete.catch(() => {});
+    const complete = createDeferred<void>();
+    this.files.set(id, { ...complete, abort });
+    void complete.promise.catch(() => {});
     this.send(
       typeof input === "string"
         ? { type: "file-play", id, path: input }
@@ -204,7 +203,7 @@ export class DiscordAudioTransport extends EventEmitter<{
             }
           })();
     try {
-      await Promise.all([pump, complete]);
+      await Promise.all([pump, complete.promise]);
     } catch (error) {
       this.send({ type: "player-stop" });
       throw error;
@@ -285,11 +284,7 @@ export class DiscordAudioTransport extends EventEmitter<{
       case "capture-frame": {
         const capture = this.captures.get(event.id);
         if (capture && !capture.destroyed) {
-          capture.push({
-            ...event.frame,
-            pcm: Buffer.from(event.frame.pcm),
-            packet: Buffer.from(event.frame.packet),
-          });
+          capture.push(event.frame);
         }
         break;
       }
@@ -329,7 +324,7 @@ export class DiscordAudioTransport extends EventEmitter<{
       }
       case "error":
         this.readiness.reject(restoreDiscordAudioError(event.error));
-        logger.warn("discord voice: " + event.error.message);
+        logger.warn("discord voice: audio worker failed", { code: event.error.code });
         break;
       case "log":
         if (event.level === "warn") {

@@ -1,12 +1,15 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 // Control UI E2E tests cover visible browser dictation state through a real composer.
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
   installTalkBrowserFixtures,
   TALK_READY_HISTORY_MESSAGE,
+  waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -36,6 +39,96 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it.each([false, true])(
+    "dictates during a running turn and sends explicitly (wait for completion: %s)",
+    async (waitForCompletion) => {
+      await suite.withPage(
+        { permissions: ["microphone"], viewport: { width: 390, height: 844 } },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            heldMethods: ["chat.send"],
+            deferredMethods: ["talk.session.create"],
+            sessionInfo: {
+              key: "agent:main:main",
+              activeRunIds: ["active-dictation-run"],
+              hasActiveRun: true,
+            },
+            inFlightRun: {
+              runId: "active-dictation-run",
+              text: "I’m reviewing the next steps.",
+              plan: {
+                steps: [
+                  { step: "Read the request", status: "completed" },
+                  { step: "Review the next steps", status: "in_progress" },
+                  { step: "Summarize the result", status: "pending" },
+                ],
+              },
+            },
+            methodResponses: createDictationMethodResponses("active-dictation", "active-dictation"),
+          });
+          await installTalkBrowserFixtures(page);
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const textarea = page.locator(".agent-chat__composer-combobox textarea");
+          const microphone = page.getByRole("button", { name: "Dictation", exact: true });
+          await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
+          await page
+            .locator('[data-chat-talk-capability="dictation"]')
+            .waitFor({ state: "detached" });
+          const capture = async (stage: string) => {
+            const surface = page.locator(".agent-chat__composer-shell");
+            const frame = await takeControlUiScreenshotFrame(page, surface, [textarea], {
+              animations: "disabled",
+            });
+            await writeFile(
+              path.join(suite.artifactDir, `${stage}-${waitForCompletion}.png`),
+              frame.png,
+            );
+          };
+          await capture("active-turn-microphone");
+          expect(await microphone.isEnabled()).toBe(true);
+          await microphone.click();
+          await gateway.waitForRequest("talk.session.create");
+          await gateway.resolveDeferred("talk.session.create");
+          await gateway.emitGatewayEvent("talk.event", {
+            transcriptionSessionId: "active-dictation",
+            type: "partial",
+            text: "Please check the tests too.",
+          });
+          await expect.poll(() => textarea.inputValue()).toBe("Please check the tests too.");
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          if (waitForCompletion) {
+            await gateway.emitChatFinal({
+              runId: "active-dictation-run",
+              text: "Review complete.",
+            });
+            await page
+              .locator(".chat-bubble")
+              .getByText("Review complete.", { exact: true })
+              .waitFor();
+            await page.getByRole("button", { name: "Stop and keep text", exact: true }).click();
+            expect(await textarea.inputValue()).toBe("Please check the tests too.");
+            expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          }
+          await capture("dictated-draft");
+          await page
+            .getByRole("button", { name: waitForCompletion ? "Send message" : "Send", exact: true })
+            .click();
+          const request = await gateway.waitForRequest("chat.send");
+          expect(request.params).toMatchObject({ message: "Please check the tests too." });
+          await expect.poll(() => textarea.inputValue()).toBe("");
+          // The local user bubble acknowledges Send before the held Gateway ACK.
+          await page
+            .locator(".chat-bubble")
+            .getByText("Please check the tests too.", { exact: true })
+            .waitFor();
+          await capture("dictation-send-pending");
+          expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+          await gateway.resolveDeferred("chat.send");
+        },
+      );
+    },
+  );
+
   it.each([
     { name: "caret insertion", start: 5, end: 5, expected: "ship please it", cancel: false },
     { name: "selection replacement", start: 5, end: 7, expected: "ship please", cancel: false },
@@ -85,7 +178,11 @@ suite.define(() => {
       });
       expect(dictationAppearance.color).toBe(dictationAppearance.textStrong);
       if (cancel) {
-        await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+        await page.getByRole("button", { name: "Sessions", exact: true }).click();
+        await page.locator(".shell--nav-collapsed").waitFor();
+        expect(await textarea.evaluate((element) => document.activeElement === element)).toBe(
+          false,
+        );
         await page.keyboard.press("Escape");
       } else {
         await page.getByRole("button", { name: "Stop and keep text" }).click();
@@ -224,17 +321,23 @@ suite.define(() => {
         // can open while transcripts arrive. Establish which surface Escape owns.
         await textarea.hover();
         await textarea.focus();
-        const openTooltips = page.locator("openclaw-tooltip[open]");
+        const openTooltips = page.locator(
+          "openclaw-tooltip .tooltip-surface[popover]:popover-open",
+        );
         await expect.poll(() => openTooltips.count()).toBe(0);
         if (tooltipOpen) {
           const stop = page.getByRole("button", { name: "Stop and keep text" });
-          const tooltip = stop.locator("..").locator("wa-tooltip");
+          const tooltip = stop.locator("..").locator(".tooltip-surface[popover]");
           await stop.hover();
-          await expect.poll(() => tooltip.getAttribute("open")).not.toBeNull();
+          await expect
+            .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+            .toBe(true);
 
           await page.keyboard.press("Escape");
 
-          await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
+          await expect
+            .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+            .toBe(false);
           expect(await textarea.inputValue()).toBe("keep this draft discard this speech too");
           expect(await textarea.evaluate((element: HTMLTextAreaElement) => element.readOnly)).toBe(
             true,
@@ -324,12 +427,17 @@ suite.define(() => {
 
       const voice = page.getByRole("button", { name: "Start voice input" });
       await voice.hover();
-      await page.getByRole("button", { name: "Microphone input" }).click();
-      const picker = page.locator("wa-dropdown.chat-talk-input-picker");
+      const trigger = page.getByRole("button", { name: "Microphone input" });
+      await trigger.click();
+      const picker = page.locator(".chat-talk-input-picker");
       const selectedDevice = picker.getByRole("menuitemradio", { name: "USB Audio Interface" });
       await selectedDevice.click();
+      await expect.poll(() => picker.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() => trigger.evaluate((element) => document.activeElement === element))
+        .toBe(false);
       await voice.hover();
-      await page.getByRole("button", { name: "Microphone input" }).click();
+      await trigger.click();
       const toggle = picker.getByRole("menuitemcheckbox", { name: "Hold to start dictation" });
       await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
       await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
@@ -349,6 +457,18 @@ suite.define(() => {
         animations: "disabled",
         path: path.join(suite.artifactDir, "voice-controls/microphone-picker-hold-toggle-full.png"),
       });
+      await page.keyboard.press("Home");
+      await page.keyboard.press("Enter");
+      await expect.poll(() => picker.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() => trigger.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      await trigger.click();
+      await selectedDevice.click();
+      await expect.poll(() => picker.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() => trigger.evaluate((element) => document.activeElement === element))
+        .toBe(false);
     });
   });
 
@@ -380,7 +500,7 @@ suite.define(() => {
       await page.getByText(TALK_READY_HISTORY_MESSAGE.content, { exact: true }).waitFor();
       const unavailable = page.locator('[data-status="unavailable"]');
       await expect.poll(() => unavailable.count()).toBe(2);
-      const picker = page.locator("wa-dropdown.chat-talk-input-picker");
+      const picker = page.locator(".chat-talk-input-picker");
       await expect.poll(() => picker.getByRole("menuitem", { name: /Configure/ }).count()).toBe(2);
       await captureComposerProof(suite, page, "microphone-picker-capability-gating.png");
       await page.screenshot({
@@ -401,6 +521,7 @@ suite.define(() => {
       { permissions: ["microphone"], viewport: { width: 390, height: 844 } },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          historyMessages: [TALK_READY_HISTORY_MESSAGE],
           methodResponses: createDictationMethodResponses(
             "dictation-browser-proof",
             "dictation-browser-proof",
@@ -408,6 +529,7 @@ suite.define(() => {
         });
         await installTalkBrowserFixtures(page);
         await page.goto(`${suite.server.baseUrl}chat`);
+        await waitForTalkReady(page);
 
         const microphone = page.getByRole("button", { name: "Dictation" });
         await microphone.click();
@@ -430,17 +552,39 @@ suite.define(() => {
           animations: "disabled",
           path: path.join(suite.artifactDir, "voice-controls/dictation-latched-after-release.png"),
         });
-        const composerBox = await composer.boundingBox();
-        expect(composerBox).not.toBeNull();
-        if (!composerBox) {
-          throw new Error("expected active dictation composer layout box");
-        }
-        for (const control of [phase, stop, send]) {
-          const box = await control.boundingBox();
-          expect(box).not.toBeNull();
+        // Read one rendered frame: owner publications can replace the status
+        // between Playwright's element lookup and its separate box request.
+        const { composerBox, controls } = await composer.evaluate((element) => {
+          const bounds = (target: Element) => {
+            const { x, y, width, height } = target.getBoundingClientRect();
+            return { x, y, width, height };
+          };
+          return {
+            composerBox: bounds(element),
+            controls: [
+              ".agent-chat__dictation-phase",
+              ".chat-mobile-dictation-action .chat-send-btn--dictating",
+              ".chat-send-btn--dictation-commit",
+            ].map((selector) => {
+              const control = element.querySelector(selector);
+              return {
+                selector,
+                box: control?.checkVisibility({ visibilityProperty: true })
+                  ? bounds(control)
+                  : null,
+              };
+            }),
+          };
+        });
+        expect(composerBox.width).toBeGreaterThan(0);
+        expect(composerBox.height).toBeGreaterThan(0);
+        for (const { selector, box } of controls) {
+          expect(box, selector).not.toBeNull();
           if (!box) {
             throw new Error("expected visible dictation control layout box");
           }
+          expect(box.width).toBeGreaterThan(0);
+          expect(box.height).toBeGreaterThan(0);
           expect(box.x).toBeGreaterThanOrEqual(composerBox.x);
           expect(box.x + box.width).toBeLessThanOrEqual(composerBox.x + composerBox.width);
         }

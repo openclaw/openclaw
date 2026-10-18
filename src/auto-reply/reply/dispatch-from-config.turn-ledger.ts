@@ -27,7 +27,13 @@ import type {
 // delivery waits at the operation layer, and finalization must not out-wait it.
 const SETTLE_QUEUED_TIMEOUT_MS = 30_000;
 
-type LedgerQueuedSend = {
+const RAW_REPLY_SEND_METHODS = {
+  tool: "sendToolResult",
+  block: "sendBlockReply",
+  final: "sendFinalReply",
+} as const;
+
+export type LedgerQueuedSend = {
   queued: boolean;
   outcome?: Promise<ReplyDispatchDeliveryOutcome>;
   hasPendingDelivery?: () => boolean;
@@ -76,7 +82,9 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
       return;
     }
     outcomes.add(outcome);
-    if (kind === "tool" || !isReplyPayloadTerminalContent(payload)) {
+    const terminalFailureNotice =
+      kind === "final" && payload.isError === true && payload.isStatusNotice === true;
+    if (kind === "tool" || (!isReplyPayloadTerminalContent(payload) && !terminalFailureNotice)) {
       return;
     }
     if (outcome === "delivered" && !pending) {
@@ -87,15 +95,6 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
     ) {
       terminalDelivery = "pending";
     }
-  };
-  const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload): boolean => {
-    if (kind === "tool") {
-      return dispatcher.sendToolResult(payload);
-    }
-    if (kind === "block") {
-      return dispatcher.sendBlockReply(payload);
-    }
-    return dispatcher.sendFinalReply(payload);
   };
   const sendOperation = (
     kind: ReplyDispatchKind,
@@ -109,7 +108,7 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
     const queued =
       operation.kind === "prepared" && dispatcher.sendPreparedReply
         ? dispatcher.sendPreparedReply(kind, operation.plan)
-        : enqueue(kind, payload);
+        : dispatcher[RAW_REPLY_SEND_METHODS[kind]](payload);
     if (!queued) {
       return { queued: false };
     }
@@ -148,33 +147,18 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
       if (abortSignal?.aborted) {
         return "aborted";
       }
-      let timedOut = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = new Promise<void>((resolve) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          resolve();
-        }, SETTLE_QUEUED_TIMEOUT_MS);
-        timer.unref?.();
-      });
-      let removeAbortListener: (() => void) | undefined;
-      const aborted = abortSignal
-        ? new Promise<void>((resolve) => {
-            const onAbort = () => resolve();
-            abortSignal.addEventListener("abort", onAbort, { once: true });
-            removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
-          })
-        : undefined;
+      const deadline = new AbortController();
+      const timer = setTimeout(() => deadline.abort(), SETTLE_QUEUED_TIMEOUT_MS);
+      timer.unref?.();
       try {
-        const receipt = await Promise.race([
-          dispatcher.waitForIdle(),
-          deadline,
-          ...(aborted ? [aborted] : []),
-        ]);
+        const receipt = await waitForReplyDispatcherIdle(
+          dispatcher,
+          abortSignal ? AbortSignal.any([abortSignal, deadline.signal]) : deadline.signal,
+        );
         if (abortSignal?.aborted) {
           return "aborted";
         }
-        if (timedOut) {
+        if (deadline.signal.aborted) {
           return "timed-out";
         }
         if (dispatcher.supportsSettledReceipt === true && receipt) {
@@ -190,17 +174,13 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
         pendingDelivery ||= receipt?.hasPendingDelivery === true;
         return "settled";
       } finally {
-        if (timer) {
-          clearTimeout(timer);
-        }
-        removeAbortListener?.();
+        clearTimeout(timer);
       }
     },
     mayHaveDelivered,
     hasObservedDelivery: () => outcomes.has("delivered"),
     canAttemptFallback: () =>
       !mayHaveDelivered() && !pendingDelivery && !outcomes.has("recovery-owned"),
-    hasPendingDelivery: () => pendingDelivery,
     resolveTerminalDelivery: () => terminalDelivery,
   };
 }

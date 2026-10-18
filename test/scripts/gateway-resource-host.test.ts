@@ -29,53 +29,36 @@ function result(): GatewayResourceCase {
 describe.skipIf(process.platform !== "linux" || typeof process.threadCpuUsage !== "function")(
   "shared resource Gateway lifecycle",
   () => {
-    it("records actual child samples and joins a successful workload before removing state", async () => {
-      const receipt = result();
-      let root = "";
-      await runResourceGatewayCase({
-        result: receipt,
-        runtime,
-        prepare: async (context) => {
-          root = context.root;
-          roots.push(root);
-          expect(context.env.OPENCLAW_KITCHEN_SINK_PERSONALITY).toBeUndefined();
-        },
-        run: async ({ port, measure }) => {
-          const url = new URL("http://127.0.0.1/work");
-          url.port = String(port);
-          await measure("work", 2, async () => {
-            const response = await fetch(url);
-            expect(await response.json()).toEqual({ completed: true });
-          });
-        },
-      });
-      expect(receipt.status).toBe("exercised");
-      expect(receipt.phases.map(({ name }) => name)).toEqual(["startup", "work"]);
-      expect(receipt.phases[1]?.operations).toEqual({ attempted: 2, completed: 2, failed: 0 });
-      expect(receipt.phases[1]?.before.pid).toBe(receipt.phases[1]?.after?.pid);
-      expect(receipt.shutdown).toMatchObject({ exited: true, exitCode: 0, signal: null });
-      expect(receipt.host).toMatchObject(runtime.buildInfo);
-      expect(existsSync(root)).toBe(false);
-    });
-
     it.each([
+      { workloadFails: false, exitCode: "0", stopError: "0" },
       { workloadFails: true, exitCode: "0", stopError: "0" },
       { workloadFails: false, exitCode: "1", stopError: "0" },
       { workloadFails: false, exitCode: "0", stopError: "1" },
       { workloadFails: true, exitCode: "1", stopError: "0" },
     ])(
-      "preserves work and invalidates failure $workloadFails/$exitCode/$stopError",
+      "joins the host and retains only failed state: $workloadFails/$exitCode/$stopError",
       async ({ workloadFails, exitCode, stopError }) => {
         const receipt = result();
+        const succeeds = !workloadFails && exitCode === "0" && stopError === "0";
         await runResourceGatewayCase({
           result: receipt,
           runtime,
           prepare: async ({ root, env }) => {
             roots.push(root);
+            expect(env.OPENCLAW_KITCHEN_SINK_PERSONALITY).toBeUndefined();
             env.FIXTURE_EXIT_CODE = exitCode;
             env.FIXTURE_STOP_ERROR = stopError;
           },
-          run: async ({ measure }) => {
+          run: async ({ port, measure }) => {
+            if (succeeds) {
+              const url = new URL("http://127.0.0.1/work");
+              url.port = String(port);
+              await measure("work", 2, async () => {
+                const response = await fetch(url);
+                expect(await response.json()).toEqual({ completed: true });
+              });
+              return;
+            }
             await measure("completed", 1, async () => {});
             if (workloadFails) {
               await measure("failed", 1, async () => {
@@ -84,6 +67,16 @@ describe.skipIf(process.platform !== "linux" || typeof process.threadCpuUsage !=
             }
           },
         });
+        if (succeeds) {
+          expect(receipt.status).toBe("exercised");
+          expect(receipt.phases.map(({ name }) => name)).toEqual(["startup", "work"]);
+          expect(receipt.phases[1]?.operations).toEqual({ attempted: 2, completed: 2, failed: 0 });
+          expect(receipt.phases[1]?.before.pid).toBe(receipt.phases[1]?.after?.pid);
+          expect(receipt.shutdown).toMatchObject({ exited: true, exitCode: 0, signal: null });
+          expect(receipt.host).toMatchObject(runtime.buildInfo);
+          expect(existsSync(roots[0]!)).toBe(false);
+          return;
+        }
         expect(receipt.status).toBe("failed");
         expect(receipt.phases[1]?.operations.completed).toBe(1);
         expect(receipt.shutdown).toMatchObject({ exited: true, exitCode: Number(exitCode) });

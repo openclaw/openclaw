@@ -9,6 +9,7 @@ import {
   acquirePluginCapabilityProviders,
   finishCapabilityOperation,
 } from "../plugins/capability-provider-acquisition.js";
+import { buildCapabilityProviderIndex } from "../plugins/provider-registry-shared.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import {
   createSpeechProviderRegistry,
@@ -27,17 +28,16 @@ import {
   resolvePersonaProviderConfig,
   resolvePrimaryTtsProviderCandidate,
   resolveSpeechProviderTimeoutMs,
-  resolveTtsProvider,
+  resolveTtsProviderAsync,
   resolveTtsProviderCandidates,
   type TtsProviderRegistry,
 } from "./tts-provider-resolution.js";
 import type { TtsProviderAttempt } from "./tts-runtime-types.js";
 import {
   readTtsPrefs,
-  normalizeConfiguredSpeechProviderId,
   resolveTtsPersonaFromPrefs,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   resolveTtsRuntimeConfig,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
@@ -95,15 +95,15 @@ type TtsProviderReadyResolution =
       personaBinding?: "missing";
     };
 
-function resolveReadySpeechProvider(params: {
+async function resolveReadySpeechProvider(params: {
   provider: TtsProvider;
   cfg: OpenClawConfig;
   config: ResolvedTtsConfig;
   persona?: ResolvedTtsPersona;
   voiceModel?: VoiceModelRef;
-  requireTelephony?: boolean;
+  target: SpeechSynthesisTarget;
   providerRegistry: TtsProviderRegistry;
-}): TtsProviderReadyResolution {
+}): Promise<TtsProviderReadyResolution> {
   const resolvedProvider = params.providerRegistry.getSpeechProvider(params.provider, params.cfg);
   if (!resolvedProvider) {
     return {
@@ -132,23 +132,25 @@ function resolveReadySpeechProvider(params: {
       personaBinding: "missing",
     };
   }
-  if (
-    !resolvedProvider.isConfigured({
-      cfg: params.cfg,
-      providerConfig: merged.providerConfig,
-      timeoutMs: resolveSpeechProviderTimeoutMs({
-        config: params.config,
-        provider: resolvedProvider,
-      }),
-    })
-  ) {
+  const context = {
+    cfg: params.cfg,
+    providerConfig: merged.providerConfig,
+    timeoutMs: resolveSpeechProviderTimeoutMs({
+      config: params.config,
+      provider: resolvedProvider,
+    }),
+  };
+  const configured = await (resolvedProvider.isConfiguredAsync
+    ? resolvedProvider.isConfiguredAsync(context)
+    : resolvedProvider.isConfigured(context));
+  if (!configured) {
     return {
       kind: "skip",
       reasonCode: "not_configured",
       message: `${params.provider}: not configured`,
     };
   }
-  if (params.requireTelephony && !resolvedProvider.synthesizeTelephony) {
+  if (params.target === "telephony" && !resolvedProvider.synthesizeTelephony) {
     return {
       kind: "skip",
       reasonCode: "unsupported_for_telephony",
@@ -165,31 +167,6 @@ function resolveReadySpeechProvider(params: {
         ? undefined
         : params.persona,
     personaBinding: merged.personaBinding,
-  };
-}
-
-async function prepareSpeechSynthesis({
-  provider,
-  ...request
-}: SpeechProviderPrepareSynthesisContext & { provider: SpeechProviderPlugin }): Promise<
-  Pick<SpeechSynthesisRequest, "text" | "providerConfig" | "providerOverrides">
-> {
-  if (!provider.prepareSynthesis) {
-    return {
-      text: request.text,
-      providerConfig: request.providerConfig,
-      providerOverrides: request.providerOverrides,
-    };
-  }
-  const prepared = await provider.prepareSynthesis({ ...request });
-  return {
-    text: prepared?.text ?? request.text,
-    providerConfig: prepared?.providerConfig
-      ? { ...request.providerConfig, ...prepared.providerConfig }
-      : request.providerConfig,
-    providerOverrides: prepared?.providerOverrides
-      ? { ...request.providerOverrides, ...prepared.providerOverrides }
-      : request.providerOverrides,
   };
 }
 
@@ -229,7 +206,7 @@ export async function acquireTtsRequest(
     channelId: params.channelId,
     accountId: params.accountId,
   });
-  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
+  const prefsPath = params.prefsPath ?? (await resolveTtsPrefsPathAsync(config));
   if (params.text.length > config.maxTextLength) {
     return {
       error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
@@ -244,23 +221,16 @@ export async function acquireTtsRequest(
   try {
     const setup = await queries.run(async () => {
       const catalog = queries.providers;
-      const defaultLookups = new Map<string, SpeechProviderPlugin | undefined>();
-      let defaultCatalog: SpeechProviderPlugin[] = [];
       const preferred = normalizeSpeechProviderId(prefs.tts?.provider);
+      let preferredProvider = preferred;
       if (preferred) {
         const provider = await queries.resolveProvider({ providerId: preferred });
-        defaultLookups.set(preferred, provider);
-        if (!provider) {
-          defaultCatalog = await queries.resolveProviders({});
-        }
+        preferredProvider =
+          provider?.id ??
+          buildCapabilityProviderIndex(await queries.resolveProviders({}), "aliases").get(preferred)
+            ?.id ??
+          preferred;
       }
-      const defaults = createSpeechProviderRegistry({
-        getProvider: (providerId) => defaultLookups.get(providerId),
-        listProviders: () => defaultCatalog,
-      });
-      const preferredProvider =
-        defaults.canonicalizeSpeechProviderId(prefs.tts?.provider) ??
-        normalizeConfiguredSpeechProviderId(prefs.tts?.provider);
       const overrideProvider = normalizeSpeechProviderId(params.providerOverride);
       const requestedInputs = [
         overrideProvider,
@@ -304,12 +274,8 @@ export async function acquireTtsRequest(
                 await queries.resolveProviders({ cfg: runtimeConfig }),
               );
         // Policy helpers use the request config or the applicable config prepared for this phase.
-        const selectRegistry = (queryConfig: OpenClawConfig | undefined) => {
-          if (queryConfig === undefined) {
-            return defaults;
-          }
-          return queryConfig === cfg ? inputView : runtimeView;
-        };
+        const selectRegistry = (queryConfig: OpenClawConfig | undefined) =>
+          queryConfig === cfg ? inputView : runtimeView;
         return {
           runtimeConfig,
           getSpeechProvider: (id, queryConfig) => selectRegistry(queryConfig).getSpeechProvider(id),
@@ -319,7 +285,9 @@ export async function acquireTtsRequest(
         };
       };
       const providerRegistry = await prepareProviderRegistry();
-      const userProvider = resolveTtsProvider(config, prefsPath, providerRegistry, prefs);
+      const userProvider =
+        preferredProvider ??
+        (await resolveTtsProviderAsync(config, prefsPath, providerRegistry, prefs));
       const provider =
         providerRegistry.canonicalizeSpeechProviderId(params.providerOverride, cfg) ?? userProvider;
       return {
@@ -390,7 +358,6 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   timeoutMs?: number;
   target: SpeechSynthesisTarget;
   logLabel: string;
-  requireTelephony?: boolean;
   prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
   selectOperation: (params: {
     provider: TtsProvider;
@@ -433,13 +400,13 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
     const providerStart = Date.now();
     try {
       const providerRegistry = await params.prepareProviderRegistry();
-      const resolvedProvider = resolveReadySpeechProvider({
+      const resolvedProvider = await resolveReadySpeechProvider({
         provider,
         cfg,
         config,
         persona,
         voiceModel,
-        requireTelephony: params.requireTelephony,
+        target: params.target,
         providerRegistry,
       });
       if (resolvedProvider.kind === "skip") {
@@ -464,8 +431,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         config,
         provider: resolvedProvider.provider,
       });
-      const prepared = await prepareSpeechSynthesis({
-        provider: resolvedProvider.provider,
+      const request: SpeechProviderPrepareSynthesisContext = {
         text: params.synthesisText,
         cfg,
         providerConfig: resolvedProvider.providerConfig,
@@ -474,7 +440,17 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target: params.target,
         timeoutMs,
-      });
+      };
+      const overrides = await resolvedProvider.provider.prepareSynthesis?.({ ...request });
+      const prepared = {
+        text: overrides?.text ?? request.text,
+        providerConfig: overrides?.providerConfig
+          ? { ...request.providerConfig, ...overrides.providerConfig }
+          : request.providerConfig,
+        providerOverrides: overrides?.providerOverrides
+          ? { ...request.providerOverrides, ...overrides.providerOverrides }
+          : request.providerOverrides,
+      };
       const synthesis = await operation.synthesize({
         text: prepared.text,
         cfg,
@@ -517,25 +493,25 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
       }
     } catch (err) {
       const errorMsg = formatTtsProviderError(provider, err);
+      const reasonCode = isTtsTimeoutError(err) ? "timeout" : "provider_error";
       const latencyMs = Date.now() - providerStart;
       errors.push(errorMsg);
       attempts.push({
         provider,
         outcome: "failed",
-        reasonCode: isTtsTimeoutError(err) ? "timeout" : "provider_error",
+        reasonCode,
         latencyMs,
         persona: persona?.id,
         personaBinding: resolvePersonaBinding(persona, provider),
         error: errorMsg,
       });
-      const rawError = sanitizeTtsErrorForLog(err);
       if (provider === primaryProvider) {
         const hasFallbacks = providers.length > 1;
         logVerbose(
-          `${params.logLabel}: primary provider ${provider} failed (${rawError})${hasFallbacks ? "; trying fallback providers." : "; no fallback providers configured."}`,
+          `${params.logLabel}: primary provider ${provider} failed (${reasonCode})${hasFallbacks ? "; trying fallback providers." : "; no fallback providers configured."}`,
         );
       } else {
-        logVerbose(`${params.logLabel}: ${provider} failed (${rawError}); trying next provider.`);
+        logVerbose(`${params.logLabel}: ${provider} failed (${reasonCode}); trying next provider.`);
       }
     }
   }

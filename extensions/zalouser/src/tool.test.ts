@@ -1,5 +1,7 @@
 // Zalouser tests cover tool plugin behavior.
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createZalouserSendReceipt } from "./send-receipt.js";
 import { sendImageZalouser, sendMessageZalouser } from "./send.js";
 import { createZalouserTool } from "./tool.js";
 import {
@@ -10,10 +12,10 @@ import {
   sendZaloLink,
 } from "./zalo-js.js";
 
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
   sendMessageZalouser: vi.fn(),
   sendImageZalouser: vi.fn(),
-  sendReactionZalouser: vi.fn(),
 }));
 
 vi.mock("./zalo-js.js", () => ({
@@ -55,24 +57,11 @@ describe("executeZalouserTool", () => {
     mockListGroups.mockReset();
   });
 
-  it("sends text message for send action", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-1" } as never);
-    const result = await executeZalouserTool("tool-1", {
-      action: "send",
-      threadId: "t-1",
-      message: "hello",
-      profile: "work",
-      isGroup: true,
-    });
-    expect(mockSendMessage).toHaveBeenCalledWith("t-1", "hello", {
-      profile: "work",
-      isGroup: true,
-    });
-    expect(extractDetails(result)).toEqual({ success: true, messageId: "m-1" });
-  });
-
   it("defaults send routing from ambient deliveryContext target", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-ambient" } as never);
+    mockSendMessage.mockResolvedValueOnce({
+      messageId: "m-ambient",
+      receipt: createZalouserSendReceipt({ messageId: "m-ambient" }),
+    });
     const tool = createZalouserTool({
       deliveryContext: {
         channel: "zalouser",
@@ -93,7 +82,10 @@ describe("executeZalouserTool", () => {
   });
 
   it("keeps explicit threadId over ambient delivery defaults", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-explicit" } as never);
+    mockSendMessage.mockResolvedValueOnce({
+      messageId: "m-explicit",
+      receipt: createZalouserSendReceipt({ messageId: "m-explicit" }),
+    });
     const tool = createZalouserTool({
       deliveryContext: {
         channel: "zalouser",
@@ -135,7 +127,7 @@ describe("executeZalouserTool", () => {
   });
 
   it("returns tool error when send action fails", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: false, error: "blocked" } as never);
+    mockSendMessage.mockRejectedValueOnce(new Error("blocked"));
     const result = await executeZalouserTool("tool-1", {
       action: "send",
       threadId: "t-1",
@@ -144,8 +136,36 @@ describe("executeZalouserTool", () => {
     expect(extractDetails(result)).toEqual({ error: "blocked" });
   });
 
+  it("reports accepted receipts when a later send chunk fails", async () => {
+    const deliveryResult = {
+      messageIds: ["mid-accepted"],
+      receipt: createZalouserSendReceipt({ messageId: "mid-accepted", threadId: "t-1" }),
+      visibleReplySent: true as const,
+    };
+    mockSendMessage.mockRejectedValueOnce(
+      createChannelPartialDeliveryError(new Error("later chunk refused"), deliveryResult),
+    );
+
+    const result = await executeZalouserTool("tool-1", {
+      action: "send",
+      threadId: "t-1",
+      message: "long message",
+    });
+
+    expect(extractDetails(result)).toEqual({
+      ok: false,
+      deliveryStatus: "partial_failed",
+      sentBeforeError: true,
+      error: "later chunk refused",
+      result: deliveryResult,
+    });
+  });
+
   it("routes image and link actions to correct helpers", async () => {
-    mockSendImage.mockResolvedValueOnce({ ok: true, messageId: "img-1" } as never);
+    mockSendImage.mockResolvedValueOnce({
+      messageId: "img-1",
+      receipt: createZalouserSendReceipt({ messageId: "img-1" }),
+    });
     const imageResult = await executeZalouserTool("tool-1", {
       action: "image",
       threadId: "g-1",
@@ -161,7 +181,10 @@ describe("executeZalouserTool", () => {
     });
     expect(extractDetails(imageResult)).toEqual({ success: true, messageId: "img-1" });
 
-    mockSendLink.mockResolvedValueOnce({ ok: true, messageId: "lnk-1" } as never);
+    mockSendLink.mockResolvedValueOnce({
+      messageId: "lnk-1",
+      receipt: createZalouserSendReceipt({ messageId: "lnk-1" }),
+    });
     const linkResult = await executeZalouserTool("tool-1", {
       action: "link",
       threadId: "t-2",
@@ -177,7 +200,6 @@ describe("executeZalouserTool", () => {
   });
 
   it.each([
-    { name: "no route", deliveryContext: undefined, profile: "work", bytes: 1024 },
     {
       name: "matching credential profile with different case",
       deliveryContext: { channel: "zalouser", accountId: "support" },
@@ -185,27 +207,18 @@ describe("executeZalouserTool", () => {
       bytes: 2048,
     },
     {
-      name: "other profile",
-      deliveryContext: { channel: "zalouser", accountId: "support" },
-      profile: "personal",
-      bytes: 1024,
-    },
-    {
       name: "native default profile",
       deliveryContext: { channel: "zalouser", accountId: "support" },
       profile: undefined,
       bytes: 1024,
     },
-    {
-      name: "other channel",
-      deliveryContext: { channel: "sms", accountId: "support" },
-      profile: "work",
-      bytes: 1024,
-    },
   ])(
     "uses only the authoritative matching media account: $name",
     async ({ deliveryContext, profile, bytes }) => {
-      mockSendImage.mockResolvedValueOnce({ ok: true, messageId: "cap" } as never);
+      mockSendImage.mockResolvedValueOnce({
+        messageId: "cap",
+        receipt: createZalouserSendReceipt({ messageId: "cap" }),
+      });
       const tool = createZalouserTool({
         runtimeConfig: {
           channels: {

@@ -1,5 +1,6 @@
 import { skipWhitespace } from "../../../packages/tool-call-repair/src/grammar.js";
 import { findCodeRegions } from "./code-regions.js";
+import { createTagNameProbe } from "./tag-name-probe.js";
 
 type FinalTagMatch = {
   index: number;
@@ -8,10 +9,11 @@ type FinalTagMatch = {
   isSelfClosing: boolean;
 };
 
+export const FINAL_TAG_NAME = "final";
 const FINAL_TAG_CANDIDATE_RE = /<[^<>]*>/g;
 
-function isWhitespace(char: string): boolean {
-  return /\s/.test(char);
+export function createFinalTagProbe() {
+  return createTagNameProbe([FINAL_TAG_NAME]);
 }
 
 function parseAttributeList(text: string): boolean {
@@ -29,10 +31,6 @@ function parseAttributeList(text: string): boolean {
 
 /** Parses a candidate `<final>` tag while rejecting lookalike names and malformed attributes. */
 function parseFinalTag(text: string): Omit<FinalTagMatch, "index" | "text"> | null {
-  if (!text.startsWith("<") || !text.endsWith(">")) {
-    return null;
-  }
-
   let body = text.slice(1, -1).trimStart();
   let isClose = false;
   if (body.startsWith("/")) {
@@ -40,15 +38,15 @@ function parseFinalTag(text: string): Omit<FinalTagMatch, "index" | "text"> | nu
     body = body.slice(1).trimStart();
   }
 
-  if (!body.toLowerCase().startsWith("final")) {
+  if (!body.toLowerCase().startsWith(FINAL_TAG_NAME)) {
     return null;
   }
-  const boundary = body[5] ?? "";
-  if (boundary && !isWhitespace(boundary) && boundary !== "/") {
+  const boundary = body[FINAL_TAG_NAME.length] ?? "";
+  if (boundary && !/\s/.test(boundary) && boundary !== "/") {
     return null;
   }
 
-  let rest = body.slice(5);
+  let rest = body.slice(FINAL_TAG_NAME.length);
   if (isClose) {
     return rest.trim().length === 0 ? { isClose: true, isSelfClosing: false } : null;
   }

@@ -7,7 +7,6 @@ import {
   resolveGatewayRestartProbeContext,
   waitForGatewayHttpReadiness,
 } from "../cli/daemon-cli/restart-health-probe.js";
-import { INTERRUPTED_UPDATE_SETTLE_PROBES } from "../cli/daemon-cli/restart-health.constants.js";
 import {
   inspectGatewayRestart,
   isSameGatewayRestartGeneration,
@@ -78,7 +77,8 @@ export async function observeInterruptedUpdateGateway(
       expectedBuildId: candidate.buildId,
       requirePluginHealth: true,
     };
-    const inspect = (phase: string) => inspectGatewayRestart({ ...probe, phase });
+    const inspect = (phase: string) =>
+      deadline.read(phase, () => inspectGatewayRestart({ ...probe, phase }));
     const servingMatches = (health: Awaited<ReturnType<typeof inspect>>) =>
       health.healthy &&
       health.runtime.status === "running" &&
@@ -89,7 +89,6 @@ export async function observeInterruptedUpdateGateway(
         ...probe,
         phase: "health-wait",
         requireRunningService: true,
-        settle: { probes: INTERRUPTED_UPDATE_SETTLE_PROBES },
       }),
     );
     waitOutcome = before.waitOutcome;
@@ -101,18 +100,14 @@ export async function observeInterruptedUpdateGateway(
         config: context.config,
         port,
         attempts: 1,
-        deadlineAt: Date.now() + deadline.remainingMs(),
+        deadlineAt: performance.now() + deadline.remainingMs(),
         probeTimeoutMs: deadline.remainingMs(),
         delayMs: 0,
         signal: deadline.signal,
       }),
     );
-    const inspected = await deadline.read("reconciliation:inspect-before", () =>
-      inspect("reconciliation:inspect-before"),
-    );
-    const after = await deadline.read("reconciliation:inspect-after", () =>
-      inspect("reconciliation:inspect-after"),
-    );
+    const inspected = await inspect("reconciliation:inspect-before");
+    const after = await inspect("reconciliation:inspect-after");
     if (
       http.healthz !== 200 ||
       http.readyz !== 200 ||

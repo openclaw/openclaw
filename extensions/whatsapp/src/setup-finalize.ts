@@ -34,34 +34,24 @@ function isDefaultWhatsAppAccountKey(accountId: string): boolean {
   return accountId.trim().toLowerCase() === DEFAULT_ACCOUNT_ID;
 }
 
-function shouldWriteDefaultWhatsAppAccountConfigAtAccountScope(cfg: OpenClawConfig): boolean {
-  const accounts = cfg.channels?.whatsapp?.accounts;
-  return Boolean(
-    accounts &&
-    (accounts.default ||
-      Object.keys(accounts).some((accountId) => !isDefaultWhatsAppAccountKey(accountId))),
-  );
-}
-
-function resolveDefaultWhatsAppAccountWriteKey(cfg: OpenClawConfig): string {
-  const accounts = cfg.channels?.whatsapp?.accounts;
-  if (!accounts) {
-    return DEFAULT_ACCOUNT_ID;
+function resolveWhatsAppAccountWriteKey(
+  cfg: OpenClawConfig,
+  accountId: string,
+): string | undefined {
+  if (accountId !== DEFAULT_ACCOUNT_ID) {
+    return accountId;
   }
-  const match = Object.keys(accounts).find((accountId) => isDefaultWhatsAppAccountKey(accountId));
-  return match ?? DEFAULT_ACCOUNT_ID;
+  const accounts = cfg.channels?.whatsapp?.accounts;
+  const keys = Object.keys(accounts ?? {});
+  if (!accounts?.default && !keys.some((key) => !isDefaultWhatsAppAccountKey(key))) {
+    return undefined;
+  }
+  return keys.find(isDefaultWhatsAppAccountKey) ?? DEFAULT_ACCOUNT_ID;
 }
 
 function resolveWhatsAppConfigPathPrefix(cfg: OpenClawConfig, accountId: string): string {
-  if (
-    accountId === DEFAULT_ACCOUNT_ID &&
-    shouldWriteDefaultWhatsAppAccountConfigAtAccountScope(cfg)
-  ) {
-    return `channels.whatsapp.accounts.${resolveDefaultWhatsAppAccountWriteKey(cfg)}`;
-  }
-  return accountId === DEFAULT_ACCOUNT_ID
-    ? "channels.whatsapp"
-    : `channels.whatsapp.accounts.${accountId}`;
+  const key = resolveWhatsAppAccountWriteKey(cfg, accountId);
+  return key === undefined ? "channels.whatsapp" : `channels.whatsapp.accounts.${key}`;
 }
 
 function mergeWhatsAppConfig(
@@ -71,10 +61,9 @@ function mergeWhatsAppConfig(
   options?: { unsetOnUndefined?: string[] },
 ): OpenClawConfig {
   const channelConfig: WhatsAppConfig = { ...cfg.channels?.whatsapp };
-  const atRoot = resolveWhatsAppConfigPathPrefix(cfg, accountId) === "channels.whatsapp";
+  const targetAccountId = resolveWhatsAppAccountWriteKey(cfg, accountId);
+  const atRoot = targetAccountId === undefined;
   const accounts = { ...channelConfig.accounts };
-  const targetAccountId =
-    accountId === DEFAULT_ACCOUNT_ID ? resolveDefaultWhatsAppAccountWriteKey(cfg) : accountId;
   const lowerDefaultAccount =
     accountId === DEFAULT_ACCOUNT_ID && targetAccountId !== DEFAULT_ACCOUNT_ID
       ? accounts[DEFAULT_ACCOUNT_ID]
@@ -271,24 +260,22 @@ async function promptWhatsAppDmAccess(params: {
     return next;
   }
 
-  const allowOptions =
-    existingAllowFrom.length > 0
-      ? ([
-          { value: "keep", label: t("wizard.whatsapp.keepCurrentAllowFrom") },
-          {
-            value: "unset",
-            label: t("wizard.whatsapp.unsetAllowFromPairing"),
-          },
-          { value: "list", label: t("wizard.whatsapp.setAllowFromNumbers") },
-        ] as const)
-      : ([
-          { value: "unset", label: t("wizard.whatsapp.unsetAllowFromDefault") },
-          { value: "list", label: t("wizard.whatsapp.setAllowFromNumbers") },
-        ] as const);
-
   const mode = await params.prompter.select({
     message: t("wizard.whatsapp.allowFromPrompt"),
-    options: [...allowOptions],
+    options: [
+      ...(existingAllowFrom.length > 0
+        ? [{ value: "keep", label: t("wizard.whatsapp.keepCurrentAllowFrom") }]
+        : []),
+      {
+        value: "unset",
+        label: t(
+          existingAllowFrom.length > 0
+            ? "wizard.whatsapp.unsetAllowFromPairing"
+            : "wizard.whatsapp.unsetAllowFromDefault",
+        ),
+      },
+      { value: "list", label: t("wizard.whatsapp.setAllowFromNumbers") },
+    ],
   });
 
   if (mode === "keep") {
@@ -348,67 +335,58 @@ export async function finalizeWhatsAppSetup(params: {
   const { authDir } = resolveWhatsAppAuthDir({ cfg: next, accountId });
   const linked = hasWebCredsSync(authDir);
 
-  if (params.options?.deferDeviceLinkToClient) {
-    // The gateway client renders the pairing QR itself (web.login.start/wait);
-    // running the terminal QR login here would print to a headless process.
-    next = await promptWhatsAppDmAccess({
-      cfg: next,
-      accountId,
-      forceAllowFrom: params.forceAllowFrom,
-      prompter: params.prompter,
-    });
-    return { cfg: next };
-  }
-
-  if (!linked) {
-    await params.prompter.note(
-      [
-        t("wizard.whatsapp.scanQr"),
-        t("wizard.whatsapp.credentialsStored", { authDir }),
-        t("wizard.channels.docs", { link: formatDocsLink("/whatsapp", "whatsapp") }),
-      ].join("\n"),
-      t("wizard.whatsapp.linkingTitle"),
-    );
-  }
-
-  const wantsLink = await params.prompter.confirm({
-    message: linked ? t("wizard.whatsapp.relinkPrompt") : t("wizard.whatsapp.linkNowPrompt"),
-    initialValue: !linked,
-  });
-  if (wantsLink) {
-    let persistenceGuardFailure: { error: unknown } | undefined;
-    try {
-      const { loginWeb } = await import("./login.js");
-      const beforeCredentialPersistence = params.options?.beforePersistentEffect
-        ? async () => {
-            try {
-              await params.options?.beforePersistentEffect?.();
-            } catch (error) {
-              persistenceGuardFailure = { error };
-              throw error;
-            }
-          }
-        : undefined;
-      await loginWeb(false, undefined, params.runtime, accountId, {
-        beforeCredentialPersistence,
-      });
-    } catch (error) {
-      if (persistenceGuardFailure) {
-        throw persistenceGuardFailure.error;
-      }
-      params.runtime.error(`WhatsApp login failed: ${String(error)}`);
+  // Gateway clients render their own pairing QR; only terminal setup runs login here.
+  if (!params.options?.deferDeviceLinkToClient) {
+    if (!linked) {
       await params.prompter.note(
-        t("wizard.channels.docs", { link: formatDocsLink("/whatsapp", "whatsapp") }),
-        t("wizard.whatsapp.helpTitle"),
+        [
+          t("wizard.whatsapp.scanQr"),
+          t("wizard.whatsapp.credentialsStored", { authDir }),
+          t("wizard.channels.docs", { link: formatDocsLink("/whatsapp", "whatsapp") }),
+        ].join("\n"),
+        t("wizard.whatsapp.linkingTitle"),
       );
     }
-  } else if (!linked) {
-    await params.prompter.note(
-      t("wizard.whatsapp.linkLater", {
-        command: formatCliCommand("openclaw channels login"),
-      }),
-      "WhatsApp",
-    );
+
+    const wantsLink = await params.prompter.confirm({
+      message: linked ? t("wizard.whatsapp.relinkPrompt") : t("wizard.whatsapp.linkNowPrompt"),
+      initialValue: !linked,
+    });
+    if (wantsLink) {
+      let persistenceGuardFailure: { error: unknown } | undefined;
+      try {
+        const { loginWeb } = await import("./login.js");
+        const beforeCredentialPersistence = params.options?.beforePersistentEffect
+          ? async () => {
+              try {
+                await params.options?.beforePersistentEffect?.();
+              } catch (error) {
+                persistenceGuardFailure = { error };
+                throw error;
+              }
+            }
+          : undefined;
+        await loginWeb(false, undefined, params.runtime, accountId, {
+          beforeCredentialPersistence,
+        });
+      } catch (error) {
+        if (persistenceGuardFailure) {
+          throw persistenceGuardFailure.error;
+        }
+        params.runtime.error(`WhatsApp login failed: ${String(error)}`);
+        await params.prompter.note(
+          t("wizard.channels.docs", { link: formatDocsLink("/whatsapp", "whatsapp") }),
+          t("wizard.whatsapp.helpTitle"),
+        );
+      }
+    } else if (!linked) {
+      await params.prompter.note(
+        t("wizard.whatsapp.linkLater", {
+          command: formatCliCommand("openclaw channels login"),
+        }),
+        "WhatsApp",
+      );
+    }
   }
 
   next = await promptWhatsAppDmAccess({

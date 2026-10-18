@@ -1,4 +1,17 @@
-import type { UpdateRunPhase, UpdateRunRecord, UpdateRunStep } from "./update-run-record.js";
+import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
+import type {
+  InterruptedUpdateSettlement,
+  InterruptedUpdateSettlementResult,
+} from "./update-run-interruption-contract.js";
+import type { UpdateRunReconciliationOperations } from "./update-run-reconciliation.types.js";
+import type {
+  CreateUpdateRunInput,
+  FinishUpdateRunInput,
+  UpdateRunDiagnostics,
+  UpdateRunPhase,
+  UpdateRunRecord,
+  UpdateRunStep,
+} from "./update-run-record.js";
 import type { UpdateRecoveryRecord } from "./update-run-recovery-schema.js";
 
 export type UpdateRunRedactionFacts = {
@@ -14,7 +27,7 @@ export type UpdateRunPatch = Partial<
 
 export type UpdateRunPhasePatch = UpdateRunPatch & { step?: UpdateRunStep };
 
-type UpdateRunWriteInput = {
+export type UpdateRunWriteInput = {
   runId: string;
   redactionFacts: UpdateRunRedactionFacts;
   requireNoRecovery?: true;
@@ -24,9 +37,29 @@ type UpdateRunWriteInput = {
 
 type UpdateRunWriteResult =
   | { kind: "recorded"; record: UpdateRunRecord }
+  | { kind: "bookkeeping-skipped" }
   | { kind: "recovery-required"; recovery: UpdateRecoveryRecord };
 
 export type UpdateRunWriteOperations = {
+  "updateRuns.create": {
+    input: UpdateRunWriteInput & { run: CreateUpdateRunInput };
+    output: UpdateRunWriteResult;
+  };
+  "updateRuns.finish": {
+    input: UpdateRunWriteInput & { result: FinishUpdateRunInput };
+    output: UpdateRunWriteResult;
+  };
+  "updateRuns.recordVerification": {
+    input: UpdateRunWriteInput & {
+      verification: UpdateRunRecord["verification"];
+      onlyIfRunning?: true;
+    };
+    output: UpdateRunWriteResult;
+  };
+  "updateRuns.recordDiagnostics": {
+    input: UpdateRunWriteInput & { diagnostics: UpdateRunDiagnostics; preserveRecovery?: true };
+    output: UpdateRunWriteResult;
+  };
   "updateRuns.recordStep": {
     input: UpdateRunWriteInput & {
       step: UpdateRunStep & { reason?: string };
@@ -39,9 +72,12 @@ export type UpdateRunWriteOperations = {
   };
 };
 
-export type UpdateRunWriteCommand = {
-  [Type in keyof UpdateRunWriteOperations]: {
-    type: Type;
-    input: UpdateRunWriteOperations[Type]["input"];
+export type UpdateRunWriteCommand = SqliteWorkerCommand<UpdateRunWriteOperations>;
+
+export type UpdateRunWorkerOperations = UpdateRunWriteOperations &
+  UpdateRunReconciliationOperations & {
+    "updateRuns.reconcileInterrupted": {
+      input: InterruptedUpdateSettlement;
+      output: InterruptedUpdateSettlementResult;
+    };
   };
-}[keyof UpdateRunWriteOperations];

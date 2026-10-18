@@ -20,12 +20,9 @@ const LEGACY_MANIFEST_CONTRACT_KEYS = [
 ] as const;
 const LEGACY_PLUGIN_MANIFESTS_CHECK_ID = "core/doctor/legacy-plugin-manifests";
 
-type LegacyManifestContractMigration = {
-  manifestPath: string;
-  pluginId: string;
-  nextRaw: Record<string, unknown>;
-  changeLines: string[];
-};
+type LegacyManifestContractMigration = NonNullable<
+  ReturnType<typeof buildLegacyManifestContractMigration>
+>;
 
 const JsonRecordSchema = z.record(z.string(), z.unknown());
 
@@ -48,7 +45,7 @@ function manifestSeenKey(manifestPath: string): string {
 function buildLegacyManifestContractMigration(params: {
   manifestPath: string;
   raw: Record<string, unknown>;
-}): LegacyManifestContractMigration | null {
+}) {
   const nextRaw = { ...params.raw };
   const parsedContracts = safeParseWithSchema(JsonRecordSchema, params.raw.contracts);
   const nextContracts = parsedContracts ? { ...parsedContracts } : {};
@@ -151,15 +148,13 @@ export function legacyPluginManifestContractMigrationToHealthFinding(
   };
 }
 
-export async function maybeRepairLegacyPluginManifestContracts(params: {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  manifestRoots?: string[];
-  workspaceDir?: string;
-  runtime: RuntimeEnv;
-  prompter: DoctorPrompter;
-  note?: typeof note;
-}): Promise<boolean> {
+export async function maybeRepairLegacyPluginManifestContracts(
+  params: NonNullable<Parameters<typeof collectLegacyPluginManifestContractMigrations>[0]> & {
+    runtime: RuntimeEnv;
+    prompter: DoctorPrompter;
+    note?: typeof note;
+  },
+): Promise<boolean> {
   const migrations = collectLegacyPluginManifestContractMigrations(params);
   if (migrations.length === 0) {
     return false;

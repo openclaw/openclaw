@@ -1,9 +1,9 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-computer.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-  setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
@@ -19,7 +19,6 @@ import {
   TRANSCRIPT_COMMIT,
   waitForWorkerProtocol,
 } from "./message-handler.worker.test-support.js";
-import { captureGatewayRpcReceivedAt, createWorkerRpcDiagnostics } from "./request-diagnostics.js";
 
 type RpcEvent = Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>;
 
@@ -45,13 +44,48 @@ async function settled(events: RpcEvent[], count = 1) {
   await waitForDiagnosticEventsDrained();
 }
 
-describe("dedicated worker RPC diagnostics", () => {
+describe("dedicated worker RPC", () => {
   setupWorkerProtocolTestState();
   beforeEach(() => resetDiagnosticEventsForTest());
   afterEach(() => {
     vi.restoreAllMocks();
     resetDiagnosticEventsForTest();
   });
+
+  it.each([true, false])(
+    "gates session computer RPC and preserves image responses (supported: %s)",
+    async (supported) => {
+      const harness = attachHarness({
+        identity: {
+          ...ATTACHED_IDENTITY,
+          protocolFeatures: ATTACHED_IDENTITY.protocolFeatures.filter(
+            (feature) => supported || feature !== WORKER_COMPUTER_PROTOCOL_FEATURE,
+          ),
+        },
+      });
+      await admit(harness);
+      const request = { command: "screen.snapshot", paramsJson: "{}" };
+      harness.sendRequest("worker.computer", request);
+      await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
+      if (supported) {
+        expect(harness.service.executeComputer).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: ATTACHED_IDENTITY.sessionId }),
+          request,
+          expect.any(AbortSignal),
+        );
+        expect(harness.responses[1]).toMatchObject({
+          ok: true,
+          payload: { resultJson: expect.stringContaining("a".repeat(128 * 1024)) },
+        });
+      } else {
+        expect(harness.service.executeComputer).not.toHaveBeenCalled();
+        expect(harness.responses[1]).toMatchObject({
+          ok: false,
+          error: { details: { reason: "method-not-allowed" } },
+        });
+      }
+    },
+  );
 
   it("measures FIFO admission separately from inference acceptance without delaying its ACK", async () => {
     const events = observeRequests();
@@ -212,19 +246,25 @@ describe("dedicated worker RPC diagnostics", () => {
     expect(events.at(-1)).toMatchObject({ phase: "dispatch", response: "unavailable" });
   });
 
-  it("records a throwing service once and preserves protocol failure", async () => {
+  it("records a throwing transcript service once and measures its error response", async () => {
     const events = observeRequests();
     const harness = attachHarness({ identity: ATTACHED_IDENTITY });
     await admit(harness);
     harness.service.commitTranscript.mockRejectedValueOnce(new Error("synthetic service fault"));
     harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
     await settled(events);
-    expect(events.map((event) => event.phase)).toEqual(["received", "handler", "dispatch"]);
+    expect(events.map((event) => event.phase)).toEqual([
+      "received",
+      "handler",
+      "response",
+      "dispatch",
+    ]);
     expect(events.slice(1)).toMatchObject([
       { outcome: "threw" },
-      { outcome: "threw", response: "none" },
+      { outcome: "error" },
+      { outcome: "threw", response: "sent" },
     ]);
-    expect(harness.close).toHaveBeenCalledWith(1011, "gateway-unavailable");
+    expect(harness.close).not.toHaveBeenCalled();
     expect(JSON.stringify(events)).not.toContain("synthetic service fault");
   });
 
@@ -241,15 +281,5 @@ describe("dedicated worker RPC diagnostics", () => {
     expect(new Set(events.map((event) => event.method))).toEqual(new Set(["unknown"]));
     expect(events.find((event) => event.phase === "response")).toMatchObject({ outcome: "error" });
     expect(JSON.stringify(events)).not.toContain("private-");
-  });
-
-  it("takes no diagnostic clocks when disabled or uninterested", () => {
-    const clock = vi.spyOn(performance, "now");
-    expect(captureGatewayRpcReceivedAt()).toBeUndefined();
-    expect(createWorkerRpcDiagnostics("worker.computer", undefined)).toBeUndefined();
-    observeRequests();
-    setDiagnosticsEnabledForProcess(false);
-    expect(captureGatewayRpcReceivedAt()).toBeUndefined();
-    expect(clock).not.toHaveBeenCalled();
   });
 });

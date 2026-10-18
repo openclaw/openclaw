@@ -9,7 +9,7 @@ import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { readMediaBuffer } from "../../media/store.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
-import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import {
   WORKER_ATTACHMENT_DIRECTORY_PATTERN,

@@ -24,13 +24,12 @@ export function normalizeCatalogRouteBaseUrl(value: string | undefined): string 
   if (!value) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString();
-  } catch {
+  const url = URL.parse(value);
+  if (!url) {
     return value.replace(/\/+$/u, "");
   }
+  url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
+  return url.toString();
 }
 
 function normalizeBaseUrl(value: unknown, api: string): string {

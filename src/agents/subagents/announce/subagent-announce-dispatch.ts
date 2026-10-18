@@ -1,17 +1,16 @@
+import type { SubagentCompletionDeliveryState } from "../registry/subagent-registry-read.types.js";
+
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
-type SubagentAnnounceDeliveryDisposition =
-  | "delivered"
-  | "session_queued"
-  | "intentional_non_delivery"
-  | "retryable"
-  | "ambiguous"
-  | "permanent_failure";
+type SubagentAnnounceDeliveryDisposition = NonNullable<
+  SubagentCompletionDeliveryState["disposition"]
+>;
 type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
   | "completion_handoff_unavailable"
   | "delivery_suppressed"
   | "generated_media_missing"
   | "message_tool_delivery_missing"
+  | "operator_authority_unavailable"
   | "requester_abandoned"
   | "requester_turn_pending"
   | "source_owner_changed"
@@ -147,22 +146,17 @@ export async function runSubagentAnnounceDispatch(params: {
     primaryDirect.disposition === "session_queued" ||
     primaryDirect.disposition === "intentional_non_delivery" ||
     primaryDirect.disposition === "ambiguous" ||
-    primaryDirect.disposition === "permanent_failure"
+    primaryDirect.disposition === "permanent_failure" ||
+    params.signal?.aborted
   ) {
-    return withPhases(primaryDirect);
-  }
-
-  if (params.signal?.aborted) {
     return withPhases(primaryDirect);
   }
 
   const fallbackSteerOutcome = await params.steer();
   const fallbackSteer = mapSteerOutcomeToDeliveryResult(fallbackSteerOutcome);
   appendPhase("steer-fallback", fallbackSteer);
-  if (fallbackSteer.delivered || fallbackSteer.terminal) {
-    return withPhases(fallbackSteer);
-  }
-
   // Keep the direct failure authoritative; dropped fallback remains in its phase.
-  return withPhases(primaryDirect);
+  return withPhases(
+    fallbackSteer.delivered || fallbackSteer.terminal ? fallbackSteer : primaryDirect,
+  );
 }

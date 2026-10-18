@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-// Setup wizard tests cover end-to-end onboarding prompt flows.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
@@ -11,22 +10,22 @@ import {
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { committedConfigFiles } from "../commands/committed-config.test-support.js";
 import { createConfigIO as createRealConfigIO } from "../config/io.factory.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
-import { WizardCancelledError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
-import { runSetupWizard } from "./setup.js";
+import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import {
-  SetupMigrationFreshnessError,
-  SetupMigrationTargetChangedError,
-} from "./setup.migration-snapshot.js";
+  expectSavedSetupCredential,
+  modelConfigWithApiKey,
+  openAiAuthProfile,
+} from "./setup.credentials.test-support.js";
+import { runSetupWizard } from "./setup.js";
+import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 
 type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
@@ -70,8 +69,6 @@ const finalizeSetupWizard = vi.hoisted(() =>
     launchedTui: false,
   })),
 );
-const listChannelPlugins = vi.hoisted(() => vi.fn(() => []));
-const logConfigUpdated = vi.hoisted(() => vi.fn(() => {}));
 
 const detectSetupMigrationSources = vi.hoisted(() =>
   vi.fn(async () => ({ detections: [], providerDescriptors: [] })),
@@ -83,6 +80,9 @@ const runSetupMigrationImport = vi.hoisted(() =>
   vi.fn<RunSetupMigrationImport>(async () => ({ kind: "no-imported-inference" })),
 );
 const runSetupMemoryImportStep = vi.hoisted(() => vi.fn(async () => {}));
+const runMemorySetupFlow = vi.hoisted(() =>
+  vi.fn<typeof import("../flows/memory-setup.js").runMemorySetupFlow>(async (config) => config),
+);
 const verifySetupInferenceConfig = vi.hoisted(() => vi.fn<VerifySetupInferenceConfig>());
 
 const setupChannels = vi.hoisted(() =>
@@ -123,13 +123,9 @@ const resolveGatewayPort = vi.hoisted(() =>
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn<typeof import("../config/io.js").readConfigFileSnapshot>(),
 );
-const createConfigIO = vi.hoisted(() => vi.fn(() => ({ readConfigFileSnapshot })));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const buildPluginCompatibilitySnapshotNotices = vi.hoisted(() =>
   vi.fn((): PluginCompatibilityNotice[] => []),
-);
-const formatPluginCompatibilityNotice = vi.hoisted(() =>
-  vi.fn((notice: PluginCompatibilityNotice) => `${notice.pluginId} ${notice.message}`),
 );
 
 function providerFlag(
@@ -166,61 +162,7 @@ function remotePromptCalls() {
 }
 
 function modelConfig(primary: string): OpenClawConfig {
-  return { agents: { defaults: { model: { primary } }, entries: { main: { default: true } } } };
-}
-
-function modelConfigWithApiKey(apiKey: string, agentDir: string): OpenClawConfig {
-  return {
-    agents: {
-      defaults: { model: { primary: "openai/gpt-5.5" } },
-      entries: { main: { default: true, agentDir } },
-    },
-    auth: {
-      profiles: { "openai:default": { provider: "openai", mode: "api_key" } },
-      order: { openai: ["openai:default"] },
-    },
-    models: {
-      providers: {
-        openai: {
-          apiKey,
-          baseUrl: "https://api.openai.com/v1",
-          models: [],
-        },
-      },
-    },
-  };
-}
-
-function openAiAuthProfile(apiKey: string) {
-  return {
-    profileId: "openai:default",
-    credential: { type: "api_key" as const, provider: "openai", key: apiKey },
-  };
-}
-
-function expectSavedSetupCredential(config: OpenClawConfig, agentDir: string, key: string): string {
-  const primary = expectDefined(
-    resolveAgentModelPrimaryValue(config.agents?.defaults?.model),
-    "selected model",
-  );
-  const profileId = expectDefined(
-    splitTrailingAuthProfile(primary).profile,
-    "selected credential profile",
-  );
-  expect(profileId).toMatch(/^openai:setup-/);
-  const { setup, ...credential } = expectDefined(
-    readAuthProfileStoreForTest(agentDir).profiles[profileId],
-    "saved credential profile",
-  );
-  expect(credential).toEqual(openAiAuthProfile(key).credential);
-  if (setup) {
-    expect(setup).toMatchObject({
-      modelRef: "openai/gpt-5.5",
-      replacement: expect.any(Boolean),
-      configJson: expect.any(String),
-    });
-  }
-  return profileId;
+  return { agents: { defaults: { model: { primary } }, entries: { main: {} } } };
 }
 
 function prepareMockAuthProfilesIn(agentDir: string): void {
@@ -276,6 +218,8 @@ vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
 }));
 
 vi.mock("../flows/search-setup.js", () => ({ runSearchSetupFlow }));
+// mock-isolation: Wizard orchestration must not probe real embedding providers or credentials.
+vi.mock("../flows/memory-setup.js", () => ({ runMemorySetupFlow }));
 
 vi.mock("../commands/onboard-remote.js", () => ({
   promptRemoteGatewayConfig,
@@ -340,10 +284,10 @@ vi.mock("../system-agent/setup-inference.js", () => ({ verifySetupInferenceConfi
 vi.mock("../config/config.js", async (importActual) => {
   const actual = await importActual<typeof import("../config/config.js")>();
   return {
+    ...actual,
     DEFAULT_GATEWAY_PORT: 18789,
-    createConfigIO,
+    createConfigIO: () => ({ readConfigFileSnapshot }),
     readConfigFileSnapshot,
-    resolveConfigWriteAfterWrite: actual.resolveConfigWriteAfterWrite,
     resolveGatewayPort,
     replaceConfigFile,
     transformConfigFileWithRetry: async (
@@ -371,13 +315,19 @@ vi.mock("../config/config.js", async (importActual) => {
     },
   };
 });
-vi.mock("../commands/onboard-agent.js", async () => {
-  return {
-    ensureOnboardingAgent: ensureOnboardingConfig,
-    validateFirstOnboardingAgentName: (value: string | undefined) =>
-      value?.trim() ? undefined : "Agent name is required.",
-  };
-});
+vi.mock("./setup.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup.shared.js")>()),
+  readSetupConfigAuthority: async () => ({
+    snapshot: await readConfigFileSnapshot(),
+    assertCurrent: () => {},
+  }),
+}));
+// mock-isolation: Keep roster/database creation and session migration outside these in-memory fixtures.
+vi.mock("../commands/onboard-agent.js", () => ({
+  ensureOnboardingAgent: ensureOnboardingConfig,
+  validateFirstOnboardingAgentName: (value: string | undefined) =>
+    value?.trim() ? undefined : "Agent name is required.",
+}));
 vi.mock("../commands/onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
   applyWizardMetadata: (cfg: unknown) => cfg,
@@ -387,14 +337,13 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   probeGatewayReachable,
 }));
 
-vi.mock("../plugins/status.js", () => ({
+vi.mock("../plugins/status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/status.js")>()),
   buildPluginCompatibilitySnapshotNotices,
-  formatPluginCompatibilityNotice,
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({ listChannelPlugins }));
-
-vi.mock("../config/logging.js", () => ({ logConfigUpdated }));
+// mock-isolation: Keep process-global channel registry state outside wizard orchestration fixtures.
+vi.mock("../channels/plugins/index.js", () => ({ listChannelPlugins: () => [] }));
 
 vi.mock("./setup.gateway-config.js", () => ({ configureGatewayForSetup }));
 
@@ -542,6 +491,7 @@ describe("runSetupWizard", () => {
       latencyMs: 250,
     });
     runSetupMemoryImportStep.mockReset().mockResolvedValue(undefined);
+    runMemorySetupFlow.mockReset().mockImplementation(async (config) => config);
     ensureOnboardingConfig.mockClear();
   });
 
@@ -685,26 +635,15 @@ describe("runSetupWizard", () => {
     );
   });
 
-  it.each([
-    {
-      label: "freshness rejection",
-      error: new SetupMigrationFreshnessError(
-        "Migration import during onboarding requires a fresh OpenClaw setup.\nExisting setup:\n- state agents/ exists",
-      ),
-      detail: "state agents/ exists",
-    },
-    {
-      label: "target change",
-      error: new SetupMigrationTargetChangedError(
-        "Migration target changed before promotion. Review it and retry.",
-      ),
-      detail: "Migration target changed before promotion",
-    },
-  ])("returns to setup mode after an interactive import $label", async ({ error, detail }) => {
+  it("returns to setup mode after an interactive import target change", async () => {
     listSetupMigrationOptions.mockResolvedValueOnce([
       { providerId: "hermes", label: "Import from Hermes" },
     ]);
-    runSetupMigrationImport.mockRejectedValueOnce(error);
+    runSetupMigrationImport.mockRejectedValueOnce(
+      new SetupMigrationTargetChangedError(
+        "Migration target changed before promotion. Review it and retry.",
+      ),
+    );
     const setupChoices: Array<"import" | "quickstart"> = ["import", "quickstart"];
     const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
       if (params.message === "Setup mode") {
@@ -724,7 +663,7 @@ describe("runSetupWizard", () => {
     expect(select.mock.calls.filter(([params]) => params.message === "Setup mode")).toHaveLength(2);
     expect(runSetupMigrationImport).toHaveBeenCalledOnce();
     expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining(detail),
+      expect.stringContaining("Migration target changed before promotion"),
       "Existing config detected",
     );
     expect(finalizeSetupWizard).toHaveBeenCalledOnce();
@@ -766,115 +705,58 @@ describe("runSetupWizard", () => {
     expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      label: "absent roster",
-      agents: {},
-      authored: false,
-      include: false,
-      requestedName: undefined,
-    },
-    {
-      label: "authored bare main",
-      agents: { entries: { main: {} } },
-      authored: true,
-      include: false,
-      requestedName: "robby",
-    },
-    {
-      label: "include-owned bare main",
-      agents: { entries: { main: {} } },
-      authored: true,
-      include: true,
-      requestedName: undefined,
-    },
-  ])(
-    "uses authored membership for same-command import and naming: $label, name=$requestedName",
-    async ({ agents, authored, include, requestedName }) => {
-      const workspaceDir = await fs.realpath(await makeCaseDir("import-naming-"));
-      const configPath = path.join(workspaceDir, "openclaw.json");
-      if (include) {
-        await fs.writeFile(path.join(workspaceDir, "roster.json"), JSON.stringify({ agents }));
-      }
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({
-          ...(include ? { $include: "./roster.json" } : {}),
-          agents: { ...(!include ? agents : {}), defaults: { workspace: workspaceDir } },
-        }),
-      );
-      const importedSnapshot = await createRealConfigIO({
-        configPath,
-        pluginValidation: "skip",
-      }).readConfigFileSnapshot();
-      expect(importedSnapshot.valid).toBe(true);
-      readConfigFileSnapshot
-        .mockResolvedValueOnce(configSnapshot({}, false))
-        .mockResolvedValue(importedSnapshot);
-      const runtime = createRuntime();
-      const prompter = buildWizardPrompter({ text: vi.fn(async () => "robby") });
+  it("rejects an agent name when the import supplies an authored roster", async () => {
+    const workspaceDir = await fs.realpath(await makeCaseDir("import-naming-"));
+    const configPath = path.join(workspaceDir, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ agents: { entries: { main: {} }, defaults: { workspace: workspaceDir } } }),
+    );
+    const importedSnapshot = await createRealConfigIO({
+      configPath,
+      pluginValidation: "skip",
+    }).readConfigFileSnapshot();
+    expect(importedSnapshot.valid).toBe(true);
+    readConfigFileSnapshot
+      .mockResolvedValueOnce(configSnapshot({}, false))
+      .mockResolvedValue(importedSnapshot);
+    const runtime = createRuntime();
+    const prompter = buildWizardPrompter({ text: vi.fn(async () => "robby") });
 
-      await runWizard(
-        { importFrom: "hermes", agentName: requestedName, workspace: workspaceDir },
-        runtime,
-        prompter,
-      );
+    await runWizard(
+      { importFrom: "hermes", agentName: "robby", workspace: workspaceDir },
+      runtime,
+      prompter,
+    );
 
-      expect(runSetupMigrationImport).toHaveBeenCalledOnce();
-      if (authored && requestedName) {
-        expect(runtime.error).toHaveBeenCalledWith(
-          "--agent-name cannot be combined with an import that supplies an agent roster. Remove --agent-name or choose an import without agents.",
-        );
-        expect(runtime.exit).toHaveBeenCalledWith(1);
-        expect(ensureOnboardingConfig).not.toHaveBeenCalled();
-      } else {
-        expect(runtime.error).not.toHaveBeenCalled();
-        expect(ensureOnboardingConfig).toHaveBeenCalledWith(
-          expect.objectContaining({
-            ...(authored ? {} : { firstAgent: { name: "robby" } }),
-            workspace: workspaceDir,
-            preserveCandidateRoster: authored,
-          }),
-        );
-        expect(finalizeSetupWizard).toHaveBeenCalledOnce();
-      }
-      const namePrompt = expect.objectContaining({
-        message: "What should we call your first agent?",
-      });
-      if (!authored && !requestedName) {
-        expect(prompter.text).toHaveBeenCalledWith(namePrompt);
-      } else {
-        expect(prompter.text).not.toHaveBeenCalledWith(namePrompt);
-      }
-    },
-  );
+    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--agent-name cannot be combined with an import that supplies an agent roster. Remove --agent-name or choose an import without agents.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(ensureOnboardingConfig).not.toHaveBeenCalled();
+    expect(prompter.text).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "What should we call your first agent?" }),
+    );
+  });
 
-  it.each([false, true])(
-    "reuses imported verification only for an unchanged model (changed: %s)",
-    async (changed) => {
-      runSetupMigrationImport.mockResolvedValueOnce({
-        kind: "verified-inference",
-        modelRef: "openai/gpt-5.6-sol",
-      });
-      const imported = modelConfig(changed ? "anthropic/claude-sonnet-4-6" : "openai/gpt-5.6-sol");
-      readConfigFileSnapshot
-        .mockResolvedValueOnce(configSnapshot({}, false))
-        .mockResolvedValue(configSnapshot(imported));
-      const confirm = vi.fn(async () => !changed);
-      await runWizard(
-        { importFrom: "hermes", authChoice: changed ? "demo-provider" : "skip" },
-        createRuntime(),
-        buildWizardPrompter({ confirm }),
-      );
-      expect(applyAuthChoice).toHaveBeenCalledTimes(changed ? 1 : 0);
-      expect(verifySetupInferenceConfig).not.toHaveBeenCalled();
-      if (!changed) {
-        expect(confirm).not.toHaveBeenCalledWith(
-          expect.objectContaining({ message: "Test AI access now with a live completion?" }),
-        );
-      }
-    },
-  );
+  it("does not reuse imported verification after changing the model", async () => {
+    runSetupMigrationImport.mockResolvedValueOnce({
+      kind: "verified-inference",
+      modelRef: "openai/gpt-5.6-sol",
+    });
+    const imported = modelConfig("anthropic/claude-sonnet-4-6");
+    readConfigFileSnapshot
+      .mockResolvedValueOnce(configSnapshot({}, false))
+      .mockResolvedValue(configSnapshot(imported));
+    await runWizard(
+      { importFrom: "hermes", authChoice: "demo-provider" },
+      createRuntime(),
+      buildWizardPrompter({ confirm: vi.fn(async () => false) }),
+    );
+    expect(applyAuthChoice).toHaveBeenCalledOnce();
+    expect(verifySetupInferenceConfig).not.toHaveBeenCalled();
+  });
 
   it("treats --import-source alone as import intent instead of prompting for a setup mode", async () => {
     const prompter = buildWizardPrompter();
@@ -903,21 +785,14 @@ describe("runSetupWizard", () => {
     async (accepted) => {
       const currentWorkspace = await makeCaseDir("fleet-current-");
       const requestedWorkspace = await makeCaseDir("fleet-requested-");
-      const config: OpenClawConfig = accepted
-        ? {
-            wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
-            agents: {
-              defaults: { workspace: currentWorkspace },
-              list: [{ id: "main", default: true }, { id: "ops" }],
-            },
-          }
-        : {
-            agents: {
-              ownership: "explicit",
-              defaults: { workspace: currentWorkspace, systemAgent: { agentId: "main" } },
-              entries: { main: {}, ops: {} },
-            },
-          };
+      const config: OpenClawConfig = {
+        ...(accepted ? { wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" } } : {}),
+        agents: {
+          ownership: "explicit",
+          defaults: { workspace: currentWorkspace, systemAgent: { agentId: "main" } },
+          entries: { main: {}, ops: {} },
+        },
+      };
       if (accepted) {
         readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
       } else {
@@ -968,6 +843,22 @@ describe("runSetupWizard", () => {
 
     expect(runSearchSetupFlow).toHaveBeenCalledOnce();
     expect(finalizeSetupWizard).toHaveBeenCalledOnce();
+  });
+
+  it("persists the optional memory choice before classic setup finalization", async () => {
+    runMemorySetupFlow.mockImplementationOnce(async (config) => ({
+      ...config,
+      memory: { search: { provider: "openai", model: "embedding-model" } },
+    }));
+    await runWizard();
+    expect(runMemorySetupFlow).toHaveBeenCalledOnce();
+    expect(persistedWizardConfigs().at(-1)?.memory?.search).toEqual({
+      provider: "openai",
+      model: "embedding-model",
+    });
+    expect(runMemorySetupFlow.mock.invocationCallOrder[0]).toBeLessThan(
+      finalizeSetupWizard.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("persists classic channel setup before hooks and Gateway finalization", async () => {
@@ -1192,7 +1083,7 @@ describe("runSetupWizard", () => {
       if (flow === "quickstart") {
         readConfigFileSnapshot.mockResolvedValueOnce(
           configSnapshot({
-            agents: { entries: { main: { default: true } } },
+            agents: { entries: { main: {} } },
             gateway: {
               port: 19111,
               bind: "loopback",
@@ -1271,101 +1162,6 @@ describe("runSetupWizard", () => {
       }
     },
   );
-
-  it("localizes the quickstart summary", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18791");
-    vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
-    const prompter = buildWizardPrompter();
-    await runWizard({}, createRuntime(), prompter);
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway 端口：18791"),
-      "QuickStart",
-    );
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Tailscale 暴露方式：关闭"),
-      "QuickStart",
-    );
-  });
-
-  it("verifies and persists managed-local setup without enabling lean mode", async () => {
-    const modelRef = "managed-local/test-model";
-    readConfigFileSnapshot.mockResolvedValue(configSnapshot({}));
-    replaceConfigFile.mockImplementation(async ({ nextConfig }) => {
-      readConfigFileSnapshot.mockResolvedValue(configSnapshot(nextConfig));
-      return { nextConfig };
-    });
-    applyAuthChoice.mockImplementationOnce(async (args) => ({
-      config: {
-        ...args.config,
-        agents: {
-          ...args.config.agents,
-          defaults: { ...args.config.agents?.defaults, model: { primary: modelRef } },
-        },
-        models: {
-          providers: {
-            "managed-local": {
-              baseUrl: "http://127.0.0.1:8080/v1",
-              models: [],
-              localService: { command: "/fixture/server" },
-            },
-          },
-        },
-      },
-    }));
-    verifySetupInferenceConfig.mockImplementationOnce(async ({ config }) => {
-      expect(config.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-      expect(replaceConfigFile).not.toHaveBeenCalled();
-      return { ok: true, modelRef, latencyMs: 1 };
-    });
-    const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true) });
-    await runWizard({ authChoice: "demo-provider" }, createRuntime(), prompter);
-    expect(prompter.confirm).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Test AI access now with a live completion?" }),
-    );
-    expect(verifySetupInferenceConfig).toHaveBeenCalledOnce();
-    expect(
-      persistedWizardConfigs().at(-1)?.agents?.defaults?.experimental?.localModelLean,
-    ).toBeUndefined();
-    expect(persistedWizardConfigs().at(-1)?.wizard ?? {}).not.toHaveProperty(
-      "localModelLeanAutoModel",
-    );
-  });
-
-  it("keeps the saved credential and leaves config unchanged when verification is cancelled", async () => {
-    const stateDir = await makeCaseDir("cancelled-auth-verification-");
-    const agentDir = path.join(stateDir, "agent");
-    prepareMockAuthProfilesIn(agentDir);
-    applyAuthChoice.mockResolvedValueOnce({
-      config: modelConfigWithApiKey("test-cancelled-key", agentDir),
-    });
-    verifySetupInferenceConfig.mockImplementationOnce(async ({ config }) => {
-      expectSavedSetupCredential(config, agentDir, "test-cancelled-key");
-      expect(replaceConfigFile).not.toHaveBeenCalled();
-      throw new WizardCancelledError("cancelled");
-    });
-
-    try {
-      await expect(
-        runWizard(
-          { authChoice: "demo-provider" },
-          createRuntime(),
-          buildWizardPrompter({ confirm: vi.fn(async () => true) }),
-        ),
-      ).rejects.toThrow("cancelled");
-
-      expect(replaceConfigFile).not.toHaveBeenCalled();
-      expect(Object.values(readAuthProfileStoreForTest(agentDir).profiles)).toContainEqual({
-        ...openAiAuthProfile("test-cancelled-key").credential,
-        setup: expect.objectContaining({
-          replacement: false,
-          modelRef: "openai/gpt-5.5",
-          configJson: expect.any(String),
-        }),
-      });
-    } finally {
-      await removeOAuthTestTempRoot(stateDir);
-    }
-  });
 
   it("saves each retry credential before verification while failed candidates leave config unchanged", async () => {
     const stateDir = await makeCaseDir("failed-auth-profile-retry-");

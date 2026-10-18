@@ -84,29 +84,19 @@ describePosix("repository-owned PR provisioning state", () => {
     },
   );
 
-  it("refuses a fresh provisioner whose handoff argv binding was stripped", () => {
-    const f = createProvisionOwnerFixture(tempDirs.make("openclaw-pr-stripped-binding-"));
-    const quote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
-    // Keep the pre-open observer but remove only the child's resolver import.
-    // The parent still has a valid binding: its witness cannot qualify this PID.
-    writeFileSync(
-      join(f.isolation.bin, "node"),
-      `#!/bin/sh\nexec ${quote(requireNodeTool("node"))} ${quote(f.isolation.nodeArgs[1]!)} "$@"\n`,
-    );
-    const result = f.run();
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Missing private provisioner handoff preload");
-    expect(readFileSync(f.isolation.observations, "utf8")).toBe("");
-    expect(existsSync(f.isolation.binding.databasePath)).toBe(false);
-    expect(existsSync(f.isolation.stateDatabase)).toBe(false);
-  });
-
-  it.each(["missing", "replaced"] as const)(
-    "refuses a %s binding directory before opening either store",
+  it.each(["stripped", "missing", "replaced"] as const)(
+    "refuses a %s handoff binding before opening either store",
     (fault) => {
       const f = createProvisionOwnerFixture(tempDirs.make("openclaw-pr-binding-identity-"));
       const preload = fileURLToPath(f.isolation.binding.nodeOption.slice("--import=".length));
-      if (fault === "missing") {
+      if (fault === "stripped") {
+        const quote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
+        // Keep the observer but remove this child's resolver; a parent witness cannot qualify it.
+        writeFileSync(
+          join(f.isolation.bin, "node"),
+          `#!/bin/sh\nexec ${quote(requireNodeTool("node"))} ${quote(f.isolation.nodeArgs[1]!)} "$@"\n`,
+        );
+      } else if (fault === "missing") {
         unlinkSync(preload);
       } else {
         const retained = join(f.root, "replaced-handoff");
@@ -117,7 +107,11 @@ describePosix("repository-owned PR provisioning state", () => {
       const result = f.run();
       expect(result.status).not.toBe(0);
       expect(result.stderr).toMatch(
-        fault === "missing" ? /ERR_MODULE_NOT_FOUND/ : /directory identity changed/,
+        fault === "stripped"
+          ? /Missing private provisioner handoff preload/
+          : fault === "missing"
+            ? /ERR_MODULE_NOT_FOUND/
+            : /directory identity changed/,
       );
       expect(readFileSync(f.isolation.observations, "utf8")).toBe("");
       expect(existsSync(f.isolation.binding.databasePath)).toBe(false);

@@ -44,6 +44,18 @@ export async function createManagedUpdateRequesterAuthority(
   return captureManagedUpdateRequester(requester, env, (auth) => auth.resolveCommandOwnerAuthority);
 }
 
+/** Reconstruct delegated authority from the source recorded by the original admission. */
+export function createDelegatedUpdateRequesterAuthority(
+  requester: UpdateRequester,
+  runId: string,
+  executor: UpdateRecoveryFence,
+  env?: NodeJS.ProcessEnv,
+): Promise<UpdateRequesterAuthority> {
+  return requester.authorizationSource?.startsWith("profile:")
+    ? createManagedUpdateRequesterContinuationAuthority(requester, { runId, executor }, env)
+    : createManagedUpdateRequesterAuthority(requester, env);
+}
+
 /** Identity facts alone grant no effects; the helper composes them with its native owner. */
 export async function prepareManagedUpdateRequesterIdentity(
   requester: UpdateRequester,

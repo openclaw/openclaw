@@ -1,5 +1,5 @@
-/** Platform service registry and shared gateway service start/repair logic. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { captureStalledGatewayStartup } from "../infra/gateway-startup-owner.js";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
@@ -19,8 +19,10 @@ import {
   assertDaemonRuntimePinDefinition,
   assertDaemonRuntimePinPlan,
   commitDaemonRuntimePin,
+  withDaemonRuntimePinMigration,
   readDaemonRuntimePinForInstall,
 } from "./runtime-pin-state.js";
+import { stopStalledGatewayStartup } from "./schtasks-process.js";
 import {
   installScheduledTask,
   isScheduledTaskEnabled,
@@ -33,6 +35,7 @@ import {
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
+import { assertServiceInspectionFallbackAllowed } from "./service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { captureGatewayServiceRebind } from "./service-rebind.js";
 import { collectGatewayServiceStartRepairIssues } from "./service-start-repair.js";
@@ -75,11 +78,10 @@ export type {
   GatewayServiceState,
 } from "./service-types.js";
 
-// Platform service adapter used by CLI commands across launchd, systemd, and schtasks.
-function ignoreServiceWriteResult<TArgs extends GatewayServiceInstallArgs>(
-  write: (args: TArgs) => Promise<unknown>,
-): (args: TArgs) => Promise<void> {
-  return async (args: TArgs) => {
+function ignoreServiceWriteResult(
+  write: (args: GatewayServiceInstallArgs) => Promise<unknown>,
+): (args: GatewayServiceInstallArgs) => Promise<void> {
+  return async (args) => {
     await write(args);
   };
 }
@@ -122,6 +124,7 @@ export async function startGatewayService(
     await service.start({ ...args, env: state.env });
     nextState = await readGatewayServiceState(service, { env: state.env });
   } catch (err) {
+    assertServiceInspectionFallbackAllowed(err);
     const recoveryState = await readGatewayServiceState(service, { env: state.env });
     if (!recoveryState.installed) {
       return {
@@ -297,21 +300,27 @@ function guardGatewayServiceMutation<
   },
   TResult,
 >(
+  kind: ServiceKind,
   action: string,
+  prepareRuntimePins: boolean,
   mutate: (args: TArgs) => Promise<TResult>,
   readCommand?: GatewayService["readCommand"],
   readRuntimePinRevision?: (env: GatewayServiceEnv) => string,
 ): (args: TArgs) => Promise<TResult> {
   return async (args) => {
-    // Mutations must satisfy both lifecycle ownership and durable-config
-    // version guards before invoking any platform service manager.
-    assertGatewayServiceMutationAllowed(action, process.env);
-    if (args.env && args.env !== process.env) {
-      assertGatewayServiceMutationAllowed(action, args.env);
+    // Node services share native custody and config guards, not Gateway installation identity.
+    if (kind === "gateway") {
+      assertGatewayServiceMutationAllowed(action, process.env);
+      if (args.env && args.env !== process.env) {
+        assertGatewayServiceMutationAllowed(action, args.env);
+      }
     }
     const assertCaller = args.assertCurrent;
     return await withGatewayServiceOperationLock(args.env ?? process.env, async (assertNative) => {
       await assertFutureConfigActionAllowed(action);
+      if (prepareRuntimePins) {
+        await withDaemonRuntimePinMigration(args.env ?? process.env, () => undefined);
+      }
       return await withGatewayServiceUpdateAuthority(
         assertCaller,
         async (assertCurrent) => {
@@ -355,7 +364,9 @@ function withGatewayServiceMutationGuards(
     readCommand?: GatewayService["readCommand"],
   ) =>
     guardGatewayServiceMutation(
+      kind,
       action,
+      true,
       async (args: GatewayServiceInstallArgs) => {
         const scope = { kind, env: { ...args.env } };
         const update = args.runtimePinUpdate ?? {
@@ -368,14 +379,35 @@ function withGatewayServiceMutationGuards(
           );
         }
         assertDaemonRuntimePinCurrent(scope, update.expected);
-        if (update.pin || update.expected.stored) {
-          const previous = await service.readCommand(args.env);
+        const checkDefinition = Boolean(
+          update.pin ||
+          update.expected.stored ||
+          update.requireDefinitionMatch ||
+          update.requireRunning,
+        );
+        if (checkDefinition) {
+          const current = update.requireRunning
+            ? await readGatewayServiceState(service, {
+                env: args.env,
+                requireEffective: true,
+                requireLoadedCommand: true,
+              })
+            : undefined;
+          const previous = current ? current.command : await service.readCommand(args.env);
           args.assertCurrent?.();
           assertDaemonRuntimePinPlan(update.expected, previous);
           assertDaemonRuntimePinCurrent(scope, update.expected);
+          if (
+            current &&
+            (current.loadState.status !== "loaded" || !current.running || current.inspectionReason)
+          ) {
+            throw new Error(
+              "The Gateway is paused or its running state could not be verified. Start it before choosing Use bundled runtime.",
+            );
+          }
         }
         await mutate(args);
-        if (update.pin || update.expected.stored) {
+        if (checkDefinition) {
           const command = await service.readCommand(args.env);
           args.assertCurrent?.();
           assertDaemonRuntimePinDefinition(
@@ -392,10 +424,12 @@ function withGatewayServiceMutationGuards(
     );
   return {
     ...service,
-    stage: write("rewrite the gateway service", service.stage),
-    install: write("install or rewrite the gateway service", service.install, service.readCommand),
+    stage: write(`rewrite the ${kind} service`, service.stage),
+    install: write(`install or rewrite the ${kind} service`, service.install, service.readCommand),
     uninstall: guardGatewayServiceMutation(
-      "uninstall the gateway service",
+      kind,
+      `uninstall the ${kind} service`,
+      true,
       async (args: GatewayServiceManageArgs & { assertCurrent?: () => void }) => {
         const scope = { kind, env: { ...args.env } };
         const expected = readDaemonRuntimePinForInstall(scope, null, true);
@@ -411,9 +445,20 @@ function withGatewayServiceMutationGuards(
         commitDaemonRuntimePin(scope, { expected }, null);
       },
     ),
-    start: guardGatewayServiceMutation("start the gateway service", service.start),
-    stop: guardGatewayServiceMutation("stop the gateway service", service.stop),
-    restart: guardGatewayServiceMutation("restart the gateway service", service.restart),
+    start: guardGatewayServiceMutation(kind, `start the ${kind} service`, true, service.start),
+    stop: guardGatewayServiceMutation(kind, `stop the ${kind} service`, false, async (args) => {
+      const stalled = kind === "gateway" ? captureStalledGatewayStartup(args.env) : undefined;
+      await service.stop(args);
+      if (stalled) {
+        await stopStalledGatewayStartup(stalled, args.assertCurrent);
+      }
+    }),
+    restart: guardGatewayServiceMutation(
+      kind,
+      `restart the ${kind} service`,
+      true,
+      service.restart,
+    ),
   };
 }
 

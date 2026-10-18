@@ -1,6 +1,8 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -8,14 +10,19 @@ import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
+  readSessionTranscriptWatermark,
   SessionTranscriptProjectionUnavailableError,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { seedUnindexedTranscriptForTest } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { isSessionTranscriptIndexReconcileRunning } from "../config/sessions/session-transcript-reconcile.js";
+import * as transcriptWatermark from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createGatewaySchedulerClock,
@@ -31,7 +38,7 @@ import {
   createSessionActivitySummaries,
   type SessionActivitySummaryService,
 } from "./session-activity-summaries.js";
-import { readActivitySummaryBatch } from "./session-activity-summary-source.js";
+import { readActivitySummaryBatch } from "./session-activity-summary-source.worker.js";
 import {
   projectSessionActivitySummary,
   type ActivitySummaryTarget,
@@ -64,6 +71,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     authProfileId: undefined,
     agentDir: "/tmp/unused",
     outputTextPolicy: "strict-visible",
+    thinkLevel: "off",
   });
   const prepare = vi.fn<typeof defaultPrepareModel>();
   const changed = vi.fn();
@@ -72,6 +80,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       ...target,
       cfg,
       entry: loadSessionEntryReadOnly(scope(target)),
+      watermark: readSessionTranscriptWatermark(scope(target)),
     });
   const addSession = async (index: number, agentId = "main") => {
     const target = { agentId, key: `agent:${agentId}:recap-${index}` };
@@ -110,9 +119,20 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       completeModel: complete,
     });
 
+  const ensureRecap = async (target: Parameters<SessionActivitySummaryService["ensure"]>[0]) =>
+    service.ensure(
+      target,
+      await readSessionEntryReadOnlyInWorker({
+        agentId: target.agentId,
+        sessionKey: target.key,
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId }),
+      }),
+    );
+
   beforeEach(async () => {
     testState = await createOpenClawTestState({ scenario: "minimal" });
     cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
+    setRuntimeConfigSnapshot(cfg);
     complete.mockReset().mockResolvedValue(result);
     prepare.mockReset().mockImplementation(prepareModel);
     changed.mockReset();
@@ -125,6 +145,80 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     await testState.cleanup();
+  });
+
+  it("refreshes a recap dirtied by an in-process append without a post-write watermark read", async ({
+    signal,
+  }) => {
+    const target = await addSession(1);
+    const transcript = scope(target);
+    const read = () => loadSessionEntryReadOnly(transcript);
+    const readWatermark = vi.spyOn(transcriptWatermark, "readSessionTranscriptWatermarkAsync");
+    complete.mockImplementationOnce(async () => {
+      await appendWork(target);
+      service.handleTranscript({ target: transcript });
+      return { ...result, text: "Only the first message was summarized." };
+    });
+    const firstPublication = createDeferred();
+    changed.mockImplementation(() => {
+      if (read()?.activitySummary) {
+        firstPublication.resolve();
+      }
+    });
+    await ensureRecap(target);
+    await withinTest(firstPublication.promise, signal);
+    expect(view(target)?.state).toBe("updating");
+    expect(read()?.activitySummary).toMatchObject({ coveredMessages: 1, totalMessages: 1 });
+    expect(readWatermark).not.toHaveBeenCalled();
+
+    const awaitCurrent = async () => {
+      const publication = createDeferred();
+      changed.mockImplementation(() => {
+        if (view(target)?.state === "current") {
+          publication.resolve();
+        }
+      });
+      await ensureRecap(target);
+      return withinTest(publication.promise, signal);
+    };
+    await awaitCurrent();
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });
+  });
+
+  it("refreshes the bounded recap source after a committed append", async () => {
+    const target = await addSession(1);
+    const transcript = scope(target);
+    const initial = readActivitySummaryBatch({ scope: transcript })!;
+    expect(initial.snapshot.totalMessages).toBe(1);
+    expect(initial.page.events).toMatchObject([
+      { event: { message: { role: "user", content: "Request 1" } } },
+    ]);
+    const previous = {
+      version: 1 as const,
+      formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
+      text: result.text,
+      updatedAt: 1,
+      sessionId: transcript.sessionId,
+      ...initial.watermark,
+      leafEntryId: initial.snapshot.activeLeafEntryId ?? null,
+      coveredMessages: 1,
+      totalMessages: 1,
+      omittedContent: false,
+    };
+
+    await appendWork(target);
+
+    const appended = readActivitySummaryBatch({ scope: transcript, previous })!;
+    expect(appended.covered).toBe(1);
+    expect(appended.snapshot.totalMessages).toBe(2);
+    expect(appended.page.scannedMessages).toBe(1);
+    expect(appended.page.events).toMatchObject([
+      { event: { message: { role: "assistant", content: "Verified additional work." } } },
+    ]);
+    expect(appended.watermark.generation).toBe(initial.watermark.generation);
+    expect(appended.watermark.maxSeq).toBeGreaterThan(initial.watermark.maxSeq!);
+    expect(appended.omitted).toBe(false);
   });
 
   it("rebuilds a dirty imported projection before retrying the recap", async () => {
@@ -172,7 +266,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         settled.resolve(summary);
       }
     });
-    service.ensure(target);
+    await ensureRecap(target);
     expect(await settled.promise).toMatchObject({ state: "current", text: result.text });
     expect(complete).toHaveBeenCalledTimes(1);
     expect(JSON.parse(complete.mock.calls[0]![0].prompt).messages).toEqual([
@@ -202,7 +296,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         settled.resolve(summary);
       }
     });
-    service.ensure(target);
+    await ensureRecap(target);
     try {
       await started.promise;
       await patchSessionEntryCore(scope(target), () => ({ category: undefined }), {
@@ -252,7 +346,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
             settled.resolve();
           }
         });
-        service.ensure(target);
+        await ensureRecap(target);
         requested = true;
         await settled.promise;
       };
@@ -333,7 +427,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     "restyles old cached text once while retaining coverage (new work: %s)",
     async (newWork) => {
       const target = await addSession(1);
-      service.ensure(target);
+      await ensureRecap(target);
       await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
       const oldText = "Ran internal_tool and checked the result. Waiting for review.";
       await patchSessionEntryCore(
@@ -350,7 +444,10 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       const restyled = createDeferred<typeof result>();
       complete.mockImplementationOnce(() => restyled.promise);
       try {
-        expect(service.ensure(target)).toMatchObject({ state: "updating", text: oldText });
+        expect(await ensureRecap(target)).toMatchObject({
+          state: "updating",
+          text: oldText,
+        });
         await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
         expect(JSON.parse(complete.mock.calls[1]![0].prompt)).toMatchObject({
           previousRecap: oldText,
@@ -370,9 +467,9 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       }
       await service.dispose();
       service = createService();
-      service.ensure(target);
+      await ensureRecap(target);
       await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
-      service.ensure(target);
+      await ensureRecap(target);
       await service.dispose();
       expect(complete).toHaveBeenCalledTimes(2);
     },
@@ -393,7 +490,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
           initial.resolve();
         }
       });
-      service.ensure(target);
+      await ensureRecap(target);
       await initial.promise;
       await appendWork(target);
       fakeTime();
@@ -440,7 +537,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
             continued.resolve();
             return continuation.promise;
           });
-          service.ensure(target);
+          await ensureRecap(target);
           completion.resolve(result);
           await continued.promise;
           const stopped = vi.fn();
@@ -469,7 +566,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
 
   it("retains the previous recap on restyle failure without rebilling repeated requests", async () => {
     const target = await addSession(1);
-    service.ensure(target);
+    await ensureRecap(target);
     await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
     await patchSessionEntryCore(
       scope(target),
@@ -479,28 +576,129 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       { preserveActivity: true },
     );
     complete.mockRejectedValue(new Error("temporary failure"));
-    service.ensure(target);
+    await ensureRecap(target);
     await vi.waitFor(() => expect(view(target)?.state).toBe("unavailable"));
     for (let index = 0; index < 20; index += 1) {
-      service.ensure(target);
+      await ensureRecap(target);
     }
     expect(view(target)?.text).toBe(result.text);
     expect(complete).toHaveBeenCalledTimes(2);
   });
 
-  it("queues a full Activity page and reports admission limits until a slot settles", async () => {
+  it.for(["success", "error"] as const)(
+    "retains recap slots and shutdown ownership after logical %s until physical settlement",
+    async (outcome, { signal }) => {
+      const targets = await Promise.all([addSession(1), addSession(2), addSession(3)]);
+      const logical = createDeferred();
+      const occupied = createDeferred();
+      const reused = createDeferred();
+      const initialOutcomes = createDeferred();
+      const thirdOutcome = createDeferred();
+      const settled = new Set<string>();
+      const finish: Array<() => void> = [];
+      const released = vi.fn();
+      let active = 0;
+      let maximumActive = 0;
+      let disposed = false;
+      let disposal: Promise<void> | undefined;
+      changed.mockImplementation((target: ActivitySummaryTarget) => {
+        if (view(target)?.state !== (outcome === "success" ? "current" : "unavailable")) {
+          return;
+        }
+        settled.add(target.key);
+        if (settled.size === 2) {
+          initialOutcomes.resolve();
+        }
+        if (target.key === targets[2]!.key) {
+          thirdOutcome.resolve();
+        }
+      });
+      complete.mockImplementation(() =>
+        runWithAsyncWorkResources(async (onAcquired) => {
+          onAcquired({ release: released });
+          const physical = createDeferred();
+          finish.push(physical.resolve);
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+          void trackAsyncWork(() =>
+            physical.promise.finally(() => {
+              active -= 1;
+            }),
+          );
+          if (finish.length === 2) {
+            occupied.resolve();
+          } else if (finish.length === 3) {
+            reused.resolve();
+          }
+          await logical.promise;
+          if (outcome === "error") {
+            throw new Error("Logical recap ended before tracked cleanup");
+          }
+          return result;
+        }),
+      );
+      try {
+        for (const target of targets) {
+          await ensureRecap(target);
+        }
+        await withinTest(occupied.promise, signal);
+        expect(complete).toHaveBeenCalledTimes(2);
+        logical.resolve();
+        await withinTest(initialOutcomes.promise, signal);
+        await nextTurn();
+        expect(complete).toHaveBeenCalledTimes(2);
+        expect(active).toBe(2);
+        expect(released).not.toHaveBeenCalled();
+
+        finish[0]!();
+        await withinTest(reused.promise, signal);
+        expect(complete).toHaveBeenCalledTimes(3);
+        expect(active).toBe(2);
+        expect(maximumActive).toBe(2);
+        expect(released).toHaveBeenCalledOnce();
+        await withinTest(thirdOutcome.promise, signal);
+        disposal = service.dispose().then(() => {
+          disposed = true;
+        });
+        await nextTurn();
+        expect(disposed).toBe(false);
+      } finally {
+        disposal ??= service.dispose();
+        logical.resolve();
+        for (const release of finish) {
+          release();
+        }
+        await withinTest(disposal, signal);
+        expect(active).toBe(0);
+        expect(released).toHaveBeenCalledTimes(finish.length);
+      }
+    },
+  );
+
+  it("queues a full Activity page and reports admission limits until a slot settles", async ({
+    signal,
+  }) => {
     const targets: ActivitySummaryTarget[] = [];
     for (let index = 0; index < 257; index += 1) {
       targets.push(await addSession(index));
     }
     const overflow = targets[256]!;
-    service.ensure(overflow);
-    await vi.waitFor(() => expect(view(overflow)?.state).toBe("current"));
+    const initial = createDeferred();
+    changed.mockImplementation(() => {
+      if (view(overflow)?.state === "current") {
+        initial.resolve();
+      }
+    });
+    await ensureRecap(overflow);
+    await withinTest(initial.promise, signal);
+    expect(view(overflow)?.state).toBe("current");
     await service.dispose();
     service = createService();
     complete.mockClear();
     const first = createDeferred<typeof result>();
     const remaining = createDeferred<typeof result>();
+    const slotsOccupied = createDeferred();
+    const slotReused = createDeferred();
     const drained = createDeferred();
     const completed = new Set<string>();
     changed.mockImplementation((target: ActivitySummaryTarget) => {
@@ -513,7 +711,14 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     });
     complete
       .mockImplementationOnce(() => first.promise)
-      .mockImplementation(() => remaining.promise);
+      .mockImplementationOnce(() => {
+        slotsOccupied.resolve();
+        return remaining.promise;
+      })
+      .mockImplementation(() => {
+        slotReused.resolve();
+        return remaining.promise;
+      });
     const context = createDirectChatContext({
       getRuntimeConfig: () => cfg,
       sessionActivitySummaries: service,
@@ -535,7 +740,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       for (let index = 0; index < 100; index += 20) {
         await ensure(targets.slice(index, index + 20));
       }
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+      await withinTest(slotsOccupied.promise, signal);
+      expect(complete).toHaveBeenCalledTimes(2);
       expect(targets.slice(0, 100).map((target) => view(target)?.state)).toEqual(
         Array.from({ length: 100 }, () => "updating"),
       );
@@ -576,7 +782,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       });
       expect(complete).toHaveBeenCalledTimes(2);
       first.resolve(result);
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(3));
+      await withinTest(slotReused.promise, signal);
+      expect(complete).toHaveBeenCalledTimes(3);
       await ensure([overflow]);
       expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
         sessions: [
@@ -587,12 +794,14 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         ],
       });
       remaining.resolve(result);
-      await drained.promise;
+      await withinTest(drained.promise, signal);
       expect(targets.every((target) => view(target)?.state === "current")).toBe(true);
       expect(complete).toHaveBeenCalledTimes(257);
     } finally {
+      const disposal = service.dispose();
       first.resolve(result);
       remaining.resolve(result);
+      await disposal;
     }
   });
 
@@ -626,17 +835,17 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     "retries $name automatically and retains cached text without rebilling repeated ensure requests",
     async ({ error, delay }) => {
       const target = await addSession(1);
-      service.ensure(target);
+      await ensureRecap(target);
       await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
       await appendWork(target);
       fakeTime();
       complete.mockRejectedValueOnce(error);
-      service.ensure(target);
+      await ensureRecap(target);
       await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
       await vi.advanceTimersByTimeAsync(0);
       const failedAt = Date.now();
       for (let index = 0; index < 20; index += 1) {
-        service.ensure(target);
+        await ensureRecap(target);
       }
       expect(view(target)).toMatchObject({ state: "updating", text: result.text });
       await vi.advanceTimersByTimeAsync(delay - 1_000);
@@ -648,15 +857,22 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     },
   );
 
-  it("pauses the overloaded model while serving another model, then retries at the queue tail", async () => {
+  it("pauses the overloaded model while serving another model, then retries at the queue tail", async ({
+    signal,
+  }) => {
     const first = await addSession(1);
     const next = await addSession(2);
     const blocker = await addSession(3, "healthy");
     const healthy = await addSession(4, "healthy");
-    cfg.agents!.list = [{ id: "main" }, { id: "healthy", utilityModel: "test/other" }];
+    cfg.agents!.entries = { main: {}, healthy: { utilityModel: "test/other" } };
     const failure = createDeferred<typeof result>();
     const release = createDeferred<typeof result>();
     const started = createDeferred();
+    // Initial parallel reads can reach the model callbacks in either order.
+    const initialCalls = new Map([
+      ["utility", failure],
+      ["other", release],
+    ]);
     const healthyReady = createDeferred();
     const retried = createDeferred();
     const completed = new Set<string>();
@@ -672,75 +888,92 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         retried.resolve();
       }
     });
-    complete
-      .mockImplementationOnce(() => failure.promise)
-      .mockImplementationOnce(() => {
+    complete.mockImplementation(({ model }) => {
+      const initial = initialCalls.get(model);
+      if (!initial) {
+        return Promise.resolve(result);
+      }
+      initialCalls.delete(model);
+      if (initialCalls.size === 0) {
         started.resolve();
-        return release.promise;
-      });
+      }
+      return initial.promise;
+    });
     fakeTime();
     try {
-      service.ensure(first);
-      service.ensure(blocker);
-      await started.promise;
+      await ensureRecap(first);
+      await ensureRecap(blocker);
+      await withinTest(started.promise, signal);
       expect(complete).toHaveBeenCalledTimes(2);
-      service.ensure(next);
-      service.ensure(healthy);
+      await ensureRecap(next);
+      await ensureRecap(healthy);
       failure.reject(Object.assign(new Error("Overloaded"), { status: 529 }));
-      await healthyReady.promise;
+      await withinTest(healthyReady.promise, signal);
       expect(view(healthy)?.state).toBe("current");
       expect(complete).toHaveBeenCalledTimes(3);
       expect(view(first)?.state).toBe("updating");
       expect(view(next)?.state).toBe("updating");
       release.resolve(result);
       await vi.advanceTimersByTimeAsync(30_000);
-      await retried.promise;
+      await withinTest(retried.promise, signal);
       expect(view(first)?.state).toBe("current");
       expect(view(next)?.state).toBe("current");
-      expect(
-        complete.mock.calls.map(([request]) => JSON.parse(request.prompt).messages[0]),
-      ).toEqual([
-        "user: Request 1",
-        "user: Request 3",
-        "user: Request 4",
-        "user: Request 2",
-        "user: Request 1",
-      ]);
+      const requests = complete.mock.calls.map(
+        ([request]) => JSON.parse(request.prompt).messages[0],
+      );
+      expect(requests.slice(0, 2)).toEqual(
+        expect.arrayContaining(["user: Request 1", "user: Request 3"]),
+      );
+      expect(requests.slice(2)).toEqual(["user: Request 4", "user: Request 2", "user: Request 1"]);
     } finally {
+      const disposal = service.dispose();
       failure.resolve(result);
       release.resolve(result);
+      await disposal;
     }
   });
 
-  it.each(["ensure", "new transcript"] as const)(
-    "stops after bounded retries and starts a fresh retry chain for %s after cooldown",
-    async (trigger) => {
-      const target = await addSession(1);
-      fakeTime();
-      complete.mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
-      service.ensure(target);
-      for (let attempt = 1; attempt <= 4; attempt += 1) {
-        await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(attempt));
-        await vi.advanceTimersByTimeAsync(attempt < 4 ? 30_000 * 2 ** (attempt - 1) : 0);
-      }
-      expect(view(target)?.state).toBe("unavailable");
-      await vi.advanceTimersByTimeAsync(3_600_000);
-      expect(complete).toHaveBeenCalledTimes(4);
-      complete
-        .mockResolvedValue(result)
-        .mockRejectedValueOnce(Object.assign(new Error("Overloaded again"), { status: 529 }));
-      if (trigger === "ensure") {
-        service.ensure(target);
-      } else {
-        await appendWork(target);
-        service.handleTranscript({ target: scope(target) });
-      }
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(5));
-      await vi.advanceTimersByTimeAsync(120_000);
-      await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
-      expect(complete).toHaveBeenCalledTimes(6);
-    },
-  );
+  it("stops after bounded retries and starts a fresh retry chain for new work after cooldown", async ({
+    signal,
+  }) => {
+    await service.dispose();
+    await scheduler.stop();
+    const time = createGatewaySchedulerClock(Date.now());
+    let retryArmed = createDeferred();
+    scheduler = createTestGatewayScheduler({
+      ...time.clock,
+      arm(run, delayMs) {
+        const cancel = time.clock.arm(run, delayMs);
+        retryArmed.resolve();
+        return cancel;
+      },
+    });
+    service = createService();
+    const target = await addSession(1);
+    fakeTime();
+    complete.mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
+    await ensureRecap(target);
+    await withinTest(retryArmed.promise, signal);
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      expect(complete).toHaveBeenCalledTimes(attempt);
+      // Join each scheduled attempt through retry admission before moving the clock.
+      await time.advanceBy(attempt < 4 ? 30_000 * 2 ** (attempt - 1) : 0);
+    }
+    expect(view(target)?.state).toBe("unavailable");
+    await time.advanceBy(3_600_000);
+    expect(complete).toHaveBeenCalledTimes(4);
+    complete
+      .mockResolvedValue(result)
+      .mockRejectedValueOnce(Object.assign(new Error("Overloaded again"), { status: 529 }));
+    retryArmed = createDeferred();
+    await appendWork(target);
+    service.handleTranscript({ target: scope(target) });
+    await withinTest(retryArmed.promise, signal);
+    expect(complete).toHaveBeenCalledTimes(5);
+    await time.advanceBy(120_000);
+    expect(view(target)?.state).toBe("current");
+    expect(complete).toHaveBeenCalledTimes(6);
+  });
 
   it.each([
     Object.assign(new Error("Invalid API key"), { status: 401 }),
@@ -753,7 +986,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     const target = await addSession(1);
     fakeTime();
     complete.mockRejectedValue(error);
-    service.ensure(target);
+    await ensureRecap(target);
     await vi.waitFor(() => expect(view(target)?.state).toBe("unavailable"));
     await vi.advanceTimersByTimeAsync(3_600_000);
     expect(complete).toHaveBeenCalledTimes(1);
@@ -763,7 +996,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     const target = await addSession(1);
     fakeTime();
     complete.mockRejectedValueOnce(Object.assign(new Error("Overloaded"), { status: 529 }));
-    service.ensure(target);
+    await ensureRecap(target);
     await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
     await vi.advanceTimersByTimeAsync(0);
     if (action === "delete") {

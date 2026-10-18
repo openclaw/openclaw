@@ -57,9 +57,6 @@ import { createCommandTerminationController } from "./exec-termination.js";
 import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 
-const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
-const WINDOWS_CLOSE_STATE_POLL_MS = 10;
-
 type CommandTerminationReason = SpawnResult["termination"] | "output-limit";
 
 export type CommandOptions = {
@@ -123,6 +120,14 @@ export async function runCommandBuffersWithTimeout(
   optionsOrTimeout: number | CommandOptions,
 ): Promise<BufferSpawnResult> {
   return await runCommandWithOutputEncoding(argv, optionsOrTimeout, false, true);
+}
+
+/** Retain raw bytes with UTF-8 capture boundaries, independent of the Windows console page. */
+export async function runUtf8CommandBuffersWithTimeout(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+): Promise<BufferSpawnResult> {
+  return await runCommandWithOutputEncoding(argv, optionsOrTimeout, true, true);
 }
 
 async function runCommandWithOutputEncoding(
@@ -623,27 +628,6 @@ async function runCommandWithOutputEncoding(
     !result.isCanceled &&
     !result.isMaxBuffer &&
     !result.isTerminated;
-  if (isCauseLessWindowsShimResult) {
-    // A patched Windows runtime can populate exitCode shortly after close.
-    // Settle that state before the shim fallback can infer a clean exit.
-    for (
-      let elapsedMs = 0;
-      elapsedMs < WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS;
-      elapsedMs += WINDOWS_CLOSE_STATE_POLL_MS
-    ) {
-      if (
-        childExitState?.code != null ||
-        childExitState?.signal != null ||
-        nodeChild.exitCode != null ||
-        nodeChild.signalCode != null
-      ) {
-        break;
-      }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, WINDOWS_CLOSE_STATE_POLL_MS);
-      });
-    }
-  }
   if (
     result.failed &&
     !termination &&

@@ -265,15 +265,10 @@ export function publishPreparedPluginGeneration(
           "Prepared model runtime plugin generation retired",
         );
         owner.pluginGeneration = undefined;
-        const retiredGatewayLoan = [...instances].some(
-          (instance) =>
-            !instance.acceptingCalls &&
-            instance.owner !== undefined &&
-            gatewayLenders.has(instance.owner.registry),
-        );
-        log.debug(
-          `Prepared plugin publication retired: metadataCacheRetired=${cacheSignal.aborted}, provenance=${owner.provenance}, pending=${Boolean(owner.pending)}, gatewayLoan=${retiredGatewayLoan}`,
-        );
+        const retiredGatewayLoan = [...instances].some((instance) => {
+          const registry = instance.owner?.registry;
+          return !instance.acceptingCalls && registry !== undefined && gatewayLenders.has(registry);
+        });
         releasePreparedPluginPublication(owner);
         // Independent prepared instances and metadata caches retain their terminal
         // retirement contract; only a lost Gateway loan needs process publication.

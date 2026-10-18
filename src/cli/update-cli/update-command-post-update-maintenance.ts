@@ -56,9 +56,7 @@ export async function preparePostUpdateService(
       );
       assertCurrent();
       params.preManagedServiceStop = stopped;
-      if (restartRequired) {
-        params.shouldRestart = true;
-      }
+      params.shouldRestart ||= restartRequired;
     }
   } catch (error) {
     if (

@@ -1,5 +1,3 @@
-// Gateway operator scope constants.
-// Defines the closed set accepted by connection auth and method policy.
 export const ADMIN_SCOPE = "operator.admin" as const;
 export const READ_SCOPE = "operator.read" as const;
 export const WRITE_SCOPE = "operator.write" as const;
@@ -24,7 +22,6 @@ const KNOWN_OPERATOR_SCOPE_VALUES = [
   TALK_SECRETS_SCOPE,
 ] as const;
 
-/** Operator privileges advertised by gateway auth and checked by method policy. */
 export type OperatorScope = (typeof KNOWN_OPERATOR_SCOPE_VALUES)[number];
 
 const KNOWN_OPERATOR_SCOPES: ReadonlySet<string> = new Set(KNOWN_OPERATOR_SCOPE_VALUES);
@@ -41,7 +38,6 @@ export function isOperatorScope(value: unknown): value is OperatorScope {
   return typeof value === "string" && KNOWN_OPERATOR_SCOPES.has(value);
 }
 
-/** Filters unknown strings down to unique operator scopes; undefined stays undefined. */
 export function normalizeOperatorScopeList(
   scopes: string[] | undefined,
 ): OperatorScope[] | undefined {

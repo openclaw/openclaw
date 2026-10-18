@@ -22,8 +22,8 @@ class ImageProcessorUnavailableError extends Error {
   readonly operation: string;
   readonly causes: unknown[];
 
-  constructor(operation: string, message?: string, causes: unknown[] = []) {
-    super(message ?? `Image processor unavailable for ${operation}`, {
+  constructor(operation: string, message: string, causes: unknown[]) {
+    super(message, {
       cause: causes.find((cause): cause is Error => cause instanceof Error),
     });
     this.name = "ImageProcessorUnavailableError";
@@ -142,6 +142,37 @@ async function encodeImage(
     }
     throw error;
   }
+}
+
+const WITHIN_BYTES_QUALITY_STEPS = [92, 85, 78, 70, 62, 52, 42] as const;
+const WITHIN_BYTES_SIDE_SCALES = [1, 0.85, 0.7, 0.5, 0.35, 0.25] as const;
+
+/**
+ * Re-encodes a still image under `maxBytes`, keeping its dimensions while any quality step fits.
+ * Opaque images become JPEG; transparent images stay PNG and shrink instead of losing alpha.
+ * Returns the smallest candidate with `withinBudget: false` when nothing fits.
+ */
+export async function encodeImageWithinBytes(
+  buffer: Buffer,
+  maxBytes: number,
+): Promise<EncodedImage> {
+  const meta = readImageMetadataFromHeader(buffer);
+  const longSide = meta ? Math.max(meta.width, meta.height) : 0;
+  const sides = [
+    ...new Set(WITHIN_BYTES_SIDE_SCALES.map((scale) => Math.round(longSide * scale))),
+  ].filter((side) => side > 0);
+  return await encodeImage(
+    buffer,
+    {
+      format: "auto",
+      maxBytes,
+      opaque: { format: "jpeg" },
+      transparent: { format: "png" },
+      transparency: "preserve",
+      search: { ...(sides.length ? { maxSide: sides } : {}), quality: WITHIN_BYTES_QUALITY_STEPS },
+    },
+    "encodeImageWithinBytes",
+  );
 }
 
 export async function convertImageToJpeg(buffer: Buffer): Promise<Buffer> {

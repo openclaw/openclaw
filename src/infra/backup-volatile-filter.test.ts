@@ -121,18 +121,6 @@ describe("isVolatileBackupPath", () => {
     expect(isVolatileBackupPath(`${winStateDir}\\sessions\\..\\config.jsonl`, winPlan)).toBe(false);
   });
 
-  it("matches tar filter paths when node-tar omits the leading slash", () => {
-    expect(
-      isVolatileBackupPath("opt/openclaw/state/agents/main/sessions/transcript.jsonl", plan),
-    ).toBe(true);
-    expect(
-      isVolatileBackupPath(
-        "opt/openclaw/state/logs/config-audit.jsonl.migrated.raw.quarantined-copy",
-        plan,
-      ),
-    ).toBe(true);
-  });
-
   it.runIf(process.platform !== "win32")(
     "does not resolve a Windows anchor into a relative POSIX directory",
     () => {

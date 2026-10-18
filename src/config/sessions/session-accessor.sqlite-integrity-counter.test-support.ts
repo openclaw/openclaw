@@ -1,4 +1,6 @@
-import type { WorkerOptions } from "node:worker_threads";
+import type { Worker, WorkerOptions } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createDeferred } from "../../../test/helpers/promise.js";
 
 const integrityCounterPreload = `
   import { DatabaseSync } from "node:sqlite";
@@ -11,7 +13,11 @@ const integrityCounterPreload = `
   const prepare = DatabaseSync.prototype.prepare;
   DatabaseSync.prototype.prepare = function(sql) {
     const statement = prepare.call(this, sql);
-    if (this.location() === databasePath &&
+    const pathControl = workerData.integrityPathControl;
+    const targetPath = pathControl
+      ? Buffer.from(pathControl).toString("utf8", 4, 4 + Atomics.load(new Int32Array(pathControl, 0, 1), 0))
+      : databasePath;
+    if (this.location() === targetPath &&
         (/^PRAGMA integrity_check;?$/i.test(sql.trim()) ||
          sql.trim() === "PRAGMA integrity_check('sqlite_schema');")) {
       for (const method of ["all", "get", "iterate", "run"]) {
@@ -50,6 +56,7 @@ export function withWorkerSqliteIntegrityCounter(
   release?: SharedArrayBuffer,
   databasePath?: string,
   firstCheck?: SharedArrayBuffer,
+  pathControl?: SharedArrayBuffer,
 ): WorkerOptions | undefined {
   return counts
     ? {
@@ -65,7 +72,88 @@ export function withWorkerSqliteIntegrityCounter(
           ...(databasePath ? { integrityDatabasePath: databasePath } : {}),
           ...(release ? { integrityRelease: release } : {}),
           ...(firstCheck ? { integrityFirstCheck: firstCheck } : {}),
+          ...(pathControl ? { integrityPathControl: pathControl } : {}),
         },
       }
     : options;
+}
+
+/** Arm after fixture preparation, including when the executor is already retained. */
+export function createWorkerSqliteIntegrityGate(databasePath = "") {
+  const counts = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const release = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const firstCheck = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  // Retained workers must see the next case's target without another constructor/preload.
+  const pathControl = new SharedArrayBuffer(4 + 4096);
+  Atomics.store(new Int32Array(firstCheck), 0, 1);
+  let entered = createDeferred();
+  const workers = new Set<Worker>();
+  const setTargetPath = (targetPath: string) => {
+    const encoded = Buffer.from(targetPath);
+    if (encoded.length > pathControl.byteLength - 4) {
+      throw new Error("Integrity gate path exceeds the fixture buffer");
+    }
+    new Uint8Array(pathControl, 4).set(encoded);
+    Atomics.store(new Int32Array(pathControl, 0, 1), 0, encoded.length);
+  };
+  setTargetPath(databasePath);
+  return {
+    get entered() {
+      return entered.promise;
+    },
+    workers,
+    arm(targetPath = databasePath) {
+      setTargetPath(targetPath);
+      entered = createDeferred();
+      Atomics.store(new Int32Array(counts), 0, 0);
+      Atomics.store(new Int32Array(release), 0, 0);
+      Atomics.store(new Int32Array(firstCheck), 0, 0);
+    },
+    count: () => Atomics.load(new Int32Array(counts), 0),
+    release: () => {
+      Atomics.store(new Int32Array(release), 0, 1);
+      Atomics.notify(new Int32Array(release), 0);
+    },
+    options: (options?: WorkerOptions) =>
+      withWorkerSqliteIntegrityCounter(
+        options,
+        counts,
+        release,
+        databasePath,
+        firstCheck,
+        pathControl,
+      ),
+    message(worker: Worker, message: unknown) {
+      if (!isRecord(message) || message.type !== "test-integrity-check") {
+        return false;
+      }
+      workers.add(worker);
+      if (message.phase === "checking" && message.held === true) {
+        entered.resolve();
+      }
+      return true;
+    },
+  };
+}
+
+export function observeWorkerSqliteIntegrity(
+  WorkerConstructor: typeof Worker,
+  currentGate: () => ReturnType<typeof createWorkerSqliteIntegrityGate> | undefined,
+): typeof Worker {
+  return class extends WorkerConstructor {
+    private readonly integrityGate: ReturnType<typeof currentGate>;
+
+    constructor(filename: string | URL, options?: WorkerOptions) {
+      const gate = currentGate();
+      super(filename, gate?.options(options) ?? options);
+      this.integrityGate = gate;
+    }
+
+    override emit(event: string | symbol, ...args: unknown[]): boolean {
+      if (event === "message" && this.integrityGate?.message(this, args[0])) {
+        return true;
+      }
+      return super.emit(event, ...args);
+    }
+  };
 }

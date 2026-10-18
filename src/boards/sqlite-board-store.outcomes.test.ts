@@ -2,18 +2,20 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import {
+  failSqliteWorkerSlot,
   receiveSqliteWorkerReply,
-  settleFailedSqliteWorkerJobs,
   settleSqliteWorkerJob,
   withSqliteWorkerCleanupFailure,
 } from "../infra/sqlite-worker-broker-reply.js";
-import type { Job } from "../infra/sqlite-worker-broker.types.js";
+import type { Actor, Job } from "../infra/sqlite-worker-broker.types.js";
 import {
   isSqliteWorkerError,
   SqliteWorkerError,
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-contract.js";
+import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -98,10 +100,15 @@ function fixture() {
 async function receiveExecutedFailure(retire: boolean) {
   const rejected = createDeferredCore<unknown>();
   const events: string[] = [];
+  const custody = new SqliteWorkerSlotCustody();
+  const requestCustody = custody.createRequest();
+  requestCustody.activate();
+  requestCustody.accept();
   const job: Job = {
+    custody: requestCustody,
+    observation: { started() {}, completed() {} },
     request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
     bytes: 0,
-    nativeDispatched: true,
     settleNative: (settlement) => events.push(`settled:${settlement.kind}`),
     resolve: () => rejected.reject(new Error("Failure reply unexpectedly resolved")),
     reject: (error) => {
@@ -110,8 +117,12 @@ async function receiveExecutedFailure(retire: boolean) {
     },
     detach() {},
   };
-  const slot: Parameters<typeof receiveSqliteWorkerReply>[0] = {
+  const slot: Parameters<typeof receiveSqliteWorkerReply>[0] &
+    Parameters<typeof failSqliteWorkerSlot>[0] = {
+    custody,
+    actors: new Set<Actor>(),
     current: job,
+    queue: [],
     worker: {
       postMessage() {
         throw new Error("A failure reply must not request another result frame");
@@ -133,20 +144,11 @@ async function receiveExecutedFailure(retire: boolean) {
       },
     },
     {
-      fail(reason, currentError, openOutcome) {
-        if (!(reason instanceof Error)) {
-          throw new Error("Expected a decoded worker error");
-        }
-        const current = slot.current;
-        slot.current = undefined;
-        slot.failed = new SqliteWorkerError(reason.message, "unavailable");
-        settleFailedSqliteWorkerJobs({
-          queuedError: slot.failed,
-          current,
-          queued: [],
-          error: reason,
+      fail(reason, currentError, openOutcome, completed) {
+        failSqliteWorkerSlot(slot, reason, {
           currentError,
           openOutcome,
+          completed,
           retire: async () => {
             events.push("retired");
           },
@@ -207,11 +209,11 @@ it("relays a committed Board outcome after revocation without failing on client 
   boundary.close.mockRejectedValue(new Error("Client cleanup failed after committed publication"));
   await expect(
     store.putWidget(params, {
-      assertCurrent() {
+      assertCurrent: composeSessionSourceAssertion([], () => {
         if (!current) {
           throw new Error("Board request revoked during committed delivery");
         }
-      },
+      }),
     }),
   ).resolves.toBe(committed);
   expect(changes).toEqual([change]);

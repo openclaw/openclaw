@@ -1,8 +1,4 @@
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-/**
- * Subscribes to embedded-agent sessions and streams formatted replies/events.
- */
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -13,19 +9,17 @@ import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { MAX_MESSAGING_HISTORY_ENTRIES } from "./embedded-agent-messaging-history.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import { installToolAuthoredSourceReplyTerminalHook } from "./embedded-agent-runner/run/message-tool-terminal.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import { cleanupRunToolStartData } from "./embedded-agent-subscribe.handlers.tools.js";
-import type {
-  EmbeddedAgentSubscribeContext,
-  EmbeddedAgentSubscribeState,
-} from "./embedded-agent-subscribe.handlers.types.js";
+import { cleanupRunToolStartData } from "./embedded-agent-subscribe.handlers.tools.start.js";
+import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createEmbeddedModelState } from "./embedded-agent-subscribe.model-state.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
-import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
+import { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
 import { createEmbeddedToolLifecycleRunner } from "./embedded-agent-subscribe.tool-lifecycle.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
@@ -33,7 +27,11 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
-import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
+import {
+  createAssistantStreamBlockState,
+  stripDowngradedToolCallText,
+} from "./embedded-agent-utils.js";
+import { sessionManagerReadTranscriptStart } from "./sessions/session-manager-current-turn.js";
 import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
@@ -46,11 +44,34 @@ function resolveEmbeddedAgentSessionLogger(messageChannel?: string) {
   return embeddedLog;
 }
 
-export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
+export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessionParams) {
+  let params = input;
+  const onAgentEvent = params.onAgentEvent;
+  if (onAgentEvent) {
+    let transcriptStartPublished = false;
+    const sessionManager = params.session.sessionManager;
+    params = {
+      ...params,
+      onAgentEvent: (event) => {
+        if (
+          transcriptStartPublished ||
+          (event.stream === "lifecycle" && typeof event.data.phase !== "string")
+        ) {
+          return onAgentEvent(event);
+        }
+        const transcriptStart = sessionManager[sessionManagerReadTranscriptStart]();
+        transcriptStartPublished = true;
+        return onAgentEvent({
+          ...event,
+          transcriptStart,
+        });
+      },
+    };
+  }
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
-  const state: EmbeddedAgentSubscribeState = createEmbeddedAgentSubscribeState(params);
+  const state = new EmbeddedAgentSubscribeState(params);
   const {
     captureModelEvent,
     recordAuxiliaryUsage,
@@ -70,6 +91,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const messagingToolSentTargets = state.messagingToolSentTargets;
   const messagingToolSentMediaUrls = state.messagingToolSentMediaUrls;
   const messagingToolSourceReplyPayloads = state.messagingToolSourceReplyPayloads;
+  const didSendViaMessagingTool = () =>
+    hasCommittedMessagingToolDeliveryEvidence({
+      messagingToolSentTexts,
+      messagingToolSentMediaUrls,
+      messagingToolSentTargets,
+    });
   const replyDelivery = createReplyDelivery({ params, state, log });
   const {
     clearAssistantStream,
@@ -156,16 +183,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     typeof params.shouldEmitToolOutput === "function"
       ? params.shouldEmitToolOutput()
       : params.verboseLevel === "full";
-  const formatToolOutputBlock = (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) {
-      return "(no output)";
-    }
-    if (!useMarkdown) {
-      return trimmed;
-    }
-    return `\`\`\`txt\n${trimmed}\n\`\`\``;
-  };
   const emitToolResultMessage = (
     toolName: string | undefined,
     message: string,
@@ -189,11 +206,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       params.sourceReplyDeliveryMode === "message_tool_only" &&
       parsed.text &&
       filteredMediaUrls.length === 0 &&
-      hasCommittedMessagingToolDeliveryEvidence({
-        messagingToolSentTexts,
-        messagingToolSentMediaUrls,
-        messagingToolSentTargets,
-      })
+      didSendViaMessagingTool()
     ) {
       return;
     }
@@ -229,7 +242,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
       markdown: useMarkdown,
     });
-    const message = `${agg}\n${formatToolOutputBlock(output)}`;
+    const trimmed = output.trim();
+    const formattedOutput = trimmed
+      ? useMarkdown
+        ? `\`\`\`txt\n${trimmed}\n\`\`\``
+        : trimmed
+      : "(no output)";
+    const message = `${agg}\n${formattedOutput}`;
     emitToolResultMessage(toolName, message, result);
   };
 
@@ -248,16 +267,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const resetForCompactionRetry = () => {
     state.hadDeterministicSideEffect =
       state.hadDeterministicSideEffect === true ||
-      hasCommittedMessagingToolDeliveryEvidence({
-        messagingToolSentTexts,
-        messagingToolSentMediaUrls,
-        messagingToolSentTargets,
-      }) ||
+      didSendViaMessagingTool() ||
       state.successfulCronAdds > 0 ||
       state.acceptedSessionSpawns.length > 0 ||
       state.visibleBlockReplyCount > 0;
     assistantTexts.length = 0;
     state.answerSegments.length = 0;
+    state.inputAnswer = undefined;
+    state.keptAnswer = undefined;
     state.lastAssistant = undefined;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextContentIndex = undefined;
@@ -296,26 +313,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
+    state.lastReasoningSent = undefined;
     state.toolExecutionSinceLastBlockReply = false;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
     streamRendering.resetAssistantMessageState(0);
   };
-
-  // Re-filter the full raw buffer. Reusing live scanner state would hide the
-  // visible prefix when timeout interrupts an open <think> or <final> block.
-  const finalizeFlushedAssistantText = (text: string) =>
-    stripDowngradedToolCallText(
-      streamRendering.stripBlockTags(
-        text,
-        {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
-        { final: true },
-      ),
-    ).trimEnd();
 
   // Settlement calls this only for the final, failure-free run-budget terminal.
   // Retain and re-filter the full buffer so queued suffixes keep hidden-tag
@@ -329,7 +332,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.hasFlushedPartialText = false;
       return;
     }
-    const visibleText = finalizeFlushedAssistantText(text);
+    // Re-filter the full raw buffer; live scanner state may hide an interrupted prefix.
+    const visibleText = stripDowngradedToolCallText(
+      streamRendering.stripBlockTags(text, createAssistantStreamBlockState(), { final: true }),
+    ).trimEnd();
     if (assistantTexts.length > state.assistantTextBaseline || state.hasFlushedPartialText) {
       replyDelivery.replaceCurrentAssistantText(visibleText);
     } else if (visibleText) {
@@ -377,6 +383,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
 
+  const removeSourceReplyTerminalHook = installToolAuthoredSourceReplyTerminalHook({
+    agent: params.session.agent,
+    sourceReplyCapableToolNames: params.sourceReplyCapableToolNames,
+    idempotencyScope: params.runId,
+    onSourceReplies: (payloads) => {
+      state.messagingToolSourceReplyPayloads.push(...payloads);
+    },
+  });
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedAgentSessionEventHandler(ctx));
   setSessionModelUsageSink(params.session.sessionManager, recordAuxiliaryUsage);
 
@@ -387,13 +401,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // Mark as unsubscribed FIRST to prevent waitForCompactionRetry from creating
     // new un-resolvable promises during teardown.
     state.unsubscribed = true;
+    removeSourceReplyTerminalHook();
     clearAssistantStream();
     cleanupRunToolStartData(params.runId);
     state.liveEditDiffStateById.clear();
     // Reject pending compaction wait to unblock awaiting code.
     // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
     if (compactionRetry) {
-      log.debug(`unsubscribe: rejecting compaction wait runId=${params.runId}`);
       const { reject } = compactionRetry;
       compactionRetry = undefined;
       reject(createAbortError("Unsubscribed during compaction"));
@@ -401,7 +415,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // Cancel any in-flight compaction to prevent resource leaks when unsubscribing.
     // Only abort if compaction is actually running to avoid unnecessary work.
     if (params.session.isCompacting) {
-      log.debug(`unsubscribe: aborting in-flight compaction runId=${params.runId}`);
       try {
         params.session.abortCompaction();
       } catch (err) {
@@ -416,6 +429,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     assistantTexts,
     answerSegments: state.answerSegments,
     getCurrentAttemptAssistant,
+    getKeptAnswer: () => state.keptAnswer,
     hasSuccessfulModelResponse,
     getLastAssistantTextMessageIndex: () =>
       state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
@@ -436,25 +450,25 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       providerStarted?: boolean;
       aborted?: boolean;
     }) => {
-      if (typeof meta.replayInvalid === "boolean") {
+      if (meta.replayInvalid !== undefined) {
         state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
       }
       if (meta.livenessState) {
         state.livenessState = meta.livenessState;
       }
-      if (typeof meta.stopReason === "string") {
+      if (meta.stopReason !== undefined) {
         state.terminalStopReason = meta.stopReason;
       }
-      if (typeof meta.yielded === "boolean") {
+      if (meta.yielded !== undefined) {
         state.yielded = meta.yielded;
       }
       if (meta.timeoutPhase) {
         state.timeoutPhase = meta.timeoutPhase;
       }
-      if (typeof meta.providerStarted === "boolean") {
+      if (meta.providerStarted !== undefined) {
         state.providerStarted = meta.providerStarted;
       }
-      if (typeof meta.aborted === "boolean") {
+      if (meta.aborted !== undefined) {
         state.terminalAborted = meta.aborted;
       }
     },
@@ -478,12 +492,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // Returns true if any messaging tool successfully sent a message.
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.
-    didSendViaMessagingTool: () =>
-      hasCommittedMessagingToolDeliveryEvidence({
-        messagingToolSentTexts,
-        messagingToolSentMediaUrls,
-        messagingToolSentTargets,
-      }),
+    didSendViaMessagingTool,
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,

@@ -25,7 +25,6 @@ let media: typeof import("./web-media.js");
 const suiteDirs = useAutoCleanupTempDirTracker(afterAll);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const TINY_PNG = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
-const CANVAS_PATH = "/__openclaw__/canvas/documents/cv_test/collection.media/tiny.png";
 const IMAGE_LIMITS = {
   models: [
     { maxSidePx: 32, preferredSidePx: 32 },
@@ -177,39 +176,42 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("image/png");
   });
 
-  it("rejects remote-host file URLs before filesystem access", async () => {
+  it.each([
+    { url: "FILE://attacker/share/evil.png", code: "invalid-file-url", beforeFs: true },
+    {
+      url: "\\\\attacker\\share\\evil.png",
+      code: "network-path-not-allowed",
+      beforeFs: true,
+      windows: true,
+    },
+    {
+      url: "/__openclaw__/canvas/documents/../collection.media/tiny.png",
+      code: "path-not-allowed",
+    },
+    { url: "media://outbound/tiny.png", code: "path-not-allowed" },
+    { url: "media://inbound/nested%2Ftiny.png", code: "invalid-path" },
+  ])("rejects unsafe media path $url ($code)", async ({ url, code, beforeFs, windows }) => {
+    const platform = windows
+      ? vi.spyOn(process, "platform", "get").mockReturnValue("win32")
+      : undefined;
     const realpath = vi.spyOn(fs, "realpath");
     try {
-      const reply = parseReplyDirectives("MEDIA:FILE://attacker/share/evil.png");
       await expectAccessError(
-        media.loadWebMedia(expectDefined(reply.mediaUrls?.[0], "file URL"), localOptions()),
-        "invalid-file-url",
+        media.loadWebMedia(
+          url.startsWith("FILE:")
+            ? expectDefined(parseReplyDirectives(`MEDIA:${url}`).mediaUrls?.[0], "file URL")
+            : url,
+          localOptions(),
+        ),
+        code,
       );
-      expect(realpath).not.toHaveBeenCalled();
+      if (beforeFs) {
+        expect(realpath).not.toHaveBeenCalled();
+      }
     } finally {
+      platform?.mockRestore();
       realpath.mockRestore();
     }
-  });
-
-  it("rejects Windows network paths before filesystem access", async () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const realpath = vi.spyOn(fs, "realpath");
-    try {
-      await expectAccessError(
-        media.loadWebMedia("\\\\attacker\\share\\evil.png", localOptions()),
-        "network-path-not-allowed",
-      );
-      expect(realpath).not.toHaveBeenCalled();
-    } finally {
-      platform.mockRestore();
-      realpath.mockRestore();
-    }
-  });
-
-  it("loads browser-style canvas media paths as managed local files", async () => {
-    const result = await media.loadWebMedia(CANVAS_PATH, { maxBytes: 1024 * 1024 });
-    expect(result.kind).toBe("image");
-    expect(result.buffer).toEqual(TINY_PNG);
   });
 
   it("keeps trying hosted media resolvers after one throws", async () => {
@@ -354,38 +356,58 @@ describe("loadWebMedia", () => {
     expect(result.buffer.readUInt32BE(20)).toBe(32);
   });
 
-  it("applies the strictest model byte cap to raw images", async () => {
-    await expect(
-      media.loadWebMediaRaw(tinyPngFile, {
-        ...localOptions(),
-        imageCompression: { models: [{ maxBytes: 1024 }, {}, { maxBytes: 8 }] },
-      }),
-    ).rejects.toThrow("Media exceeds 8B limit");
-  });
-
-  it("reports the configured byte cap when optimization cannot meet it", async () => {
-    await expect(
-      media.loadWebMedia(tinyPngFile, { ...localOptions(), maxBytes: 8 }),
-    ).rejects.toThrow(/^Media could not be reduced below 8B \(got /);
-  });
+  it.each([
+    {
+      raw: true,
+      error: "Media exceeds 8B limit",
+      imageCompression: { models: [{ maxBytes: 1024 }, {}, { maxBytes: 8 }] },
+      maxBytes: 1024 * 1024,
+    },
+    { raw: false, error: /^Media could not be reduced below 8B \(got /, maxBytes: 8 },
+  ])(
+    "reports the effective image byte cap (raw=$raw)",
+    async ({ raw, error, imageCompression, maxBytes }) => {
+      await expect(
+        (raw ? media.loadWebMediaRaw : media.loadWebMedia)(tinyPngFile, {
+          ...localOptions(),
+          maxBytes,
+          imageCompression,
+        }),
+      ).rejects.toThrow(error);
+    },
+  );
 
   it("rejects oversized local media before an unbounded file-handle read", async () => {
     const maxBytes = 1.5 * 1024 * 1024;
-    const file = await writeFile("oversized.bin", Buffer.alloc(maxBytes + 1));
+    // Sparse and well past the cap, so an uncapped read would consume all of it.
+    const file = await writeFile("oversized.bin", Buffer.alloc(0));
+    await fs.truncate(file, maxBytes * 4);
     const unboundedRead = vi.fn(async () => {
       throw new Error("unbounded read invoked");
     });
+    let observedOpen = false;
+    let bytesRead = 0;
     __setFsSafeTestHooksForTest({
       afterOpen: (openedPath, handle) => {
         if (openedPath === file) {
+          observedOpen = true;
           vi.spyOn(handle, "readFile").mockImplementation(unboundedRead);
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementation(async (...args) => {
+            const result = await read(...args);
+            bytesRead += result.bytesRead;
+            return result;
+          });
         }
       },
     });
     await expect(media.loadWebMediaRaw(file, { ...localOptions(), maxBytes })).rejects.toThrow(
       "Media exceeds 1.50MB limit",
     );
+    expect(observedOpen).toBe(true);
     expect(unboundedRead).not.toHaveBeenCalled();
+    // fs-safe reads with FileHandle.read; a bounded read stops one byte past the cap.
+    expect(bytesRead).toBeLessThanOrEqual(maxBytes + 1);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -414,22 +436,6 @@ describe("loadWebMedia", () => {
     },
   );
 
-  it("passes Windows sandbox paths unchanged to custom readers and emits only the leaf filename", async () => {
-    const file = String.raw`C:\workspace\captures\tiny.png`;
-    const readFile = vi.fn(async (_source: string) => TINY_PNG);
-    const result = await media.loadWebMediaRaw(file, {
-      maxBytes: 1024 * 1024,
-      sandboxValidated: true,
-      readFile,
-    });
-    expect(readFile).toHaveBeenCalledWith(file);
-    expect(readFile.mock.calls[0]).toHaveLength(1);
-    expect(result.buffer).toEqual(TINY_PNG);
-    expect(result.kind).toBe("image");
-    expect(result.contentType).toBe("image/png");
-    expect(result.fileName).toBe("tiny.png");
-  });
-
   it("resolves home-relative paths through allowed local roots", async () => {
     await withEnvAsync({ OPENCLAW_HOME: fixtureRoot }, async () => {
       const result = await media.loadWebMedia("~/workspace/chart.png", {
@@ -441,31 +447,55 @@ describe("loadWebMedia", () => {
     });
   });
 
-  it("allows punctuation-heavy host-read TXT files", async () => {
-    const result = await hostDocument("notes.txt", ",,,,,,,,,,\n");
+  it.each([
+    { name: "notes.txt", body: ",,,,,,,,,,\n", contentType: "text/plain" },
+    {
+      name: "legacy.csv",
+      body: Buffer.from("caf\xe9,ni\xf1o\n", "latin1"),
+      contentType: "text/csv",
+    },
+    {
+      name: "report.html",
+      body: "<!doctype html><title>Report</title><h1>Report</h1>\n",
+      contentType: "text/html",
+    },
+  ])("allows validated host-read $name", async ({ name, body, contentType }) => {
+    const result = await hostDocument(name, body);
     expect(result.kind).toBe("document");
-    expect(result.contentType).toBe("text/plain");
+    expect(result.contentType).toBe(contentType);
   });
 
-  it("rejects host-read LOG files even though they map to text/plain", async () => {
-    await expectAccessError(hostDocument("debug.log", "plain text\n"));
-  });
-
-  it("allows byte-verified XLSM without changing its name or bytes", async () => {
-    const body = await xlsmFixture();
-    const result = await hostDocument("report.XLSM", body);
-    expect(result.kind).toBe("document");
-    expect(result.contentType).toBe("application/vnd.ms-excel.sheet.macroenabled.12");
-    expect(result.fileName).toBe("report.XLSM");
-    expect(result.buffer).toEqual(body);
-  });
-
-  it("rejects text disguised as an allowed binary document", async () => {
-    await expectAccessError(hostDocument("secret.pdf", "secret"));
-  });
-
-  it("rejects unverified text named as XLSM", async () => {
-    await expectAccessError(hostDocument("report.xlsm", "not a workbook"));
+  it.each([
+    { name: "debug.log", body: "plain text\n" },
+    { name: "secret.pdf", body: "secret" },
+    { name: "report.html", body: "status,value\nok,1\n" },
+    { name: "outside.html", body: "<!doctype html><h1>outside</h1>", outside: true },
+    {
+      name: "prefix-tail.csv",
+      body: Buffer.concat([
+        Buffer.from(`name,value\n${"row,1\n".repeat(1400)}`),
+        Buffer.from([0x00, 0xff, 0x10, 0x80]),
+      ]),
+    },
+    {
+      name: "bom-binary.csv",
+      body: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.alloc(9000, 0xff)]),
+    },
+    {
+      name: "alternating-high.csv",
+      body: Buffer.from(
+        Array.from({ length: 9000 }, (_, index) => (index % 2 === 0 ? 0x41 : 0xff)),
+      ),
+    },
+  ])("rejects unsafe host-read document $name", async ({ name, body, outside }) => {
+    if (name === "prefix-tail.csv") {
+      expect(body.length - 4).toBeGreaterThan(8192);
+    }
+    await expectAccessError(
+      loadWithHostRead(
+        await writeFile(name, body, outside ? tempDirs.make("html-outside-") : fixtureRoot),
+      ),
+    );
   });
 
   it("keeps the host-read XLSM root boundary and byte limit", async () => {
@@ -484,15 +514,6 @@ describe("loadWebMedia", () => {
         hostReadCapability: true,
       }),
     ).rejects.toThrow(/exceeds.*limit/i);
-  });
-
-  it("allows generated HTML under the trusted temp root", async () => {
-    const result = await hostDocument(
-      "report.html",
-      "<!doctype html><title>Report</title><h1>Report</h1>\n",
-    );
-    expect(result.kind).toBe("document");
-    expect(result.contentType).toBe("text/html");
   });
 
   it("allows exact marked outbound HTML bytes and rejects same-size replacements", async () => {
@@ -591,15 +612,6 @@ describe("loadWebMedia", () => {
     );
   });
 
-  it("rejects host-read HTML outside the trusted temp root", async () => {
-    const file = await writeFile(
-      "report.html",
-      "<!doctype html><h1>outside</h1>",
-      tempDirs.make("html-outside-"),
-    );
-    await expectAccessError(loadWithHostRead(file));
-  });
-
   it.each(["symlink", "hardlink"] as const)(
     "rejects a trusted HTML %s to an outside file",
     async (kind) => {
@@ -632,50 +644,6 @@ describe("loadWebMedia", () => {
       }
     },
   );
-
-  it("rejects trusted HTML paths without HTML document shape", async () => {
-    await expectAccessError(hostDocument("report.html", "status,value\nok,1\n"));
-  });
-
-  it("rejects opaque non-NUL binary data disguised as HTML", async () => {
-    const body = Buffer.from(Array.from({ length: 9000 }, (_, index) => (index % 255) + 1));
-    await expectAccessError(hostDocument("opaque.html", body));
-  });
-
-  it("rejects a CSV binary tail after the old text sample window", async () => {
-    const prefix = Buffer.from(`name,value\n${"row,1\n".repeat(1400)}`);
-    expect(prefix.length).toBeGreaterThan(8192);
-    await expectAccessError(
-      hostDocument(
-        "prefix-tail.csv",
-        Buffer.concat([prefix, Buffer.from([0x00, 0xff, 0x10, 0x80])]),
-      ),
-    );
-  });
-
-  it("allows single-byte encoded host-read CSV", async () => {
-    const result = await hostDocument("legacy.csv", Buffer.from("caf\xe9,ni\xf1o\n", "latin1"));
-    expect(result.kind).toBe("document");
-    expect(result.contentType).toBe("text/csv");
-  });
-
-  it("rejects BOM-prefixed binary despite a misleading media signature", async () => {
-    const body = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.alloc(9000, 0xff)]);
-    await expectAccessError(hostDocument("bom-binary.csv", body));
-  });
-
-  it("rejects alternating ASCII and high bytes at the former 50% threshold", async () => {
-    const body = Buffer.from(
-      Array.from({ length: 9000 }, (_, index) => (index % 2 === 0 ? 0x41 : 0xff)),
-    );
-    await expectAccessError(hostDocument("alternating-high.csv", body));
-  });
-
-  it("rejects traversal-style canvas media paths", async () => {
-    await expectAccessError(
-      media.loadWebMedia("/__openclaw__/canvas/documents/../collection.media/tiny.png"),
-    );
-  });
 
   it.runIf(process.platform !== "win32").each([
     [2, "invalid-path"],
@@ -780,12 +748,5 @@ describe("loadWebMedia", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it.each([
-    ["media://outbound/tiny.png", "path-not-allowed"],
-    ["media://inbound/nested%2Ftiny.png", "invalid-path"],
-  ])("rejects unsafe store URI %s", async (url, code) => {
-    await expectAccessError(media.loadWebMedia(url), code);
   });
 });

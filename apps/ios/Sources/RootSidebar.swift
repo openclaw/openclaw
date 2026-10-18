@@ -551,13 +551,15 @@ struct RootSidebar: View {
     }
 
     private var visibleSessionSections: [ChatSessionSidebarModel.Section] {
-        self.model.sections(
+        RootSidebarModel.sections(
+            sessions: self.model.sessions,
             query: self.searchText,
             currentSessionKey: self.appModel.chatSessionKey,
             mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
             groups: self.sessionGroups,
-            sessionRoutingContract: self.appModel.chatSessionRoutingContract)
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract,
+            now: self.model.now)
     }
 
     struct SessionLayout: Equatable {
@@ -688,10 +690,8 @@ struct RootSidebar: View {
                 canDelete: ChatSessionSidebarModel.canDeleteSession(
                     key: session.key,
                     mainSessionKey: self.resolvedMainSessionKey),
-                actions: .gateway(
-                    session: session,
-                    performMutation: self.performSessionMutation,
-                    fork: { self.forkSession(session) }))
+                performMutation: self.performSessionMutation,
+                fork: { self.forkSession(session) })
             .accessibilityValue(Self.sessionAccessibilityValue(
                 isPinned: session.pinned == true,
                 isUnread: session.unread == true))
@@ -810,7 +810,7 @@ struct RootSidebar: View {
 
     private func performSessionMutation(
         resetActiveSessionKey: String?,
-        _ operation: @escaping CommandSessionActions.Mutation)
+        _ operation: @escaping CommandSessionActionsModifier.Mutation)
     {
         Task {
             do {

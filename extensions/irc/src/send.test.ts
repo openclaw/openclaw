@@ -1,3 +1,4 @@
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { createSendCfgThreadingRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -64,9 +65,12 @@ vi.mock("openclaw/plugin-sdk/text-chunking", async () => {
   };
 });
 
-import { ircMessageAdapter, sendFormattedIrcText } from "./message-adapter.js";
+import { ircPlugin } from "./channel.js";
 import { ircOutboundBaseAdapter } from "./outbound-base.js";
-import { sendMessageIrc } from "./send.js";
+import { sendIrcMessages, sendMessageIrc } from "./send.js";
+
+const ircMessageAdapter = ircPlugin.message!;
+const sendFormattedIrcText = ircPlugin.outbound!.sendFormattedText!;
 
 function resetHoistedMocks() {
   hoisted.loadConfig.mockReset();
@@ -160,6 +164,7 @@ describe("sendMessageIrc cfg threading", () => {
         },
       ],
       sentAt: 123,
+      sourceResults: [{ channel: "irc", messageId: "irc-msg-1" }],
       raw: [
         {
           channel: "irc",
@@ -272,8 +277,8 @@ describe("sendMessageIrc cfg threading", () => {
   it.each(
     [
       { kind: "formatted", sendMessage: sendFormattedIrcText },
-      { kind: "text", sendMessage: ircMessageAdapter.send.text },
-      { kind: "media", sendMessage: ircMessageAdapter.send.media },
+      { kind: "text", sendMessage: ircMessageAdapter.send!.text! },
+      { kind: "media", sendMessage: ircMessageAdapter.send!.media! },
     ].flatMap(({ kind, sendMessage }) =>
       ["connect", "dispatch"].map((phase) => ({ kind, sendMessage, phase })),
     ),
@@ -335,12 +340,75 @@ describe("sendMessageIrc cfg threading", () => {
         onDeliveryResult,
         onPlatformSendDispatch,
       }),
-    ).rejects.toThrow("IRC connection closed before send");
+    ).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      message: "IRC connection closed before send",
+      deliveryResult: { messageIds: ["irc-msg-1"], visibleReplySent: true },
+    });
 
     expect(client.sendPrivmsg).toHaveBeenCalledOnce();
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
     expect(onDeliveryResult).toHaveBeenCalledOnce();
     expect(client.quit).toHaveBeenCalledOnce();
+  });
+
+  it.each(["send", "report", "activity", "partial-send"] as const)(
+    "retains accepted receipts when a later %s fails",
+    async (phase) => {
+      const client = createClient();
+      const cause = new Error("send interrupted");
+      const failure =
+        phase === "partial-send"
+          ? createChannelPartialDeliveryError(cause, {
+              messageIds: ["nested-id"],
+              visibleReplySent: true,
+            })
+          : cause;
+      if (phase === "send" || phase === "partial-send") {
+        client.sendPrivmsg.mockResolvedValueOnce(undefined).mockRejectedValueOnce(failure);
+      }
+      if (phase === "activity") {
+        hoisted.record.mockImplementationOnce(() => {
+          throw cause;
+        });
+      }
+      const onDeliveryResult =
+        phase === "report"
+          ? () => {
+              throw cause;
+            }
+          : undefined;
+
+      await expect(
+        sendIrcMessages(
+          "#room",
+          "first second",
+          { cfg: providedCfg, client },
+          () => [{ text: "first" }, { text: "second" }],
+          onDeliveryResult,
+        ),
+      ).rejects.toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        cause: failure,
+        deliveryResult: {
+          messageIds: phase === "partial-send" ? ["irc-msg-1", "nested-id"] : ["irc-msg-1"],
+          visibleReplySent: true,
+          receipt: {
+            platformMessageIds:
+              phase === "partial-send" ? ["irc-msg-1", "nested-id"] : ["irc-msg-1"],
+          },
+        },
+      });
+    },
+  );
+
+  it("preserves the original failure when no message was sent", async () => {
+    const client = createClient();
+    const failure = new Error("first send refused");
+    client.sendPrivmsg.mockRejectedValueOnce(failure);
+    await expect(sendMessageIrc("#room", "hello", { cfg: providedCfg, client })).rejects.toBe(
+      failure,
+    );
   });
 
   it("declares message adapter durable text, media, and reply with receipt proofs", async () => {

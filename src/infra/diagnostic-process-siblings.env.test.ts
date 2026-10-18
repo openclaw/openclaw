@@ -1,10 +1,9 @@
-import fs, { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import fs, { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { forceFreePort, forceFreePortAndWait } from "../cli/ports.js";
+import { forceFreePortAndWait } from "../cli/ports.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import {
@@ -22,8 +21,13 @@ const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
   probe: vi.fn(),
   darwinCommand: vi.fn(),
+  identity: vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessIdentity>(() => null),
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
+  readProcessIdentity: mocks.identity,
+}));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   execFileSync: mocks.exec,
@@ -40,19 +44,28 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+function lockRecord(root: string, extra: { pid?: number; port?: number; startTime?: number } = {}) {
+  return JSON.stringify({
+    pid: 424242,
+    port: 43123,
+    createdAt: "2026-09-03T00:00:00Z",
+    configPath: path.join(root, "openclaw.json"),
+    ...extra,
+  });
+}
+
 it("enforces the lock observation deadline after native argv inspection", async () => {
   const root = tempDirs.make("lock-argv-budget-");
-  await writeFile(
-    path.join(root, "gateway.state.lock"),
-    JSON.stringify({
-      pid: 424242,
-      port: 43123,
-      createdAt: "2026-09-03T00:00:00Z",
-      configPath: path.join(root, "openclaw.json"),
-    }),
-  );
+  await writeFile(path.join(root, "gateway.state.lock"), lockRecord(root));
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   vi.spyOn(process, "kill").mockReturnValue(true);
+  mocks.identity.mockImplementation((pid) => ({
+    pid,
+    parentPid: 0,
+    startTimeMicros: 1,
+    startTimeResolutionMicros: 1,
+    exited: false,
+  }));
   let elapsedMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
   mocks.darwinCommand.mockImplementation(() => {
@@ -97,15 +110,7 @@ it("stops a canceled lock observation before process inspection resumes", async 
     await entered.promise;
     const reason = new Error("observation canceled");
     controller.abort(reason);
-    released.resolve(
-      JSON.stringify({
-        pid: process.pid,
-        createdAt: "2026-09-03T00:00:00Z",
-        configPath: path.join(root, "openclaw.json"),
-        startTime: 111,
-        port: 48789,
-      }),
-    );
+    released.resolve(lockRecord(root, { pid: process.pid, startTime: 111, port: 48789 }));
     expect(await observed).toBe(reason);
     expect(readProcessStartTime).not.toHaveBeenCalled();
   } finally {
@@ -125,7 +130,7 @@ it.each([
   "CLI fuser KILL",
 ])("projects the environment at the %s launch boundary", async (surface) => {
   const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "diagnostic-siblings-")));
+  const root = tempDirs.make("diagnostic-siblings-");
   const routing = createDiagnosticFixtureRouting({
     PATH: root,
     HOME: root,
@@ -139,10 +144,12 @@ it.each([
   mocks.darwinCommand.mockImplementation((pid: number) =>
     pid === 424242 ? { argv: ["openclaw-gateway"] } : undefined,
   );
+  let portCleared = false;
   const killMock = vi.spyOn(process, "kill").mockImplementation(() => {
     if (surface === "restart poll") {
       throw Object.assign(new Error("gone"), { code: "ESRCH" });
     }
+    portCleared = true;
     return true;
   });
   const previousLoggerOverride = loggingState.overrideSettings;
@@ -195,9 +202,9 @@ it.each([
             return "424242";
           }
           if (command.endsWith("netstat.exe")) {
-            return "TCP 127.0.0.1:43123 0.0.0.0:0 LISTENING 424242";
+            return portCleared ? "" : "TCP 127.0.0.1:43123 0.0.0.0:0 LISTENING 424242";
           }
-          return "p424242\ncnode\n";
+          return portCleared ? "" : "p424242\ncnode\n";
         },
       );
       const parent = { ...process.env };
@@ -240,7 +247,9 @@ it.each([
           expect(killMock).not.toHaveBeenCalled();
         }
       } else {
-        expect(forceFreePort(43123)).toEqual([expect.objectContaining({ pid: 424242 })]);
+        expect((await forceFreePortAndWait(43123)).killed).toEqual([
+          expect.objectContaining({ pid: 424242 }),
+        ]);
       }
       expect(process.env).toEqual(parent);
       expect(reports.length).toBeGreaterThan(0);
@@ -253,6 +262,5 @@ it.each([
     });
   } finally {
     setLoggerOverride(previousLoggerOverride as Parameters<typeof setLoggerOverride>[0]);
-    await rm(root, { recursive: true, force: true });
   }
 });

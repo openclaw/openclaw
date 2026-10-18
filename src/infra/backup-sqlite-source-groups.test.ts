@@ -28,8 +28,8 @@ it("refuses an alias checkpoint that truncates its WAL during capture", async ()
     await fs.link(ownerPath, aliasPath);
     writer.exec("INSERT INTO records VALUES(2, 'owner-wal')");
     const groups = await planBackupSqliteSourceGroups([
-      { path: ownerPath, identity: await fs.stat(ownerPath) },
-      { path: aliasPath, identity: await fs.stat(aliasPath) },
+      { path: ownerPath, identity: await fs.stat(ownerPath, { bigint: true }) },
+      { path: aliasPath, identity: await fs.stat(aliasPath, { bigint: true }) },
     ]);
     const group = groups.get(ownerPath);
     if (!group) {

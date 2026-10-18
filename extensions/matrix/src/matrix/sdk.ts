@@ -26,10 +26,8 @@ import {
 } from "./sdk/client-support.js";
 import { MatrixClientVerification } from "./sdk/client-verification.js";
 import type { MatrixCryptoBootstrapResult } from "./sdk/crypto-bootstrap.js";
-import { ConsoleLogger, LogService } from "./sdk/logger.js";
 import type { MatrixCryptoBootstrapApi } from "./sdk/types.js";
 
-export { ConsoleLogger, LogService };
 export type {
   MatrixDeviceVerificationStatus,
   MatrixOwnDeviceDeleteResult,
@@ -74,7 +72,6 @@ export class MatrixClient extends MatrixClientVerification {
     }
 
     await this.ensureStartedForCryptoControlPlane();
-    await this.ensureCryptoSupportInitialized();
     const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
     if (!crypto) {
       return await fail("Matrix crypto is not available (start client with encryption enabled)");
@@ -154,23 +151,18 @@ export class MatrixClient extends MatrixClientVerification {
       await cryptoBootstrapper.bootstrap(crypto, {
         allowAutomaticCrossSigningReset: false,
       });
-      await this.enableTrustedRoomKeyBackupIfPossible(crypto);
+      await crypto.checkKeyBackupAndEnable();
       const status = await this.getOwnDeviceVerificationStatus();
       const backupUsable =
         resolveMatrixRoomKeyBackupReadinessError(status.backup, {
           requireServerBackup: true,
         }) === null;
       const stagedRecoveryKeyUsed = this.recoveryKeyStore.hasStagedRecoveryKeyBeenUsed();
-      const secretStorageStatus =
-        typeof crypto.getSecretStorageStatus === "function"
-          ? await crypto.getSecretStorageStatus().catch(() => null)
-          : null;
-      const stagedRecoveryKeyConfirmedBySecretStorage =
-        Boolean(stagedKeyId) &&
-        secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId ?? ""] === true;
-      const stagedRecoveryKeyRejectedBySecretStorage =
-        Boolean(stagedKeyId) &&
-        secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId ?? ""] === false;
+      const stagedKeyValid = await this.checkSecretStorageKey(stagedKeyId ?? undefined).catch(
+        () => undefined,
+      );
+      const stagedRecoveryKeyConfirmedBySecretStorage = stagedKeyValid === true;
+      const stagedRecoveryKeyRejectedBySecretStorage = stagedKeyValid === false;
       const stagedRecoveryKeyUnlockedBackup =
         stagedRecoveryKeyUsed &&
         !stagedRecoveryKeyRejectedBySecretStorage &&
@@ -236,11 +228,6 @@ export class MatrixClient extends MatrixClientVerification {
         await this.recoveryKeyStore.discardStagedRecoveryKey();
         return await fail(backupError);
       }
-      if (typeof crypto.restoreKeyBackup !== "function") {
-        await this.recoveryKeyStore.discardStagedRecoveryKey();
-        return await fail("Matrix crypto backend does not support full key backup restore");
-      }
-
       const restore = await crypto.restoreKeyBackup();
       if (rawRecoveryKey) {
         await this.recoveryKeyStore.commitStagedRecoveryKey({
@@ -251,8 +238,8 @@ export class MatrixClient extends MatrixClientVerification {
       return {
         success: true,
         backupVersion: backup.serverVersion,
-        imported: typeof restore.imported === "number" ? restore.imported : 0,
-        total: typeof restore.total === "number" ? restore.total : 0,
+        imported: restore.imported,
+        total: restore.total,
         loadedFromSecretStorage,
         restoredAt: new Date().toISOString(),
         backup: finalBackup,
@@ -325,7 +312,7 @@ export class MatrixClient extends MatrixClientVerification {
         // error (e.g. bad MAC from a different SSSS entry).
         allowSecretStorageRecreateWithoutRecoveryKey: true,
       });
-      await this.enableTrustedRoomKeyBackupIfPossible(crypto);
+      await crypto.checkKeyBackupAndEnable();
 
       const backup = await this.getRoomKeyBackupStatus();
       const createdVersion = backup.serverVersion;
@@ -405,7 +392,6 @@ export class MatrixClient extends MatrixClientVerification {
     let rawRecoveryKey: string | undefined;
     try {
       await this.ensureStartedForCryptoControlPlane();
-      await this.ensureCryptoSupportInitialized();
       const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
       if (!crypto) {
         throw new Error("Matrix crypto is not available (start client with encryption enabled)");
@@ -538,7 +524,6 @@ export class MatrixClient extends MatrixClientVerification {
         this.currentSyncState = state;
         this.currentSyncError = error;
         this.currentSyncFromCache = fromCache;
-        this.currentSyncRevision += 1;
       },
     });
   }

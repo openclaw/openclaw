@@ -127,45 +127,49 @@ export function detectRepointedWorkspaceAlias(
   }
   return withExistingOpenClawStateDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(database.db, () => {
-        const kysely = getNodeSqliteKysely<WorkspaceDatabase>(database.db);
-        const alias = executeSqliteQueryTakeFirstSync(
-          database.db,
-          kysely
-            .selectFrom("workspace_path_aliases")
-            .selectAll()
-            .where("alias_key", "=", lexical.workspaceKey),
-        );
-        if (!alias) {
-          return undefined;
-        }
-        const stored = createWorkspaceStateIdentity(alias.workspace_path);
-        if (
-          alias.alias_path !== lexical.workspacePath ||
-          alias.workspace_key !== stored.workspaceKey
-        ) {
-          throw new Error("workspace path alias identity is invalid");
-        }
-        if (stored.workspaceKey === current.workspaceKey) {
-          return undefined;
-        }
-        return {
-          aliasPath: lexical.workspacePath,
-          storedWorkspacePath: stored.workspacePath,
-          currentWorkspacePath: current.workspacePath,
-          currentDirectoryPath,
-          currentTargetHasOwnState:
-            executeSqliteQueryTakeFirstSync(
-              database.db,
-              kysely
-                .selectFrom("workspace_setup_state")
-                .select("workspace_key")
-                .where("workspace_key", "=", current.workspaceKey),
-            ) !== undefined,
-          targetDirectoryIdentity,
-          state: readWorkspaceMoveState(database, stored),
-        };
-      }),
+      runSqliteDeferredTransactionSync(
+        database.db,
+        () => {
+          const kysely = getNodeSqliteKysely<WorkspaceDatabase>(database.db);
+          const alias = executeSqliteQueryTakeFirstSync(
+            database.db,
+            kysely
+              .selectFrom("workspace_path_aliases")
+              .selectAll()
+              .where("alias_key", "=", lexical.workspaceKey),
+          );
+          if (!alias) {
+            return undefined;
+          }
+          const stored = createWorkspaceStateIdentity(alias.workspace_path);
+          if (
+            alias.alias_path !== lexical.workspacePath ||
+            alias.workspace_key !== stored.workspaceKey
+          ) {
+            throw new Error("workspace path alias identity is invalid");
+          }
+          if (stored.workspaceKey === current.workspaceKey) {
+            return undefined;
+          }
+          return {
+            aliasPath: lexical.workspacePath,
+            storedWorkspacePath: stored.workspacePath,
+            currentWorkspacePath: current.workspacePath,
+            currentDirectoryPath,
+            currentTargetHasOwnState:
+              executeSqliteQueryTakeFirstSync(
+                database.db,
+                kysely
+                  .selectFrom("workspace_setup_state")
+                  .select("workspace_key")
+                  .where("workspace_key", "=", current.workspaceKey),
+              ) !== undefined,
+            targetDirectoryIdentity,
+            state: readWorkspaceMoveState(database, stored),
+          };
+        },
+        { operationLabel: "workspace.alias.inspect" },
+      ),
     options,
   );
 }

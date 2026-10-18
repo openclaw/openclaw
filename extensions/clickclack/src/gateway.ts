@@ -30,10 +30,6 @@ function payloadString(event: ClickClackEvent, key: string): string {
   return readStringField(event.payload, key) ?? "";
 }
 
-function eventCorrelationId(event: ClickClackEvent): string | undefined {
-  return normalizeClickClackCorrelationId(event.payload?.correlation_id);
-}
-
 async function resolveEventMessage(params: {
   client: ReturnType<typeof createClickClackClient>;
   event: ClickClackEvent;
@@ -76,7 +72,7 @@ async function processEvent(params: {
   if (params.abortSignal.aborted || payloadString(params.event, "author_id") === params.botUserId) {
     return;
   }
-  const correlationId = eventCorrelationId(params.event);
+  const correlationId = normalizeClickClackCorrelationId(params.event.payload?.correlation_id);
   // The event body is only a routing hint. Re-fetch the authoritative message
   // under the same safe correlation id before dispatching any model work.
   const messageClient = correlationId
@@ -140,8 +136,7 @@ async function drainEventBacklog(params: {
       afterCursor,
       limit: CLICKCLACK_EVENT_PAGE_LIMIT,
     });
-    const events = page.events;
-    for (const event of events) {
+    for (const event of page.events) {
       if (params.abortSignal.aborted) {
         return afterCursor;
       }
@@ -151,7 +146,7 @@ async function drainEventBacklog(params: {
       await params.onEvent(event);
       afterCursor = event.cursor;
     }
-    if (events.length === 0) {
+    if (page.events.length === 0) {
       return afterCursor;
     }
   }

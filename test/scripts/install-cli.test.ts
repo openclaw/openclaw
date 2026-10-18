@@ -20,6 +20,7 @@ import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
+  createInstallGitWorktreeFixtureScript,
   createInstallGitBranchFallbackFixtureScript,
   createInstallGitCloneFixtureScript,
   createInstallGitUpdateFixtureScript,
@@ -35,7 +36,6 @@ import {
 } from "./install-npm-fixtures.js";
 import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
 import {
-  defineInstallerNpmDirectoryIdentityContract,
   defineInstallerNpmFreshnessContract,
   defineInstallerShellIsolationContract,
 } from "./install-test-contract.js";
@@ -388,33 +388,26 @@ fi
     const dynamicValue = `quote"\\café项目lobster🦞${String.fromCharCode(
       ...Array.from({ length: 31 }, (_, index) => index + 1),
     )}end`;
-    const repo = join(root, dynamicValue);
-    const legacyDir = join(repo, "Peekaboo");
     const fakeNode = join(root, "node");
-    mkdirSync(legacyDir, { recursive: true });
     writeFileSync(fakeNode, '#!/bin/bash\nprintf "%s" "$EVENT_VALUE"\n');
     chmodSync(fakeNode, 0o755);
 
     const success = runInstallCliShell(
       [
         "JSON=1",
-        'cleanup_legacy_submodules "$REPO"',
         "try_link_usable_node_runtime_from_path() { return 0; }",
         `node_bin() { printf '%s\\n' ${JSON.stringify(fakeNode)}; }`,
         "install_alpine_node",
         'emit_json done version "$EVENT_VALUE"',
       ].join("\n"),
-      { EVENT_VALUE: dynamicValue, REPO: repo },
+      { EVENT_VALUE: dynamicValue },
     );
 
     expect(success.status, success.stderr || success.stdout).toBe(0);
-    expect(existsSync(legacyDir)).toBe(false);
     const successLines = success.stdout.trimEnd().split("\n");
-    expect(successLines).toHaveLength(5);
+    expect(successLines).toHaveLength(3);
     const successEvents = successLines.map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(successEvents).toEqual([
-      { event: "step", name: "legacy-submodule", status: "start", path: legacyDir },
-      { event: "step", name: "legacy-submodule", status: "ok", path: legacyDir },
       { event: "step", name: "node", status: "start", method: "apk" },
       { event: "step", name: "node", status: "ok", method: "system", version: dynamicValue },
       { event: "done", ok: true, version: dynamicValue },
@@ -429,34 +422,20 @@ fi
     expect(JSON.parse(failure.stdout)).toEqual({ event: "error", message: dynamicValue });
   });
 
-  it("rejects a git checkout without a commit before updating it", () => {
-    const result = runInstallCliShell(`
-      set -euo pipefail
-      tmp="$(mktemp -d)"
-      repo="$tmp/repo"
-      mkdir -p "$repo/.git"
-      ensure_git() { :; }
-      ensure_pnpm() { :; }
-      git() {
-        [[ "$1" == "--git-dir=$repo/.git" ]] &&
-          [[ "$2" == "--work-tree=$repo" ]] &&
-          [[ "$3" == "rev-parse" ]] &&
-          [[ "$4" == "--verify" ]] &&
-          [[ "$5" == "--quiet" ]] &&
-          [[ "$6" == "HEAD^{commit}" ]] &&
-          return 1
-        return 99
-      }
-
-      set +e
-      (install_openclaw_from_git "$repo")
-      status="$?"
-      set -e
-      [[ "$status" -eq 1 ]]
-      [[ -d "$repo/.git" ]]
-    `);
-
-    expect(result.status).toBe(0);
+  it.each([
+    "valid",
+    "missing-head",
+    "broken-gitfile",
+    "subdirectory",
+    "main",
+    "main-no-update",
+    "latest",
+    "named-branch",
+  ])("preserves linked checkout boundaries: %s", (scenario) => {
+    const result = runShell(createInstallGitWorktreeFixtureScript(SCRIPT_PATH, scenario), {
+      FIXTURE_NODE: nodeExecutable,
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
   });
 
   it("publishes fresh Git clones only after success and cleans failed staging directories", () => {
@@ -494,8 +473,6 @@ fi
         [[ "$1" == "$target" && "$2" == "main" ]] || return 1
         GIT_REF_KIND=moving
       }
-      cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
-      ensure_pnpm_git_prepare_allowlist() { [[ "$1" == "$target" ]]; }
       ensure_pnpm() { [[ "$1" == "$target" ]]; }
       run_pnpm() {
         [[ "$1" == "-C" && "$2" == "$target" ]] || return 1
@@ -903,8 +880,6 @@ fi
             ? [
                 "preflight_fresh_git_disk_space() { :; }",
                 "ensure_pnpm() { :; }",
-                "ensure_pnpm_git_prepare_allowlist() { :; }",
-                "cleanup_legacy_submodules() { :; }",
                 "resolve_git_openclaw_ref() { printf 'main\\n'; }",
                 "checkout_git_openclaw_ref() { :; }",
                 "git_install_lockfile_flag() { printf '%s\\n' '--no-frozen-lockfile'; }",
@@ -1477,47 +1452,6 @@ fi
     expect(readFileSync(packageFile, "utf8")).toBe('{"name":"openclaw","version":"2026.9.2"}\n');
   });
 
-  it("removes the workspace rewrite temp file when rewriting fails", () => {
-    const tmp = tempDirs.make("openclaw-install-cli-workspace-cleanup-");
-    const repo = join(tmp, "repo");
-    const workspaceFile = join(repo, "pnpm-workspace.yaml");
-    const rewriteTemp = join(tmp, "workspace-rewrite");
-    const workspace = 'packages:\n  - "packages/*"\n\nallowBuilds:\n';
-    mkdirSync(repo, { recursive: true });
-    writeFileSync(workspaceFile, workspace);
-
-    const result = runInstallCliShell(
-      [
-        `mktemp() { : > ${JSON.stringify(rewriteTemp)}; printf '%s\\n' ${JSON.stringify(rewriteTemp)}; }`,
-        "awk() { return 43; }",
-        `ensure_pnpm_git_prepare_allowlist ${JSON.stringify(repo)}`,
-      ].join("\n"),
-    );
-
-    expect(result.status).toBe(43);
-    expect(() => lstatSync(rewriteTemp)).toThrow();
-    expect(readFileSync(workspaceFile, "utf8")).toBe(workspace);
-  });
-
-  it.each([
-    { expected: "", version: "11.15.0" },
-    { expected: "--allow-scripts=openclaw", version: "11.16.0" },
-  ])("resolves npm lifecycle policy for npm $version", ({ expected, version }) => {
-    const fixture = npmPolicyFixture();
-    const result = fixture.run("openclaw@latest", version);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe(expected);
-    const tool = fixture.run("pnpm@12.0.0", version, "pnpm@12.0.0");
-    expect(tool.status).toBe(0);
-    expect(tool.stdout).toBe(expected ? "--allow-scripts=pnpm@12.0.0" : "");
-  });
-
-  it("rejects a malformed npm version before mutation", () => {
-    const fixture = npmPolicyFixture();
-    expect(fixture.run("openclaw@latest", "npm 12.0.0 warning").status).not.toBe(0);
-    expect(existsSync(fixture.args)).toBe(false);
-  });
-
   it.each([
     ["openclaw@npm:@scope/candidate.tgz@1.0.0", "--allow-scripts=@scope/candidate.tgz"],
     ["vendor/repo.tgz", "--allow-scripts=vendor/repo.tgz"],
@@ -1529,15 +1463,6 @@ fi
     const result = npmPolicyFixture().run(spec, "12.0.0");
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(expected);
-  });
-
-  it("uses the absolute npm tarball identity for file-relative input", () => {
-    const fixture = npmPolicyFixture();
-    const result = fixture.run("file:./candidate.tgz", "12.0.0");
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      `--allow-scripts=file:${join(fixture.root, "candidate.tgz")}`,
-    );
   });
 
   it.each([
@@ -1557,8 +1482,6 @@ fi
       expect(existsSync(fixture.args)).toBe(false);
     },
   );
-
-  defineInstallerNpmDirectoryIdentityContract(installerContract);
 
   it.each(["global", "builtin"])(
     "honors raw %s npmrc min-release-age before --before",

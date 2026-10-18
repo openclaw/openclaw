@@ -5,10 +5,7 @@ import { sleepWithAbort } from "@openclaw/retry";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveDeliveryNotSentRetryability } from "../../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
-import {
-  isOutboundDeliveryError,
-  isPlatformMessageRejectedError,
-} from "../../../infra/outbound/deliver-types.js";
+import { isPlatformMessageRejectedError } from "../../../infra/outbound/deliver-types.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isFailoverError } from "../../failover-error.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
@@ -68,15 +65,12 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
-  WRITER_CLAIM_REBOUND_ANNOUNCE_RE,
 ];
 
 function isWriterClaimReboundAnnounceError(error: unknown): boolean {
-  return Boolean(
-    (error &&
-      typeof error === "object" &&
-      (error as { name?: unknown }).name === "SessionTranscriptWriterClaimReboundError") ||
-    WRITER_CLAIM_REBOUND_ANNOUNCE_RE.test(summarizeDeliveryError(error)),
+  return (
+    asOptionalObjectRecord(error)?.name === "SessionTranscriptWriterClaimReboundError" ||
+    WRITER_CLAIM_REBOUND_ANNOUNCE_RE.test(summarizeDeliveryError(error))
   );
 }
 
@@ -88,20 +82,15 @@ function hasAnnounceErrorMatch(error: unknown, matches: (candidate: unknown) => 
   ]).some(matches);
 }
 
-function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
-  return hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError);
-}
-
-function isPermanentNonWriterAnnounceError(error: unknown): boolean {
+function hasPermanentAnnounceError(error: unknown): boolean {
   return hasAnnounceErrorMatch(
     error,
     (candidate) =>
       isPlatformMessageRejectedError(candidate) ||
       isSessionTranscriptTurnMismatchErrorMessage(summarizeDeliveryError(candidate)) ||
-      (!isWriterClaimReboundAnnounceError(candidate) &&
-        PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) =>
-          pattern.test(summarizeDeliveryError(candidate)),
-        )),
+      PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) =>
+        pattern.test(summarizeDeliveryError(candidate)),
+      ),
   );
 }
 
@@ -117,11 +106,11 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
     return typedRetryability;
   }
 
-  if (isPermanentNonWriterAnnounceError(error)) {
+  if (hasPermanentAnnounceError(error)) {
     return false;
   }
 
-  if (hasWriterClaimReboundAnnounceError(error)) {
+  if (hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError)) {
     return true;
   }
 
@@ -134,9 +123,7 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
     }
     const message = summarizeDeliveryError(candidate);
     if (
-      candidate &&
-      typeof candidate === "object" &&
-      (candidate as { gatewayCode?: unknown }).gatewayCode === "UNAVAILABLE" &&
+      asOptionalObjectRecord(candidate)?.gatewayCode === "UNAVAILABLE" &&
       /cron run continuation/i.test(message)
     ) {
       return true;
@@ -150,7 +137,7 @@ export function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   if (typedRetryability !== undefined) {
     return !typedRetryability;
   }
-  return isPermanentNonWriterAnnounceError(error) || hasWriterClaimReboundAnnounceError(error);
+  return hasPermanentAnnounceError(error);
 }
 
 export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
@@ -158,16 +145,11 @@ export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
   return /(?:incomplete terminal response|code=incomplete_result)\b/i.test(message);
 }
 
-function hasDirectAnnounceSendEvidence(error: unknown): boolean {
-  if (isOutboundDeliveryError(error) && error.sentBeforeError) {
-    return true;
-  }
-  const record = asOptionalObjectRecord(error);
-  return record?.sentBeforeError === true || record?.visibleReplySent === true;
-}
-
 export function hasAnnounceSendEvidence(error: unknown): boolean {
-  return hasAnnounceErrorMatch(error, hasDirectAnnounceSendEvidence);
+  return hasAnnounceErrorMatch(error, (candidate) => {
+    const record = asOptionalObjectRecord(candidate);
+    return record?.sentBeforeError === true || record?.visibleReplySent === true;
+  });
 }
 
 export async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {

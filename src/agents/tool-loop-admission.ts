@@ -16,6 +16,7 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { hashToolCall } from "./tool-loop-detection.js";
+import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ToolLoopCall = {
@@ -49,7 +50,6 @@ async function evaluateToolLoopCall(
     stateOverride ?? sessionState,
     toolName,
     call.params,
-    ctx.loopDetection,
     ctx.runId ? { runId: ctx.runId } : undefined,
   );
   if (!result.stuck) {
@@ -103,7 +103,6 @@ async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise
     normalizeToolPolicyName(call.toolName || "tool"),
     call.params,
     call.toolCallId,
-    ctx.loopDetection,
     ctx.runId ? { runId: ctx.runId } : undefined,
   );
 }
@@ -140,9 +139,8 @@ export async function admitToolCallBatch(
     reconcileToolCallExecutionParams,
     recordToolCall,
     recordToolCallOutcome,
-    resolveToolLoopWarningThreshold,
   } = await loadBeforeToolCallRuntime();
-  const warningThreshold = resolveToolLoopWarningThreshold();
+  const warningThreshold = TOOL_LOOP_WARNING_THRESHOLD;
   const sessionState = getDiagnosticSessionState({
     sessionKey: ctx.sessionKey,
     sessionId: ctx.sessionId,
@@ -157,7 +155,6 @@ export async function admitToolCallBatch(
       normalizeToolPolicyName(call.toolCall.name || "tool"),
       call.args,
       call.toolCall.id,
-      ctx.loopDetection,
       ctx.runId ? { runId: ctx.runId } : undefined,
     );
     const projectedCall = state.toolCallHistory?.at(-1);
@@ -238,7 +235,6 @@ export async function admitToolCallBatch(
       admitted.toolName,
       readyCall.args,
       readyCall.toolCallId,
-      ctx.loopDetection,
       ctx.runId ? { runId: ctx.runId } : undefined,
     );
     if (admitted.validationFailure) {
@@ -249,7 +245,6 @@ export async function admitToolCallBatch(
         toolParams: readyCall.args,
         toolCallId: readyCall.toolCallId,
         result: admitted.validationFailure,
-        config: ctx.loopDetection,
         runId: ctx.runId,
       });
       if (record) {

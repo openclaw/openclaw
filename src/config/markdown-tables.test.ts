@@ -7,7 +7,6 @@ const listChannelPluginsMock = vi.hoisted(() =>
     { id: "signal", messaging: { defaultMarkdownTableMode: "block" as const } },
   ]),
 );
-const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn(() => 1));
 
 vi.mock("../channels/plugins/registry.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/registry.js")>(
@@ -15,17 +14,9 @@ vi.mock("../channels/plugins/registry.js", async () => {
   );
   return {
     ...actual,
-    listChannelPlugins: () => listChannelPluginsMock(),
+    getLoadedChannelPlugin: (id: string) =>
+      listChannelPluginsMock().find((plugin) => plugin.id === id),
     normalizeChannelId: (raw?: string | null) => raw ?? null,
-  };
-});
-
-vi.mock("../plugins/runtime.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../plugins/runtime.js")>("../plugins/runtime.js");
-  return {
-    ...actual,
-    getActivePluginChannelRegistryVersion: () => getActivePluginChannelRegistryVersionMock(),
   };
 });
 

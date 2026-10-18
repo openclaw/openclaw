@@ -195,7 +195,7 @@ describe("normalizeActRequest batch nesting depth", () => {
     return action;
   };
 
-  it("normalizes batches nested up to the executor depth limit", () => {
+  it("normalizes batches nested up to the depth limit", () => {
     const normalized = normalizeActRequest(buildNestedBatch(ACT_MAX_BATCH_DEPTH + 1));
     expect(normalized).toMatchObject({ kind: "batch" });
   });

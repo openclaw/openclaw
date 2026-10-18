@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { generateConversationLabel } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 60_000;
 const MAX_THREAD_TITLE_SOURCE_CHARS = 600;
@@ -51,7 +51,7 @@ function buildThreadTitleCompletionUserMessage(params: {
   channelName?: string;
   channelDescription?: string;
 }): string {
-  const sourceText = truncateThreadTitleSourceText(params.sourceText);
+  const sourceText = truncateThreadTitleText(params.sourceText, MAX_THREAD_TITLE_SOURCE_CHARS);
   const channelName = normalizeTitleContextField(
     params.channelName,
     MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
@@ -60,22 +60,17 @@ function buildThreadTitleCompletionUserMessage(params: {
     params.channelDescription,
     MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS,
   );
-  const messageLines: string[] = [];
-  if (channelName) {
-    messageLines.push(`Channel: ${channelName}`);
-  }
-  if (channelDescription) {
-    messageLines.push(`Channel description: ${channelDescription}`);
-  }
-  messageLines.push(`Message:\n${sourceText}`);
-  return messageLines.join("\n\n");
+  return [
+    channelName ? `Channel: ${channelName}` : undefined,
+    channelDescription ? `Channel description: ${channelDescription}` : undefined,
+    `Message:\n${sourceText}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
-function truncateThreadTitleSourceText(sourceText: string): string {
-  if (sourceText.length <= MAX_THREAD_TITLE_SOURCE_CHARS) {
-    return sourceText;
-  }
-  return `${truncateUtf16Safe(sourceText, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
+function truncateThreadTitleText(text: string, maxChars: number): string {
+  return truncateWithMarker(text, maxChars, { marker: "...", reserve: 0, trimEnd: false });
 }
 
 function normalizeGeneratedThreadTitle(raw: string): string {
@@ -93,11 +88,9 @@ function stripThreadTitleWrappers(raw: string): string {
     previous = current;
     current = current.replace(/^["'`]+|["'`]+$/g, "").trim();
     // Preserve separate spans ("*Plan* for *project*") while unwrapping nested emphasis.
-    current = stripBalancedWrapper(current, "**");
-    current = stripBalancedWrapper(current, "__");
-    current = stripBalancedWrapper(current, "*");
-    current = stripBalancedWrapper(current, "_");
-    current = stripBalancedWrapper(current, "~~");
+    for (const marker of ["**", "__", "*", "_", "~~"]) {
+      current = stripBalancedWrapper(current, marker);
+    }
   }
   return current;
 }
@@ -115,9 +108,5 @@ function normalizeTitleContextField(raw: string | undefined, maxChars: number): 
   if (!value) {
     return undefined;
   }
-  const singleLine = value.replace(/\s+/g, " ");
-  if (singleLine.length <= maxChars) {
-    return singleLine;
-  }
-  return `${truncateUtf16Safe(singleLine, maxChars)}...`;
+  return truncateThreadTitleText(value.replace(/\s+/g, " "), maxChars);
 }

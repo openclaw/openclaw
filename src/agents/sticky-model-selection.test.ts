@@ -39,23 +39,22 @@ beforeEach(() => {
 });
 
 describe("persistStickyModelSelection", () => {
-  it.each([
+  it.each<{ name: string; agentId: string; cfg: OpenClawConfig; target: "agent" | "defaults" }>([
     {
       name: "agent entry for an explicit agent model",
       agentId: "work",
       cfg: {
         agents: {
           defaults: { model: "anthropic/claude-opus-4-6" },
-          list: [
-            { id: "main", default: true },
-            {
-              id: "work",
+          entries: {
+            main: {},
+            work: {
               model: {
                 primary: "anthropic/claude-sonnet-4-6",
                 fallbacks: ["openai/gpt-5.6-luna"],
               },
             },
-          ],
+          },
         },
       } satisfies OpenClawConfig,
       target: "agent" as const,
@@ -87,15 +86,14 @@ describe("persistStickyModelSelection", () => {
               fallbacks: ["openai/gpt-5.6-luna"],
             },
           },
-          list: [
-            {
-              id: "work",
+          entries: {
+            work: {
               model: {
                 primary: "anthropic/claude-sonnet-4-6",
                 fallbacks: ["google/gemini-3-pro"],
               },
             },
-          ],
+          },
         },
       } satisfies OpenClawConfig,
       target: "defaults" as const,
@@ -119,8 +117,7 @@ describe("persistStickyModelSelection", () => {
     const persistedPrimary =
       target === "defaults"
         ? mocks.cfg.agents?.defaults?.model
-        : (mocks.cfg.agents?.entries?.[agentId]?.model ??
-          mocks.cfg.agents?.list?.find((entry) => entry.id === agentId)?.model);
+        : mocks.cfg.agents?.entries?.[agentId]?.model;
     if (target === "agent" && agentId === "main") {
       expect(persistedPrimary).toBe("openai/gpt-5.6-sol");
       return;

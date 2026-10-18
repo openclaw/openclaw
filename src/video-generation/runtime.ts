@@ -2,20 +2,17 @@
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseVideoGenerationModelRef } from "../media-generation/model-ref.js";
 import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getVideoGenerationProvider,
   listVideoGenerationProviders,
-  withVideoGenerationProviders,
 } from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
-  buildNoCapabilityModelConfiguredMessage,
-  resolveCapabilityModelCandidates,
   resolveMediaProviderRequestTimeoutMs,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
+import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
@@ -53,10 +50,7 @@ function validateProviderOptionsAgainstDeclaration(params: {
 }): string | undefined {
   const { providerId, model, providerOptions, declaration } = params;
   const keys = Object.keys(providerOptions);
-  if (keys.length === 0) {
-    return undefined;
-  }
-  if (declaration === undefined) {
+  if (keys.length === 0 || declaration === undefined) {
     return undefined;
   }
   if (Object.keys(declaration).length === 0) {
@@ -98,14 +92,17 @@ export async function generateVideo(
   if (deps.getProvider && deps.listProviders) {
     return runVideoGeneration(params, deps);
   }
-  return withVideoGenerationProviders(params.cfg, (providers) => {
-    const lookup = createMediaProviderLookup(providers);
-    return runVideoGeneration(params, {
-      ...deps,
-      getProvider: deps.getProvider ?? lookup.getProvider,
-      listProviders: deps.listProviders ?? lookup.listProviders,
-    });
-  });
+  return withAcquiredPluginCapabilityProviders(
+    { key: "videoGenerationProviders", cfg: params.cfg },
+    (providers) => {
+      const lookup = createMediaProviderLookup(providers);
+      return runVideoGeneration(params, {
+        ...deps,
+        getProvider: deps.getProvider ?? lookup.getProvider,
+        listProviders: deps.listProviders ?? lookup.listProviders,
+      });
+    },
+  );
 }
 
 async function runVideoGeneration(
@@ -118,29 +115,10 @@ async function runVideoGeneration(
   const requestedTimeoutMs =
     params.timeoutMs ??
     resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.video);
-  const candidates = resolveCapabilityModelCandidates({
-    cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.mediaModels?.video,
-    modelOverride: params.modelOverride,
-    parseModelRef: parseVideoGenerationModelRef,
-    agentDir: params.agentDir,
-    listProviders,
-    autoProviderFallback: params.autoProviderFallback,
-  });
-  if (candidates.length === 0) {
-    throw new Error(
-      buildNoCapabilityModelConfiguredMessage({
-        capabilityLabel: "video-generation",
-        modelConfigKey: "mediaModels.video",
-        providers: listProviders(params.cfg),
-        getProviderEnvVars: deps.getProviderEnvVars,
-      }),
-    );
-  }
 
   let skipWarnEmitted = false;
   const warnOnFirstSkip = (reason: string) => {
-    // Only the first skipped candidate warrants a warning; callers log the rest at debug.
+    // Warn once; the coordinator retains every skipped candidate in attempts.
     if (!skipWarnEmitted) {
       skipWarnEmitted = true;
       logger.warn(`video-generation candidate skipped: ${reason}`);
@@ -148,7 +126,9 @@ async function runVideoGeneration(
   };
 
   return runMediaGenerationCandidates({
-    candidates,
+    request: params,
+    listProviders,
+    getProviderEnvVars: deps.getProviderEnvVars,
     capability: "video",
     getProvider: (providerId) => getProvider(providerId, params.cfg),
     onFailure: (attempt) => {
@@ -187,25 +167,18 @@ async function runVideoGeneration(
       });
       if (capabilityMismatch) {
         warnOnFirstSkip(capabilityMismatch);
-        logger.debug(
-          `video-generation candidate skipped (mode or reference capability): ${candidate.provider}/${candidate.model}`,
-        );
         return capabilityMismatch;
       }
 
-      if (
-        params.providerOptions &&
-        typeof params.providerOptions === "object" &&
-        Object.keys(params.providerOptions).length > 0
-      ) {
-        const { capabilities: optCaps } = resolveVideoGenerationModeCapabilities({
-          provider: activeProvider,
-          model: candidate.model,
-          inputImageCount,
-          inputVideoCount,
-        });
+      const { capabilities: modeCapabilities } = resolveVideoGenerationModeCapabilities({
+        provider: activeProvider,
+        model: candidate.model,
+        inputImageCount,
+        inputVideoCount,
+      });
+      if (params.providerOptions) {
         const declaredOptions =
-          optCaps?.providerOptions ?? activeProvider.capabilities.providerOptions ?? undefined;
+          modeCapabilities?.providerOptions ?? activeProvider.capabilities.providerOptions;
         const mismatch = validateProviderOptionsAgainstDeclaration({
           providerId: candidate.provider,
           model: candidate.model,
@@ -214,9 +187,6 @@ async function runVideoGeneration(
         });
         if (mismatch) {
           warnOnFirstSkip(mismatch);
-          logger.debug(
-            `video-generation candidate skipped (providerOptions): ${candidate.provider}/${candidate.model}`,
-          );
           return mismatch;
         }
       }
@@ -230,14 +200,8 @@ async function runVideoGeneration(
       });
       const requestedDuration = params.durationSeconds;
       if (typeof requestedDuration === "number" && Number.isFinite(requestedDuration)) {
-        const { capabilities: durCaps } = resolveVideoGenerationModeCapabilities({
-          provider: activeProvider,
-          model: candidate.model,
-          inputImageCount,
-          inputVideoCount,
-        });
         const maxDuration =
-          durCaps?.maxDurationSeconds ?? activeProvider.capabilities.maxDurationSeconds;
+          modeCapabilities?.maxDurationSeconds ?? activeProvider.capabilities.maxDurationSeconds;
         if (
           !supportedDurations &&
           typeof maxDuration === "number" &&
@@ -248,9 +212,6 @@ async function runVideoGeneration(
         ) {
           const error = `${candidate.provider}/${candidate.model} supports at most ${maxDuration}s per video, ${requestedDuration}s requested; skipping`;
           warnOnFirstSkip(error);
-          logger.debug(
-            `video-generation candidate skipped (duration capability): ${candidate.provider}/${candidate.model}`,
-          );
           return error;
         }
       }

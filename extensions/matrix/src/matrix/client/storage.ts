@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { readDirectoryEntriesSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   isMatrixActiveTokenRootDirectory,
@@ -16,6 +17,7 @@ import {
   assertMatrixSupportedStateFile,
   assertMatrixSupportedStateRoot,
 } from "../retired-state.js";
+import { updateMatrixKeyedState } from "../sqlite-state.js";
 import {
   normalizeMatrixStorageMetadata,
   openMatrixStorageMetaStoreOptions,
@@ -28,7 +30,7 @@ const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";
 
 function openStorageMetaStore(rootDir: string) {
-  return getMatrixRuntime().state.openKeyedStore<MatrixStorageMetadata>(
+  return getMatrixRuntime().state.openKeyedStoreV2<MatrixStorageMetadata>(
     openMatrixStorageMetaStoreOptions(rootDir),
   );
 }
@@ -55,13 +57,6 @@ function resolveStorageRootMtimeMs(rootDir: string): number {
     return 0;
   }
 }
-
-type PopulatedMatrixStorageRoot = {
-  tokenHash: string;
-  rootDir: string;
-  score: number;
-  mtimeMs: number;
-};
 
 async function readStoredRootMetadata(rootDir: string): Promise<MatrixStorageMetadata> {
   await assertMatrixSupportedStateFile(path.join(rootDir, STORAGE_META_FILENAME));
@@ -149,17 +144,9 @@ async function resolvePreferredMatrixStorageRoot(params: {
     mtimeMs: bestCurrentMtimeMs,
   };
 
-  let siblingEntries: fs.Dirent[];
-  try {
-    siblingEntries = fs.readdirSync(parentDir, { withFileTypes: true });
-  } catch {
-    return {
-      rootDir: best.rootDir,
-      tokenHash: best.tokenHash,
-    };
-  }
+  const siblingEntries = readDirectoryEntriesSync(parentDir);
 
-  const compatiblePopulatedSiblings: PopulatedMatrixStorageRoot[] = [];
+  const populatedSiblingTokenHashes: string[] = [];
   const populatedTokenHashes = bestCurrentScore > 0 ? [params.canonicalTokenHash] : [];
   for (const entry of siblingEntries.toSorted((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) {
@@ -191,15 +178,13 @@ async function resolvePreferredMatrixStorageRoot(params: {
       continue;
     }
     populatedTokenHashes.push(entry.name);
-    compatiblePopulatedSiblings.push({
+    populatedSiblingTokenHashes.push(entry.name);
+    const candidate = {
       rootDir: candidateRootDir,
       tokenHash: entry.name,
       score: candidateScore,
       mtimeMs: resolveStorageRootMtimeMs(candidateRootDir),
-    });
-  }
-
-  for (const candidate of compatiblePopulatedSiblings) {
+    };
     if (
       candidate.score > best.score ||
       (best.rootDir !== params.canonicalRootDir &&
@@ -218,7 +203,7 @@ async function resolvePreferredMatrixStorageRoot(params: {
         canonicalTokenHash: params.canonicalTokenHash,
         selectedTokenHash: best.tokenHash,
         populatedTokenHashes,
-        populatedSiblingTokenHashes: compatiblePopulatedSiblings.map((root) => root.tokenHash),
+        populatedSiblingTokenHashes,
         populatedRootCount: populatedTokenHashes.length,
       });
   }
@@ -296,19 +281,15 @@ export async function maybeMigrateLegacyStorage({
     return;
   }
   const syncCache = await import("./sync-cache-state.js");
-  if (!(await syncCache.readLegacyMatrixSyncCacheState(rootDir))) {
+  const persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
+  if (!persisted) {
     return;
   }
 
   const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
-  fs.mkdirSync(rootDir, { recursive: true });
   let migrated = false;
   try {
-    const persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
-    if (!persisted) {
-      return;
-    }
-    const store = getMatrixRuntime().state.openKeyedStore<
+    const store = getMatrixRuntime().state.openKeyedStoreV2<
       import("./sync-cache-state.js").MatrixSyncCacheRecord
     >(syncCache.openMatrixSyncCacheStoreOptions(rootDir));
     if (!(await syncCache.hasMatrixSyncCacheStateInStore({ storageRootDir: rootDir, store }))) {
@@ -382,37 +363,12 @@ async function mutateStorageMeta(rootDir: string, mutation: StorageMetaMutation)
   try {
     const store = openStorageMetaStore(rootDir);
     const decode = (value: unknown) => normalizeMatrixStorageMetadata(value) ?? {};
-    if (!store.observe || !store.compareAndApply) {
-      // The published >=2026.9.4 host floor predates data-only comparisons.
-      const legacyStore = getMatrixRuntime().state.openSyncKeyedStore<MatrixStorageMetadata>(
-        openMatrixStorageMetaStoreOptions(rootDir),
-      );
-      const next = prepareStorageMetaMutation(
-        decode(legacyStore.lookup(STORAGE_META_STATE_KEY)),
-        mutation,
-      );
-      if (!next) {
-        return false;
-      }
-      legacyStore.register(STORAGE_META_STATE_KEY, next);
-      return true;
-    }
-    let observation = await store.observe(STORAGE_META_STATE_KEY);
-    for (;;) {
-      const next = prepareStorageMetaMutation(decode(observation.value), mutation);
-      if (!next) {
-        return false;
-      }
-      const result = await store.compareAndApply(STORAGE_META_STATE_KEY, observation.comparison, {
-        operation: "update",
-        action: "set",
-        value: next,
-      });
-      if (result.status !== "conflict") {
-        return true;
-      }
-      observation = result.current;
-    }
+    return await updateMatrixKeyedState(
+      store,
+      STORAGE_META_STATE_KEY,
+      (current) => prepareStorageMetaMutation(decode(current), mutation) ?? undefined,
+      "skip",
+    );
   } catch {
     return false;
   }

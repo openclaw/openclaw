@@ -2,6 +2,7 @@ import { expect, onTestFinished, vi } from "vitest";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import type { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 
 const mocks = vi.hoisted(() => ({
   abortable: vi.fn(),
@@ -18,9 +19,13 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
   flushPendingToolResultsAfterIdle: mocks.flushPendingToolResultsAfterIdle,
 }));
 vi.mock("./abortable.js", () => ({ abortable: mocks.abortable }));
-vi.mock("./attempt-finalize.js", () => ({
-  createEmbeddedAttemptRunAbort: mocks.createRunAbort,
-}));
+vi.mock("./attempt-finalize.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./attempt-finalize.js")>();
+  return {
+    ...actual,
+    createEmbeddedAttemptRunAbort: mocks.createRunAbort,
+  };
+});
 vi.mock("./attempt-history-prepare.js", () => ({
   prepareEmbeddedAttemptHistory: mocks.prepareHistory,
 }));
@@ -118,7 +123,7 @@ export async function createFixture(
     anthropicPayloadLogger: {},
     boundary: { orphanRepair: { removeLeaf: true } },
     cacheTrace: {},
-    contextGuards: { recordCacheTouch: vi.fn() },
+    contextGuards: { checkMidTurnPrecheck: vi.fn(), recordCacheTouch: vi.fn() },
     isOpenAIResponsesApi: true,
     sessionManager,
     settleTracker: { abortActiveSession, trackPromptSettlePromise },
@@ -150,7 +155,10 @@ export async function createFixture(
       bundleTools: {},
       sessionRuntime,
       systemPrompt: { runtimeChannel: "telegram" },
-      toolBase: { skillInstructionDeliveryCache, nestedToolActivities: new Map() },
+      toolBase: {
+        skillInstructionDeliveryCache,
+        nestedToolActivityState: createAttemptNestedToolActivityState(),
+      },
       toolCatalog: {
         toolSearchRunPlan: {
           capabilityToolNames: new Set(["read"]),
@@ -200,7 +208,6 @@ export async function createFixture(
     order.push("history");
     return {
       contextEnginePromptAuthority: "assembled",
-      contextEngineAssemblySucceeded: true,
     };
   });
   mocks.createRunAbort.mockImplementation(() => {

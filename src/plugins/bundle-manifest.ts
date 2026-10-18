@@ -143,22 +143,7 @@ function resolveCodexComponentDirs(
   return pluginCacheExistsSync(path.join(rootDir, component)) ? [component] : [];
 }
 
-function resolveCursorCommandRootDirs(raw: Record<string, unknown>, rootDir: string): string[] {
-  return resolveBundleComponentPaths(raw.commands, rootDir, [".cursor/commands"]);
-}
-
-function resolveCursorSkillDirs(raw: Record<string, unknown>, rootDir: string): string[] {
-  return mergeBundlePathLists(
-    resolveBundleComponentPaths(raw.skills, rootDir, ["skills"]),
-    resolveCursorCommandRootDirs(raw, rootDir),
-  );
-}
-
-function resolveCursorAgentDirs(raw: Record<string, unknown>, rootDir: string): string[] {
-  return resolveBundleComponentPaths(raw.subagents ?? raw.agents, rootDir, [".cursor/agents"]);
-}
-
-function resolveBundleComponentPaths(
+export function resolveBundleComponentPaths(
   value: unknown,
   rootDir: string,
   defaults: string[],
@@ -170,11 +155,22 @@ function resolveBundleComponentPaths(
   return mergeBundlePathLists(existingDefaults, declared);
 }
 
-function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string): string[] {
+function resolveCursorComponents(
+  raw: Record<string, unknown>,
+  rootDir: string,
+): Pick<BundlePluginManifest, "skills" | "capabilities"> {
+  const commands = resolveBundleComponentPaths(raw.commands, rootDir, [".cursor/commands"]);
+  const skills = mergeBundlePathLists(
+    resolveBundleComponentPaths(raw.skills, rootDir, ["skills"]),
+    commands,
+  );
+  const agents = resolveBundleComponentPaths(raw.subagents ?? raw.agents, rootDir, [
+    ".cursor/agents",
+  ]);
   const capabilities = [
-    ...(resolveCursorSkillDirs(raw, rootDir).length > 0 ? ["skills"] : []),
-    ...(resolveCursorCommandRootDirs(raw, rootDir).length > 0 ? ["commands"] : []),
-    ...(resolveCursorAgentDirs(raw, rootDir).length > 0 ? ["agents"] : []),
+    ...(skills.length > 0 ? ["skills"] : []),
+    ...(commands.length > 0 ? ["commands"] : []),
+    ...(agents.length > 0 ? ["agents"] : []),
   ];
   for (const [capability, defaultPath] of [
     ["hooks", ".cursor/hooks.json"],
@@ -188,15 +184,7 @@ function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string):
       capabilities.push(capability);
     }
   }
-  return capabilities;
-}
-
-function resolveAgentSkillDirs(rootDir: string): string[] {
-  try {
-    return pluginCacheStatSync(path.join(rootDir, "skills"))?.isDirectory() ? ["skills"] : [];
-  } catch {
-    return [];
-  }
+  return { skills, capabilities };
 }
 
 function resolveAgentActivation(
@@ -286,7 +274,9 @@ export function loadBundleManifest(params: {
         manifestPath: loaded.manifestPath,
       };
     }
-    manifest.skills = resolveAgentSkillDirs(params.rootDir);
+    manifest.skills = pluginCacheStatSync(path.join(params.rootDir, "skills"))?.isDirectory()
+      ? ["skills"]
+      : [];
     manifest.activation = resolveAgentActivation(raw, loaded.manifestPath);
     manifest.capabilities = [
       ...(manifest.skills.length > 0 ? ["skills"] : []),
@@ -313,8 +303,7 @@ export function loadBundleManifest(params: {
         }
       }
     } else if (params.bundleFormat === "cursor") {
-      manifest.skills = resolveCursorSkillDirs(raw, params.rootDir);
-      manifest.capabilities = buildCursorCapabilities(raw, params.rootDir);
+      Object.assign(manifest, resolveCursorComponents(raw, params.rootDir));
     } else {
       Object.assign(manifest, resolveClaudeComponents(raw, params.rootDir));
     }

@@ -127,29 +127,30 @@ esac
 }
 
 describe.skipIf(process.platform === "win32")("Docker package identity report", () => {
-  it.each(["npm", "pnpm", "bun"] as const)(
-    "rejects a %s manifest version that differs from the artifact",
-    (manager) => {
+  it.each(
+    (["npm", "pnpm", "bun"] as const).flatMap((manager) => [
+      {
+        manager,
+        field: "Manifest",
+        value: "11.2.30",
+        diagnostic: "installed manifest version '11.2.30' != artifact '1.2.3'",
+      },
+      {
+        manager,
+        field: "Cli",
+        value: "OpenClaw 11.2.30 (wrong)",
+        diagnostic: "CLI output parses to '11.2.30'",
+      },
+    ]),
+  )(
+    "rejects a stale $manager $field version even when it contains the artifact version",
+    ({ manager, field, value, diagnostic }) => {
       const { result } = runPackageIdentity({
         artifactVersion: "1.2.3",
-        [`${manager}Manifest`]: "11.2.30",
+        [`${manager}${field}`]: value,
       });
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain(
-        `[${manager}] installed manifest version '11.2.30' != artifact '1.2.3'`,
-      );
-    },
-  );
-
-  it.each(["npm", "pnpm", "bun"] as const)(
-    "rejects a stale %s CLI version containing the artifact version as a substring",
-    (manager) => {
-      const { result } = runPackageIdentity({
-        artifactVersion: "1.2.3",
-        [`${manager}Cli`]: "OpenClaw 11.2.30 (wrong)",
-      });
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain(`[${manager}] CLI output parses to '11.2.30'`);
+      expect(result.stderr).toContain(`[${manager}] ${diagnostic}`);
     },
   );
 

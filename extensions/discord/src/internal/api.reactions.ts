@@ -3,27 +3,25 @@ import { normalizeDiscordMessageId } from "./api.messages.js";
 import type { RequestQuery } from "./rest-scheduler.js";
 import type { RequestClient } from "./rest.js";
 
-export async function createOwnMessageReaction(
-  rest: RequestClient,
-  channelId: string,
-  messageId: string,
-  encodedEmoji: string,
-): Promise<void> {
-  await rest.put(
-    Routes.channelMessageOwnReaction(channelId, normalizeDiscordMessageId(messageId), encodedEmoji),
-  );
+function ownReactionMutation(method: "put" | "delete") {
+  return async (
+    rest: RequestClient,
+    channelId: string,
+    messageId: string,
+    encodedEmoji: string,
+  ): Promise<void> => {
+    await rest[method](
+      Routes.channelMessageOwnReaction(
+        channelId,
+        normalizeDiscordMessageId(messageId),
+        encodedEmoji,
+      ),
+    );
+  };
 }
 
-export async function deleteOwnMessageReaction(
-  rest: RequestClient,
-  channelId: string,
-  messageId: string,
-  encodedEmoji: string,
-): Promise<void> {
-  await rest.delete(
-    Routes.channelMessageOwnReaction(channelId, normalizeDiscordMessageId(messageId), encodedEmoji),
-  );
-}
+export const createOwnMessageReaction = ownReactionMutation("put");
+export const deleteOwnMessageReaction = ownReactionMutation("delete");
 
 export async function listMessageReactionUsers(
   rest: RequestClient,

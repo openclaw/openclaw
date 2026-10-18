@@ -1,7 +1,6 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { resolveAllowlistProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeMattermostMessagingTarget } from "../normalize.js";
 import { resolveMattermostAccount } from "./accounts.js";
@@ -9,7 +8,6 @@ import {
   createMattermostClient,
   fetchMattermostChannel,
   fetchMattermostChannelPosts,
-  type MattermostFetch,
   type MattermostPost,
 } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -34,14 +32,14 @@ function isCurrentMattermostReadTarget(params: {
 }): boolean {
   const toolContext = params.context.toolContext;
   const nativeChannelId = toolContext?.currentChannelId;
-  if (typeof nativeChannelId === "string" && nativeChannelId.trim()) {
+  if (nativeChannelId?.trim()) {
     // Mattermost DMs route outbound messages via `user:<peerId>`, while the
     // trusted native channel ID remains the exact conversation identity.
     return parseMattermostChannelTarget(nativeChannelId) === params.channelId;
   }
   const messagingTarget = toolContext?.currentMessagingTarget;
   return (
-    typeof messagingTarget === "string" &&
+    messagingTarget !== undefined &&
     Boolean(messagingTarget.trim()) &&
     parseMattermostChannelTarget(messagingTarget) === params.channelId
   );
@@ -77,7 +75,6 @@ export async function readMattermostMessages(params: {
   after?: string;
   accountId?: string | null;
   context: ReadContext;
-  fetchImpl?: MattermostFetch;
 }): Promise<{ messages: MattermostPost[]; hasMore: boolean }> {
   const account = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.enabled) {
@@ -92,8 +89,7 @@ export async function readMattermostMessages(params: {
   const client = createMattermostClient({
     baseUrl,
     botToken,
-    fetchImpl: params.fetchImpl,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+    allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
   });
   if (params.context.conversationReadOrigin !== "direct-operator") {
     const requesterAccountId = params.context.requesterAccountId?.trim();

@@ -47,7 +47,8 @@ async function invoke(
 }
 
 describe("storage Gateway methods", () => {
-  it("describes loaded providers without opening or activating providers", async () => {
+  it("lists sanitized destinations without opening roots or activating providers", async () => {
+    const root = path.join(tempDirs.make("openclaw-storage-rpc-"), "missing");
     const open = vi.fn();
     const storageProviders: StorageRegistry["storageProviders"] = new Map();
     storageProviders.set("memory", {
@@ -73,6 +74,13 @@ describe("storage Gateway methods", () => {
         storage: {
           locations: {
             archive: { provider: "memory", settings: { bucket: "example" }, encryption: "none" },
+            local: {
+              provider: "filesystem",
+              settings: { path: root },
+              encryption: {
+                passphrase: { source: "env", provider: "default", id: "STORAGE_TEST_KEY" },
+              },
+            },
             opaque: { provider: "opaque", settings: {}, encryption: "none" },
             unavailable: { provider: "unloaded", settings: {}, encryption: "none" },
           },
@@ -90,82 +98,39 @@ describe("storage Gateway methods", () => {
             displayTarget: "memory://example",
             encrypted: false,
           },
+          { name: "local", provider: "filesystem", displayTarget: root, encrypted: true },
           { name: "opaque", provider: "opaque", encrypted: false },
           { name: "unavailable", provider: "unloaded", encrypted: false },
         ],
       },
       undefined,
     );
+    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
     expect(open).not.toHaveBeenCalled();
     expect(pluginInspection).not.toHaveBeenCalled();
   });
 
-  it("does not activate an unavailable provider through CLI plugin inspection", async () => {
-    const respond = await invoke(
-      "storage.locations.probe",
-      {
-        storage: {
-          locations: { remote: { provider: "fixture-storage", settings: {}, encryption: "none" } },
-        },
-      },
-      { name: "remote" },
-    );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ state: "error" }),
-      undefined,
-    );
-    expect(pluginInspection).not.toHaveBeenCalled();
-  });
-
-  it("lists config without opening a missing destination or exposing settings and secrets", async () => {
-    const root = path.join(tempDirs.make("openclaw-storage-rpc-"), "missing");
-    const config: OpenClawConfig = {
-      storage: {
-        locations: {
-          archive: {
-            provider: "filesystem",
-            settings: { path: root },
-            encryption: {
-              passphrase: { source: "env", provider: "default", id: "STORAGE_TEST_KEY" },
-            },
+  it.each([
+    ["fixture-storage", "error"],
+    ["filesystem", "unavailable"],
+  ])(
+    "probes unavailable %s without creating roots or activating plugins",
+    async (provider, state) => {
+      const root = path.join(tempDirs.make("openclaw-storage-rpc-"), "missing");
+      const respond = await invoke(
+        "storage.locations.probe",
+        {
+          storage: {
+            locations: { archive: { provider, settings: { path: root }, encryption: "none" } },
           },
         },
-      },
-    };
-    const respond = await invoke("storage.locations.list", config, {});
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        locations: [
-          { name: "archive", provider: "filesystem", displayTarget: root, encrypted: true },
-        ],
-      },
-      undefined,
-    );
-    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("reports an unavailable destination through probe without creating its root", async () => {
-    const root = path.join(tempDirs.make("openclaw-storage-rpc-"), "missing");
-    const respond = await invoke(
-      "storage.locations.probe",
-      {
-        storage: {
-          locations: {
-            archive: { provider: "filesystem", settings: { path: root }, encryption: "none" },
-          },
-        },
-      },
-      { name: "archive" },
-    );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ state: "unavailable" }),
-      undefined,
-    );
-    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+        { name: "archive" },
+      );
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ state }), undefined);
+      expect(pluginInspection).not.toHaveBeenCalled();
+      await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it.each(["storage.locations.list", "storage.locations.probe"] as const)(
     "%s is available with read scope and rejects unknown request properties",

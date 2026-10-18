@@ -34,15 +34,16 @@ function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
   );
 }
 
-function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
-  if (
-    replyOperation?.result?.kind === "aborted" &&
-    replyOperation.result.code === "aborted_for_restart"
-  ) {
-    return true;
-  }
-  const abortSignal = replyOperation?.abortSignal;
-  return abortSignal?.aborted === true && isAgentRunRestartAbortReason(abortSignal.reason);
+function hasReplyOperationAbort(
+  replyOperation: ReplyOperation | undefined,
+  code: "aborted_for_restart" | "aborted_for_supersession",
+  matchesReason: (reason: unknown) => boolean,
+): boolean {
+  return (
+    (replyOperation?.result?.kind === "aborted" && replyOperation.result.code === code) ||
+    (replyOperation?.abortSignal?.aborted === true &&
+      matchesReason(replyOperation.abortSignal.reason))
+  );
 }
 
 export function resolveReplyOperationTerminationFields(
@@ -60,14 +61,11 @@ export function resolveReplyOperationTerminationFields(
 }
 
 export function isReplyOperationSuperseded(replyOperation?: ReplyOperation): boolean {
-  if (
-    replyOperation?.result?.kind === "aborted" &&
-    replyOperation.result.code === "aborted_for_supersession"
-  ) {
-    return true;
-  }
-  const abortSignal = replyOperation?.abortSignal;
-  return abortSignal?.aborted === true && isAgentRunSupersededAbortReason(abortSignal.reason);
+  return hasReplyOperationAbort(
+    replyOperation,
+    "aborted_for_supersession",
+    isAgentRunSupersededAbortReason,
+  );
 }
 
 export function resolveReplyOperationAbortReason(
@@ -75,15 +73,16 @@ export function resolveReplyOperationAbortReason(
   error?: unknown,
   signal: AbortSignal | undefined = replyOperation?.abortSignal,
 ): "user" | "restart" | "superseded" | undefined {
+  const errorStopReason = resolveAgentRunErrorLifecycleFields(error, undefined).stopReason;
   // Operation-owned settlement precedes the caller signal, which precedes thrown markers.
-  return isReplyOperationRestartAbort(replyOperation)
+  return hasReplyOperationAbort(replyOperation, "aborted_for_restart", isAgentRunRestartAbortReason)
     ? "restart"
     : isReplyOperationSuperseded(replyOperation)
       ? "superseded"
       : (resolveSignalAbortReason(signal) ??
-        (isAgentRunRestartAbortReason(error)
+        (errorStopReason === "restart"
           ? "restart"
-          : isAgentRunSupersededAbortReason(error)
+          : errorStopReason === "superseded"
             ? "superseded"
             : isAgentRunDirectAbortReason(error) || isReplyOperationUserAbort(replyOperation)
               ? "user"

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { SdkError, SdkErrorCode } from "@modelcontextprotocol/server";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   areDiagnosticsEnabledForProcess,
@@ -188,7 +188,7 @@ describe("MCP serving registration ownership", () => {
     "releases registrations and only its owned scheduler after validation fails (%s)",
     async (ownership) => {
       const fixture = nativePlugin();
-      const clock = createGatewaySchedulerClock(Date.now());
+      const clock = createGatewaySchedulerClock(0);
       const scheduler = createTestGatewayScheduler(clock.clock);
       const host = ownership === "borrowed" ? new LegacyPluginSdkResourceHost() : undefined;
       host?.bindScheduler(scheduler);
@@ -276,7 +276,7 @@ describe("MCP serving registration ownership", () => {
       await Promise.all([server.connect(inbound), client.connect(outbound)]);
       const controller = new AbortController();
       call = client
-        .callTool({ name: "mcp_native_read" }, undefined, { signal: controller.signal })
+        .callTool({ name: "mcp_native_read" }, { signal: controller.signal })
         .catch((error: unknown) => error);
       await Promise.race([
         fixture.state.started.promise,
@@ -392,9 +392,14 @@ describe("MCP serving registration ownership", () => {
         (error: unknown) => error,
       );
       await connection;
-      const messages = causes(failure).map(String);
+      const failures = causes(failure);
+      const messages = failures.map(String);
       expect(messages).toHaveLength(3);
-      expect(messages.filter((message) => message.includes("Already connected"))).toHaveLength(1);
+      expect(
+        failures.filter(
+          (error) => error instanceof SdkError && error.code === SdkErrorCode.AlreadyConnected,
+        ),
+      ).toHaveLength(1);
       expect(
         messages.filter((message) => message.includes("synthetic transport close failure")),
       ).toHaveLength(1);

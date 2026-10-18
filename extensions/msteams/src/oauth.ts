@@ -2,14 +2,10 @@ import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-a
 import {
   generateOAuthState,
   parseOAuthCallbackInput,
-  waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { buildMSTeamsAuthUrl, shouldUseManualOAuthFlow } from "./oauth.flow.js";
+import { buildMSTeamsAuthUrl } from "./oauth.flow.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
-  MSTEAMS_OAUTH_CALLBACK_PATH,
-  MSTEAMS_OAUTH_CALLBACK_PORT,
-  MSTEAMS_OAUTH_REDIRECT_URI,
   type MSTeamsDelegatedOAuthContext,
   type MSTeamsDelegatedTokens,
 } from "./oauth.shared.js";
@@ -23,24 +19,14 @@ export async function loginMSTeamsDelegated(
     tenantId: string;
     clientId: string;
     clientSecret: string;
-    scopes?: readonly string[];
   },
 ): Promise<MSTeamsDelegatedTokens> {
-  const scopes = params.scopes ?? MSTEAMS_DEFAULT_DELEGATED_SCOPES;
-  const needsManual = shouldUseManualOAuthFlow(ctx.isRemote);
-
   await ctx.note(
-    needsManual
-      ? [
-          "You are running in a remote/VPS environment.",
-          "A URL will be shown for you to open in your LOCAL browser.",
-          "After signing in, copy the redirect URL and paste it back here.",
-        ].join("\n")
-      : [
-          "Browser will open for Microsoft authentication.",
-          `Sign in to grant delegated permissions for MSTeams.`,
-          `The callback will be captured automatically on localhost:${MSTEAMS_OAUTH_CALLBACK_PORT}.`,
-        ].join("\n"),
+    [
+      "You are running in a remote/VPS environment.",
+      "A URL will be shown for you to open in your LOCAL browser.",
+      "After signing in, copy the redirect URL and paste it back here.",
+    ].join("\n"),
     "MSTeams Delegated OAuth",
   );
 
@@ -51,68 +37,9 @@ export async function loginMSTeamsDelegated(
     clientId: params.clientId,
     challenge,
     state,
-    scopes,
+    scopes: MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   });
 
-  if (needsManual) {
-    return manualFlow(ctx, authUrl, state, verifier, params);
-  }
-
-  ctx.progress.update("Complete sign-in in browser...");
-  try {
-    await ctx.openUrl(authUrl);
-  } catch {
-    ctx.log(`\nOpen this URL in your browser:\n\n${authUrl}\n`);
-  }
-
-  try {
-    const { code } = await waitForLocalOAuthCallback({
-      expectedState: state,
-      timeoutMs: 5 * 60 * 1000,
-      port: MSTEAMS_OAUTH_CALLBACK_PORT,
-      callbackPath: MSTEAMS_OAUTH_CALLBACK_PATH,
-      redirectUri: MSTEAMS_OAUTH_REDIRECT_URI,
-      successTitle: "MSTeams Delegated OAuth complete",
-      progressMessage: `Waiting for OAuth callback on ${MSTEAMS_OAUTH_REDIRECT_URI}...`,
-      onProgress: (msg) => ctx.progress.update(msg),
-    });
-    ctx.progress.update("Exchanging authorization code for tokens...");
-    return await exchangeMSTeamsCodeForTokens({
-      tenantId: params.tenantId,
-      clientId: params.clientId,
-      clientSecret: params.clientSecret,
-      code,
-      verifier,
-      scopes,
-    });
-  } catch (err) {
-    // EADDRINUSE or other listen errors: fall back to manual flow
-    if (
-      err instanceof Error &&
-      (err.message.includes("EADDRINUSE") ||
-        err.message.includes("port") ||
-        err.message.includes("listen"))
-    ) {
-      ctx.progress.update("Local callback server failed. Switching to manual mode...");
-      return manualFlow(ctx, authUrl, state, verifier, params, err);
-    }
-    throw err;
-  }
-}
-
-async function manualFlow(
-  ctx: MSTeamsDelegatedOAuthContext,
-  authUrl: string,
-  state: string,
-  verifier: string,
-  params: {
-    tenantId: string;
-    clientId: string;
-    clientSecret: string;
-    scopes?: readonly string[];
-  },
-  cause?: Error,
-): Promise<MSTeamsDelegatedTokens> {
   ctx.progress.update("OAuth URL ready");
   ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
   ctx.progress.update("Waiting for you to paste the callback URL...");
@@ -123,10 +50,10 @@ async function manualFlow(
       "Paste the full redirect URL (including code and state parameters), not just the authorization code.",
   });
   if ("error" in parsed) {
-    throw new Error(parsed.error, cause ? { cause } : undefined);
+    throw new Error(parsed.error);
   }
   if (parsed.state !== state) {
-    throw new Error("OAuth state mismatch - please try again", cause ? { cause } : undefined);
+    throw new Error("OAuth state mismatch - please try again");
   }
   ctx.progress.update("Exchanging authorization code for tokens...");
   return exchangeMSTeamsCodeForTokens({
@@ -135,6 +62,5 @@ async function manualFlow(
     clientSecret: params.clientSecret,
     code: parsed.code,
     verifier,
-    scopes: params.scopes,
   });
 }

@@ -58,35 +58,94 @@ function fixture() {
 }
 
 describe("explicit managed handoff test binding", () => {
-  it("opens the real lease store with a replaced environment and no NODE_OPTIONS", () => {
-    const { root, binding, run } = fixture();
-    const env: NodeJS.ProcessEnv = { ...resolveServiceManagerEnv(), HOME: root, USERPROFILE: root };
-    delete env.NODE_OPTIONS;
+  it.each(["consumer", "preload"])("credits only target consumer resolution (%s)", (phase) => {
+    const { root, binding, program, run } = fixture();
+    const env: NodeJS.ProcessEnv = { ...resolveServiceManagerEnv() };
+    if (phase === "consumer") {
+      Object.assign(env, { HOME: root, USERPROFILE: root });
+      delete env.NODE_OPTIONS;
+    } else {
+      fs.writeFileSync(program, 'process.stdout.write("entrypoint-ran");');
+    }
     const child = run(env);
     expect(child.status, child.stderr).toBe(0);
-    const result = JSON.parse(child.stdout);
-    expect(result).toMatchObject({
-      databasePath: binding.databasePath,
-      observed: { kind: "current", lease: { owner: "binding-owner" } },
-      result: { kind: "absent" },
-      nodeOptions: null,
-    });
-    expect(fs.statSync(binding.databasePath).isFile()).toBe(true);
-    expect(binding.assertPath(result.databasePath)).toBe(binding.databasePath);
-    assertManagedHandoffTestConsumer(binding, child.pid, path.resolve("src"));
+    if (phase === "consumer") {
+      const result = JSON.parse(child.stdout);
+      expect(result).toMatchObject({
+        databasePath: binding.databasePath,
+        observed: { kind: "current", lease: { owner: "binding-owner" } },
+        result: { kind: "absent" },
+        nodeOptions: null,
+      });
+      expect(fs.statSync(binding.databasePath).isFile()).toBe(true);
+      expect(binding.assertPath(result.databasePath)).toBe(binding.databasePath);
+      assertManagedHandoffTestConsumer(binding, child.pid, path.resolve("src"));
+    } else {
+      expect(child.stdout).toBe("entrypoint-ran");
+      expect(fs.readdirSync(root).some((name) => name.startsWith("preflight-"))).toBe(true);
+      expect(() =>
+        assertManagedHandoffTestConsumer(binding, child.pid, path.resolve("test")),
+      ).toThrow(/No bound handoff resolver witness/);
+      expect(fs.existsSync(binding.databasePath)).toBe(false);
+    }
   });
 
-  it("does not credit preload setup as target consumer use", () => {
-    const { binding, program, root, run } = fixture();
-    fs.writeFileSync(program, 'process.stdout.write("entrypoint-ran");');
-    const child = run();
+  it("admits a second worker while another is publishing its resolver shim", () => {
+    const { root, binding, program } = fixture();
+    const workerPath = path.join(root, "paused-consumer.mjs");
+    fs.writeFileSync(
+      workerPath,
+      `import fs from "node:fs";
+import { parentPort, workerData } from "node:worker_threads";
+const write = fs.writeFileSync;
+let paused = false;
+fs.writeFileSync = (file, source, options) => {
+  if (workerData.pause && !paused && String(file).includes("fs-safe-temp-")) {
+    paused = true;
+    const fd = fs.openSync(file, "wx", 0o600);
+    try {
+      parentPort.postMessage("publishing");
+      Atomics.wait(new Int32Array(workerData.gate), 0, 0);
+      return write(fd, source);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+  return write(file, source, options);
+};
+await import(${JSON.stringify(pathToFileURL(binding.preloadPath).href)});
+parentPort.close();
+`,
+    );
+    fs.writeFileSync(
+      program,
+      `import assert from "node:assert/strict";
+import { once } from "node:events";
+import { Worker } from "node:worker_threads";
+const gate = new SharedArrayBuffer(4);
+const launch = (pause) => new Worker(${JSON.stringify(workerPath)}, {
+  execArgv: [], workerData: { pause, gate },
+});
+const first = launch(true);
+const firstExit = once(first, "exit");
+assert.deepEqual(await once(first, "message"), ["publishing"]);
+try {
+  const second = launch(false);
+  assert.deepEqual(await once(second, "exit"), [0]);
+} finally {
+  Atomics.store(new Int32Array(gate), 0, 1);
+  Atomics.notify(new Int32Array(gate), 0);
+  assert.deepEqual(await firstExit, [0]);
+}
+`,
+    );
+    const child = spawnSync(requireNodeTool("node"), [program], {
+      env: resolveServiceManagerEnv(),
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+    expect(child.error).toBeUndefined();
     expect(child.status, child.stderr).toBe(0);
-    expect(child.stdout).toBe("entrypoint-ran");
-    expect(fs.readdirSync(root).some((name) => name.startsWith("preflight-"))).toBe(true);
-    expect(() =>
-      assertManagedHandoffTestConsumer(binding, child.pid, path.resolve("test")),
-    ).toThrow(/No bound handoff resolver witness/);
-    expect(fs.existsSync(binding.databasePath)).toBe(false);
   });
 
   it.each([
@@ -122,8 +181,9 @@ describe("explicit managed handoff test binding", () => {
     },
   );
 
-  it("preserves a separately resolved consumer package's import and require conditions", () => {
+  it("preserves consumer import/require conditions and explicitly selected caches", () => {
     const { root, binding, program, run } = fixture();
+    const cache = temporary.make("openclaw-explicit-cache-");
     const consumer = path.join(root, "consumer-package");
     const dependency = path.join(consumer, "node_modules", "@openclaw", "fs-safe");
     fs.mkdirSync(dependency, { recursive: true });
@@ -158,6 +218,7 @@ describe("explicit managed handoff test binding", () => {
         `const imported = await import(${JSON.stringify(pathToFileURL(esmConsumer).href)});`,
         "process.stdout.write(JSON.stringify([required, imported].map((temp) => ({",
         '  root: temp.resolveSecureTempRoot({ preferredDir: "/tmp/openclaw", fallbackPrefix: "openclaw", skipPreferredOnWindows: true }),',
+        `  cache: temp.resolveSecureTempRoot({ preferredDir: ${JSON.stringify(cache)}, fallbackPrefix: "cache", skipPreferredOnWindows: false }),`,
         "  consumer: temp.fixtureConsumer,",
         "}))));",
       ].join("\n"),
@@ -165,35 +226,25 @@ describe("explicit managed handoff test binding", () => {
     const child = run();
     expect(child.status, child.stderr).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual([
-      { root, consumer: "commonjs" },
-      { root, consumer: "esm" },
+      { root, cache, consumer: "commonjs" },
+      { root, cache, consumer: "esm" },
     ]);
     assertManagedHandoffTestConsumer(binding, child.pid, root);
   });
 
-  it("preserves an explicitly selected application cache", () => {
-    const { program, run } = fixture();
-    const cache = temporary.make("openclaw-explicit-cache-");
-    fs.writeFileSync(
-      program,
-      [
-        'import { createRequire } from "node:module";',
-        `const require = createRequire(${JSON.stringify(path.join(process.cwd(), "package.json"))});`,
-        'const { resolveSecureTempRoot } = require("@openclaw/fs-safe/temp");',
-        `process.stdout.write(resolveSecureTempRoot({ preferredDir: ${JSON.stringify(cache)}, fallbackPrefix: "cache", skipPreferredOnWindows: false }));`,
-      ].join("\n"),
-    );
-    const child = run();
-    expect(child.status, child.stderr).toBe(0);
-    expect(child.stdout).toBe(cache);
-  });
-
-  it("refuses a directory alias before creating a preload in its target", () => {
+  it("refuses aliased, shared, and relative binding roots without allocating there", () => {
     const target = temporary.make("openclaw-handoff-alias-target-");
     const root = temporary.make("openclaw-handoff-alias-container-");
     const alias = path.join(root, "alias");
     fs.symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
-    expect(() => createManagedHandoffTestBinding(alias)).toThrow(/must be real/);
+    for (const [directory, error] of [
+      [alias, /must be real/],
+      ["/tmp/openclaw", /Shared/],
+      ["/private/tmp/openclaw", /Shared/],
+      ["relative-handoff", /absolute/],
+    ] as const) {
+      expect(() => createManagedHandoffTestBinding(directory)).toThrow(error);
+    }
     expect(fs.readdirSync(target)).toEqual([]);
   });
 
@@ -233,10 +284,4 @@ describe("explicit managed handoff test binding", () => {
       expect(fs.readFileSync(protectedFile, "utf8")).toBe("unchanged");
     },
   );
-
-  it("refuses shared and relative binding roots without allocating there", () => {
-    expect(() => createManagedHandoffTestBinding("/tmp/openclaw")).toThrow(/Shared/);
-    expect(() => createManagedHandoffTestBinding("/private/tmp/openclaw")).toThrow(/Shared/);
-    expect(() => createManagedHandoffTestBinding("relative-handoff")).toThrow(/absolute/);
-  });
 });

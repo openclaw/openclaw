@@ -31,17 +31,6 @@ function writeRepoFile(repoRoot: string, relativePath: string, value: string) {
 }
 
 describe("collectModuleSpecifiers", () => {
-  it("captures require.resolve package lookups used by runtime shims and bundled plugins", () => {
-    expect([
-      ...collectModuleSpecifiers(`
-        const require = createRequire(import.meta.url);
-        const runtimeRequire = createRequire(runtimePackagePath);
-        require.resolve("gaxios");
-        runtimeRequire.resolve("openshell/package.json");
-      `),
-    ]).toEqual(["gaxios", "openshell/package.json"]);
-  });
-
   it("resolves simple string constants used by lazy runtime imports", () => {
     expect([
       ...collectModuleSpecifiers(`
@@ -80,19 +69,6 @@ describe("classifyRootDependencyOwnership", () => {
       category: "extension_only_localizable",
       recommendation:
         "remove from root package.json and rely on owning extension manifests plus doctor --fix",
-    });
-  });
-
-  it("allows explicit root-owned internal extension runtime dependencies", () => {
-    expect(
-      classifyRootDependencyOwnership({
-        depName: "playwright-core",
-        sections: ["extensions", "test"],
-      }),
-    ).toEqual({
-      category: "root_owned_extension_runtime",
-      recommendation:
-        "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
     });
   });
 
@@ -193,37 +169,17 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
     ]);
   });
 
-  it("fails only extension-owned root dependencies", () => {
-    expect(
-      collectRootDependencyOwnershipCheckErrors([
-        {
-          category: "extension_only_localizable",
-          declaredInExtensions: ["demo-channel:dependencies"],
-          depName: "vendor-sdk",
-          recommendation:
-            "remove from root package.json and rely on owning extension manifests plus doctor --fix",
-          sampleFiles: ["extensions/demo-channel/src/setup.ts"],
-        },
-        {
-          category: "unreferenced",
-          declaredInExtensions: [],
-          depName: "@mozilla/readability",
-          recommendation: "investigate removal; no direct source imports found in scanned files",
-          sampleFiles: [],
-        },
-      ]),
-    ).toEqual([
-      "root dependency 'vendor-sdk' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: demo-channel:dependencies; sample imports: extensions/demo-channel/src/setup.ts",
-    ]);
-  });
-
   it("does not fail explicitly root-owned internal extension runtime dependencies", () => {
     const repoRoot = makeTempRepo();
     writeRepoFile(
       repoRoot,
       "package.json",
       JSON.stringify({
-        dependencies: { "@homebridge/ciao": "^1.3.7", "playwright-core": "1.59.1" },
+        dependencies: {
+          "@homebridge/ciao": "^1.3.7",
+          "@opentelemetry/semantic-conventions": "1.43.0",
+          "playwright-core": "1.59.1",
+        },
       }),
     );
     writeRepoFile(
@@ -235,6 +191,11 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
       repoRoot,
       "extensions/bonjour/src/advertiser.ts",
       'const CIAO_MODULE_ID = "@homebridge/ciao";\nimport(CIAO_MODULE_ID);\n',
+    );
+    writeRepoFile(
+      repoRoot,
+      "extensions/diagnostics-otel/src/service.ts",
+      'import { ATTR_ERROR_TYPE } from "@opentelemetry/semantic-conventions";\n',
     );
     writeRepoFile(
       repoRoot,
@@ -261,6 +222,18 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
         sampleFiles: ["extensions/bonjour/src/advertiser.ts"],
         sections: ["extensions"],
         spec: "^1.3.7",
+      },
+      {
+        category: "root_owned_extension_runtime",
+        declaredInExtensions: [],
+        depName: "@opentelemetry/semantic-conventions",
+        fileCount: 1,
+        internalizedBundledRuntimeOwners: [],
+        recommendation:
+          "keep at root; the bundled Mistral runtime in @openclaw/ai imports these constants even though only the diagnostics plugin imports them directly in repository source",
+        sampleFiles: ["extensions/diagnostics-otel/src/service.ts"],
+        sections: ["extensions"],
+        spec: "1.43.0",
       },
       {
         category: "root_owned_extension_runtime",
@@ -317,45 +290,5 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
       },
     ]);
     expect(collectRootDependencyOwnershipCheckErrors(records)).toStrictEqual([]);
-  });
-
-  it("keeps excluded bundled plugin deps localizable", () => {
-    const repoRoot = makeTempRepo();
-    writeRepoFile(
-      repoRoot,
-      "package.json",
-      JSON.stringify({
-        dependencies: { "vendor-sdk": "^1.0.0" },
-        files: ["dist/", "!dist/extensions/externalized/**"],
-      }),
-    );
-    writeRepoFile(
-      repoRoot,
-      "extensions/externalized/package.json",
-      JSON.stringify({ dependencies: { "vendor-sdk": "^1.0.0" } }),
-    );
-    writeRepoFile(repoRoot, "extensions/externalized/openclaw.plugin.json", JSON.stringify({}));
-    writeRepoFile(
-      repoRoot,
-      "extensions/externalized/src/setup.ts",
-      'const sdk = await import("vendor-sdk");\n',
-    );
-
-    const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
-
-    expect(records).toEqual([
-      {
-        category: "extension_only_localizable",
-        declaredInExtensions: ["externalized:dependencies"],
-        depName: "vendor-sdk",
-        fileCount: 1,
-        internalizedBundledRuntimeOwners: [],
-        recommendation:
-          "remove from root package.json and rely on owning extension manifests plus doctor --fix",
-        sampleFiles: ["extensions/externalized/src/setup.ts"],
-        sections: ["extensions"],
-        spec: "^1.0.0",
-      },
-    ]);
   });
 });

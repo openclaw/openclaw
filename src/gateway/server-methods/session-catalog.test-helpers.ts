@@ -1,4 +1,8 @@
 import { afterEach, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -20,7 +24,7 @@ type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
 const hoisted = vi.hoisted(() => ({
   activeRegistry: {} as TestPluginRegistry,
   hasMultipleSessionSharingIdentities: vi.fn(() => false),
-  recordSessionStateEvent: vi.fn(),
+  recordSessionStateEventAsync: vi.fn(async () => undefined),
   upsertSessionUpstreamLink: vi.fn(),
   prepareShellPathFromLoginShell: vi.fn(async () => null as string | null),
 }));
@@ -41,20 +45,23 @@ vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
   requireActivePluginRegistry: () => hoisted.activeRegistry,
 }));
 
+// mock-isolation: Catalog RPC fixtures control signal settlement without opening shared-state workers.
 vi.mock("../../sessions/session-state-events.js", () => ({
-  recordSessionStateEvent: hoisted.recordSessionStateEvent,
-  recordSessionStateEventAsync: hoisted.recordSessionStateEvent,
+  recordSessionStateEventAsync: hoisted.recordSessionStateEventAsync,
 }));
 
+// mock-isolation: Record catalog link requests without opening the persistence owner.
 vi.mock("../../sessions/session-upstream-links.js", () => ({
-  upsertSessionUpstreamLink: hoisted.upsertSessionUpstreamLink,
+  upsertSessionUpstreamLinkAsync: hoisted.upsertSessionUpstreamLink,
 }));
 vi.mock("../../plugins/session-conversation-binding.js", () => ({
   bindPluginSessionConversation: conversationBindingMocks.bindPluginSessionConversation,
 }));
-vi.mock("../../state/user-profiles.js", () => ({
-  getUserProfileRole: vi.fn(() => null),
-  hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
+// mock-isolation: Control the synthetic catalog's sharing policy without opening profile storage.
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
+  readResidentUserProfileAliases: (id: string) => new Set([id]),
 }));
 const { markPluginRegistryActive } = await import("../../plugins/registry-lifecycle.js");
 const { bindPluginRegistryRuntime } = await import("../../plugins/registry-runtime-binding.js");
@@ -69,6 +76,7 @@ afterEach(() => {
     projection.dispose();
   }
   projections.clear();
+  clearRuntimeConfigSnapshot();
 });
 
 export function setSessionCatalogEntries(
@@ -92,6 +100,7 @@ export function createSessionCatalogTestContext(
   config: OpenClawConfig = {},
   overrides: Record<string, unknown> = {},
 ) {
+  setRuntimeConfigSnapshot(config);
   const projection = createSessionRowProjectionFixture({ cfg: config, store: sessionStore });
   projections.add(projection);
   return bindSessionRowProjection(
@@ -150,7 +159,7 @@ export function resetSessionCatalogTestState() {
   markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
   hoisted.hasMultipleSessionSharingIdentities.mockReset().mockReturnValue(false);
   sessionStore = {};
-  hoisted.recordSessionStateEvent.mockClear();
+  hoisted.recordSessionStateEventAsync.mockClear();
   hoisted.upsertSessionUpstreamLink.mockClear();
   conversationBindingMocks.bindPluginSessionConversation.mockClear();
 }
@@ -160,7 +169,6 @@ export {
   conversationBindingMocks,
   createPluginRuntime,
   hoisted,
-  markPluginRegistryActive,
   resolveRegisteredCatalogCreateTarget,
   sessionCatalogHandlers,
 };

@@ -23,7 +23,8 @@ export type ResolvePreferredOpenClawTmpDirOptions = {
   warn?: (message: string) => void;
 };
 
-type ResolveSecureTempRoot = typeof import("@openclaw/fs-safe/temp").resolveSecureTempRoot;
+type ResolveSecureTempRoot =
+  typeof import("@openclaw/fs-safe/secure-temp-root").resolveSecureTempRoot;
 
 let resolveSecureTempRootRuntime: ResolveSecureTempRoot | undefined;
 declare const SEALED_RUNTIME_BUILD: boolean;
@@ -40,24 +41,13 @@ function loadResolveSecureTempRoot(): ResolveSecureTempRoot {
   if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
     throw new Error("sealed temp-root runtime was not registered before use");
   }
-  // Keep this module browser-import safe: fs-safe's temp barrel owns Node-only
-  // workspaces, so load it only when the Node runtime actually resolves a temp root.
-  const getBuiltinModule = (
-    process as NodeJS.Process & {
-      getBuiltinModule?: (id: string) => unknown;
-    }
-  ).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
+  // Keep browser imports safe; load the Node-only resolver when a temp root is needed.
+  if (typeof process.getBuiltinModule !== "function") {
     throw new Error("Node module loading is unavailable for secure temp-root resolution");
   }
-  const moduleNamespace = getBuiltinModule("module") as {
-    createRequire?: (id: string) => NodeJS.Require;
-  };
-  if (typeof moduleNamespace.createRequire !== "function") {
-    throw new Error("Node createRequire is unavailable for secure temp-root resolution");
-  }
-  const require = moduleNamespace.createRequire(import.meta.url);
-  const fsSafeTemp = require("@openclaw/fs-safe/temp") as typeof import("@openclaw/fs-safe/temp");
+  const require = process.getBuiltinModule("module").createRequire(import.meta.url);
+  const fsSafeTemp =
+    require("@openclaw/fs-safe/secure-temp-root") as typeof import("@openclaw/fs-safe/secure-temp-root");
   resolveSecureTempRootRuntime = fsSafeTemp.resolveSecureTempRoot;
   return resolveSecureTempRootRuntime;
 }

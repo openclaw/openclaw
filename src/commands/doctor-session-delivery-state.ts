@@ -37,19 +37,15 @@ import {
 } from "./doctor/shared/session-entry-rewrite.js";
 import { migrateLegacySessionEntryState } from "./doctor/shared/session-entry-shape.js";
 
-export type SessionDeliveryStateRepairReport = {
-  found: number;
-  repaired: number;
-  scannedStores: number;
-};
+export type SessionDeliveryStateRepairReport = ReturnType<typeof repairCanonicalSessionEntries>;
+
+type CanonicalSessionRepairOptions = Omit<
+  Parameters<typeof repairCanonicalSessionEntries>[0],
+  "transform" | "updateDeliveryProjection"
+>;
 
 /** Scan or rewrite legacy delivery fields inside existing session row JSON. */
-export function repairCanonicalSessionDeliveryStates(params: {
-  apply: boolean;
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  targets?: readonly ExistingAgentDatabaseTarget[];
-}): SessionDeliveryStateRepairReport {
+export function repairCanonicalSessionDeliveryStates(params: CanonicalSessionRepairOptions) {
   return repairCanonicalSessionEntries({
     ...params,
     transform: normalizeLegacySessionEntryDelivery,
@@ -57,12 +53,7 @@ export function repairCanonicalSessionDeliveryStates(params: {
   });
 }
 
-export function repairCanonicalSessionResolvedSkills(params: {
-  apply: boolean;
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  targets?: readonly ExistingAgentDatabaseTarget[];
-}): SessionDeliveryStateRepairReport {
+export function repairCanonicalSessionResolvedSkills(params: CanonicalSessionRepairOptions) {
   return repairCanonicalSessionEntries({
     ...params,
     transform: stripRuntimeOnlySessionSkillsFields,
@@ -74,6 +65,7 @@ type SessionEntryRepairParams = {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   targets?: readonly ExistingAgentDatabaseTarget[];
+  integrityCheck?: "quick" | "full";
   transform: (entry: SessionEntry, sessionKey: string, phase: "scan" | "repair") => SessionEntry;
   updateDeliveryProjection: boolean;
 };
@@ -163,6 +155,7 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
           repaired += rewriteDoctorSessionEntries({
             scope,
             sessionKeys,
+            integrityCheck: params.integrityCheck ?? "quick",
             ...(params.source === "raw"
               ? { rawTransform: params.rawTransform }
               : {
@@ -186,7 +179,7 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
 
 export function repairCanonicalSessionEntries(
   params: SessionEntryRepairParams & { apply: boolean },
-): SessionDeliveryStateRepairReport {
+) {
   const plan = prepareSessionEntryRepairs({ ...params, source: "canonical" });
   return {
     found: plan.found,
@@ -203,17 +196,18 @@ export async function repairLegacySessionEntryStates(params: {
   authority?: DoctorSqliteMaintenanceAuthority;
   targets?: readonly ExistingAgentDatabaseTarget[];
   deferSchemaRepair?: boolean;
+  integrityCheck?: "quick" | "full";
 }): Promise<SessionDeliveryStateRepairReport> {
   try {
     const plan = prepareSessionEntryRepairs({
       ...params,
       source: "raw",
       rawNeedsRepair: hasLegacySessionEntryState,
-      rawTransform: (entry, _sessionKey, updatedAt) => {
+      rawTransform: (entry, sessionKey, updatedAt) => {
         if (!hasLegacySessionEntryState(entry)) {
           return entry;
         }
-        const next = migrateLegacySessionEntryState(entry, updatedAt);
+        const next = migrateLegacySessionEntryState(entry, updatedAt, sessionKey);
         return hasLegacySessionProviderState(entry)
           ? normalizeLegacySessionEntryDelivery(next)
           : next;

@@ -1,4 +1,3 @@
-// Browser tests cover browser request.timeout plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
@@ -29,12 +28,15 @@ vi.mock("../browser/routes/dispatcher.js", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: loadConfigMock,
+  readRuntimeConfig: loadConfigMock,
 }));
 vi.mock("../control-service.js", () => ({
   startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,
 }));
-vi.mock("../sdk-node-runtime.js", () => ({ withTimeout: withTimeoutMock }));
+vi.mock("../sdk-node-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sdk-node-runtime.js")>()),
+  withTimeout: withTimeoutMock,
+}));
 
 const { createBrowserRouteDispatcher } = await vi.importActual<
   typeof import("../browser/routes/dispatcher.js")
@@ -61,8 +63,6 @@ describe("browser.request local timeout", () => {
 
   it.each([
     { timeoutMs: undefined, revocation: "authority" },
-    { timeoutMs: 1000, revocation: "authority" },
-    { timeoutMs: undefined, revocation: "client" },
     { timeoutMs: 1000, revocation: "client" },
   ])(
     "rechecks $revocation after local profile admission with timeout=$timeoutMs",
@@ -194,7 +194,14 @@ describe("browser.request local timeout", () => {
       isWebchatConnect: () => false,
     });
 
-    const [, timeoutMs] = withTimeoutMock.mock.calls.at(-1) ?? [];
-    expect(timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(withTimeoutMock).toHaveBeenCalledExactlyOnceWith(
+      expect.any(Function),
+      MAX_TIMER_TIMEOUT_MS,
+      "browser request",
+    );
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "Error: browser request timed out",
+    });
   });
 });

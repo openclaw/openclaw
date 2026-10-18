@@ -14,50 +14,31 @@ import {
   extractBundleServerMap,
   loadEnabledBundleConfig,
   readBundleJsonObject,
-  resolveBundleJsonOpenFailure,
 } from "./bundle-config-shared.js";
 import {
   AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
   CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
-  mergeBundlePathLists,
-  normalizeBundlePathList,
+  resolveBundleComponentPaths,
 } from "./bundle-manifest.js";
+import type {
+  BundleMcpConfig,
+  BundleMcpDataDirOwnership,
+  BundleMcpServerConfig,
+  EnabledBundleMcpConfigResult,
+} from "./bundle-mcp.types.js";
 import { encodePluginInstallDirName } from "./install-paths.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 
-export type BundleMcpServerConfig = Record<string, unknown>;
-
-export type BundleMcpConfig = {
-  mcpServers: Record<string, BundleMcpServerConfig>;
-};
-
-export type BundleMcpDataDirOwnership = {
-  pluginId: string;
-  dataDir: string;
-};
-
 type BundleMcpRuntimeConfig = BundleMcpConfig & {
   prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership | null>;
 };
 
-export type BundleMcpDiagnostic = {
-  pluginId: string;
-  message: string;
-};
-
-type EnabledBundleMcpConfigResult = {
-  config: BundleMcpConfig;
-  diagnostics: BundleMcpDiagnostic[];
-  prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership>;
-  pluginIdsByServer: Record<string, string>;
-};
 type BundleMcpRuntimeSupport = {
-  hasSupportedStdioServer: boolean;
   supportedServerNames: string[];
   stdioServerNames: string[];
   unsupportedServerNames: string[];
@@ -87,11 +68,7 @@ function resolveBundleMcpConfigPaths(params: {
   if (params.bundleFormat === "agent") {
     return pluginCacheExistsSync(path.join(params.rootDir, "mcp.json")) ? ["mcp.json"] : [];
   }
-  const declared = normalizeBundlePathList(params.raw.mcpServers);
-  const defaults = pluginCacheExistsSync(path.join(params.rootDir, ".mcp.json"))
-    ? [".mcp.json"]
-    : [];
-  return mergeBundlePathLists(defaults, declared);
+  return resolveBundleComponentPaths(params.raw.mcpServers, params.rootDir, [".mcp.json"]);
 }
 
 export function extractMcpServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
@@ -381,12 +358,7 @@ function loadBundleFileBackedMcpConfig(params: {
   const result = readBundleJsonObject({
     rootDir,
     relativePath: params.relativePath,
-    onOpenFailure: (failure) =>
-      resolveBundleJsonOpenFailure({
-        failure,
-        relativePath: params.relativePath,
-        allowMissing: params.bundleFormat !== "agent",
-      }),
+    allowMissing: params.bundleFormat !== "agent",
   });
   if (!result.ok) {
     return {
@@ -465,12 +437,7 @@ function loadBundleMcpConfig(params: {
   const manifestLoaded = readBundleJsonObject({
     rootDir: params.rootDir,
     relativePath: manifestRelativePath,
-    onOpenFailure: (failure) =>
-      resolveBundleJsonOpenFailure({
-        failure,
-        relativePath: manifestRelativePath,
-        allowMissing: params.bundleFormat === "claude",
-      }),
+    allowMissing: params.bundleFormat === "claude",
   });
   if (!manifestLoaded.ok) {
     return {
@@ -546,7 +513,6 @@ function inspectMcpServerRuntimeSupport(loaded: {
     unsupportedServerNames.push(serverName);
   }
   return {
-    hasSupportedStdioServer: stdioServerNames.length > 0,
     supportedServerNames,
     stdioServerNames,
     unsupportedServerNames,
@@ -582,7 +548,6 @@ export function loadEnabledBundleMcpConfig(params: {
             }),
           )
         : undefined,
-    createDiagnostic: (pluginId, message) => ({ pluginId, message }),
   });
   return {
     config: { mcpServers: loaded.config.mcpServers },

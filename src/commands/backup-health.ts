@@ -15,7 +15,6 @@ import {
 // Backups older than two weeks no longer provide a useful routine recovery point.
 const BACKUP_STALE_AFTER_MS = 14 * 24 * 60 * 60 * 1_000;
 
-/** Format the compact status overview value for the latest backup attempt. */
 export function buildBackupStatusValue(params: {
   freshness: BackupRunFreshness;
   now?: number;
@@ -31,20 +30,15 @@ export function buildBackupStatusValue(params: {
     : `last attempt failed ${age} (${latest.kind})`;
 }
 
-/** Build the informational Doctor hint for missing or stale successful backups. */
-function buildBackupDoctorHint(params: {
-  freshness: BackupRunFreshness;
-  now?: number;
-}): string | null {
-  const latestOk = params.freshness.latestOk;
+function buildBackupDoctorHint(freshness: BackupRunFreshness): string | null {
+  const latestOk = freshness.latestOk;
   if (latestOk?.pushFailed) {
     return [
       "The newest local Git backup succeeded, but its requested push failed.",
       `Check the configured Git remote for ${latestOk.archivePath}, then retry the backup.`,
     ].join("\n");
   }
-  const stale =
-    !latestOk || (params.now ?? Date.now()) - latestOk.createdAt > BACKUP_STALE_AFTER_MS;
+  const stale = !latestOk || Date.now() - latestOk.createdAt > BACKUP_STALE_AFTER_MS;
   if (!stale) {
     return null;
   }
@@ -61,10 +55,9 @@ function buildBackupDoctorHint(params: {
 function buildOffsiteBackupDoctorHints(params: {
   runs: readonly BackupRunRecord[];
   schedules: readonly BackupScheduleSummary[];
-  now?: number;
 }): string[] {
   const targets = summarizeBackupTargets(params.runs);
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   return params.schedules.flatMap((schedule) => {
     if (schedule.mode !== "offsite" || !schedule.enabled) {
       return [];
@@ -97,7 +90,7 @@ export async function noteBackupDoctorHint(
   cfg?: OpenClawConfig,
 ): Promise<void> {
   const runs = await readBackupRuns(env);
-  const hint = buildBackupDoctorHint({ freshness: summarizeBackupFreshness(runs) });
+  const hint = buildBackupDoctorHint(summarizeBackupFreshness(runs));
   const hints = hint ? [hint] : [];
   if (cfg) {
     const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(

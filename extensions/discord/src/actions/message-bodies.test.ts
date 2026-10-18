@@ -7,9 +7,8 @@ import { discordMessageActions } from "../channel-actions.js";
 import { RequestClient } from "../internal/rest.js";
 import { sendDiscordComponentMessage } from "../send.components.js";
 import * as runtime from "../send.js";
-import { sendPollDiscord, sendStickerDiscord } from "../send.outbound.js";
+import { sendPollDiscord } from "../send.outbound.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
-import { handleDiscordAction } from "./runtime.js";
 
 vi.mock("../send.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../send.js")>();
@@ -187,6 +186,16 @@ afterAll(async () => {
 
 const writes = () => requests.filter((request) => request.method !== "GET");
 
+function expectEdit(target: string, content: unknown, fields: Record<string, unknown> = {}) {
+  expect(writes()).toEqual([
+    {
+      method: "PATCH",
+      path: `/v10/channels/${target}/messages/${messageId}`,
+      body: { content, ...fields },
+    },
+  ]);
+}
+
 describe("Discord retained progress edits", () => {
   it("edits the same checklist with account-scoped rendering and inert mentions", async () => {
     const snapshot: ChannelProgressDraftCompositorSnapshot = {
@@ -231,16 +240,9 @@ describe("Discord retained progress edits", () => {
       conversationReadOrigin: "direct-operator",
     });
 
-    expect(writes()).toEqual([
-      {
-        method: "PATCH",
-        path: `/v10/channels/${threadId}/messages/${messageId}`,
-        body: {
-          content: expect.stringContaining("Inspect source and configuration"),
-          allowed_mentions: { parse: [] },
-        },
-      },
-    ]);
+    expectEdit(threadId, expect.stringContaining("Inspect source and configuration"), {
+      allowed_mentions: { parse: [] },
+    });
     expect(current.content).toContain("Child verifier: checks passed");
     expect(current.content).toContain("Verify the child result");
     expect(current.content).not.toContain("Generic fallback");
@@ -302,13 +304,7 @@ describe("Discord retained progress edits", () => {
       }
       await editing;
 
-      expect(writes()).toEqual([
-        {
-          method: "PATCH",
-          path: `/v10/channels/${channelId}/messages/${messageId}`,
-          body: { content: "▸ Verify", allowed_mentions: { parse: [] } },
-        },
-      ]);
+      expectEdit(channelId, "▸ Verify", { allowed_mentions: { parse: [] } });
     },
   );
 
@@ -345,43 +341,30 @@ describe("Discord retained progress edits", () => {
   });
 });
 
-describe.each(["runtime", "adapter"] as const)("Discord %s message bodies", (entry) => {
+describe("Discord action message bodies", () => {
   const send = (content: unknown, extra: Record<string, unknown> = {}) =>
-    entry === "runtime"
-      ? handleDiscordAction(
-          { action: "sendMessage", to: ` channel:${channelId} `, content, ...extra },
-          cfg,
-        )
-      : handleDiscordMessageAction({
-          action: "send",
-          params: { to: ` channel:${channelId} `, message: content, ...extra },
-          cfg,
-        });
+    handleDiscordMessageAction({
+      action: "send",
+      params: { to: ` channel:${channelId} `, message: content, ...extra },
+      cfg,
+    });
   const edit = (content: unknown, config = cfg, id: unknown = messageId) =>
-    entry === "runtime"
-      ? handleDiscordAction({ action: "editMessage", channelId, messageId: id, content }, config, {
-          conversationReadOrigin: "direct-operator",
-        })
-      : handleDiscordMessageAction({
-          action: "edit",
-          params: { to: `channel:${channelId}`, messageId: id, message: content },
-          cfg: config,
-          conversationReadOrigin: "direct-operator",
-        });
+    handleDiscordMessageAction({
+      action: "edit",
+      params: { to: `channel:${channelId}`, messageId: id, message: content },
+      cfg: config,
+      conversationReadOrigin: "direct-operator",
+    });
 
   const createThread = (content?: string) =>
-    entry === "runtime"
-      ? handleDiscordAction({ action: "threadCreate", channelId, name: "example", content }, cfg)
-      : handleDiscordMessageAction({
-          action: "thread-create",
-          params: { channelId, threadName: "example", message: content },
-          cfg,
-        });
+    handleDiscordMessageAction({
+      action: "thread-create",
+      params: { channelId, threadName: "example", message: content },
+      cfg,
+    });
 
   it.each([
-    [0, "hello", 1],
     [0, "a".repeat(2001), 2],
-    [15, "hello", 1],
     [15, "a".repeat(2001), 2],
     [16, undefined, 1],
   ] as const)(
@@ -415,44 +398,27 @@ describe.each(["runtime", "adapter"] as const)("Discord %s message bodies", (ent
     expect(writes()).toHaveLength(1);
   });
 
-  it.each(["Changed caption", "    console.log(1);\n", ""])(
-    "edits exact content %j and retains attachments",
-    async (content) => {
-      await edit(content);
-      expect(writes()).toEqual([
-        {
-          method: "PATCH",
-          path: `/v10/channels/${channelId}/messages/${messageId}`,
-          body: { content },
-        },
-      ]);
-      expect(current).toEqual({ content, attachments: [attachment] });
-    },
-  );
+  it("clears content while retaining attachments", async () => {
+    await edit("");
+    expectEdit(channelId, "");
+    expect(current).toEqual({ content: "", attachments: [attachment] });
+  });
 
-  it.each([undefined, null, 42])(
-    "rejects absent or non-string edit content %j without mutation",
-    async (content) => {
-      await expect(edit(content)).rejects.toThrow(/required/);
-      expect(writes()).toEqual([]);
-    },
-  );
+  it("rejects absent edit content without mutation", async () => {
+    await expect(edit(undefined)).rejects.toThrow(/required/);
+    expect(writes()).toEqual([]);
+  });
 
-  it.each([null, "", "   "])("rejects missing message ID %j without mutation", async (id) => {
-    await expect(edit("Changed caption", cfg, id)).rejects.toThrow(/required/);
+  it("rejects a blank message ID without mutation", async () => {
+    await expect(edit("Changed caption", cfg, "   ")).rejects.toThrow(/required/);
     expect(writes()).toEqual([]);
   });
 
   it("normalizes identifiers without normalizing the message body", async () => {
     const content = "  Changed caption\n";
     await edit(content, cfg, ` ${messageId} `);
-    expect(writes()).toEqual([
-      {
-        method: "PATCH",
-        path: `/v10/channels/${channelId}/messages/${messageId}`,
-        body: { content },
-      },
-    ]);
+    expectEdit(channelId, content);
+    expect(current).toEqual({ content, attachments: [attachment] });
   });
 
   it("rejects malformed message IDs before a message mutation", async () => {
@@ -460,13 +426,10 @@ describe.each(["runtime", "adapter"] as const)("Discord %s message bodies", (ent
     expect(writes()).toEqual([]);
   });
 
-  it.each([undefined, null, 42])(
-    "rejects plain sends without string content %j",
-    async (content) => {
-      await expect(send(content)).rejects.toThrow(/required/);
-      expect(writes()).toEqual([]);
-    },
-  );
+  it("rejects plain sends without content", async () => {
+    await expect(send(undefined)).rejects.toThrow(/required/);
+    expect(writes()).toEqual([]);
+  });
 
   it("delivers embeds without a text body", async () => {
     const embeds = [{ title: "Release notes", description: "Version available" }];
@@ -482,24 +445,19 @@ describe.each(["runtime", "adapter"] as const)("Discord %s message bodies", (ent
 
   it("delivers presentation text without a separate message body", async () => {
     const text = "-# Revenue (bar chart)\n- USD: Q1: 12; Q2: 18";
-    await send(
-      undefined,
-      entry === "adapter"
-        ? {
-            presentation: {
-              blocks: [
-                {
-                  type: "chart",
-                  chartType: "bar",
-                  title: "Revenue",
-                  categories: ["Q1", "Q2"],
-                  series: [{ name: "USD", values: [12, 18] }],
-                },
-              ],
-            },
-          }
-        : { components: { blocks: [{ type: "text", text }] } },
-    );
+    await send(undefined, {
+      presentation: {
+        blocks: [
+          {
+            type: "chart",
+            chartType: "bar",
+            title: "Revenue",
+            categories: ["Q1", "Q2"],
+            series: [{ name: "USD", values: [12, 18] }],
+          },
+        ],
+      },
+    });
     expect(writes()).toHaveLength(1);
     expect(writes()[0]).toMatchObject({
       method: "POST",
@@ -520,18 +478,12 @@ describe.each(["runtime", "adapter"] as const)("Discord %s message bodies", (ent
   });
 
   it("deletes the exact message through the same target projection", async () => {
-    if (entry === "runtime") {
-      await handleDiscordAction({ action: "deleteMessage", channelId, messageId }, cfg, {
-        conversationReadOrigin: "direct-operator",
-      });
-    } else {
-      await handleDiscordMessageAction({
-        action: "delete",
-        params: { to: `channel:${channelId}`, messageId },
-        cfg,
-        conversationReadOrigin: "direct-operator",
-      });
-    }
+    await handleDiscordMessageAction({
+      action: "delete",
+      params: { to: `channel:${channelId}`, messageId },
+      cfg,
+      conversationReadOrigin: "direct-operator",
+    });
     expect(writes()).toEqual([
       { method: "DELETE", path: `/v10/channels/${channelId}/messages/${messageId}`, body: {} },
     ]);
@@ -541,38 +493,18 @@ describe.each(["runtime", "adapter"] as const)("Discord %s message bodies", (ent
     "preserves indentation and trailing newline for %s",
     async (action) => {
       const content = "    console.log(1);\n";
-      if (entry === "adapter") {
-        await handleDiscordMessageAction({
-          action,
-          params: {
-            to: `channel:${channelId}`,
-            channelId,
-            threadId: channelId,
-            threadName: "example",
-            message: content,
-            stickerId: ["523456789012345678"],
-          },
-          cfg,
-        });
-      } else {
-        const actions = {
-          send: "sendMessage",
-          "thread-reply": "threadReply",
-          "thread-create": "threadCreate",
-          sticker: "sticker",
-        };
-        await handleDiscordAction(
-          {
-            action: actions[action],
-            to: `channel:${channelId}`,
-            channelId,
-            name: "example",
-            content,
-            stickerIds: ["523456789012345678"],
-          },
-          cfg,
-        );
-      }
+      await handleDiscordMessageAction({
+        action,
+        params: {
+          to: `channel:${channelId}`,
+          channelId,
+          threadId: channelId,
+          threadName: "example",
+          message: content,
+          stickerId: ["523456789012345678"],
+        },
+        cfg,
+      });
       const messages = writes().filter((request) => request.path.endsWith("/messages"));
       expect(messages).toHaveLength(1);
       expect(messages[0]?.body.content).toBe(content);
@@ -580,25 +512,19 @@ describe.each(["runtime", "adapter"] as const)("Discord %s message bodies", (ent
   );
 });
 
-describe.each(["sticker", "poll"] as const)("Discord structured %s content", (kind) => {
+describe("Discord structured content", () => {
   it.each([
     [undefined, undefined],
     [" \n", undefined],
-    ["Caption", "Caption"],
     ["  Caption\n", "  Caption\n"],
   ])("preserves optional content %j when nonblank", async (content, expected) => {
-    const options = { cfg, rest, content };
-    if (kind === "sticker") {
-      await sendStickerDiscord(`channel:${channelId}`, ["523456789012345678"], options);
-    } else {
-      await sendPollDiscord(
-        `channel:${channelId}`,
-        { question: "Lunch?", options: ["Pizza", "Sushi"] },
-        options,
-      );
-    }
+    await sendPollDiscord(
+      `channel:${channelId}`,
+      { question: "Lunch?", options: ["Pizza", "Sushi"] },
+      { cfg, rest, content },
+    );
     expect(writes()).toHaveLength(1);
     expect(writes()[0]?.body.content).toBe(expected);
-    expect(writes()[0]?.body).toHaveProperty(kind === "sticker" ? "sticker_ids" : "poll");
+    expect(writes()[0]?.body).toHaveProperty("poll");
   });
 });

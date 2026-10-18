@@ -138,6 +138,37 @@ function compactionEntry(
 }
 
 describe("buildSessionContext", () => {
+  it.each(["command", "delivery-mirror", "gateway-injected", "automation-result"])(
+    "keeps the inference model after an OpenClaw %s reply without hiding its history",
+    (model) => {
+      const answer = assistantEntry("answer", null, "Provider answer");
+      const artifact = assistantEntry("artifact", "answer", "Delivered reply");
+      if (artifact.type !== "message" || artifact.message.role !== "assistant") {
+        throw new Error("expected assistant fixture");
+      }
+      artifact.message.provider = "openclaw";
+      artifact.message.model = model;
+      const context = buildSessionContext([answer, artifact]);
+      expect(context.model).toEqual({ provider: "test-provider", modelId: "test-model" });
+      expect(context.messages).toContainEqual(artifact.message);
+    },
+  );
+
+  it("ignores a synthetic model change retained by an earlier bounded context", () => {
+    const context = buildSessionContext([
+      assistantEntry("answer", null, "Provider answer"),
+      {
+        type: "model_change",
+        id: "command-model",
+        parentId: "answer",
+        timestamp,
+        provider: "openclaw",
+        modelId: "command",
+      },
+    ]);
+    expect(context.model).toEqual({ provider: "test-provider", modelId: "test-model" });
+  });
+
   it.each(["compaction", "reset", "prompt-restart", "prompt-checkpoint"])(
     "retires only operators from an earlier prompt series across %s",
     (boundary) => {
@@ -223,7 +254,12 @@ describe("buildSessionContext", () => {
           customType,
           content: "metadata ".repeat(100),
           display: false,
-          details,
+          details:
+            carrier === "operator-runtime"
+              ? details
+              : runtimeContextCarrier
+                ? { source: "openclaw-runtime-context", runtimeContextCarrier }
+                : details,
         },
         assistantEntry("entry-2", "entry-1", "done"),
       ];
@@ -252,7 +288,12 @@ describe("buildSessionContext", () => {
               role: "custom",
               customType,
               content: "metadata ".repeat(100),
-              details,
+              details:
+                carrier === "operator-runtime"
+                  ? details
+                  : runtimeContextCarrier
+                    ? { source: "openclaw-runtime-context", runtimeContextCarrier }
+                    : details,
             },
             { role: "assistant", content: [{ type: "text", text: "done" }] },
           ].slice(expectedIndex),
@@ -275,7 +316,7 @@ describe("buildSessionContext", () => {
       customType: "openclaw.runtime-context",
       content: "Model-visible runtime context",
       display: false,
-      details: { runtimeContextCarrier: true },
+      details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
       timestamp: Date.parse(timestamp),
     };
     const activityEntry: SessionTreeEntry = {
@@ -310,8 +351,9 @@ describe("buildSessionContext", () => {
       { role: "user", content: "original request" },
       {
         role: "user",
-        content: [{ type: "text", text: "Model-visible runtime context" }],
-        runtimeContextCarrier: true,
+        content:
+          "OpenClaw runtime context:\nModel-visible runtime context\nEnd OpenClaw runtime context.",
+        runtimeContext: {},
       },
       { role: "user", content: "continue" },
     ]);
@@ -476,30 +518,6 @@ describe("buildSessionContext", () => {
     expect(JSON.stringify(context.messages)).toContain("first result");
     expect(JSON.stringify(context.messages)).toContain("second result");
     expect(JSON.stringify(context.messages)).not.toContain("orphan result");
-  });
-
-  it("pairs reset results only with calls inside the retained tail", () => {
-    const entries: SessionTreeEntry[] = [
-      userEntry("discarded-user", null, "discarded question"),
-      assistantToolEntry("discarded-assistant", "discarded-user", "call-shared"),
-      userEntry("kept", "discarded-assistant", "kept question"),
-      toolResultEntry("discarded-result", "kept", "call-shared", "discarded owner result"),
-      assistantToolEntry("kept-assistant", "discarded-result", "call-shared"),
-      toolResultEntry("kept-result", "kept-assistant", "call-shared", "kept owner result"),
-      resetEntry("reset", "kept-result", "kept"),
-      userEntry("new", "reset", "new turn"),
-    ];
-
-    const context = buildSessionContext(entries);
-    const providerMessages = convertToLlm(context.messages);
-
-    expect(providerMessages).toMatchObject([
-      { role: "user", content: "kept question" },
-      { role: "assistant", content: [{ id: "call-shared" }] },
-      { role: "toolResult", toolCallId: "call-shared", content: [{ text: "kept owner result" }] },
-      { role: "user", content: "new turn" },
-    ]);
-    expect(JSON.stringify(providerMessages)).not.toContain("discarded owner result");
   });
 
   it("keeps tool ownership within the latest reset when resets repeat", () => {

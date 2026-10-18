@@ -16,6 +16,16 @@ const SHA = "a".repeat(40);
 const TAG_OBJECT_SHA = "b".repeat(40);
 const BRANCH = `release-publish/${SHA.slice(0, 12)}-123`;
 const URL = "https://github.com/openclaw/openclaw/actions/runs/456";
+const WORKFLOW = ".github/workflows/openclaw-npm-release.yml";
+const REPOSITORY = "openclaw/openclaw";
+const RUN_API = `repos/${REPOSITORY}/actions/runs/456`;
+const object = (sha = SHA, type = "commit") => ({ object: { sha, type } });
+const identityError = "untrusted workflow identity";
+const tagError = "not bound to a real";
+const refError = "untrusted workflow ref";
+const approvalError = "lacks successful parent release approval";
+const runFixture = (run: OpenClawNpmResumeValidationInput["run"]) =>
+  fixture({ run: { ...fixture().run, ...run } });
 
 function fixture(
   overrides: Partial<OpenClawNpmResumeValidationInput> = {},
@@ -35,15 +45,12 @@ function fixture(
       head_branch: BRANCH,
       head_sha: SHA,
       html_url: URL,
-      path: ".github/workflows/openclaw-npm-release.yml",
+      path: WORKFLOW,
       workflow_id: 101,
       run_attempt: 1,
     },
-    tag: {
-      object: { sha: SHA, type: "commit" },
-      verification: { verified: true },
-    },
-    tagRef: { object: { sha: TAG_OBJECT_SHA, type: "tag" } },
+    tag: { ...object(), verification: { verified: true } },
+    tagRef: object(TAG_OBJECT_SHA, "tag"),
     trustedWorkflowFullRef: `refs/tags/${BRANCH}`,
     trustedWorkflowRef: BRANCH,
     ...overrides,
@@ -54,50 +61,47 @@ describe("openclaw npm resume run identity", () => {
   function publicationRun(
     overrides: Record<string, unknown> = {},
     publish = true,
-    latest: Record<string, unknown> = {},
+    latest: Record<string, unknown> | null = {},
+    jobs?: OpenClawNpmResumeValidationInput["jobs"],
+    annotated = false,
   ) {
+    const input = fixture();
+    const responses = new Map<string, unknown>();
+    const api = (path: string, value: unknown) =>
+      responses.set(`api repos/openclaw/openclaw/${path} --method GET`, value);
+    if (!jobs && latest !== null) {
+      api("actions/runs/456", { ...input.run, ...overrides, ...latest });
+    }
+    api("actions/runs/456/attempts/1", { ...input.run, ...overrides });
+    api("actions/workflows/openclaw-npm-release.yml", { id: 101 });
+    api(`git/ref/tags/${BRANCH}`, annotated ? input.tagRef : object());
+    if (annotated) {
+      api(`git/tags/${TAG_OBJECT_SHA}`, input.tag);
+      api(`compare/${SHA}...main`, { status: "identical" });
+    }
+    const publishJobs = input.jobs.map((job) =>
+      Object.assign(job, {
+        conclusion: job.name === "publish_openclaw_npm" && !publish ? "skipped" : "success",
+      }),
+    );
+    responses.set(
+      "run view 456 --repo openclaw/openclaw --attempt 1 --json jobs --jq .jobs",
+      jobs ?? publishJobs,
+    );
     return vi.fn((args: string[]) => {
-      const endpoint = args[1];
-      if (endpoint === "repos/openclaw/openclaw/actions/runs/456") {
-        return JSON.stringify({ ...fixture().run, ...overrides, ...latest });
-      }
-      if (endpoint === "repos/openclaw/openclaw/actions/runs/456/attempts/1") {
-        return JSON.stringify({ ...fixture().run, ...overrides });
-      }
-      if (endpoint === "repos/openclaw/openclaw/actions/workflows/openclaw-npm-release.yml") {
-        return JSON.stringify({ id: 101 });
-      }
-      if (endpoint === `repos/openclaw/openclaw/git/ref/tags/${BRANCH}`) {
-        return JSON.stringify({ object: { sha: SHA, type: "commit" } });
-      }
-      if (args[0] === "run") {
-        return JSON.stringify([
-          { conclusion: "success", name: "validate_publish_request" },
-          { name: "publish_openclaw_npm", conclusion: publish ? "success" : "skipped" },
-        ]);
+      const response = responses.get(args.join(" "));
+      if (response) {
+        return JSON.stringify(response);
       }
       throw new Error(`Unexpected gh invocation: ${args.join(" ")}`);
     });
   }
 
   function recover(publication = publicationEvidence(), runGh = publicationRun(), runId = "") {
-    return resolveOpenClawNpmResumeRun({
-      repo: "openclaw/openclaw",
-      runGh,
-      runId,
-      publication,
-    });
+    return resolveOpenClawNpmResumeRun({ repo: REPOSITORY, runGh, runId, publication });
   }
 
-  it("recovers the exact published version's original publisher after parent tooling changes", () => {
-    expect(recover()).toMatchObject({
-      runId: "456",
-      workflowRef: `refs/tags/${BRANCH}`,
-      workflowSha: SHA,
-    });
-  });
-
-  it("recovers a provenance-backed publish whose only failure was delayed registry readback", () => {
+  it.each([false, true])("readback recovery with extra failure: %s", (otherFailure) => {
     const jobs = [
       { conclusion: "success", name: "validate_publish_request", steps: [] },
       {
@@ -108,68 +112,29 @@ describe("openclaw npm resume run identity", () => {
           { conclusion: "failure", name: "Verify extended-stable registry readback" },
         ],
       },
+      ...(otherFailure ? [{ conclusion: "failure", name: "unexpected_failure", steps: [] }] : []),
     ];
-    const runGh = publicationRun({ conclusion: "failure" });
-    runGh.mockImplementation((args: string[]) => {
-      if (args[0] === "run") {
-        return JSON.stringify(jobs);
-      }
-      const endpoint = args[1];
-      if (endpoint === "repos/openclaw/openclaw/actions/runs/456/attempts/1") {
-        return JSON.stringify({ ...fixture().run, conclusion: "failure" });
-      }
-      if (endpoint === "repos/openclaw/openclaw/actions/workflows/openclaw-npm-release.yml") {
-        return JSON.stringify({ id: 101 });
-      }
-      if (endpoint === `repos/openclaw/openclaw/git/ref/tags/${BRANCH}`) {
-        return JSON.stringify({ object: { sha: SHA, type: "commit" } });
-      }
-      throw new Error(`Unexpected gh invocation: ${args.join(" ")}`);
-    });
-
-    expect(recover(publicationEvidence(), runGh)).toMatchObject({
-      runId: "456",
-      runAttempt: 1,
-      workflowRef: `refs/tags/${BRANCH}`,
-      workflowSha: SHA,
-    });
+    const runGh = publicationRun({ conclusion: "failure" }, true, {}, jobs);
+    if (otherFailure) {
+      expect(() =>
+        validateOpenClawNpmResumeRun({ ...runFixture({ conclusion: "failure" }), jobs }),
+      ).toThrow("untrusted workflow identity");
+    } else {
+      expect(recover(publicationEvidence(), runGh)).toMatchObject({
+        runId: "456",
+        runAttempt: 1,
+        workflowRef: `refs/tags/${BRANCH}`,
+        workflowSha: SHA,
+      });
+    }
   });
 
-  it("rejects delayed readback recovery when another job failed", () => {
-    expect(() =>
-      validateOpenClawNpmResumeRun(
-        fixture({
-          run: { ...fixture().run, conclusion: "failure" },
-          jobs: [
-            { conclusion: "success", name: "validate_publish_request" },
-            {
-              conclusion: "failure",
-              name: "publish_openclaw_npm",
-              steps: [
-                { conclusion: "success", name: "Publish" },
-                { conclusion: "failure", name: "Verify extended-stable registry readback" },
-              ],
-            },
-            { conclusion: "failure", name: "unexpected_failure" },
-          ],
-        }),
-      ),
-    ).toThrow("untrusted workflow identity");
+  it.each(["success", "failure"])("keeps signed attempt after %s rerun", (conclusion) => {
+    const runGh = publicationRun({}, true, { run_attempt: 2, conclusion });
+    expect(recover(publicationEvidence(), runGh)).toMatchObject({ runId: "456", runAttempt: 1 });
+    expect(runGh.mock.calls.some(([args]) => args.includes(RUN_API))).toBe(false);
+    expect(runGh.mock.calls.find(([args]) => args[0] === "run")?.[0]).toContain("--attempt");
   });
-
-  it.each(["success", "failure"])(
-    "retains the signed attempt after a later %s rerun",
-    (conclusion) => {
-      const runGh = publicationRun({}, true, { run_attempt: 2, conclusion });
-      expect(recover(publicationEvidence(), runGh)).toMatchObject({ runId: "456", runAttempt: 1 });
-      expect(
-        runGh.mock.calls.some(([args]) =>
-          args.includes("repos/openclaw/openclaw/actions/runs/456"),
-        ),
-      ).toBe(false);
-      expect(runGh.mock.calls.find(([args]) => args[0] === "run")?.[0]).toContain("--attempt");
-    },
-  );
 
   it("accepts repeated receipts only when they identify the same publisher", () => {
     const publication = publicationEvidence();
@@ -182,216 +147,103 @@ describe("openclaw npm resume run identity", () => {
   });
 
   it.each([
-    ["different version", { version: "2026.9.6" }],
-    ["different tarball", { tarballSha512: "e".repeat(128) }],
-  ])("refuses discovery from a %s", (_name, overrides) => {
-    expect(() => recover({ ...publicationEvidence(), ...overrides })).toThrow(
+    ["version", "2026.9.6"],
+    ["tarballSha512", "e".repeat(128)],
+  ])("rejects different %s", (key, value) => {
+    expect(() => recover({ ...publicationEvidence(), [key]: value })).toThrow(
       "missing or ambiguous publisher evidence",
     );
   });
-
-  it("rejects a supplied run id that contradicts the immutable publication receipt", () => {
+  it("rejects a contradictory supplied run before any lookup", () => {
     const runGh = publicationRun();
     expect(() => recover(publicationEvidence(), runGh, "999")).toThrow("original publisher");
     expect(runGh).not.toHaveBeenCalled();
   });
-
-  it("rejects a publisher invocation from another repository", () => {
-    expect(() =>
-      recover(publicationEvidence("https://github.com/other/repo/actions/runs/456/attempts/1")),
-    ).toThrow("this repository's npm release workflow");
+  it("rejects another repository", () => {
+    const evidence = publicationEvidence(
+      "https://github.com/other/repo/actions/runs/456/attempts/1",
+    );
+    expect(() => recover(evidence)).toThrow("this repository's npm release workflow");
   });
-
   it.each([
-    ["failed", { conclusion: "failure" }, "untrusted workflow identity"],
+    ["failed publisher", { conclusion: "failure" }, identityError],
     ["wrong attempt response", { run_attempt: 2 }, "SHA and attempt"],
     ["wrong run response", { id: 789 }, "SHA and attempt"],
     ["unfinished attempt", { status: "in_progress" }, "SHA and attempt"],
     ["changed workflow", { head_sha: "e".repeat(40) }, "SHA and attempt"],
-  ])("rejects a %s original publisher", (_name, overrides, message) => {
+  ] as const)("rejects %s", (_label, overrides, message) => {
     expect(() => recover(publicationEvidence(), publicationRun(overrides))).toThrow(message);
   });
-
-  it("does not adopt a successful preflight-only run as the publisher", () => {
+  it("rejects a preflight-only publisher", () => {
     expect(() => recover(publicationEvidence(), publicationRun({}, false))).toThrow(
       "successful npm publish job",
     );
   });
-  it("bounds each GitHub lookup", () => {
-    const execFileSyncImpl = vi.fn(() => "result");
 
-    expect(
-      runOpenClawNpmResumeGh(["api", "repos/openclaw/openclaw/actions/runs/456"], {
-        execFileSyncImpl,
-      }),
-    ).toBe("result");
-    expect(execFileSyncImpl).toHaveBeenCalledWith(
-      "gh",
-      ["api", "repos/openclaw/openclaw/actions/runs/456"],
-      {
-        encoding: "utf8",
-        killSignal: "SIGKILL",
-        maxBuffer: 32 * 1024 * 1024,
-        timeout: 60_000,
-      },
-    );
-  });
-
-  it("propagates GitHub lookup timeouts", () => {
-    const timeoutError = Object.assign(new Error("spawnSync gh ETIMEDOUT"), {
-      code: "ETIMEDOUT",
+  it.each([false, true])("bounds GitHub lookups and propagates timeouts: %s", (timeout) => {
+    const error = Object.assign(new Error("spawnSync gh ETIMEDOUT"), { code: "ETIMEDOUT" });
+    const execFileSyncImpl = vi.fn(() => {
+      if (timeout) {
+        throw error;
+      }
+      return "result";
     });
-
-    expect(() =>
-      runOpenClawNpmResumeGh(["api", "repos/openclaw/openclaw/actions/runs/456"], {
-        execFileSyncImpl: () => {
-          throw timeoutError;
-        },
-      }),
-    ).toThrow(timeoutError);
+    const lookup = () => runOpenClawNpmResumeGh(["api", RUN_API], { execFileSyncImpl });
+    if (timeout) {
+      expect(lookup).toThrow(error);
+    } else {
+      expect(lookup()).toBe("result");
+    }
+    expect(execFileSyncImpl).toHaveBeenCalledWith("gh", ["api", RUN_API], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      maxBuffer: 32 * 1024 * 1024,
+      timeout: 60_000,
+    });
   });
 
+  it.each<[string, OpenClawNpmResumeValidationInput["run"]]>([
+    ["branch", { head_branch: "main" }],
+    ["workflow", { workflow_id: 999 }],
+    ["event", { event: "push" }],
+    ["conclusion", { conclusion: "failure" }],
+    ["path", { path: ".github/workflows/ci.yml" }],
+  ])("rejects an untrusted %s", (_label, run) => {
+    expect(() => validateOpenClawNpmResumeRun(runFixture(run))).toThrow(identityError);
+  });
   it.each([
-    ["branch", { run: { ...fixture().run, head_branch: "main" } }, "untrusted workflow identity"],
-    ["workflow", { run: { ...fixture().run, workflow_id: 999 } }, "untrusted workflow identity"],
-    ["event", { run: { ...fixture().run, event: "push" } }, "untrusted workflow identity"],
-    [
-      "conclusion",
-      { run: { ...fixture().run, conclusion: "failure" } },
-      "untrusted workflow identity",
-    ],
-    [
-      "path",
-      { run: { ...fixture().run, path: ".github/workflows/ci.yml" } },
-      "untrusted workflow identity",
-    ],
-    [
-      "same-name branch full ref",
-      { trustedWorkflowFullRef: `refs/heads/${BRANCH}` },
-      "untrusted workflow ref",
-    ],
-    [
-      "mismatched supplied ref",
-      { trustedWorkflowRef: `release-publish/${SHA.slice(0, 12)}-124` },
-      "untrusted workflow ref",
-    ],
-    [
-      "tag kind",
-      { tagRef: { object: { sha: TAG_OBJECT_SHA, type: "tree" } } },
-      "not a protected tag",
-    ],
-    [
-      "moved lightweight tag",
-      {
-        compareStatus: undefined,
-        tag: {},
-        tagRef: { object: { sha: "c".repeat(40), type: "commit" } },
-      },
-      "moved after dispatch",
-    ],
-    [
-      "tag target",
-      { tag: { ...fixture().tag, object: { sha: "c".repeat(40), type: "commit" } } },
-      "not bound to a real",
-    ],
-    [
-      "signature",
-      { tag: { ...fixture().tag, verification: { verified: false } } },
-      "not bound to a real",
-    ],
-    ["main ancestry", { compareStatus: "diverged" }, "not bound to a real"],
+    ["branch ref", { trustedWorkflowFullRef: `refs/heads/${BRANCH}` }, refError],
+    ["supplied ref", { trustedWorkflowRef: `${BRANCH}4` }, refError],
+    ["tag kind", { tagRef: object(TAG_OBJECT_SHA, "tree") }, "not a protected tag"],
+    ["moved lightweight tag", { tagRef: object("c".repeat(40)) }, "moved after dispatch"],
+    ["tag target", { tag: { ...fixture().tag, ...object("c".repeat(40)) } }, tagError],
+    ["signature", { tag: { ...fixture().tag, verification: { verified: false } } }, tagError],
+    ["main ancestry", { compareStatus: "diverged" }, tagError],
     [
       "approval",
       { jobs: [{ conclusion: "failure", name: "validate_publish_request" }] },
-      "lacks successful parent release approval",
+      approvalError,
     ],
   ])("rejects an untrusted %s", (_label, overrides, message) => {
     expect(() => validateOpenClawNpmResumeRun(fixture(overrides))).toThrow(message);
   });
 
-  it("loads the exact run, workflow, signed tag, ancestry, and approval job", () => {
-    const responses = new Map<string, unknown>([
-      [`api repos/openclaw/openclaw/actions/runs/456/attempts/1 --method GET`, fixture().run],
-      [
-        `api repos/openclaw/openclaw/actions/workflows/openclaw-npm-release.yml --method GET`,
-        { id: 101 },
-      ],
-      [`api repos/openclaw/openclaw/git/ref/tags/${BRANCH} --method GET`, fixture().tagRef],
-      [`api repos/openclaw/openclaw/git/tags/${TAG_OBJECT_SHA} --method GET`, fixture().tag],
-      [`api repos/openclaw/openclaw/compare/${SHA}...main --method GET`, { status: "identical" }],
-      [`run view 456 --repo openclaw/openclaw --attempt 1 --json jobs --jq .jobs`, fixture().jobs],
-    ]);
-    const runGh = vi.fn((args: string[]) => {
-      const response = responses.get(args.join(" "));
-      if (!response) {
-        throw new Error(`Unexpected gh invocation: ${args.join(" ")}`);
-      }
-      return JSON.stringify(response);
-    });
-
-    expect(
-      resolveOpenClawNpmResumeRun({
-        repo: "openclaw/openclaw",
-        runGh,
-        runId: "456",
-        publication: publicationEvidence(),
-      }),
-    ).toEqual({
+  it.each([true, false])("loads the immutable publisher with an annotated tag: %s", (annotated) => {
+    const runGh = publicationRun({}, true, null, undefined, annotated);
+    expect(recover(publicationEvidence(), runGh, "456")).toEqual({
       runId: "456",
       runAttempt: 1,
-      tagObjectSha: TAG_OBJECT_SHA,
+      tagObjectSha: annotated ? TAG_OBJECT_SHA : SHA,
       url: URL,
       workflowRef: `refs/tags/${BRANCH}`,
       workflowSha: SHA,
     });
-    expect(runGh).toHaveBeenCalledTimes(6);
-  });
-
-  it("loads a lightweight protected tag without requiring tag metadata or main ancestry", () => {
-    const lightweight = fixture({
-      compareStatus: undefined,
-      tag: {},
-      tagRef: { object: { sha: SHA, type: "commit" } },
-    });
-    const responses = new Map<string, unknown>([
-      [`api repos/openclaw/openclaw/actions/runs/456/attempts/1 --method GET`, lightweight.run],
-      [
-        `api repos/openclaw/openclaw/actions/workflows/openclaw-npm-release.yml --method GET`,
-        { id: 101 },
-      ],
-      [`api repos/openclaw/openclaw/git/ref/tags/${BRANCH} --method GET`, lightweight.tagRef],
-      [
-        `run view 456 --repo openclaw/openclaw --attempt 1 --json jobs --jq .jobs`,
-        lightweight.jobs,
-      ],
-    ]);
-    const runGh = vi.fn((args: string[]) => {
-      const response = responses.get(args.join(" "));
-      if (!response) {
-        throw new Error(`Unexpected gh invocation: ${args.join(" ")}`);
-      }
-      return JSON.stringify(response);
-    });
-
-    expect(
-      resolveOpenClawNpmResumeRun({
-        repo: "openclaw/openclaw",
-        runGh,
-        runId: "456",
-        publication: publicationEvidence(),
-      }),
-    ).toEqual({
-      runId: "456",
-      runAttempt: 1,
-      tagObjectSha: SHA,
-      url: URL,
-      workflowRef: `refs/tags/${BRANCH}`,
-      workflowSha: SHA,
-    });
-    expect(runGh).toHaveBeenCalledTimes(4);
-    expect(runGh.mock.calls.flatMap(([args]) => args)).not.toContain(
-      `repos/openclaw/openclaw/compare/${SHA}...main`,
-    );
+    expect(runGh).toHaveBeenCalledTimes(annotated ? 6 : 4);
+    if (!annotated) {
+      expect(runGh.mock.calls.flatMap(([args]) => args)).not.toContain(
+        `repos/openclaw/openclaw/compare/${SHA}...main`,
+      );
+    }
   });
 });
 
@@ -403,13 +255,13 @@ function publicationEvidence(invocationId = `${URL}/attempts/1`) {
         externalParameters: {
           workflow: {
             ref: `refs/tags/${BRANCH}`,
-            repository: "https://github.com/openclaw/openclaw",
-            path: ".github/workflows/openclaw-npm-release.yml",
+            repository: `https://github.com/${REPOSITORY}`,
+            path: WORKFLOW,
           },
         },
         resolvedDependencies: [
           {
-            uri: `git+https://github.com/openclaw/openclaw@refs/tags/${BRANCH}`,
+            uri: `git+https://github.com/${REPOSITORY}@refs/tags/${BRANCH}`,
             digest: { gitCommit: SHA },
           },
         ],
@@ -450,41 +302,29 @@ it("prints an executable resume command that preserves all inputs without shell 
     GITHUB_REF: `refs/tags/${BRANCH}`,
     GITHUB_REF_NAME: BRANCH,
     PARENT_WORKFLOW_SHA: SHA,
-    GITHUB_REPOSITORY: "openclaw/openclaw",
+    GITHUB_REPOSITORY: REPOSITORY,
     GITHUB_EVENT_PATH: event,
     GITHUB_STEP_SUMMARY: summary,
   };
-  const printed = spawnSync(
-    "bash",
-    [
-      "-c",
-      'source "$1"; print_release_resume_command',
-      "fixture",
-      resolve("scripts/lib/release-publish-children.sh"),
-    ],
-    { cwd: root, env, encoding: "utf8" },
+  const shell = (script: string, ...args: string[]) =>
+    spawnSync("bash", ["-c", script, ...args], { cwd: root, env, encoding: "utf8" });
+  const printed = shell(
+    'source "$1"; print_release_resume_command',
+    "fixture",
+    resolve("scripts/lib/release-publish-children.sh"),
   );
   expect(printed.status, printed.stderr).toBe(0);
   const command = readFileSync(summary, "utf8").match(/```bash\n([\s\S]+?)\n```/u)?.[1];
   if (!command) {
     throw new Error("Release summary did not contain a resume command.");
   }
-  const resumed = spawnSync(
-    "bash",
-    ["-c", `gh() { printf '%s\\n' "$@" > args; cat > inputs.json; }; ${command}`],
-    { cwd: root, env, encoding: "utf8" },
-  );
+  const resumed = shell(`gh() { printf '%s\\n' "$@" > args; cat > inputs.json; }; ${command}`);
   expect(resumed.status, resumed.stderr).toBe(0);
   expect(JSON.parse(readFileSync(join(root, "inputs.json"), "utf8"))).toEqual(inputs);
-  expect(readFileSync(join(root, "args"), "utf8").trim().split("\n")).toEqual([
-    "workflow",
-    "run",
-    "openclaw-release-publish.yml",
-    "--repo",
-    "openclaw/openclaw",
-    "--ref",
-    BRANCH,
-    "--json",
-  ]);
+  expect(readFileSync(join(root, "args"), "utf8").trim().split("\n")).toEqual(
+    `workflow run openclaw-release-publish.yml --repo ${REPOSITORY} --ref ${BRANCH} --json`.split(
+      " ",
+    ),
+  );
   expect(existsSync(join(root, "injected"))).toBe(false);
 });

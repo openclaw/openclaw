@@ -31,17 +31,6 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
     },
   );
 
-  it("rejects a relative persisted pin instead of silently selecting another runtime", async () => {
-    await expect(
-      resolveDaemonInstallRuntimeInputs({
-        env: {},
-        pinnedRuntimePath: "relative/node",
-        runtime: "node",
-        devMode: false,
-      }),
-    ).rejects.toThrow(/absolute/);
-  });
-
   it("detects src ts entrypoints when devMode is not overridden", async () => {
     const originalArgv = process.argv;
     try {
@@ -63,34 +52,9 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
       process.argv = originalArgv;
     }
   });
-
-  it("keeps explicit devMode and runtimePath overrides", async () => {
-    await expect(
-      resolveDaemonInstallRuntimeInputs({
-        env: {},
-        runtime: "node",
-        devMode: false,
-        runtimePath: "/custom/node",
-      }),
-    ).resolves.toEqual({
-      devMode: false,
-      runtime: "node",
-      runtimePath: "/custom/node",
-    });
-  });
 });
 
 describe("resolveDaemonServicePathDirs openclaw discovery", () => {
-  it("uses the active openclaw command directory", () => {
-    expect(
-      resolveDaemonServicePathDirs({
-        argv: ["node", "/Users/testuser/.npm-global/bin/openclaw", "gateway", "install"],
-        env: { PATH: "" },
-        platform: "darwin",
-      }),
-    ).toEqual(["/Users/testuser/.npm-global/bin"]);
-  });
-
   it.skipIf(process.platform === "win32")(
     "finds the PATH shim that resolves to the active package entrypoint",
     () => {

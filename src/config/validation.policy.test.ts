@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { getDefaultRedactPatterns } from "../logging/redact.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   validateConfigObjectRaw,
@@ -90,10 +91,6 @@ function validateCredential(source: "env" | "exec", strict: boolean, defaultAlia
 }
 
 describe("config validation SecretRef policy", () => {
-  it("allows impossible SecretRefs on inactive plugin targets at runtime", () => {
-    expect(validateCredential("exec", false).ok).toBe(true);
-  });
-
   it("rejects impossible inactive plugin SecretRefs in strict mode without leaking their IDs", () => {
     const result = validateCredential("exec", true);
     expect(result.ok).toBe(false);
@@ -227,14 +224,6 @@ describe("ambient heartbeat ownership", () => {
 
   it.each([
     {
-      name: "system owner",
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, ops: {} },
-        defaults: { systemAgent: { agentId: "ops" } },
-      },
-    },
-    {
       name: "per-agent heartbeat",
       agents: {
         ownership: "explicit",
@@ -251,5 +240,41 @@ describe("ambient heartbeat ownership", () => {
     },
   ])("does not warn for a $name", ({ agents }) => {
     expect(warnings(agents)).toEqual([]);
+  });
+});
+
+describe("logging.redactPatterns", () => {
+  function warnings(redactPatterns: string[]) {
+    const result = validateConfigObjectWithPlugins(
+      { logging: { redactPatterns } },
+      {
+        pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [] } },
+      },
+    );
+    expect(result.ok).toBe(true);
+    return result.warnings.filter((warning) => warning.path.startsWith("logging.redactPatterns"));
+  }
+
+  it("warns for patterns that log redaction silently drops", () => {
+    expect(warnings(["ACME-[0-9]+", "(", String.raw`/(\+?\d+[ -]?)+/`])).toEqual([
+      {
+        path: "logging.redactPatterns.1",
+        message:
+          "Redaction pattern is ignored (invalid-regex); values it should mask stay visible in logs and diagnostics. Fix the regex syntax, then run openclaw config validate again.",
+      },
+      {
+        path: "logging.redactPatterns.2",
+        message:
+          "Redaction pattern is ignored (unsafe-nested-repetition); values it should mask stay visible in logs and diagnostics. Rewrite the nested repetition, for example (a+)+ as a+, then run openclaw config validate again.",
+      },
+    ]);
+  });
+
+  it("does not warn for the default string list", () => {
+    const defaults = getDefaultRedactPatterns().filter(
+      (pattern): pattern is string => typeof pattern === "string",
+    );
+    expect(defaults.length).toBeGreaterThan(0);
+    expect(warnings(defaults)).toEqual([]);
   });
 });

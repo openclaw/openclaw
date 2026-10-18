@@ -193,7 +193,9 @@ export async function sendPluginSessionAttachment(
     typeof params.maxBytes === "number" && Number.isFinite(params.maxBytes)
       ? Math.min(DEFAULT_ATTACHMENT_MAX_BYTES, Math.max(1, Math.floor(params.maxBytes)))
       : DEFAULT_ATTACHMENT_MAX_BYTES;
-  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey, { cfg: params.config });
+  const { deliveryContext, threadId } = await extractDeliveryInfo(sessionKey, {
+    cfg: params.config,
+  });
   if (!deliveryContext?.channel || !deliveryContext.to) {
     return { ok: false, error: `session has no active delivery route: ${sessionKey}` };
   }
@@ -232,7 +234,7 @@ export async function sendPluginSessionAttachment(
     return { ok: false, error: validated.error };
   }
   const resolvedThreadId =
-    normalizeOptionalThreadId(resolvedDelivery.threadId) ??
+    resolvedDelivery.threadId ??
     normalizeOptionalThreadId(params.threadId) ??
     normalizeOptionalThreadId(threadId) ??
     normalizeOptionalThreadId(deliveryContext.threadId);

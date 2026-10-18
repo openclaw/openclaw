@@ -8,7 +8,6 @@ type FatalErrorHook = (context: FatalErrorHookContext) => string | undefined | v
 
 const hooks = new Set<FatalErrorHook>();
 
-/** Registers a fatal-error hook and returns an unsubscribe callback. */
 export function registerFatalErrorHook(hook: FatalErrorHook): () => void {
   hooks.add(hook);
   return () => {
@@ -16,7 +15,6 @@ export function registerFatalErrorHook(hook: FatalErrorHook): () => void {
   };
 }
 
-/** Runs registered fatal-error hooks and returns non-empty diagnostic lines. */
 export function runFatalErrorHooks(context: FatalErrorHookContext): string[] {
   const messages: string[] = [];
   for (const hook of hooks) {

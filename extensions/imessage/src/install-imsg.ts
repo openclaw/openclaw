@@ -1,4 +1,3 @@
-// iMessage plugin module implements imsg CLI install behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";

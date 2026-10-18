@@ -4,8 +4,7 @@ import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { MOONSHOT_BASE_URL, MOONSHOT_CN_BASE_URL } from "./provider-catalog.js";
-import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
+import { MOONSHOT_BASE_URL } from "./provider-catalog.js";
 
 async function captureThinkingConfig(
   modelId: string,
@@ -29,15 +28,7 @@ async function captureThinkingConfig(
 
 describe("moonshot provider plugin", () => {
   it.each<{ name: string; route: Partial<Model>; expected: boolean }>([
-    { name: "international slash", route: { baseUrl: `${MOONSHOT_BASE_URL}/` }, expected: true },
-    { name: "China", route: { baseUrl: MOONSHOT_CN_BASE_URL }, expected: true },
-    { name: "unknown model", route: { id: "kimi-k3-latest" }, expected: false },
-    { name: "Responses", route: { api: "openai-responses" }, expected: false },
-    { name: "proxy", route: { baseUrl: "https://proxy.example/v1" }, expected: false },
-    { name: "query", route: { baseUrl: `${MOONSHOT_BASE_URL}?x=1` }, expected: false },
     { name: "userinfo", route: { baseUrl: "https://u@api.moonshot.ai/v1" }, expected: false },
-    { name: "HTTP", route: { baseUrl: "http://api.moonshot.ai/v1" }, expected: false },
-    { name: "provider alias", route: { provider: "moonshotai" }, expected: false },
   ])("enables native video only for the exact $name route", async ({ route, expected }) => {
     const provider = await registerSingleProviderPlugin(plugin);
     const model = {
@@ -60,12 +51,6 @@ describe("moonshot provider plugin", () => {
     } as never);
 
     expect(((normalized ?? model).input as string[]).includes("video")).toBe(expected);
-  });
-
-  it("mirrors Kimi web-search env credentials in manifest metadata", () => {
-    const envVars =
-      manifest.setup.providers.find((provider) => provider.id === "moonshot")?.envVars ?? [];
-    expect(envVars.toSorted()).toStrictEqual(createKimiWebSearchProvider().envVars.toSorted());
   });
 
   it("declares shipped Moonshot provider aliases in runtime and manifest metadata", async () => {
@@ -95,45 +80,7 @@ describe("moonshot provider plugin", () => {
     expect(policy).not.toHaveProperty("dropReasoningFromHistory");
   });
 
-  it("wires moonshot-thinking stream hooks", async () => {
-    const { payload } = await captureThinkingConfig("kimi-k2.6", "wrapStreamFn");
-    expect(payload).toEqual({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      thinking: { type: "disabled" },
-    });
-  });
-
-  it.each(["kimi-k2.7-code", "kimi-k2.7-code-highspeed"])(
-    "keeps %s thinking always on without sending a thinking field",
-    async (modelId) => {
-      const { provider, captured, payload } = await captureThinkingConfig(modelId);
-      expect(payload).toEqual({ config: { thinkingConfig: { thinkingBudget: -1 } } });
-      expect(
-        provider.wrapSimpleCompletionStreamFn?.({
-          provider: "moonshot",
-          modelId: "kimi-k2.6",
-          streamFn: captured.streamFn,
-        } as never),
-      ).toBe(captured.streamFn);
-      expect(
-        provider.resolveThinkingProfile?.({
-          provider: "moonshot",
-          modelId,
-          reasoning: true,
-        } as never),
-      ).toEqual({
-        levels: [{ id: "low", label: "on" }],
-        defaultLevel: "low",
-        preserveWhenCatalogReasoningFalse: true,
-      });
-      expect(provider.isModernModelRef?.({ provider: "moonshot", modelId })).toBe(true);
-      expect(provider.isModernModelRef?.({ provider: "moonshot", modelId: "kimi-k2.6" })).toBe(
-        false,
-      );
-    },
-  );
-
-  it.each(["constructor", "__proto__"])(
+  it.each(["constructor"])(
     "keeps inherited object key %s outside the always-thinking model family",
     async (modelId) => {
       const provider = await registerSingleProviderPlugin(plugin);

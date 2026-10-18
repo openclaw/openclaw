@@ -136,17 +136,11 @@ function projectDevices(
           .toSorted((a, b) => a.connectionId.localeCompare(b.connectionId))
           .map(({ entry, connectionId }) => {
             const connection: PresenceDevice["connections"][number] = { id: connectionId };
-            if (entry.clientId) {
-              connection.clientId = entry.clientId;
-            }
-            if (entry.platform) {
-              connection.platform = entry.platform;
-            }
-            if (entry.deviceFamily) {
-              connection.deviceFamily = entry.deviceFamily;
-            }
-            if (entry.timeZone) {
-              connection.timeZone = entry.timeZone;
+            for (const field of ["clientId", "platform", "deviceFamily", "timeZone"] as const) {
+              const value = entry[field];
+              if (value) {
+                connection[field] = value;
+              }
             }
             if (include.includes("network")) {
               connection.network = { ip: entry.ip ?? null };

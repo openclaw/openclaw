@@ -1,15 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-
-export type ExecutableResolver = (
-  command: string,
-  env: NodeJS.ProcessEnv,
-  extraCandidates?: readonly string[],
-) => string | null;
+import { canAccessSync } from "openclaw/plugin-sdk/path-existence-runtime";
 
 const cache = new Map<string, string | null>();
 
-export const resolveExecutable: ExecutableResolver = (command, env, extraCandidates = []) => {
+export function resolveExecutable(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  extraCandidates: readonly string[] = [],
+): string | null {
   const pathValue = env.PATH ?? "";
   const key = `${command}\0${pathValue}\0${extraCandidates.join("\0")}`;
   if (cache.has(key)) {
@@ -21,15 +20,7 @@ export const resolveExecutable: ExecutableResolver = (command, env, extraCandida
     .filter(Boolean)
     .map((dir) => path.join(dir, command));
   const candidates = path.isAbsolute(command) ? [command] : [...pathCandidates, ...extraCandidates];
-  const found =
-    candidates.find((candidate) => {
-      try {
-        fs.accessSync(candidate, fs.constants.X_OK);
-        return true;
-      } catch {
-        return false;
-      }
-    }) ?? null;
+  const found = candidates.find((candidate) => canAccessSync(candidate, fs.constants.X_OK)) ?? null;
   cache.set(key, found);
   return found;
-};
+}

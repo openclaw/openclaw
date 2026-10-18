@@ -75,6 +75,8 @@ let captureRoutingDecisionWork: typeof import("./test-helpers/model-routing-deci
 let createModelRoutingTestAdmission: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").createModelRoutingTestAdmission;
 let ensureAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").ensureAuthProfileStore;
 let saveAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").saveAuthProfileStore;
+let createOpenClawDatabaseMaintenanceScope: typeof import("../state/openclaw-state-db-async-lifecycle.js").createOpenClawDatabaseMaintenanceScope;
+let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 
 beforeAll(async () => {
   vi.resetModules();
@@ -91,6 +93,9 @@ beforeAll(async () => {
       createResolvedEmbeddedRunnerModel(provider, modelId),
   }));
 
+  ({ createOpenClawDatabaseMaintenanceScope } =
+    await import("../state/openclaw-state-db-async-lifecycle.js"));
+  ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
   runEmbeddedAgentWithPreparedAdmission = (await import("./embedded-agent-runner/run.js"))
     .runEmbeddedAgent;
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
@@ -101,6 +106,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   runEmbeddedAttemptMock.mockReset();
   sleepWithAbortMock.mockClear();
 });
@@ -123,7 +129,7 @@ function makeProviderConfig(fallbacks: string[]): OpenClawConfig {
   return {
     agents: {
       defaults: { model: { primary: "openai/mock-1", fallbacks } },
-      list: [{ id: "test" }],
+      entries: { test: {} },
     },
     models: {
       providers: {
@@ -304,6 +310,7 @@ async function runScenario(params: {
     agentId: sessionTarget.agentId,
     boundary: "provider-fault-sequence",
   });
+  const maintenance = createOpenClawDatabaseMaintenanceScope();
   try {
     // The synthetic attempt skips transcript creation; seed the real row so the
     // runner claims its writer normally before entering compaction recovery.
@@ -311,42 +318,44 @@ async function runScenario(params: {
       sessionId: sessionTarget.sessionId,
       updatedAt: Date.now(),
     });
-    const outcome = await runWithModelFallback<EmbeddedAgentRunResult>({
-      cfg: params.config,
-      provider: "openai",
-      model: "mock-1",
-      runId: params.runId,
-      sessionId: sessionTarget.sessionId,
-      sessionKey: sessionTarget.sessionKey,
-      agentDir: params.agentDir,
-      classifyResult: ({ provider, model, result }) =>
-        classifyEmbeddedAgentRunResultForModelFallback({ provider, model, result }),
-      mergeExhaustedResult: ({ latestResult, preferredResult }) =>
-        mergeEmbeddedAgentRunResultForModelFallbackExhaustion({
-          latestResult,
-          preferredResult,
-        }),
-      run: async (provider, model, options) =>
-        await runEmbeddedAgentWithPreparedAdmission({
-          preparedRunAdmission,
-          agentId: sessionTarget.agentId,
-          sessionId: sessionTarget.sessionId,
-          sessionKey: sessionTarget.sessionKey,
-          sessionTarget,
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          config: params.config,
-          prompt: "hello",
-          provider,
-          model,
-          authProfileIdSource: "auto",
-          allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
-          isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
-          timeoutMs: 250,
-          runId: params.runId,
-          enqueue: async (task) => await task(),
-        }),
-    });
+    const outcome = await maintenance.run(() =>
+      runWithModelFallback<EmbeddedAgentRunResult>({
+        cfg: params.config,
+        provider: "openai",
+        model: "mock-1",
+        runId: params.runId,
+        sessionId: sessionTarget.sessionId,
+        sessionKey: sessionTarget.sessionKey,
+        agentDir: params.agentDir,
+        classifyResult: ({ provider, model, result }) =>
+          classifyEmbeddedAgentRunResultForModelFallback({ provider, model, result }),
+        mergeExhaustedResult: ({ latestResult, preferredResult }) =>
+          mergeEmbeddedAgentRunResultForModelFallbackExhaustion({
+            latestResult,
+            preferredResult,
+          }),
+        run: async (provider, model, options) =>
+          await runEmbeddedAgentWithPreparedAdmission({
+            preparedRunAdmission,
+            agentId: sessionTarget.agentId,
+            sessionId: sessionTarget.sessionId,
+            sessionKey: sessionTarget.sessionKey,
+            sessionTarget,
+            workspaceDir: params.workspaceDir,
+            agentDir: params.agentDir,
+            config: params.config,
+            prompt: "hello",
+            provider,
+            model,
+            authProfileIdSource: "auto",
+            allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
+            isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
+            timeoutMs: 250,
+            runId: params.runId,
+            enqueue: async (task) => await task(),
+          }),
+      }),
+    );
     return {
       kind: "result",
       provider: outcome.provider,
@@ -360,7 +369,12 @@ async function runScenario(params: {
     }
     return { kind: "error", error };
   } finally {
-    preparedRunAdmission.close();
+    try {
+      // Profile failure bookkeeping can outlive the completed reply.
+      await maintenance.close();
+    } finally {
+      preparedRunAdmission.close();
+    }
   }
 }
 
@@ -461,7 +475,9 @@ async function expectPreparationInvalidationToDropRoutingWork(
           await replacementAdmission.admit("embedded");
         }
         releasePreparation.resolve();
-        await expect(run).rejects.toThrow("admitted run authority is no longer active");
+        await expect(run).rejects.toThrow(
+          "embedded attempt reached dispatch without an active admitted run",
+        );
       });
 
       expect(decisionWork).toHaveLength(0);
@@ -579,49 +595,53 @@ describe("runEmbeddedAgent provider fault sequences", () => {
     });
   });
 
-  it("fails over a header-only multi-hour 429 past retry.provider.maxRetryDelayMs instead of sleeping it", async () => {
-    // The regression: Anthropic's session-window 429 carries the reset only in
-    // Retry-After and matches no usage-window keyword, so the controller slept
-    // the full ~2.75h floor in-turn and the configured fallback never ran
-    // (#148558/#143274). With the cap wired through, the run fails over to the
-    // model fallback and completes, and the floor is never handed to the sleep.
-    await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
-      writeProfiles(agentDir, { openai: 1, groq: true });
-      const observations: AttemptObservation[] = [];
-      installFaultScript(
-        [
-          { status: 429, window: "header-floor", retryAfterSeconds: 9897, maxRetryDelayMs: 30_000 },
-          { status: 200, text: "fallback after header floor" },
-        ],
-        observations,
-      );
-
-      const outcome = expectResult(
-        await runScenario({
+  it.each(["model fallback", "auth profile", "exhausted profiles"] as const)(
+    "handles a header-only multi-hour 429 with %s",
+    async (recovery) => {
+      await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
+        const modelFallback = recovery === "model fallback";
+        const exhausted = recovery === "exhausted profiles";
+        writeProfiles(agentDir, { openai: modelFallback ? 1 : 2, groq: modelFallback });
+        const observations: AttemptObservation[] = [];
+        const rateLimit: ProviderFault = {
+          status: 429,
+          window: "header-floor",
+          retryAfterSeconds: 9897,
+          maxRetryDelayMs: 30_000,
+        };
+        installFaultScript(
+          [rateLimit, exhausted ? rateLimit : { status: 200, text: "backup recovered" }],
+          observations,
+        );
+        const outcome = await runScenario({
           agentDir,
           workspaceDir,
-          config: makeProviderConfig(["groq/mock-2"]),
-          runId: "header-floor-failover",
-        }),
-      );
+          config: makeProviderConfig(modelFallback ? ["groq/mock-2"] : []),
+          runId: `header-floor-${recovery.replaceAll(" ", "-")}`,
+        });
 
-      // The single openai attempt failed over to the groq fallback: the floor was
-      // declined, not slept, and no same-model retry sat between them.
-      expect(observations.map(({ provider, model }) => [provider, model])).toEqual([
-        ["openai", "mock-1"],
-        ["groq", "mock-2"],
-      ]);
-      // Nothing slept the 9,897,000ms floor; the only sleeps are the backoff
-      // controller's between-candidate waits, never the provider floor.
-      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).not.toContain(9_897_000);
-      expect(outcome.provider).toBe("groq");
-      expect(outcome.model).toBe("mock-2");
-      expect(outcome.result.payloads?.[0]?.text).toContain("fallback after header floor");
-
-      const usageStats = await readUsageStats(agentDir);
-      expect(usageStats["openai:p1"]?.cooldownReason).toBe("rate_limit");
-    });
-  });
+        expect(
+          observations.map(({ provider, model, profileId }) => [provider, model, profileId]),
+        ).toEqual([
+          ["openai", "mock-1", "openai:p1"],
+          modelFallback ? ["groq", "mock-2", "groq:p1"] : ["openai", "mock-1", "openai:p2"],
+        ]);
+        expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).not.toContain(9_897_000);
+        if (exhausted) {
+          const error = expectError(outcome);
+          expect(error).toMatchObject({ reason: "rate_limit" });
+          expect(error.message).toMatch(/try again/i);
+        } else {
+          expect(expectResult(outcome).result.payloads?.[0]?.text).toBe("backup recovered");
+        }
+        const usageStats = await readUsageStats(agentDir);
+        expect(usageStats["openai:p1"]?.cooldownReason).toBe("rate_limit");
+        if (exhausted) {
+          expect(usageStats["openai:p2"]?.cooldownReason).toBe("rate_limit");
+        }
+      });
+    },
+  );
 
   it("persists a ten-minute initial billing disable and surfaces billing copy for 402", async () => {
     await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
@@ -674,15 +694,19 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         }),
       );
 
-      // Current behavior: legacy compaction reports no compactable transcript, so the runner
-      // returns a blocked context_overflow payload instead of rotating credentials or models.
       expect(observations).toHaveLength(1);
       expect(outcome.result.meta.error).toMatchObject({ kind: "context_overflow" });
       expect(outcome.result.payloads?.[0]).toMatchObject({
         isError: true,
         text: expect.stringContaining("Context overflow: prompt too large for the model"),
       });
-      expect(outcome.attempts).toEqual([]);
+      expect(outcome.attempts).toEqual([
+        expect.objectContaining({
+          provider: "openai",
+          model: "mock-1",
+          reason: "context_overflow",
+        }),
+      ]);
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
     });

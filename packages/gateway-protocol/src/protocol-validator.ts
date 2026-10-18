@@ -1,6 +1,6 @@
 import { normalizeTypeBoxValidationErrors } from "@openclaw/normalization-core/json-schema";
 import type { Static, TSchema } from "typebox";
-import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
+import { Compile, type Validator as TypeBoxValidator } from "typebox/schema";
 import type { ValidationError } from "./validation-errors.js";
 
 /** Runtime validator shape shared by gateway clients and server handlers. */
@@ -34,9 +34,9 @@ export function lazyCompile<T = unknown>(
       errors = [precheckError];
       return false;
     }
-    const current = (compiled ??= Compile(schema as never));
+    const current = (compiled ??= Compile(schema));
     const valid = current.Check(data);
-    errors = valid ? null : normalizeTypeBoxValidationErrors([...current.Errors(data)]);
+    errors = valid ? null : normalizeTypeBoxValidationErrors(current.Errors(data)[1]);
     return valid;
   }) as ProtocolValidator<T>;
 

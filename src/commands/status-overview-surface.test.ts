@@ -6,17 +6,9 @@ import {
   buildStatusUpdateSurface,
 } from "./status-all/format.js";
 import {
-  buildStatusOverviewSurfaceFromOverview,
-  buildStatusOverviewSurfaceFromScan,
-} from "./status-overview-surface.ts";
-import {
   baseStatusCfg,
   baseStatusExpectedUpdateChannelLabel,
-  baseStatusGatewaySnapshot,
-  baseStatusOverviewScanFields,
   baseStatusOverviewSurface,
-  baseStatusServices,
-  baseStatusUpdate,
 } from "./status.test-support.ts";
 
 describe("status-overview-surface", () => {
@@ -41,31 +33,6 @@ describe("status-overview-surface", () => {
     expect(update.updateAvailable).toBe(false);
     expect(update.gitLabel).toBeNull();
   });
-  it("builds the shared overview surface from a status scan result", () => {
-    expect(
-      buildStatusOverviewSurfaceFromScan({
-        scan: baseStatusOverviewScanFields,
-        ...baseStatusServices,
-      }),
-    ).toEqual(baseStatusOverviewSurface);
-  });
-
-  it("builds the shared overview surface from scan overview data", () => {
-    expect(
-      buildStatusOverviewSurfaceFromOverview({
-        overview: {
-          cfg: baseStatusCfg,
-          update: baseStatusUpdate,
-          tailscaleMode: "serve",
-          tailscaleDns: "box.tail.ts.net",
-          tailscaleHttpsUrl: "https://box.tail.ts.net",
-          gatewaySnapshot: baseStatusGatewaySnapshot,
-        } as never,
-        ...baseStatusServices,
-      }),
-    ).toEqual(baseStatusOverviewSurface);
-  });
-
   it("builds overview rows from the shared surface bundle", () => {
     expect(
       buildStatusOverviewSurfaceRows({

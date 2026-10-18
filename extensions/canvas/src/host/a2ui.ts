@@ -1,9 +1,7 @@
-/**
- * HTTP handler for serving bundled A2UI renderer assets.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   handleA2uiHttpRequestWithRootResolver,
   type A2uiHttpRequest,
@@ -77,7 +75,6 @@ async function resolveA2uiRootReal(): Promise<string | null> {
   return resolvingA2uiRoot;
 }
 
-/** Handles one HTTP request for the hosted A2UI asset surface. */
 export async function handleA2uiHttpRequest(
   req: A2uiHttpRequest,
   res: A2uiHttpResponse,
@@ -98,7 +95,7 @@ export async function readPublicA2uiResource(
   }
   try {
     return {
-      body: await opened.handle.readFile(),
+      body: await readFileHandleBounded(opened.handle, Infinity),
       contentType: "application/javascript; charset=utf-8",
     };
   } finally {

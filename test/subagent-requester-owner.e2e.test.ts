@@ -1,14 +1,23 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../packages/gateway-protocol/src/schema/logs-chat.js";
-import { saveSubagentRegistryToSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
+import { loadConfig } from "../src/config/io.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../src/config/runtime-snapshot.js";
+import { loadSessionEntry } from "../src/config/sessions/session-accessor.js";
 import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -26,6 +35,7 @@ import {
 } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withTestTimeout } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
+import { withSubagentRecoveryOperator } from "./helpers/subagent-recovery-operator.js";
 
 const TEST_TIMEOUT_MS = 180_000;
 const MODEL_REF = "requester-owner/synthetic";
@@ -60,6 +70,7 @@ afterEach(async () => {
     ...modelServers.splice(0).map((server) => server.close()),
   ]);
   const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  clearRuntimeConfigSnapshot();
   if (errors.length > 0) {
     throw new AggregateError(errors, "Requester fixture cleanup failed");
   }
@@ -346,12 +357,13 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         // The parent checks the finished child through its real tool before yielding.
         yieldGate.resolve();
         expect(await parent, instance.logs()).toMatchObject({ status: "ok" });
-        await vi.waitFor(
+        const settledRun = await vi.waitFor(
           () => {
             const runs = [...loadSubagentRegistryFromSqlite().values()];
             expect(runs, instance.logs()).toHaveLength(1);
             expect(runs[0]?.delivery?.status, instance.logs()).toBe("delivered");
             expect(runs[0]?.requesterSettleWake).toBeUndefined();
+            return expectDefined(runs[0], "settled child run");
           },
           { interval: 50, timeout: 30_000 },
         );
@@ -370,7 +382,18 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         if (!receipts.found) {
           throw new Error("Expected requester database for completion verification");
         }
-        expect(receipts.value).toEqual([]);
+        const settleRunId = `announce:requester-settle:${REQUESTER_AGENT_ID}:${sessionKey}:${settledRun.runId}:yield-1`;
+        expect(receipts.value).toHaveLength(1);
+        const receipt = expectDefined(receipts.value[0], "requester completion receipt");
+        expect(receipt).toMatchObject({
+          run_id: settleRunId,
+          idempotency_key: `${settleRunId}:user`,
+          succeeded: 1,
+        });
+        expect(JSON.parse(receipt.outcome_json)).toMatchObject({
+          reason: "completed",
+          status: "ok",
+        });
         expect(modelServer.completionResponseCount()).toBe(1);
         expect(chatErrors).toEqual([]);
         const history = await client.request<{
@@ -500,14 +523,17 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
     async () => {
       const modelServer = await startProofModelServer();
       modelServers.push(modelServer);
+      const config = createTestConfig(modelServer.url);
       const instance = await createOpenClawTestInstance({
         name: "requester-owner-legacy-unscoped-requester",
-        config: createTestConfig(modelServer.url),
+        config,
         env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
       });
       instances.push(instance);
 
       instance.state.applyEnv();
+      const gatewayConfig = loadConfig();
+      setRuntimeConfigSnapshot(gatewayConfig);
       const registry =
         await import("../src/agents/subagents/registry/subagent-registry.test-helpers.js");
       await runQaGatewayFixture(
@@ -528,31 +554,64 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
             sessionId: "requester-owner-legacy-child-session",
             defaultSessionId: "requester-owner-legacy-child-session",
           });
+          const requester = expectDefined(
+            loadSessionEntry({
+              agentId: REQUESTER_AGENT_ID,
+              sessionKey: RESTORED_REQUESTER_KEY,
+            }),
+            "restored requester session",
+          );
           // Registration owns native child execution and physical-store provenance even for a bare key.
           // Queue only while preparing stored completion state; no child RPC is dispatched.
-          await registry.registerSubagentRun({
-            runId: RESTORED_RUN_ID,
-            childSessionKey,
-            requesterSessionKey: RESTORED_REQUESTER_KEY,
-            requesterDisplayKey: RESTORED_REQUESTER_KEY,
-            requesterAgentId: REQUESTER_AGENT_ID,
-            agentId: REQUESTER_AGENT_ID,
-            task: "REQUESTER-OWNER legacy restored completion",
-            cleanup: "keep",
-            expectsCompletionMessage: true,
-            queued: true,
-          });
+          const profileId = await withSubagentRecoveryOperator(
+            gatewayConfig,
+            async (admittedProfileId) => {
+              await registry.registerSubagentRun({
+                runId: RESTORED_RUN_ID,
+                childSessionKey,
+                requesterSessionKey: RESTORED_REQUESTER_KEY,
+                requesterDisplayKey: RESTORED_REQUESTER_KEY,
+                requesterAgentId: REQUESTER_AGENT_ID,
+                requesterTurnRunId: "requester-owner-restored-parent-turn",
+                completionRequesterSessionId: requester.sessionId,
+                completionRequesterLifecycleRevision: requester.lifecycleRevision,
+                childAgentId: REQUESTER_AGENT_ID,
+                sessionEntry: loadSessionEntry({
+                  agentId: REQUESTER_AGENT_ID,
+                  sessionKey: childSessionKey,
+                }),
+                task: "REQUESTER-OWNER legacy restored completion",
+                cleanup: "keep",
+                expectsCompletionMessage: true,
+                queued: true,
+              });
+              return admittedProfileId;
+            },
+          );
           const registered = loadSubagentRegistryFromSqlite().get(RESTORED_RUN_ID);
           if (!registered) {
             throw new Error("Restored requester fixture registration was not persisted");
           }
           expect(registered.requesterStorePath).toBeTruthy();
           expect(registered.controllerStorePath).toBe(registered.requesterStorePath);
+          expect(registered.operatorRecoverySource).toMatchObject({
+            agentId: REQUESTER_AGENT_ID,
+            sessionKey: RESTORED_REQUESTER_KEY,
+            sessionId: requester.sessionId,
+            sourceRunId: "requester-owner-restored-parent-turn",
+            snapshot: {
+              profileId,
+              scopes: ["operator.write"],
+              grant: null,
+            },
+          });
           // Retire setup callbacks, not durable ownership, before freezing the completed fixture.
           await registry.resetSubagentRegistryForTests({ persist: false });
           const endedAt = Date.now();
           const restored: SubagentRunRecord = {
             ...registered,
+            // The parent turn has ended; only its admitted child completion remains owed.
+            requesterTurnRunId: undefined,
             endedReason: "subagent-complete",
             execution: {
               ...registered.execution,
@@ -561,7 +620,12 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
               endedAt,
               outcome: { status: "ok" },
             },
-            completion: { required: true, resultText: RESTORED_CHILD_RESULT, capturedAt: endedAt },
+            completion: {
+              required: true,
+              terminalReply: { disposition: "visible", text: RESTORED_CHILD_RESULT },
+              resultText: RESTORED_CHILD_RESULT,
+              capturedAt: endedAt,
+            },
           };
           saveSubagentRegistryToSqlite(new Map([[restored.runId, restored]]));
           const seeded = loadSubagentRegistryFromSqlite().get(RESTORED_RUN_ID);

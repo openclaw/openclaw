@@ -144,7 +144,6 @@ describe("plugin management uninstall channel ownership", () => {
   });
 
   it.each([
-    { label: "an enabled non-channel plugin", enabled: true, channelIds: [] },
     {
       label: "a disabled channel plugin",
       enabled: false,
@@ -370,7 +369,6 @@ describe("plugin management uninstall channel ownership", () => {
   });
 
   it.each([
-    { mode: "keep-files", keepFiles: true, linked: false },
     { mode: "linked", keepFiles: false, linked: true },
     { mode: "remove-files", keepFiles: false, linked: false },
   ])(

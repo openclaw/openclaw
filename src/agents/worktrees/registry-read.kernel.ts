@@ -1,8 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import type {
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
@@ -11,7 +14,7 @@ import type {
 } from "./types.js";
 
 type WorktreeRow = Selectable<OpenClawStateKyselyDatabase["worktrees"]>;
-export const WORKTREE_RECORD_COLUMNS = [
+const WORKTREE_RECORD_COLUMNS = [
   "id",
   "repo_fingerprint",
   "repo_root",
@@ -33,38 +36,26 @@ export type WorktreeRegistryListOptions = { liveOnly?: boolean };
 function parseRunEndCleanup(
   raw: string | null | undefined,
 ): ManagedWorktreeRunEndCleanup | undefined {
-  if (raw == null) {
+  const parsed = safeParseJsonRecord(raw ?? "");
+  if (!parsed || typeof parsed.at !== "number" || !Number.isInteger(parsed.at) || parsed.at < 0) {
     return undefined;
   }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (
-      !isRecord(parsed) ||
-      typeof parsed.at !== "number" ||
-      !Number.isInteger(parsed.at) ||
-      parsed.at < 0
-    ) {
+  const at = parsed.at;
+  switch (parsed.outcome) {
+    case "failed":
+      return typeof parsed.reason === "string" &&
+        parsed.reason.length > 0 &&
+        parsed.reason.length <= 500
+        ? { outcome: parsed.outcome, at, reason: parsed.reason }
+        : undefined;
+    case "removed-lossless":
+    case "retained-busy":
+    case "retained-dirty":
+    case "retained-unpushed":
+    case "retained-provisioned-drift":
+      return parsed.reason === undefined ? { outcome: parsed.outcome, at } : undefined;
+    default:
       return undefined;
-    }
-    const at = parsed.at;
-    switch (parsed.outcome) {
-      case "failed":
-        return typeof parsed.reason === "string" &&
-          parsed.reason.length > 0 &&
-          parsed.reason.length <= 500
-          ? { outcome: parsed.outcome, at, reason: parsed.reason }
-          : undefined;
-      case "removed-lossless":
-      case "retained-busy":
-      case "retained-dirty":
-      case "retained-unpushed":
-      case "retained-provisioned-drift":
-        return parsed.reason === undefined ? { outcome: parsed.outcome, at } : undefined;
-      default:
-        return undefined;
-    }
-  } catch {
-    return undefined;
   }
 }
 
@@ -87,17 +78,34 @@ export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
     ...(row.removed_at == null ? {} : { removedAt: row.removed_at }),
     ...(runEndCleanup ? { runEndCleanup } : {}),
   };
-  try {
-    const protection: unknown = JSON.parse(row.gc_protection_json ?? "null");
+  const protection = safeParseJsonRecord(row.gc_protection_json ?? "");
+  if (
+    protection &&
+    protection.revision === worktreeGcRevision(record) &&
+    typeof protection.reason === "string"
+  ) {
+    record.gcProtection = protection.reason;
+    const retry = protection.retry;
     if (
-      isRecord(protection) &&
-      protection.revision === worktreeGcRevision(record) &&
-      typeof protection.reason === "string"
+      isRecord(retry) &&
+      typeof retry.stage === "string" &&
+      typeof retry.elapsedMs === "number" &&
+      Number.isSafeInteger(retry.elapsedMs) &&
+      retry.elapsedMs >= 0 &&
+      typeof retry.attempts === "number" &&
+      Number.isSafeInteger(retry.attempts) &&
+      retry.attempts > 0 &&
+      typeof retry.retryAt === "number" &&
+      Number.isSafeInteger(retry.retryAt) &&
+      retry.retryAt >= 0
     ) {
-      record.gcProtection = protection.reason;
+      record.gcRetry = {
+        stage: retry.stage,
+        elapsedMs: retry.elapsedMs,
+        attempts: retry.attempts,
+        retryAt: retry.retryAt,
+      };
     }
-  } catch {
-    /* Invalid derived state is re-inspected. */
   }
   return record;
 }
@@ -121,7 +129,7 @@ export function worktreeGcRevision(record: ManagedWorktreeRecord): string {
 }
 
 export function getRegistryWorktreeInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   id: string,
 ): ManagedWorktreeRecord | undefined {
   const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
@@ -132,8 +140,42 @@ export function getRegistryWorktreeInDatabase(
   return row ? rowToRecord(row) : undefined;
 }
 
+export function findLiveRegistryWorktreeByOwnerInDatabase(
+  db: EngineConnection,
+  ownerKind: ManagedWorktreeOwnerKind,
+  ownerId: string,
+): ManagedWorktreeRecord | undefined {
+  const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+    .selectFrom("worktrees")
+    .select(WORKTREE_RECORD_COLUMNS)
+    .where("owner_kind", "=", ownerKind)
+    .where("owner_id", "=", ownerId)
+    .where("removed_at", "is", null)
+    .orderBy("created_at", "desc")
+    .limit(1);
+  const row = executeSqliteQuerySync(db, query).rows[0];
+  return row ? rowToRecord(row) : undefined;
+}
+
+function findLiveRegistryWorktreeByPathInDatabase(
+  db: EngineConnection,
+  worktreePath: string,
+): ManagedWorktreeRecord | undefined {
+  const row = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+      .selectFrom("worktrees")
+      .select(WORKTREE_RECORD_COLUMNS)
+      .where("path", "=", worktreePath)
+      .where("removed_at", "is", null)
+      .orderBy("created_at", "desc")
+      .limit(1),
+  ).rows[0];
+  return row ? rowToRecord(row) : undefined;
+}
+
 export function listRegistryWorktreesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   options: WorktreeRegistryListOptions = {},
 ): ManagedWorktreeRecord[] {
   let query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
@@ -147,7 +189,7 @@ export function listRegistryWorktreesInDatabase(
   return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
 }
 
-export function listLiveRegistryWorktreeIdsInDatabase(db: DatabaseSync): string[] {
+function listLiveRegistryWorktreeIdsInDatabase(db: EngineConnection): string[] {
   const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
     .selectFrom("worktrees")
     .select("id")
@@ -173,26 +215,19 @@ function isProvisionedFileState(entry: unknown): entry is ProvisionedFileState {
 function parseProvisionedData(
   raw: string | null,
 ): Array<string | ProvisionedFileState> | undefined {
-  if (raw === null) {
+  const parsed = safeParseJson(raw ?? "");
+  if (!Array.isArray(parsed)) {
     return undefined;
   }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      return undefined;
-    }
-    return parsed.every(
-      (entry): entry is string | ProvisionedFileState =>
-        typeof entry === "string" || isProvisionedFileState(entry),
-    )
-      ? parsed
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return parsed.every(
+    (entry): entry is string | ProvisionedFileState =>
+      typeof entry === "string" || isProvisionedFileState(entry),
+  )
+    ? parsed
+    : undefined;
 }
 
-function readProvisionedData(db: DatabaseSync, id: string) {
+function readProvisionedData(db: EngineConnection, id: string) {
   const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
     .selectFrom("worktrees")
     .select("provisioned_paths_json")
@@ -201,8 +236,8 @@ function readProvisionedData(db: DatabaseSync, id: string) {
   return parseProvisionedData(row?.provisioned_paths_json ?? null);
 }
 
-export function getRegistryWorktreeProvisionedPathsInDatabase(
-  db: DatabaseSync,
+function getRegistryWorktreeProvisionedPathsInDatabase(
+  db: EngineConnection,
   id: string,
 ): string[] | undefined {
   return readProvisionedData(db, id)?.map((entry) =>
@@ -210,8 +245,8 @@ export function getRegistryWorktreeProvisionedPathsInDatabase(
   );
 }
 
-export function getRegistryWorktreeProvisionedStateInDatabase(
-  db: DatabaseSync,
+function getRegistryWorktreeProvisionedStateInDatabase(
+  db: EngineConnection,
   id: string,
 ): ProvisionedFileState[] | undefined {
   const data = readProvisionedData(db, id);
@@ -220,8 +255,8 @@ export function getRegistryWorktreeProvisionedStateInDatabase(
     : undefined;
 }
 
-export function getRegistryWorktreeProvisionedChunkInDatabase(
-  db: DatabaseSync,
+function getRegistryWorktreeProvisionedChunkInDatabase(
+  db: EngineConnection,
   params: { worktreeId: string; path: string; chunkIndex: number },
 ): Uint8Array | undefined {
   const query = getNodeSqliteKysely<
@@ -234,3 +269,56 @@ export function getRegistryWorktreeProvisionedChunkInDatabase(
     .where("chunk_index", "=", params.chunkIndex);
   return executeSqliteQuerySync(db, query).rows[0]?.data;
 }
+
+export const worktreeReadOperations = {
+  "worktrees.findLiveByOwner": (
+    { ownerKind, ownerId }: { ownerKind: ManagedWorktreeOwnerKind; ownerId: string },
+    db,
+  ) => ({
+    type: "worktrees.findLiveByOwner" as const,
+    value: findLiveRegistryWorktreeByOwnerInDatabase(db, ownerKind, ownerId),
+  }),
+  "worktrees.get": ({ id }: { id: string }, db) => ({
+    type: "worktrees.get" as const,
+    value: getRegistryWorktreeInDatabase(db, id),
+  }),
+  "worktrees.sessionBinding": (
+    { boundId, ownerId }: { boundId?: string; ownerId: string },
+    db,
+  ) => ({
+    type: "worktrees.sessionBinding" as const,
+    value: runSqliteDeferredTransactionSync(db, () => {
+      const bound = boundId ? getRegistryWorktreeInDatabase(db, boundId) : undefined;
+      return bound && bound.removedAt === undefined
+        ? bound
+        : findLiveRegistryWorktreeByOwnerInDatabase(db, "session", ownerId);
+    }),
+  }),
+  "worktrees.findLiveByPath": ({ path }: { path: string }, db) => ({
+    type: "worktrees.findLiveByPath" as const,
+    value: findLiveRegistryWorktreeByPathInDatabase(db, path),
+  }),
+  "worktrees.list": (input: WorktreeRegistryListOptions, db) => ({
+    type: "worktrees.list" as const,
+    value: listRegistryWorktreesInDatabase(db, input),
+  }),
+  "worktrees.liveIds": (_input: undefined, db) => ({
+    type: "worktrees.liveIds" as const,
+    value: listLiveRegistryWorktreeIdsInDatabase(db),
+  }),
+  "worktrees.provisionedPaths": ({ id }: { id: string }, db) => ({
+    type: "worktrees.provisionedPaths" as const,
+    value: getRegistryWorktreeProvisionedPathsInDatabase(db, id),
+  }),
+  "worktrees.provisionedState": ({ id }: { id: string }, db) => ({
+    type: "worktrees.provisionedState" as const,
+    value: getRegistryWorktreeProvisionedStateInDatabase(db, id),
+  }),
+  "worktrees.provisionedChunk": (
+    input: Parameters<typeof getRegistryWorktreeProvisionedChunkInDatabase>[1],
+    db,
+  ) => ({
+    type: "worktrees.provisionedChunk" as const,
+    value: getRegistryWorktreeProvisionedChunkInDatabase(db, input),
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;

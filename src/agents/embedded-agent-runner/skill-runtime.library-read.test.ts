@@ -3,10 +3,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   upsertSessionEntryCore,
   loadSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import {
   listSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
@@ -55,6 +60,7 @@ const temps = useAutoCleanupTempDirTracker((cleanup) =>
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     expect(
       hasOpenClawAgentDatabaseAsyncResources(),
@@ -134,6 +140,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
           exec: { applyPatch: { enabled: true, workspaceOnly: true } },
         },
       };
+      setRuntimeConfigSnapshot(config);
       const actor = (email: string): SkillLibraryAuthority => ({
         profileId: ensureProfileForEmail(email).id,
         scopes: ["operator.read", "operator.write"],
@@ -148,7 +155,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
         files: supporting,
         expectedRevision: null,
       });
-      const pins = changeSkillLibrarySelection(alice, [], {
+      const pins = await changeSkillLibrarySelection(alice, [], {
         action: "attach",
         sessionKey: "agent:main:manual",
         skillId: saved.entry.skillId,
@@ -347,6 +354,12 @@ describe("manual library resources through embedded and host-bound reads", () =>
           childSessionKey: childKey,
           incognito: false,
           requesterInternalKey: parentKey,
+          parentTarget: await resolveGatewaySessionStoreTargetInWorker({
+            cfg: config,
+            key: parentKey,
+            agentId: "main",
+            projection: "full",
+          }),
           completionOwnerSessionKey: parentKey,
           creationPolicy: { actor: { type: "agent", id: "main" } },
           modelPatch: {},
@@ -378,7 +391,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
 
         // Pin survival across unshare/removal is intentional; current library defaults are not revocation.
         for (const action of ["share", "unshare", "remove"] as const) {
-          mutateSkillLibrary(alice, {
+          await mutateSkillLibrary(alice, {
             skillId: saved.entry.skillId,
             expectedRevision: newer.entry.revision,
             action,

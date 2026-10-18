@@ -30,51 +30,14 @@ export function observeMcpAppHttpResponses(gatewayPort: number) {
   return { responses, stop: () => requests.unsubscribe(onRequest) };
 }
 
-export function observeMcpAppNetwork(
-  page: Page,
-  label: string,
-  diagnostics: Array<Record<string, unknown>>,
-) {
+export function observeMcpAppRequests(page: Page) {
+  const requests: Array<{ method: string; pathname: string }> = [];
   page.on("request", (request) => {
     if (request.url().includes("mcp-app")) {
-      diagnostics.push({
-        host: label,
-        atMs: Date.now(),
-        event: "request",
-        method: request.method(),
-        pathname: new URL(request.url()).pathname,
-      });
+      requests.push({ method: request.method(), pathname: new URL(request.url()).pathname });
     }
   });
-  page.on("response", (response) => {
-    if (response.url().includes("mcp-app")) {
-      diagnostics.push({
-        host: label,
-        atMs: Date.now(),
-        event: "response",
-        status: response.status(),
-        pathname: new URL(response.url()).pathname,
-      });
-    }
-  });
-  page.on("requestfailed", (request) =>
-    diagnostics.push({
-      host: label,
-      atMs: Date.now(),
-      event: "requestfailed",
-      method: request.method(),
-      pathname: new URL(request.url()).pathname,
-      error: request.failure()?.errorText,
-    }),
-  );
-  page.on("pageerror", (error) =>
-    diagnostics.push({
-      host: label,
-      atMs: Date.now(),
-      event: "pageerror",
-      message: error.message,
-    }),
-  );
+  return requests;
 }
 
 export type McpAppFixtureEvent = {
@@ -191,60 +154,6 @@ export async function requestStandaloneUrl(
   );
 }
 
-export async function recordMcpAppHost(
-  { proofDir, captureUiProof }: { proofDir: string; captureUiProof: boolean },
-  page: Page,
-  name: string,
-) {
-  const frames = [];
-  for (const frame of page.frames()) {
-    frames.push({
-      url: frame.url().split("#")[0],
-      state: await Promise.all([
-        // Snapshot rendered text without waiting for an initializing frame's body.
-        frame.locator("body").allInnerTexts(),
-        frame.evaluate(() => ({
-          html: document.body?.innerHTML.slice(0, 4000) ?? "",
-          initialized: document.querySelector("#initialized")?.textContent ?? null,
-          appTool: document.querySelector("#app-tool")?.textContent ?? null,
-        })),
-      ])
-        .then(([texts, state]) => ({ text: texts[0]?.slice(0, 4000) ?? "", ...state }))
-        .catch((error: unknown) => ({ detached: String(error) })),
-    });
-  }
-  const errors = await page.locator(".error").allTextContents();
-  const result = { atMs: Date.now(), frames, errors };
-  await fs.writeFile(path.join(proofDir, name + ".json"), JSON.stringify(result, null, 2));
-  if (captureUiProof) {
-    await page.screenshot({ path: path.join(proofDir, name + ".png") });
-  }
-  return result;
-}
-
-export async function readMcpAppHistoryNavigation(page: Page) {
-  return await page.evaluate(() => {
-    // Non-restoration reasons may contain URLs; keep only reasons and child structure.
-    const reasons = (value: unknown): unknown => {
-      if (!value || typeof value !== "object") {
-        return null;
-      }
-      return {
-        reasons: Reflect.get(value, "reasons"),
-        children: (Reflect.get(value, "children") ?? []).map(reasons),
-      };
-    };
-    const entry = performance.getEntriesByType("navigation")[0];
-    return {
-      atMs: Date.now(),
-      pathname: location.pathname,
-      timeOrigin: performance.timeOrigin,
-      pageShows: Reflect.get(window, "mcpConformancePageShows"),
-      notRestoredReasons: entry ? reasons(Reflect.get(entry, "notRestoredReasons")) : null,
-    };
-  });
-}
-
 export async function mountControlUiHost(
   page: Page,
   {
@@ -268,6 +177,8 @@ export async function mountControlUiHost(
 <script type="module">
 import { GatewayBrowserClient } from "/src/api/gateway.ts";
 import "/src/components/mcp-app-view-registration.ts";
+import { applicationContext } from "/src/app/context.ts";
+window.mcpConformanceApplicationContext = applicationContext;
 import { MCP_APP_MESSAGE_EVENT } from "/src/components/mcp-app-security.ts";
 import { mcpAppMessageText } from "/src/lib/mcp-app-message-content.ts";
 window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
@@ -280,7 +191,7 @@ window.mcpConformanceUnmount = async () => {
   const mount = document.getElementById("mount");
   const view = window.mcpConformanceView;
   if (!mount || !view) return;
-  const frame = view.shadowRoot?.querySelector("iframe");
+  const frame = view.querySelector("iframe");
   await view.teardown();
   if (frame?.isConnected) throw new Error("MCP App frame remained mounted");
   console.info("mcp-conformance-frame-detached");
@@ -339,10 +250,11 @@ window.mcpConformanceUnmount = async () => {
         }
       };
       setTheme("dark");
-      Reflect.set(view, "context", {
+      const context = {
         gateway: {
-          snapshot: { client },
+          snapshot: { client, phase: "connected" },
           connection: { gatewayUrl: params.gatewayUrl },
+          subscribe: () => () => {},
         },
         theme: {
           subscribe(listener: () => void) {
@@ -350,6 +262,15 @@ window.mcpConformanceUnmount = async () => {
             return () => themeListeners.delete(listener);
           },
         },
+      };
+      document.getElementById("mount")?.addEventListener("context-request", (event) => {
+        if (
+          Reflect.get(event, "context") !== Reflect.get(window, "mcpConformanceApplicationContext")
+        ) {
+          return;
+        }
+        event.stopPropagation();
+        Reflect.get(event, "callback")(context);
       });
       view.sessionKey = params.sessionKey;
       view.viewId = params.viewId;
@@ -661,8 +582,8 @@ export async function findAppFrame(page: Page): Promise<Frame> {
       const view = document.querySelector("mcp-app-view");
       return {
         exists: Boolean(view),
-        error: view?.shadowRoot?.querySelector(".error")?.textContent ?? null,
-        shadow: view?.shadowRoot?.textContent ?? null,
+        error: view?.querySelector(".error")?.textContent ?? null,
+        content: view?.textContent ?? null,
       };
     });
     throw new Error(

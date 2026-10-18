@@ -20,7 +20,8 @@ const loadOutboundMediaFromUrl = vi.hoisted(() =>
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 const getSlackWriteClientMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>()),
   withTrustedEnvProxyGuardedFetchMode: (value: unknown) => value,
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard }));
@@ -36,21 +37,12 @@ vi.mock("./client.js", async (importOriginal) => {
 const { sendMessageSlack, updateMessageSlack } = await import("./send.js");
 
 type Post = (payload: SlackPostMessagePayload) => Promise<ChatPostMessageResponse>;
-type EnterpriseTestClient = WebClient & {
-  chat: { postMessage: ReturnType<typeof vi.fn<Post>> };
-  files: {
-    getUploadURLExternal: ReturnType<typeof vi.fn>;
-    completeUploadExternal: ReturnType<typeof vi.fn>;
-  };
-};
-
 const ENTERPRISE_CFG = { channels: { slack: {} } };
+const postResult = (ts = "123.456") => ({ ok: true, ts, channel: "C123" });
 
-function createEnterpriseClient(): EnterpriseTestClient {
-  return {
-    chat: {
-      postMessage: vi.fn(async () => ({ ok: true, ts: "123.456", channel: "C123" })),
-    },
+function createEnterpriseClient() {
+  const stub = {
+    chat: { postMessage: vi.fn<Post>(async () => postResult()) },
     files: {
       getUploadURLExternal: vi.fn(async () => ({
         ok: true,
@@ -59,26 +51,22 @@ function createEnterpriseClient(): EnterpriseTestClient {
       })),
       completeUploadExternal: vi.fn(async () => ({ ok: true })),
     },
-  } as unknown as EnterpriseTestClient;
-}
-
-function eventScope(client: WebClient, teamId = "T1", writeClient: WebClient = client) {
-  return {
-    teamId,
-    client,
-    writeClient,
   };
+  return stub as typeof stub & WebClient;
 }
 
 function enterpriseOptions(client: WebClient, teamId = "T1", writeClient: WebClient = client) {
   return {
     cfg: ENTERPRISE_CFG,
-    eventScope: eventScope(client, teamId, writeClient),
+    eventScope: { teamId, client, writeClient },
   };
 }
 
 describe("sendMessageSlack Enterprise listener scope", () => {
+  let installation: ReturnType<typeof registerSlackInstallationState> | undefined;
+  let client: ReturnType<typeof createEnterpriseClient>;
   beforeEach(() => {
+    client = createEnterpriseClient();
     clearSlackThreadParticipationCache();
     loadOutboundMediaFromUrl.mockClear();
     fetchWithSsrFGuard.mockReset();
@@ -86,50 +74,22 @@ describe("sendMessageSlack Enterprise listener scope", () => {
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("creates a workspace-scoped client for a qualified detached send", async () => {
-    const scopedClient = createEnterpriseClient();
-    const injectedClient = createEnterpriseClient();
-    getSlackWriteClientMock.mockReturnValue(scopedClient);
-    const installationState = registerSlackInstallationState("default", "enterprise");
-    try {
-      await sendMessageSlack("team:T123:channel:C08GQH53EJM", "hello", {
-        cfg: ENTERPRISE_CFG,
-        token: "xoxb-enterprise",
-        client: injectedClient,
-      });
-
-      expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-enterprise", {
-        teamId: "T123",
-      });
-      expect(scopedClient.chat.postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ channel: "C08GQH53EJM", text: "hello" }),
-      );
-      expect(injectedClient.chat.postMessage).not.toHaveBeenCalled();
-    } finally {
-      installationState.release();
-    }
+    installation?.release();
+    installation = undefined;
   });
 
   it("rejects a bare detached target for an authenticated Enterprise install", async () => {
-    const installationState = registerSlackInstallationState("default", "enterprise");
-    try {
-      await expect(
-        sendMessageSlack("C08GQH53EJM", "hello", {
-          cfg: ENTERPRISE_CFG,
-          token: "xoxb-enterprise",
-        }),
-      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
-      expect(getSlackWriteClientMock).not.toHaveBeenCalled();
-    } finally {
-      installationState.release();
-    }
+    installation = registerSlackInstallationState("default", "enterprise");
+    await expect(
+      sendMessageSlack("C08GQH53EJM", "hello", {
+        cfg: ENTERPRISE_CFG,
+        token: "xoxb-enterprise",
+      }),
+    ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+    expect(getSlackWriteClientMock).not.toHaveBeenCalled();
   });
 
   it("rejects qualified targets in a listener-owned workspace", async () => {
-    const client = createEnterpriseClient();
     await expect(
       sendMessageSlack("team:T123:channel:C08GQH53EJM", "hello", enterpriseOptions(client)),
     ).rejects.toThrow("unsupported_enterprise_slack_delivery_target");
@@ -148,18 +108,18 @@ describe("sendMessageSlack Enterprise listener scope", () => {
       firstClient.chat.postMessage.mockImplementationOnce(async () => {
         firstStarted.resolve();
         await release.promise;
-        return { ok: true, ts: "1.000", channel: "C123" };
+        return postResult("1.000");
       });
       secondClient.chat.postMessage.mockImplementationOnce(async () => {
         secondStarted.resolve();
-        return { ok: true, ts: "2.000", channel: "C123" };
+        return postResult("2.000");
       });
       const first = sendMessageSlack("C123", "first", enterpriseOptions(firstClient));
       await firstStarted.promise;
-      const scope = eventScope(secondClient, teamId);
-      const second = sendMessageSlack("C123", "second", { cfg: ENTERPRISE_CFG, eventScope: scope });
-      scope.client = replacementClient;
-      scope.writeClient = replacementClient;
+      const options = enterpriseOptions(secondClient, teamId);
+      const second = sendMessageSlack("C123", "second", options);
+      options.eventScope.client = replacementClient;
+      options.eventScope.writeClient = replacementClient;
       if (teamId === "T1") {
         await Promise.resolve();
         expect(secondClient.chat.postMessage).not.toHaveBeenCalled();
@@ -174,7 +134,6 @@ describe("sendMessageSlack Enterprise listener scope", () => {
   );
 
   it("rejects delivery without the one-shot writer", async () => {
-    const client = createEnterpriseClient();
     await expect(
       sendMessageSlack("C123", "caption", {
         cfg: ENTERPRISE_CFG,
@@ -192,14 +151,14 @@ describe("sendMessageSlack Enterprise listener scope", () => {
       response: { ok: true, status: 200 },
       release,
     });
-    const listenerClient = createEnterpriseClient();
     const writeClient = createEnterpriseClient();
-    writeClient.chat.postMessage
-      .mockResolvedValueOnce({ ok: true, ts: "123.001", channel: "C123" })
-      .mockResolvedValueOnce({ ok: true, ts: "123.002", channel: "C123" });
+    const postMessage = writeClient.chat.postMessage;
+    postMessage
+      .mockResolvedValueOnce(postResult("123.001"))
+      .mockResolvedValueOnce(postResult("123.002"));
 
     const result = await sendMessageSlack("C123", "12345678abcdefghZ", {
-      ...enterpriseOptions(listenerClient, "T1", writeClient),
+      ...enterpriseOptions(client, "T1", writeClient),
       mediaUrl: "https://example.com/image.png",
       textLimit: 8,
       mediaMaxBytes: 5,
@@ -207,15 +166,14 @@ describe("sendMessageSlack Enterprise listener scope", () => {
       cfg: { channels: { slack: { unfurlLinks: true, unfurlMedia: true } } },
     });
 
-    expect(loadOutboundMediaFromUrl).toHaveBeenCalledWith(
-      "https://example.com/image.png",
-      expect.objectContaining({ maxBytes: 5 }),
-    );
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({ auditContext: "slack-enterprise-immediate-upload" }),
-    );
-    expect(listenerClient.files.getUploadURLExternal).toHaveBeenCalledOnce();
-    expect(listenerClient.files.completeUploadExternal).not.toHaveBeenCalled();
+    expect(loadOutboundMediaFromUrl.mock.calls).toMatchObject([
+      ["https://example.com/image.png", { maxBytes: 5 }],
+    ]);
+    expect(fetchWithSsrFGuard.mock.calls).toMatchObject([
+      [{ auditContext: "slack-enterprise-immediate-upload" }],
+    ]);
+    expect(client.files.getUploadURLExternal).toHaveBeenCalledOnce();
+    expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
     expect(writeClient.files.getUploadURLExternal).not.toHaveBeenCalled();
     expect(writeClient.files.completeUploadExternal).toHaveBeenCalledWith({
       files: [{ id: "F123", title: "image.png" }],
@@ -223,18 +181,17 @@ describe("sendMessageSlack Enterprise listener scope", () => {
       initial_comment: "12345678",
       thread_ts: "1712345678.123456",
     });
-    expect(writeClient.chat.postMessage.mock.calls.map((call) => call[0]?.text)).toEqual([
-      "abcdefgh",
-      "Z",
-    ]);
-    expect(listenerClient.chat.postMessage).not.toHaveBeenCalled();
-    expect(writeClient.chat.postMessage).toHaveBeenCalledWith(
+    expect(postMessage.mock.calls.map(([payload]) => payload.text)).toEqual(["abcdefgh", "Z"]);
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({ unfurl_links: false, unfurl_media: true }),
     );
-    expect(writeClient.chat.postMessage.mock.calls[0]?.[0]).not.toHaveProperty("team_id");
-    expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456", "T1")).toBe(true);
-    expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456", "T2")).toBe(false);
-    expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(false);
+    expect(postMessage.mock.calls[0]?.[0]).not.toHaveProperty("team_id");
+    expect(
+      ["T1", "T2", undefined].map((teamId) =>
+        hasSlackThreadParticipation("default", "C123", "1712345678.123456", teamId),
+      ),
+    ).toEqual([true, false, false]);
     expect(release).toHaveBeenCalledOnce();
     expect(result.receipt).toMatchObject({
       primaryPlatformMessageId: "F123",
@@ -243,15 +200,14 @@ describe("sendMessageSlack Enterprise listener scope", () => {
   });
 
   it("preserves account unfurl overrides when a block send falls back from custom identity", async () => {
-    const postMessage = vi
-      .fn()
+    const postMessage = client.chat.postMessage;
+    postMessage
       .mockRejectedValueOnce(
         Object.assign(new Error("missing_scope"), {
           data: { error: "missing_scope", needed: "chat:write.customize" },
         }),
       )
-      .mockResolvedValue({ ts: "171234.567" });
-    const client = { chat: { postMessage } } as unknown as WebClient;
+      .mockResolvedValue(postResult());
     await sendMessageSlack("channel:C123", "https://example.com", {
       token: "xoxb-test",
       accountId: "work",
@@ -283,25 +239,19 @@ describe("sendMessageSlack Enterprise listener scope", () => {
   it("caps Enterprise finalization text at Slack's UTF-8 edit limit", async () => {
     const update = vi.fn(async (_payload: { text: string }) => ({ ok: true }));
     getSlackWriteClientMock.mockReturnValue({ chat: { update } } as unknown as WebClient);
-    const installation = registerSlackInstallationState("default", "enterprise");
-    try {
-      await updateMessageSlack({
-        cfg: { channels: { slack: { botToken: "xoxb-test" } } },
-        channelId: "C123",
-        teamId: "T123",
-        messageTs: "171234.567",
-        text: `${"x".repeat(3_999)}…tail`,
-        blocks: [{ type: "section", text: { type: "mrkdwn", text: "status" } }],
-      });
-      expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: "T123" });
-      expect(update).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ text: `${"x".repeat(3_997)}…` }),
-      );
-      expect(countSlackTextUtf8Bytes(update.mock.calls[0]![0].text)).toBe(
-        SLACK_EDIT_TEXT_MAX_BYTES,
-      );
-    } finally {
-      installation.release();
-    }
+    installation = registerSlackInstallationState("default", "enterprise");
+    await updateMessageSlack({
+      cfg: { channels: { slack: { botToken: "xoxb-test" } } },
+      channelId: "C123",
+      teamId: "T123",
+      messageTs: "171234.567",
+      text: `${"x".repeat(3_999)}…tail`,
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "status" } }],
+    });
+    expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: "T123" });
+    expect(update).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: `${"x".repeat(3_997)}…` }),
+    );
+    expect(countSlackTextUtf8Bytes(update.mock.calls[0]![0].text)).toBe(SLACK_EDIT_TEXT_MAX_BYTES);
   });
 });

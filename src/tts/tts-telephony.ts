@@ -31,21 +31,13 @@ export async function textToSpeechTelephony(params: {
         timeoutMs: params.timeoutMs,
         target: "telephony",
         logLabel: "TTS telephony",
-        requireTelephony: true,
         selectOperation: ({ resolvedProvider }) => {
           const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony as NonNullable<
             typeof resolvedProvider.provider.synthesizeTelephony
           >;
           return {
             kind: "ready",
-            synthesize: ({ text, cfg: runtimeCfg, providerConfig, providerOverrides, timeoutMs }) =>
-              synthesizeTelephony({
-                text,
-                cfg: runtimeCfg,
-                providerConfig,
-                providerOverrides,
-                timeoutMs,
-              }),
+            synthesize: ({ target: _target, ...request }) => synthesizeTelephony(request),
           };
         },
         buildSuccess: ({ synthesis, ...metadata }) => ({

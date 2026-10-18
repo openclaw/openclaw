@@ -156,7 +156,7 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
-  readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
+  readSessionUpdatedAtAsync: async (...args: unknown[]) => readSessionUpdatedAtMock(...args),
   resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
 }));
 

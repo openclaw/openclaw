@@ -7,19 +7,22 @@ import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-type DefaultModelAuthStatus = ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>;
+type DefaultModelAuthStatus = Awaited<
+  ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
+>;
 type DefaultModelCatalogFacts = ReturnType<
   typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
 >;
 
 const readPin = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
+// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
+vi.mock("../daemon/runtime-pin-state.js", () => ({
+  readDaemonRuntimePinForInstall: readPin,
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T): Promise<T> =>
+    read(),
+}));
 
 const runTui = vi.hoisted(() => vi.fn<(options: unknown) => Promise<void>>(async () => {}));
-const setupCleanupExitTimer = vi.hoisted(() => ({ unref: vi.fn() }));
-const scheduleProcessExitAfterTuiReturn = vi.hoisted(() => vi.fn(() => setupCleanupExitTimer));
-const cancelProcessExitAfterTuiReturn = vi.hoisted(() => vi.fn());
-const resolveTuiShutdownHardExitMs = vi.hoisted(() => vi.fn(() => 122_000));
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 const probeGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
@@ -59,7 +62,11 @@ const healthCommand = vi.hoisted(() =>
   vi.fn<typeof import("../commands/health.js").healthCommandNonExiting>(async () => {}),
 );
 const resolveDefaultModelAuthStatus = vi.hoisted(() =>
-  vi.fn<() => DefaultModelAuthStatus>(() => ({
+  vi.fn<
+    (
+      ...args: Parameters<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
+    ) => DefaultModelAuthStatus
+  >(() => ({
     provider: "anthropic",
     model: "test-model",
     status: "ready",
@@ -129,8 +136,9 @@ const hasAuthProfileForProvider = vi.hoisted(() =>
   >(() => false),
 );
 const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
-const startGatewayServer = vi.hoisted(() =>
+const startOnboardingGatewayProcess = vi.hoisted(() =>
   vi.fn(async () => ({
+    wait: new Promise<void>(() => {}),
     close: vi.fn(async () => {}),
   })),
 );
@@ -173,14 +181,6 @@ vi.mock("../commands/daemon-install-helpers.js", () => ({
 
 vi.mock("../commands/gateway-install-token.js", () => ({
   resolveGatewayInstallToken,
-}));
-
-vi.mock("../commands/daemon-runtime.js", () => ({
-  DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
-  GATEWAY_DAEMON_RUNTIME_OPTIONS: [
-    { value: "node", label: "Node" },
-    { value: "bun", label: "Bun 1.4+" },
-  ],
 }));
 
 vi.mock("../commands/health-format.js", async (importOriginal) => ({
@@ -248,25 +248,24 @@ vi.mock("../infra/container-environment.js", () => ({
   isContainerEnvironment,
 }));
 
-vi.mock("../gateway/server.js", () => ({
-  startGatewayServer,
+vi.mock("../commands/onboard-gateway-process.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-gateway-process.js")>()),
+  startOnboardingGatewayProcess,
 }));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState,
 }));
 
-vi.mock("../tui/tui.js", () => ({
-  cancelProcessExitAfterTuiReturn,
-  resolveTuiShutdownHardExitMs,
-  runTui,
-  scheduleProcessExitAfterTuiReturn,
-}));
+// mock-isolation: Onboarding handoff fixtures isolate the interactive terminal graph.
+vi.mock("../tui/tui.js", () => ({ runTui }));
 
 vi.mock("../commands/auth-choice.js", () => ({
   applyAuthChoice: vi.fn(),
   resolveDefaultModelCatalogFacts,
-  resolveDefaultModelAuthStatus,
+  resolveDefaultModelAuthStatus: async (
+    ...args: Parameters<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
+  ) => resolveDefaultModelAuthStatus(...args),
   resolvePreferredProviderForAuthChoice: vi.fn(),
   warnIfModelConfigLooksOff: vi.fn(),
 }));
@@ -354,11 +353,6 @@ describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
     runTui.mockClear();
-    setupCleanupExitTimer.unref.mockClear();
-    scheduleProcessExitAfterTuiReturn.mockReset();
-    scheduleProcessExitAfterTuiReturn.mockReturnValue(setupCleanupExitTimer);
-    cancelProcessExitAfterTuiReturn.mockClear();
-    resolveTuiShutdownHardExitMs.mockClear();
     restoreTerminalState.mockClear();
     probeGatewayReachable.mockReset();
     probeGatewayReachable.mockResolvedValue({ ok: false, detail: "offline" });
@@ -416,8 +410,11 @@ describe("finalizeSetupWizard", () => {
     hasAuthProfileForProvider.mockReturnValue(false);
     isContainerEnvironment.mockReset();
     isContainerEnvironment.mockReturnValue(false);
-    startGatewayServer.mockReset();
-    startGatewayServer.mockResolvedValue({ close: vi.fn(async () => {}) });
+    startOnboardingGatewayProcess.mockReset();
+    startOnboardingGatewayProcess.mockResolvedValue({
+      wait: new Promise<void>(() => {}),
+      close: vi.fn(async () => {}),
+    });
     inspectWindowsGatewayFirewall.mockReset();
     inspectWindowsGatewayFirewall.mockResolvedValue({
       applies: false,

@@ -2,17 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  listAcpSessionEntries,
-  upsertAcpSessionMeta,
-  writeAcpSessionMetaForMigration,
-} from "./session-meta.js";
+import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
+import { listAcpSessionEntries, upsertAcpSessionMeta } from "./session-meta.js";
 import { withAcpSessionTestDir as withTestDir } from "./session-meta.test-support.js";
 
 describe("ACP session listing", () => {
@@ -56,7 +56,7 @@ describe("ACP session listing", () => {
       const sql = observeMainThreadSql();
       let entries;
       try {
-        entries = await listAcpSessionEntries({ ...scope, clone: false });
+        entries = await listAcpSessionEntries(scope);
         sql.expectIdle();
       } finally {
         sql.restore();
@@ -84,7 +84,13 @@ describe("ACP session listing", () => {
       if (!returned?.skillsSnapshot) {
         throw new Error("Expected complete session metadata");
       }
-      returned.skillsSnapshot.skills[0]!.name = "changed-return-value";
+      const snapshot = returned.skillsSnapshot;
+      expect(Object.isFrozen(snapshot)).toBe(true);
+      expect(Object.isFrozen(snapshot.skills)).toBe(true);
+      expect(Object.isFrozen(snapshot.skills[0])).toBe(true);
+      expect(() => {
+        snapshot.skills[0]!.name = "changed-return-value";
+      }).toThrow(TypeError);
       await upsertAcpSessionMeta({
         ...scope,
         sessionKey,
@@ -102,6 +108,7 @@ describe("ACP session listing", () => {
         agents: { ownership: "explicit", entries: { codex: {} } },
       } satisfies OpenClawConfig;
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const sessionKey = "agent:codex:acp:cold-config";
       await replaceSessionEntry(
         { agentId: "codex", sessionKey, env: state.env },
@@ -143,7 +150,7 @@ describe("ACP session listing", () => {
     await withTestDir({ prefix: "openclaw-acp-list-missing-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(dir, "missing") };
       if (missing === "agent") {
-        writeAcpSessionMetaForMigration({
+        seedCanonicalAcpSessionMeta({
           env,
           sessionKey: "agent:codex:acp:missing",
           sessionId: "missing",

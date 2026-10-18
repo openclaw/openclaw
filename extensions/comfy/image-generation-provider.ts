@@ -2,6 +2,7 @@ import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generati
 import {
   DEFAULT_COMFY_MODEL,
   isComfyCapabilityConfigured,
+  isComfyCapabilityConfiguredAsync,
   runComfyWorkflow,
 } from "./workflow-runtime.js";
 
@@ -11,12 +12,11 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
     label: "ComfyUI",
     defaultModel: DEFAULT_COMFY_MODEL,
     models: [DEFAULT_COMFY_MODEL],
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ cfg, agentDir }) =>
-      isComfyCapabilityConfigured({
-        cfg,
-        agentDir,
-        capability: "image",
-      }),
+      isComfyCapabilityConfigured({ cfg, agentDir, capability: "image" }),
+    isConfiguredAsync: ({ cfg, agentDir }) =>
+      isComfyCapabilityConfiguredAsync({ cfg, agentDir, capability: "image" }),
     capabilities: {
       generate: {
         maxCount: 1,
@@ -39,24 +39,15 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
       }
 
       const result = await runComfyWorkflow({
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        authStore: req.authStore,
-        prompt: req.prompt,
-        model: req.model,
-        timeoutMs: req.timeoutMs,
+        ...req,
         capability: "image",
-        outputKinds: ["images"],
         inputImage: req.inputImages?.[0],
       });
 
       return {
         images: result.assets,
         model: result.model,
-        metadata: {
-          promptId: result.promptId,
-          outputNodeIds: result.outputNodeIds,
-        },
+        metadata: result.metadata,
       };
     },
   };

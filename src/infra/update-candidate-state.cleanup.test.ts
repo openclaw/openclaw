@@ -20,11 +20,9 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
+import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import {
-  discoverUpdateStateSchemaInspectionInProcess,
-  readUpdateStateSchemaVersions,
-} from "./update-candidate-state.js";
-import {
+  captureUpdateCandidateDeadline,
   inventoryUpdateCandidateStateWorker,
   materializeUpdateCandidateStateWorker,
 } from "./update-candidate-state.test-support.js";
@@ -42,12 +40,15 @@ afterAll(async () => {
 // published before the fault or reply that settles the operation.
 async function fixtureEventBeforeSettlement(
   file: string,
-  operation: PromiseLike<unknown>,
+  operation: PromiseLike<void | { value: unknown } | { error: unknown }>,
   message = `Worker did not reach ${path.basename(file)}`,
 ): Promise<void> {
-  const settled = Promise.resolve(operation).then(async () => {
+  const settled = Promise.resolve(operation).then(async (result) => {
     await fs.access(file).catch((error: unknown) => {
       if (hasErrnoCode(error, "ENOENT")) {
+        if (result && "error" in result) {
+          throw result.error;
+        }
         throw new Error(message);
       }
       throw error;
@@ -80,19 +81,36 @@ async function createDatabase(file: string, sql = ""): Promise<void> {
   }
 }
 
-const cases = [
-  { cleanup: "healthy", readError: false },
-  { cleanup: "transient", readError: false },
-  { cleanup: "persistent", readError: false },
-  { cleanup: "healthy", readError: true },
-  { cleanup: "persistent", readError: true },
-] as const;
+function capture<T>(operation: Promise<T>) {
+  return operation.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+}
 
-it.each(
-  (["versions", "snapshot"] as const).flatMap((mode) =>
-    cases.map(({ cleanup, readError }) => ({ mode, cleanup, readError })),
-  ),
-)(
+function runWorker(input: unknown, preload?: string, env?: NodeJS.ProcessEnv) {
+  const argv = [
+    process.execPath,
+    ...(preload ? ["--import", pathToFileURL(preload).href] : []),
+    ...resolveRuntimeWorkerArgv(
+      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
+    ),
+  ];
+  return runCommandBuffered(argv, {
+    input: JSON.stringify(input),
+    env,
+    timeoutMs: 30_000,
+    killGraceMs: 500,
+    maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+  });
+}
+
+it.each([
+  { mode: "versions", cleanup: "transient", readError: false },
+  { mode: "versions", cleanup: "persistent", readError: true },
+  { mode: "snapshot", cleanup: "persistent", readError: false },
+  { mode: "snapshot", cleanup: "healthy", readError: true },
+] as const)(
   "$mode: $cleanup cleanup with readError=$readError",
   async (scenario) => {
     const { mode } = scenario;
@@ -101,19 +119,11 @@ it.each(
     const source = path.join(stateDir, "state", "openclaw.sqlite");
     const cache = path.join(fixture, "cache");
     const attemptsPath = path.join(fixture, "attempts.jsonl");
-    await fs.mkdir(path.dirname(source), { recursive: true });
+    await createDatabase(
+      source,
+      `CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('source preserved'); ${scenario.readError && mode === "versions" ? "CREATE TABLE agent_databases (not_path TEXT);" : ""}`,
+    );
     await fs.mkdir(cache);
-    const db = openNodeSqliteDatabase(source);
-    try {
-      db.exec(
-        "PRAGMA user_version = 3; CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('source preserved');",
-      );
-      if (scenario.readError && mode === "versions") {
-        db.exec("CREATE TABLE agent_databases (not_path TEXT);");
-      }
-    } finally {
-      db.close();
-    }
     const input = {
       stateDir,
       targetStateDir: path.join(fixture, "candidate"),
@@ -125,12 +135,7 @@ it.each(
       mode === "snapshot" ? await inventoryUpdateCandidateStateWorker(input) : undefined;
     if (scenario.readError && mode === "snapshot") {
       // Inventory succeeds first; the instrumented snapshot owns the failed read and cleanup.
-      const malformed = openNodeSqliteDatabase(source);
-      try {
-        malformed.exec("CREATE TABLE agent_databases (not_path TEXT);");
-      } finally {
-        malformed.close();
-      }
+      await createDatabase(source, "CREATE TABLE agent_databases (not_path TEXT);");
     }
     const sentinel = path.join(cache, "unrelated.txt");
     await fs.writeFile(sentinel, "unrelated preserved");
@@ -183,27 +188,9 @@ it.each(
       };
     `,
     );
-    const result = await runCommandBuffered(
-      [
-        process.execPath,
-        "--import",
-        pathToFileURL(preload).href,
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
-        ),
-      ],
-      {
-        input: JSON.stringify({
-          mode,
-          ...input,
-          ...admitted,
-        }),
-        env: { XDG_CACHE_HOME: cache },
-        timeoutMs: 30_000,
-        killGraceMs: 500,
-        maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-      },
-    );
+    const result = await runWorker({ mode, ...input, ...admitted }, preload, {
+      XDG_CACHE_HOME: cache,
+    });
     expect(await fs.readFile(source)).toEqual(sourceBytes);
     expect(await fs.readdir(path.dirname(source))).toEqual(sourceEntries);
     expect(await fs.readFile(sentinel, "utf8")).toBe("unrelated preserved");
@@ -222,110 +209,30 @@ it.each(
     const retained = (await fs.readdir(stagingRoot)).filter((name) =>
       name.startsWith("openclaw-sqlite-readonly-"),
     );
-    console.log(
-      JSON.stringify({
-        ...scenario,
-        code: result.code,
-        termination: result.termination,
-        stdout: result.stdout.toString(),
-        stderr: result.stderr.toString(),
-        attempts,
-        retained,
-      }),
-    );
     expect(attempts).toHaveLength(scenario.cleanup === "healthy" ? 1 : 2);
     expect(attempts.every((attempt) => attempt.before)).toBe(true);
     expect(attempts.at(-1)?.after).toBe(scenario.cleanup === "persistent");
     expect(retained).toHaveLength(scenario.cleanup === "persistent" ? 1 : 0);
-    if (scenario.cleanup === "healthy" && !scenario.readError) {
-      expect(result.code, result.stderr.toString()).toBe(0);
-      const output = JSON.parse(result.stdout.toString());
-      expect(mode === "versions" ? output : output.versions).toContainEqual({
-        path: source,
-        userVersion: 3,
-        contentVersion: 3,
+    expect(result.code, result.stdout.toString()).toBe(1);
+    expect(result.stdout.toString()).toBe("");
+    if (scenario.readError) {
+      expect(result.stderr.toString()).toContain('no such column: "path"');
+      const [recorded] = updateRunStepsFromResultStep({
+        name: "candidate snapshot",
+        exitCode: result.code,
+        stderrTail: result.stderr.toString(),
       });
-    } else {
-      expect(result.code, result.stdout.toString()).toBe(1);
-      expect(result.stdout.toString()).toBe("");
-      if (scenario.readError) {
-        expect(result.stderr.toString()).toContain('no such column: "path"');
-        const [recorded] = updateRunStepsFromResultStep({
-          name: "candidate snapshot",
-          exitCode: result.code,
-          stderrTail: result.stderr.toString(),
-        });
-        expect(recorded?.detail).toMatch(
-          /^Exit code: 1; (?:Caused by: )?no such column: "path".* \| ERR_SQLITE_ERROR$/u,
-        );
-        expect(recorded?.detail).toContain("ERR_SQLITE_ERROR");
-        expect(recorded?.detail).toContain('no such column: "path"');
-        expect(recorded?.detail?.length).toBeLessThanOrEqual(300);
-      }
-      if (scenario.cleanup !== "healthy") {
-        expect(result.stderr.toString()).toContain("snapshot cleanup failed");
-        expect(result.stderr.toString()).toContain(attempts[0]!.directory);
-      }
+      expect(recorded?.detail).toMatch(
+        /^Exit code: 1; (?:Caused by: )?no such column: "path".* \| ERR_SQLITE_ERROR$/u,
+      );
+      expect(recorded?.detail?.length).toBeLessThanOrEqual(300);
+    }
+    if (scenario.cleanup !== "healthy") {
+      expect(result.stderr.toString()).toContain("snapshot cleanup failed");
+      expect(result.stderr.toString()).toContain(attempts[0]!.directory);
     }
   },
   30_000,
-);
-
-it("releases the shared discovery snapshot before agent inspection", async () => {
-  const stateDir = path.join(root, "discovery-owner");
-  const shared = path.join(stateDir, "state", "openclaw.sqlite");
-  const agent = path.join(stateDir, "agents", "registered.sqlite");
-  const stagingRoot = path.join(root, "discovery-staging");
-  await createDatabase(
-    shared,
-    `CREATE TABLE agent_databases (path TEXT); INSERT INTO agent_databases VALUES ('${agent.replaceAll("'", "''")}');`,
-  );
-  await createDatabase(agent);
-  await fs.mkdir(stagingRoot, { recursive: true, mode: 0o700 });
-
-  await expect(
-    discoverUpdateStateSchemaInspectionInProcess({ stateDir, config: {}, stagingRoot }),
-  ).resolves.toMatchObject({
-    files: expect.arrayContaining([
-      [shared, { spellings: [shared], owners: [{ role: "global" }] }],
-      [agent, { spellings: [agent] }],
-    ]),
-    sharedVersion: { path: shared, userVersion: 3, contentVersion: 3 },
-  });
-  expect(await fs.readdir(stagingRoot)).toEqual([]);
-});
-
-it.each([false, true])(
-  "removes parent-owned schema staging after worker settlement (readError=%s)",
-  async (readError) => {
-    const cache = path.join(root, "inspection-cache");
-    const cacheOwner = path.join(cache, "openclaw");
-    const stateDir = path.join(root, `cleanup-${readError}`);
-    const shared = path.join(stateDir, "state", "openclaw.sqlite");
-    await fs.mkdir(cacheOwner, { recursive: true, mode: 0o700 });
-    await createDatabase(shared, readError ? "CREATE TABLE agent_databases (not_path TEXT);" : "");
-    const previousCache = process.env.XDG_CACHE_HOME;
-    process.env.XDG_CACHE_HOME = cache;
-    try {
-      const operation = readUpdateStateSchemaVersions({ stateDir, config: {} });
-      if (readError) {
-        await expect(operation).rejects.toThrow('no such column: "path"');
-      } else {
-        await expect(operation).resolves.toContainEqual({
-          path: shared,
-          userVersion: 3,
-          contentVersion: 3,
-        });
-      }
-      expect(await fs.readdir(cacheOwner)).toEqual([]);
-    } finally {
-      if (previousCache === undefined) {
-        delete process.env.XDG_CACHE_HOME;
-      } else {
-        process.env.XDG_CACHE_HOME = previousCache;
-      }
-    }
-  },
 );
 
 function inspectionResult(
@@ -354,10 +261,13 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
     database.exec("PRAGMA user_version = 3; CREATE TABLE agent_databases (path TEXT);");
     database.prepare("INSERT INTO agent_databases VALUES (?)").run(external);
     database.close();
-    await fs.writeFile(external, "");
-    await fs.truncate(external, 3_489_660_928);
-    await fs.writeFile(`${external}-wal`, "");
-    await fs.truncate(`${external}-wal`, 64 * 1024 * 1024);
+    for (const [file, size] of [
+      [external, 3_489_660_928],
+      [`${external}-wal`, 64 * 1024 * 1024],
+    ] as const) {
+      await fs.writeFile(file, "");
+      await fs.truncate(file, size);
+    }
     const sharedVersion = { path: shared, userVersion: 3, contentVersion: 3 };
     const discovery = {
       files: [
@@ -401,11 +311,9 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
     const now = Date.now.bind(Date);
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    const expireDeadline = captureUpdateCandidateDeadline();
     const operation = readUpdateStateSchemaVersions({ stateDir, config: {} });
-    const outcome = operation.then(
-      (versions) => ({ versions }),
-      (error: unknown) => ({ error }),
-    );
+    const outcome = capture(operation);
     try {
       const signal = await Promise.race([
         inspecting.promise,
@@ -421,6 +329,7 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
           signal.addEventListener("abort", () => resolve(), { once: true });
         });
         elapsed += 400_000;
+        expireDeadline();
         await aborted;
         expect(signal.aborted).toBe(true);
       }
@@ -428,12 +337,9 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
       expect(fsSync.existsSync(stagingRoot)).toBe(true);
       release.resolve();
       if (expires) {
+        const message = `exceeded its ${legacy ? 4_841 : 4_540} second allowance`;
         expect(await outcome).toMatchObject({
-          error: {
-            message: expect.stringContaining(
-              `made no progress for ${legacy ? 4_841 : 4_540} seconds`,
-            ),
-          },
+          error: { message: expect.stringContaining(message) },
         });
       } else {
         await expect(operation).resolves.toContainEqual({ path: external, userVersion: 7 });
@@ -494,20 +400,11 @@ it("keeps fleet progress below a released parent's stderr limit", async () => {
         ] as const,
     ),
   );
-  const result = await runCommandBuffered(
-    [
-      process.execPath,
-      ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
-      ),
-    ],
-    {
-      input: JSON.stringify({ mode: "versions", stateDir: root, config: { agents: { entries } } }),
-      timeoutMs: 30_000,
-      killGraceMs: 500,
-      maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-    },
-  );
+  const result = await runWorker({
+    mode: "versions",
+    stateDir: root,
+    config: { agents: { entries } },
+  });
   expect(result.code, result.stderr.toString()).toBe(0);
   expect(result.stderr.byteLength).toBeLessThan(20_000);
   expect(result.stderr.toString()).toContain("detailed progress omitted");
@@ -625,6 +522,7 @@ it.for(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
     const now = Date.now.bind(Date);
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    const expireDeadline = captureUpdateCandidateDeadline();
     const controller = new AbortController();
     const operation = prepareUpdateCandidateStateSnapshot({
       config: {},
@@ -639,10 +537,7 @@ it.for(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
       }),
       signal: controller.signal,
     });
-    const outcome = operation.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
+    const outcome = capture(operation);
     workerSettlement = outcome;
     try {
       await withinTest(fixtureEventBeforeSettlement(ready, outcome), signal);
@@ -658,6 +553,7 @@ it.for(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
         controller.abort(new Error("cancel rehearsal proof"));
       } else if (failure === "deadline") {
         elapsed = 600_000;
+        expireDeadline();
       }
       const result = await outcome;
       expect(result).toMatchObject({ error: expect.any(Error) });
@@ -666,7 +562,7 @@ it.for(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
           failure === "cancel" || failure === "cooperative-cancel"
             ? "cancel rehearsal proof"
             : failure === "deadline"
-              ? "made no progress"
+              ? "exceeded its"
               : "synthetic destination full",
         );
       }

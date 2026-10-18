@@ -6,6 +6,12 @@ export type SessionWorkAdmissionInterrupt = (
   reason?: Error,
 ) => SessionWorkAdmissionInterruptionReceipt | void;
 
+export function sessionWorkAdmissionAbortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error("session work admission aborted");
+}
+
 export async function waitForSessionWorkAdmissionRelease(
   released: Promise<void>,
   timeoutMs?: number,

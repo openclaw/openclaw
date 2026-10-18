@@ -35,33 +35,6 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-it("streams settled host notifications and joins observation when its input closes", async () => {
-  const input = new PassThrough();
-  const output = new PassThrough();
-  let events = "";
-  output.on("data", (data: Buffer) => {
-    events += data.toString("utf8");
-  });
-  const ready = createDeferred<void>();
-  observer.created = () => ready.resolve();
-  const worker = serveMemoryFiles({ workspace: state.workspaceDir, input, output, watch: true });
-  try {
-    input.write(request);
-    await ready.promise;
-    observer.observations[0]!.dirty();
-    expect(events).toBe("");
-    await vi.advanceTimersByTimeAsync(10);
-    expect(events).toBe('"change"\n');
-    input.end();
-    await worker;
-    expect(observer.observations[0]!.close).toHaveBeenCalledOnce();
-  } finally {
-    input.end();
-    await worker;
-    output.destroy();
-  }
-});
-
 it("revokes remote admission while startup is awaiting filesystem discovery", async () => {
   const input = new PassThrough();
   const output = new PassThrough();
@@ -126,10 +99,12 @@ it.each(["input end", "output error"] as const)(
     observer.created = () => ready.resolve();
     observer.closeBarrier = physical.promise;
     let blocked = true;
+    let events = "";
     const callbacks: Array<(error?: Error | null) => void> = [];
     const output = new Writable({
       highWaterMark: 1,
-      write(_chunk, _encoding, callback) {
+      write(chunk: Buffer, _encoding, callback) {
+        events += chunk.toString("utf8");
         written.resolve();
         if (blocked) {
           callbacks.push(callback);
@@ -162,8 +137,10 @@ it.each(["input end", "output error"] as const)(
       input.write(request);
       await ready.promise;
       observer.observations[0]!.dirty();
+      expect(events).toBe("");
       await vi.advanceTimersByTimeAsync(10);
       await written.promise;
+      expect(events).toBe('"change"\n');
       expect(output.writableNeedDrain).toBe(true);
       const failure = new Error("Memory stdout failed");
       if (ending === "output error") {

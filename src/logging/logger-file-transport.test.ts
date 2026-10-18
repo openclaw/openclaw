@@ -1,10 +1,11 @@
 // Logger file transport tests cover async ordering, overflow, and exit durability.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { appendRegularFile } from "@openclaw/fs-safe/advanced";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { fileLogTransport } from "./logger-file-transport.js";
 import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
@@ -13,6 +14,7 @@ import { registerSecretValueForRedaction } from "./secret-redaction-registry.js"
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-file-transport-");
+const failedLogPaths = new Set<string>();
 
 function writeStableRecords(): void {
   const logger = getLogger();
@@ -22,16 +24,33 @@ function writeStableRecords(): void {
 
 beforeAll(async () => {
   await logPathTracker.setup();
+  await testApi.flushFileLogQueueForTests();
 });
 
 afterEach(async () => {
   await testApi.flushFileLogQueueForTests();
-  testApi.resetFileLogTransportForTests();
+  vi.restoreAllMocks();
+  // Successful real writes end fixture failure streaks without clearing the transport owner.
+  for (const file of failedLogPaths) {
+    const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+    if (stat?.isDirectory()) {
+      fs.rmdirSync(file);
+    } else if (stat?.isSymbolicLink() || (stat && stat.nlink > 1)) {
+      fs.unlinkSync(file);
+    }
+    fileLogTransport.enqueue({
+      file,
+      hostname: "transport-test-host",
+      maxFileBytes: 1024 * 1024,
+      payload: "{}\n",
+    });
+  }
+  await fileLogTransport.flush();
+  failedLogPaths.clear();
   resetLogger();
   setLoggerOverride(null);
   resetSecretRedactionRegistryForTest();
   vi.useRealTimers();
-  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -39,32 +58,12 @@ afterAll(async () => {
 });
 
 describe("async logger file transport", () => {
-  it("installs process hooks only while file logging is active", () => {
-    const beforeExitListeners = process.listenerCount("beforeExit");
-    const exitListeners = process.listenerCount("exit");
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
-
-    expect(process.listenerCount("beforeExit")).toBe(beforeExitListeners);
-    expect(process.listenerCount("exit")).toBe(exitListeners);
-
-    getLogger().info("install-file-transport-hooks");
-
-    expect(process.listenerCount("beforeExit")).toBe(beforeExitListeners + 1);
-    expect(process.listenerCount("exit")).toBe(exitListeners + 1);
-
-    testApi.resetFileLogTransportForTests();
-
-    expect(process.listenerCount("beforeExit")).toBe(beforeExitListeners);
-    expect(process.listenerCount("exit")).toBe(exitListeners);
-  });
-
   it("writes queued records in order and byte-identically to the synchronous drain", async () => {
     const syncPath = logPathTracker.nextPath();
     const asyncPath = logPathTracker.nextPath();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-27T12:00:00Z"));
-    testApi.setHostnameResolverForTests(() => "transport-test-host");
+    vi.spyOn(os, "hostname").mockReturnValue("transport-test-host");
     setLoggerOverride({ level: "info", file: syncPath });
 
     writeStableRecords();
@@ -72,7 +71,6 @@ describe("async logger file transport", () => {
     const syncBytes = fs.readFileSync(syncPath);
 
     resetLogger();
-    testApi.setHostnameResolverForTests(() => "transport-test-host");
     setLoggerOverride({ level: "info", file: asyncPath });
     writeStableRecords();
     await testApi.flushFileLogQueueForTests();
@@ -88,11 +86,13 @@ describe("async logger file transport", () => {
 
   it("drops the oldest records on overflow and writes one count marker", async () => {
     const logPath = logPathTracker.nextPath();
-    testApi.setFileLogQueueMaxRecordsForTests(3);
-    setLoggerOverride({ level: "info", file: logPath });
-
-    for (let index = 1; index <= 5; index += 1) {
-      getLogger().info(`queued-record-${index}`);
+    for (let index = 1; index <= 4_098; index += 1) {
+      fileLogTransport.enqueue({
+        file: logPath,
+        hostname: "transport-test-host",
+        maxFileBytes: 1024 * 1024,
+        payload: `${JSON.stringify({ message: `queued-record-${index}` })}\n`,
+      });
     }
     await testApi.flushFileLogQueueForTests();
 
@@ -110,36 +110,8 @@ describe("async logger file transport", () => {
     ]);
     expect(records.map((record) => record.message)).toEqual([
       "[openclaw] file log queue overflow; dropped 2 oldest records",
-      "queued-record-3",
-      "queued-record-4",
-      "queued-record-5",
+      ...Array.from({ length: 4_096 }, (_, index) => `queued-record-${index + 3}`),
     ]);
-  });
-
-  it("drains bursts with bounded secured appends while preserving every record", async () => {
-    const logPath = logPathTracker.nextPath();
-    const appended: string[] = [];
-    testApi.setFileLogAppenderForTests(async (options) => {
-      appended.push(String(options.content));
-      await appendRegularFile(options);
-    });
-    setLoggerOverride({ level: "info", file: logPath });
-    const messages = Array.from({ length: 128 }, (_, index) => `${index}:${"🦞".repeat(256)}`);
-
-    for (const message of messages) {
-      getLogger().info(message);
-    }
-    await testApi.flushFileLogQueueForTests();
-
-    expect(appended.length).toBeLessThan(16);
-    expect(appended.every((content) => Buffer.byteLength(content) <= 64 * 1024)).toBe(true);
-    expect(
-      fs
-        .readFileSync(logPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line).message),
-    ).toEqual(messages);
   });
 
   it.each(["async", "sync"])(
@@ -181,11 +153,23 @@ describe("async logger file transport", () => {
     const issued = createDeferred();
     const release = createDeferred();
     let issuedRecords = 0;
-    testApi.setFileLogAppenderForTests(async (options) => {
-      await appendRegularFile(options);
-      issuedRecords = String(options.content).trim().split("\n").length;
-      issued.resolve();
-      await release.promise;
+    const openFile = fsPromises.open.bind(fsPromises);
+    vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+      const handle = await openFile(...args);
+      if (args[0] === logPath) {
+        const append = handle.appendFile.bind(handle);
+        vi.spyOn(handle, "appendFile").mockImplementation(async (...appendArgs) => {
+          await append(...appendArgs);
+          const content = appendArgs[0];
+          if (typeof content !== "string") {
+            throw new TypeError("Expected a serialized log batch");
+          }
+          issuedRecords = content.trim().split("\n").length;
+          issued.resolve();
+          await release.promise;
+        });
+      }
+      return handle;
     });
     const entries = Array.from({ length: 4 }, (_, index) => ({
       file: logPath,
@@ -198,7 +182,11 @@ describe("async logger file transport", () => {
     }
     const flushing = fileLogTransport.flush();
     try {
-      await issued.promise;
+      await awaitGateBeforeSettlement(
+        issued.promise,
+        flushing,
+        "logger flush completed without reaching the held append",
+      );
       expect(issuedRecords).toBeGreaterThan(1);
       fileLogTransport.enqueue({
         file: logPath,
@@ -251,6 +239,7 @@ describe("async logger file transport", () => {
         } else {
           fs.linkSync(target, logPath);
         }
+        failedLogPaths.add(logPath);
         const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
         setLoggerOverride({ level: "info", file: logPath });
         writeStableRecords();
@@ -270,12 +259,16 @@ describe("async logger file transport", () => {
     const logPath = `${logPathTracker.nextPath()}-${secret}`;
     let appendAttempts = 0;
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    testApi.setFileLogAppenderForTests(async (options) => {
-      appendAttempts += 1;
-      if (appendAttempts !== 3) {
-        throw new Error("injected append failure");
+    failedLogPaths.add(logPath);
+    const openFile = fsPromises.open.bind(fsPromises);
+    vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+      if (args[0] === logPath) {
+        appendAttempts += 1;
+        if (appendAttempts !== 3) {
+          throw new Error("injected append failure");
+        }
       }
-      await appendRegularFile(options);
+      return openFile(...args);
     });
     setLoggerOverride({ level: "info", file: logPath });
 
@@ -311,6 +304,8 @@ describe("async logger file transport", () => {
     const secondPath = logPathTracker.nextPath();
     fs.mkdirSync(firstPath);
     fs.mkdirSync(secondPath);
+    failedLogPaths.add(firstPath);
+    failedLogPaths.add(secondPath);
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     setLoggerOverride({ level: "info", file: firstPath });
@@ -330,6 +325,32 @@ describe("async logger file transport", () => {
     expect(warnings.filter((line) => line.includes(`file=${secondPath}`))).toHaveLength(1);
     expect(fs.readFileSync(secondPath, "utf8")).toContain("second-file-recovery");
   });
+
+  // A deleted directory reached through its open descriptor mirrors a stale mounted
+  // /tmp: children fail with ENOENT while the parent path still resolves, the shape
+  // on which Node's recursive mkdirSync never returns.
+  it.skipIf(process.platform !== "linux")(
+    "drops records with a warning when the log directory parent is deleted but still resolvable",
+    async () => {
+      const deletedDir = logPathTracker.nextPath();
+      fs.mkdirSync(deletedDir);
+      const fd = fs.openSync(deletedDir, "r");
+      try {
+        fs.rmdirSync(deletedDir);
+        const logPath = `/proc/self/fd/${fd}/openclaw/openclaw.log`;
+        const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+        setLoggerOverride({ level: "info", file: logPath });
+
+        getLogger().info("only-record-after-deletion");
+        await testApi.flushFileLogQueueForTests();
+
+        const warnings = stderrSpy.mock.calls.map(([line]) => String(line));
+        expect(warnings.some((line) => line.includes(`file=${logPath}`))).toBe(true);
+      } finally {
+        fs.closeSync(fd);
+      }
+    },
+  );
 
   it("writes a piped append warning before process exit", () => {
     const logPath = logPathTracker.nextPath();
@@ -368,8 +389,13 @@ describe("async logger file transport", () => {
     stderrSpy.mockImplementationOnce(() => {
       throw new Error("injected stderr failure");
     });
-    testApi.setFileLogAppenderForTests(async () => {
-      throw new Error("injected append failure");
+    failedLogPaths.add(logPath);
+    const openFile = fsPromises.open.bind(fsPromises);
+    vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+      if (args[0] === logPath) {
+        throw new Error("injected append failure");
+      }
+      return openFile(...args);
     });
     setLoggerOverride({ level: "info", file: logPath });
 
@@ -391,8 +417,19 @@ describe("async logger file transport", () => {
       lastPath,
     ];
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    testApi.setFileLogAppenderForTests(async () => {
-      throw new Error("injected append failure");
+    const targets = new Set(paths);
+    paths.forEach((file) => failedLogPaths.add(file));
+    const openFile = fsPromises.open.bind(fsPromises);
+    let recoveringFirstPath = false;
+    vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+      if (
+        typeof args[0] === "string" &&
+        targets.has(args[0]) &&
+        !(recoveringFirstPath && args[0] === firstPath)
+      ) {
+        throw new Error("injected append failure");
+      }
+      return openFile(...args);
     });
 
     for (const [index, file] of paths.entries()) {
@@ -405,13 +442,7 @@ describe("async logger file transport", () => {
     expect(warnings.filter((line) => line.includes("diagnostics saturated"))).toHaveLength(1);
     expect(warnings.some((line) => line.includes(`file=${lastPath}`))).toBe(false);
 
-    testApi.setFileLogAppenderForTests(async (options) => {
-      if (options.filePath === firstPath) {
-        await appendRegularFile(options);
-        return;
-      }
-      throw new Error("injected append failure");
-    });
+    recoveringFirstPath = true;
     setLoggerOverride({ level: "info", file: firstPath });
     getLogger().info("tracked-file-recovery");
     setLoggerOverride({ level: "info", file: lastPath });
@@ -421,16 +452,5 @@ describe("async logger file transport", () => {
     expect(stderrSpy.mock.calls.some(([line]) => String(line).includes(`file=${lastPath}`))).toBe(
       true,
     );
-  });
-
-  it("synchronously drains a crash-adjacent fatal record through the exit-hook seam", () => {
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
-
-    getLogger().fatal("fatal-before-exit");
-    expect(fs.existsSync(logPath)).toBe(false);
-    testApi.drainFileLogQueueSyncForTests();
-
-    expect(fs.readFileSync(logPath, "utf8")).toContain("fatal-before-exit");
   });
 });

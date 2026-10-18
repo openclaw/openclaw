@@ -111,7 +111,7 @@ it("prioritizes critical audit findings, caps warnings, and preserves remediatio
   expect(lines).not.toContain("  WARN Warn 5");
   expect(lines.slice(-2)).toEqual([
     "Full report: openclaw security audit",
-    "Deep probe: openclaw security audit --deep",
+    "Deep check: openclaw security audit --deep",
   ]);
 });
 
@@ -275,6 +275,6 @@ it("warns when deep health says the retained Node executable is gone", () => {
   expect(rows[1]).toEqual({
     Item: "Gateway runtime",
     Status: "warn(WARN)",
-    Detail: `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`,
+    Detail: `The Node.js runtime this Gateway started with (${execPath}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
   });
 });

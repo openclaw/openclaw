@@ -1,13 +1,10 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
   normalizeDiscordHandleKey,
   normalizeDiscordSnowflake,
   resolveDiscordDirectoryUserId,
 } from "./directory-cache.js";
+import { findDiscordUrlRanges } from "./url-ranges.js";
 
 type DiscordMentionAliasesConfig = Record<string, string>;
 
@@ -50,13 +47,7 @@ function resolveConfiguredMentionAlias(
       continue;
     }
     const aliasWithoutDiscriminator = alias.replace(DISCORD_DISCRIMINATOR_SUFFIX, "");
-    if (
-      alias === key ||
-      (withoutDiscriminator && withoutDiscriminator !== key && alias === withoutDiscriminator) ||
-      (aliasWithoutDiscriminator &&
-        aliasWithoutDiscriminator !== alias &&
-        aliasWithoutDiscriminator === key)
-    ) {
+    if (alias === key || alias === withoutDiscriminator || aliasWithoutDiscriminator === key) {
       const userId = normalizeDiscordSnowflake(rawUserId);
       if (userId) {
         return userId;
@@ -73,29 +64,34 @@ function rewritePlainTextMentions(
     mentionAliases?: DiscordMentionAliasesConfig | null;
   },
 ): string {
-  if (!text.includes("@")) {
-    return text;
-  }
-  return text.replace(MENTION_CANDIDATE_PATTERN, (match, prefix, rawHandle) => {
-    const handle = normalizeOptionalString(rawHandle) ?? "";
-    if (!handle) {
+  const urlRanges = findDiscordUrlRanges(text);
+  return text.replace(
+    MENTION_CANDIDATE_PATTERN,
+    (match: string, prefix: string, handle: string, offset: number) => {
+      const mentionStart = offset + prefix.length;
+      if (urlRanges.some(({ start, end }) => start <= mentionStart && mentionStart < end)) {
+        return match;
+      }
+      for (let candidate = handle; candidate.length >= 2; candidate = candidate.slice(0, -1)) {
+        if (DISCORD_RESERVED_MENTIONS.has(candidate.toLowerCase())) {
+          return match;
+        }
+        const userId =
+          resolveConfiguredMentionAlias(candidate, params.mentionAliases) ??
+          resolveDiscordDirectoryUserId({
+            accountId: params.accountId,
+            handle: candidate,
+          });
+        if (userId) {
+          return `${prefix}${formatMention({ userId })}${handle.slice(candidate.length)}`;
+        }
+        if (!candidate.endsWith(".")) {
+          return match;
+        }
+      }
       return match;
-    }
-    const lookup = normalizeLowercaseStringOrEmpty(handle);
-    if (DISCORD_RESERVED_MENTIONS.has(lookup)) {
-      return match;
-    }
-    const userId =
-      resolveConfiguredMentionAlias(handle, params.mentionAliases) ??
-      resolveDiscordDirectoryUserId({
-        accountId: params.accountId,
-        handle,
-      });
-    if (!userId) {
-      return match;
-    }
-    return `${String(prefix ?? "")}${formatMention({ userId })}`;
-  });
+    },
+  );
 }
 
 function countBacktickRun(text: string, index: number): number {

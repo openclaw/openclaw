@@ -1,3 +1,4 @@
+import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { assertSqliteIntegrityInWorker } from "./sqlite-integrity-worker.js";
 import type { SqliteIntegrityOperation } from "./sqlite-integrity.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
@@ -29,13 +30,16 @@ export async function runSqliteIntegrityOperationInWorker(
           signal,
           undefined,
           step.value.timing,
-          step.value.tables,
+          { check: step.value.check, tables: step.value.tables },
         );
       } catch (error) {
         failure = { error };
       }
       // Neither cancellation nor lost custody may resume an index/schema repair.
       beforeResume();
+      if (!failure && step.value.check !== "quick") {
+        recordSqliteDatabaseIntegrity(step.value.database);
+      }
       step =
         failure && !options.repairIntegrityError?.()
           ? operation.throw(failure.error)

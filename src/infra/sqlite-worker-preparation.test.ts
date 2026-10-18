@@ -68,10 +68,13 @@ it.each([
       expect(first).toMatchObject({
         writes: 1,
         readerOwnership: {
-          preparation: [undefined, undefined],
           execution: { operation: "append", ownerKind: "worker", actorId: expect.any(Number) },
         },
       });
+      expect(first.readerOwnership?.preparation).toEqual([
+        first.readerOwnership?.execution,
+        first.readerOwnership?.execution,
+      ]);
       expect(await following).toMatchObject({ writes: 2, readerOwnership: first.readerOwnership });
       await closing;
       expect(closed).toBe(true);

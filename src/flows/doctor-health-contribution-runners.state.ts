@@ -1,12 +1,14 @@
 import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
-import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
+import {
+  noteDoctorRepairResult,
+  resolveDoctorWorkspaceDir,
+} from "./doctor-health-contribution-utils.js";
 import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
-
-const loadDoctorStateIntegrityModule = async () =>
-  await import("../commands/doctor-state-integrity.js");
 
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
@@ -74,12 +76,7 @@ export async function runReleaseConfiguredPluginInstallsHealth(
   if (result.postInstallDoctorResult) {
     ctx.postInstallDoctorResult = result.postInstallDoctorResult;
   }
-  if (result.changes.length > 0) {
-    note(result.changes.join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorRepairResult(result, note);
   if (!result.touchedConfig) {
     return;
   }
@@ -88,7 +85,9 @@ export async function runReleaseConfiguredPluginInstallsHealth(
       ctx.cfg.meta?.lastTouchedVersion ||
       VERSION
     : VERSION;
-  ctx.cfg = { ...ctx.cfg, meta: { ...ctx.cfg.meta, lastTouchedVersion } };
+  const config = { ...ctx.cfg, meta: { ...ctx.cfg.meta, lastTouchedVersion } };
+  copyConfigResolutionFactsThroughRewrite(ctx.cfg, config);
+  ctx.cfg = config;
   writeConfigMachineState("config.lastTouchedAt", new Date().toISOString());
 }
 
@@ -127,7 +126,7 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
     ctx.updateWarnings ??= [];
     ctx.updateWarnings.push(...warnings);
   }
-  const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
+  const { noteStateIntegrity } = await import("../commands/doctor-state-integrity.js");
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
     stateDirExistedAtStart: ctx.stateDirExistedAtStart,
   });
@@ -146,6 +145,9 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
     env: ctx.env ?? process.env,
+    ...(!ctx.prompter.shouldRepair && ctx.configResult.providerRenames?.length
+      ? { providerRenames: ctx.configResult.providerRenames }
+      : {}),
     shouldRepair: ctx.prompter.shouldRepair,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
@@ -157,12 +159,7 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
         }
       : {}),
   });
-  if (result.changes.length > 0) {
-    note(result.changes.join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorRepairResult(result, note);
 }
 
 export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -171,6 +168,7 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
     onWarnings: (warnings) => recordDoctorHealthWarnings(ctx, [], warnings),
     ...(ctx.configResult.postSessionPluginMigration
       ? { postSessionPluginMigration: ctx.configResult.postSessionPluginMigration }
@@ -194,6 +192,7 @@ export async function runSessionTranscriptHeadersHealth(
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
   });
 }
 
@@ -206,6 +205,7 @@ export async function runSessionTranscriptLabelsHealth(
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
   });
 }
 
@@ -219,7 +219,8 @@ export async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): P
 
 export async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyRuntimeFiles } = await import("../commands/doctor-usage-cost-cache.js");
-  await maybeRepairLegacyRuntimeFiles(ctx.prompter.shouldRepair, ctx.env);
+  const warnings = await maybeRepairLegacyRuntimeFiles(ctx.prompter.shouldRepair, ctx.env);
+  recordDoctorHealthWarnings(ctx, [], warnings);
 }
 
 export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -231,13 +232,29 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
     options: ctx.options,
     prompter: ctx.prompter,
   });
+  const { maybeRepairCronInferenceBindings } =
+    await import("../commands/doctor/cron/inference-binding-migration.js");
+  const inference = await maybeRepairCronInferenceBindings({
+    cfg: ctx.cfg,
+    env: ctx.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+  const { note } = await import("../../packages/terminal-core/src/note.js");
+  noteDoctorRepairResult(inference, note);
+  recordDoctorHealthWarnings(ctx, [], inference.warnings);
 }
 
 export async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles, noteSandboxScopeWarnings } =
     await import("../commands/doctor-sandbox.js");
-  await maybeRepairSandboxRegistryFiles(ctx.prompter);
-  ctx.cfg = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  await maybeRepairSandboxRegistryFiles(ctx.prompter, () => {
+    if (!maintenance) {
+      throw new Error("Retired sandbox registry repair requires exclusive maintenance ownership");
+    }
+    maintenance.assertOwnerCurrent();
+  });
+  await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
   noteSandboxScopeWarnings(ctx.cfg);
 }
 

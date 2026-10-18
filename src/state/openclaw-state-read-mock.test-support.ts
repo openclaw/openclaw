@@ -1,4 +1,7 @@
-import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
+import {
+  createRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import type { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 
 type ReadSource = ReturnType<typeof captureOpenClawStateReadSource>;
@@ -23,7 +26,6 @@ export function createMockStateReadSource(transport: {
 }): ReadSource {
   return {
     own: () => () => {},
-    service() {},
     createTransport: () => ({
       startValidateFresh: () => startAwaitedReadMock(async () => {}),
       startRead: (...args) => startAwaitedReadMock(() => transport.read(...args)),

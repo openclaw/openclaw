@@ -5,7 +5,6 @@ import {
   PlatformMessageNotDispatchedError,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
-import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   captureChannelReadAuthority,
   responseWithRelease,
@@ -31,6 +30,7 @@ import {
   readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import type { MattermostAccountConfig } from "../types.js";
 
 const MATTERMOST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const MATTERMOST_REQUEST_TIMEOUT_MS = 30_000;
@@ -42,7 +42,6 @@ const MATTERMOST_REQUEST_TIMEOUT_MS = 30_000;
 // generous text budget but still bound it instead of buffering the whole stream.
 const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
 
-export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type MattermostRequestInit = RequestInit & {
   timeoutMs?: number;
   /**
@@ -54,16 +53,7 @@ type MattermostRequestInit = RequestInit & {
   isMessagePost?: boolean;
 };
 
-export type MattermostClient = {
-  baseUrl: string;
-  apiBaseUrl: string;
-  token: string;
-  /** Operation-local sender fence, independent of ambient read authority. */
-  assertRequestCurrent?: () => void;
-  request: <T>(path: string, init?: MattermostRequestInit) => Promise<T>;
-  /** Guarded fetch implementation; use in place of raw fetch for outbound requests. */
-  fetchImpl: MattermostFetch;
-};
+export type MattermostClient = ReturnType<typeof createMattermostClient>;
 
 export type MattermostUser = {
   id: string;
@@ -172,7 +162,7 @@ export async function readMattermostError(
     chunkTimeoutMs: 10_000,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`error body read stalled for ${chunkTimeoutMs}ms`),
-  });
+  }).catch(() => ({ text: "error response body unavailable", truncated: false }));
   let detail = text;
   if (contentType.includes("application/json")) {
     try {
@@ -196,13 +186,12 @@ export async function readMattermostError(
 export function createMattermostClient(params: {
   baseUrl: string;
   botToken: string;
-  fetchImpl?: MattermostFetch;
   /** Timeout for REST requests in milliseconds (default: 30000). */
   timeoutMs?: number;
   /** Allow requests to private/internal IPs (self-hosted/LAN deployments). */
   allowPrivateNetwork?: boolean;
   assertRequestCurrent?: () => void;
-}): MattermostClient {
+}) {
   const baseUrl = normalizeMattermostBaseUrl(params.baseUrl);
   if (!baseUrl) {
     throw new Error("Mattermost baseUrl is required");
@@ -231,12 +220,7 @@ export function createMattermostClient(params: {
         }
       }
     : undefined;
-  // When no custom fetchImpl is provided (production path), use an SSRF-guarded wrapper
-  // that validates the target URL before making the request (DNS rebinding protection etc.).
-  // A custom fetchImpl is accepted for testing and special cases.
-  const externalFetchImpl = params.fetchImpl;
-
-  const guardedFetchImpl = async (
+  const fetchImpl = async (
     input: RequestInfo | URL,
     init?: MattermostRequestInit,
   ): Promise<Response> => {
@@ -264,44 +248,6 @@ export function createMattermostClient(params: {
     });
     return responseWithRelease(response, release);
   };
-
-  const timedExternalFetchImpl:
-    | ((input: RequestInfo | URL, init?: MattermostRequestInit) => Promise<Response>)
-    | undefined = externalFetchImpl
-    ? async (input, init) => {
-        const assertReadAuthority = captureChannelReadAuthority();
-        assertReadAuthority?.();
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        const { timeoutMs: initTimeoutMs, isMessagePost, ...requestInit } = init ?? {};
-        const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, requestTimeoutMs);
-        const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
-          timeoutMs,
-          operation: "mattermost-api",
-          url,
-        });
-        const callerSignal = requestInit.signal ?? undefined;
-        const signal =
-          callerSignal && timeoutSignal
-            ? AbortSignal.any([callerSignal, timeoutSignal])
-            : (callerSignal ?? timeoutSignal);
-        try {
-          assertRequestCurrent?.();
-          if (isMessagePost) {
-            postDispatchStarted = true;
-          }
-          const response = await externalFetchImpl(input, { ...requestInit, signal });
-          // Match guarded production fetches: retain cancellation and the
-          // request deadline until the custom response body is consumed.
-          return responseWithRelease(response, async () => cleanup());
-        } catch (error) {
-          cleanup();
-          throw error;
-        }
-      }
-    : undefined;
-
-  const fetchImpl = timedExternalFetchImpl ?? guardedFetchImpl;
 
   const request = async <T>(path: string, init?: MattermostRequestInit): Promise<T> => {
     const url = buildMattermostApiUrl(baseUrl, path);
@@ -455,16 +401,7 @@ export async function sendMattermostTyping(
   });
 }
 
-export type CreateDmChannelRetryOptions = {
-  /** Maximum number of retry attempts (default: 3) */
-  maxRetries?: number;
-  /** Initial delay in milliseconds (default: 1000) */
-  initialDelayMs?: number;
-  /** Maximum delay in milliseconds (default: 10000) */
-  maxDelayMs?: number;
-  /** Timeout for each individual request in milliseconds (default: 30000) */
-  timeoutMs?: number;
-  /** Optional logger for retry events */
+export type CreateDmChannelRetryOptions = NonNullable<MattermostAccountConfig["dmChannelRetry"]> & {
   onRetry?: (attempt: number, delayMs: number, error: Error) => void;
 };
 
@@ -529,23 +466,12 @@ export async function createMattermostDirectChannelWithRetry(
   const timeoutMs = resolveTimerTimeoutMs(rawTimeoutMs, 30000);
 
   return await retryAsync(
-    async () => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        return await client.request<MattermostChannel>("/channels/direct", {
-          method: "POST",
-          body: JSON.stringify(userIds),
-          signal: controller.signal,
-          timeoutMs,
-        });
-      } catch (err) {
-        // Normalize before rethrowing so shouldRetry/onRetry below always see Errors.
-        throw err instanceof Error ? err : new Error(String(err));
-      } finally {
-        clearTimeout(timeoutId);
-      }
-    },
+    () =>
+      client.request<MattermostChannel>("/channels/direct", {
+        method: "POST",
+        body: JSON.stringify(userIds),
+        timeoutMs,
+      }),
     {
       attempts: maxRetries + 1,
       // Core retry raises maxDelayMs to the minDelayMs floor, but the schema
@@ -572,33 +498,13 @@ export function isRetryableError(error: Error): boolean {
     current.reason,
     ...(Array.isArray(current.errors) ? current.errors : []),
   ]);
-  const messages = candidates.map((candidate) =>
-    normalizeLowercaseStringOrEmpty(readStringField(asOptionalObjectRecord(candidate), "message")),
-  );
-
   // Provider status takes precedence over statuses mentioned in its details and network errors.
-  // Require the API prefix so port numbers and IP octets cannot become HTTP statuses.
-  if (messages.some((message) => /mattermost api 5\d{2}\b/.test(message))) {
-    return true;
-  }
-
-  if (
-    messages.some(
-      (message) => /mattermost api 429\b/.test(message) || message.includes("too many requests"),
-    )
-  ) {
-    return true;
-  }
-
-  if (messages.some((message) => /mattermost api 4\d{2}\b/.test(message))) {
-    return false;
-  }
-
-  const hasMattermostApiStatusCode = messages.some((message) =>
-    /mattermost api \d{3}\b/.test(message),
-  );
-  if (hasMattermostApiStatusCode) {
-    return false;
+  // The first status in the outermost provider error is authoritative, including wrapped errors.
+  for (const candidate of candidates) {
+    const status = parseMattermostApiStatus(candidate);
+    if (status !== undefined) {
+      return status === 429 || (status >= 500 && status < 600);
+    }
   }
 
   if (
@@ -613,9 +519,15 @@ export function isRetryableError(error: Error): boolean {
     return true;
   }
 
-  return messages.some((message) =>
-    RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern)),
-  );
+  return candidates.some((candidate) => {
+    const message = normalizeLowercaseStringOrEmpty(
+      readStringField(asOptionalObjectRecord(candidate), "message"),
+    );
+    return (
+      message.includes("too many requests") ||
+      RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern))
+    );
+  });
 }
 
 function readErrorCode(error: unknown): string | undefined {

@@ -26,21 +26,11 @@ export type DraftSessionCreateSelection = Partial<
   toolOverrides?: SessionCreateParams["toolOverrides"] | null;
 };
 
-export function canStartSessionAsDraft(params: {
-  allowedVisibilities?: readonly string[];
-  hasMultipleIdentities?: boolean;
-}): boolean {
-  return (
-    params.allowedVisibilities?.includes("draft") === true && params.hasMultipleIdentities === true
-  );
-}
-
 export function isWorktreeNameValid(value: string): boolean {
   const name = value.trim();
   return !name || WORKTREE_NAME_PATTERN.test(name);
 }
 
-/** Maps the new-session draft selections onto additive sessions.create params. */
 export function buildDraftSessionCreateParams(draft: {
   agentId: string;
   message: string;
@@ -59,6 +49,7 @@ export function buildDraftSessionCreateParams(draft: {
   projectId?: string;
   projectGitUrl?: string;
   repository?: SessionCreateParams["repository"];
+  deviceFolder?: SessionCreateParams["deviceFolder"];
   worktree: boolean;
   worktreeSource?: SessionCreateParams["worktreeSource"];
   baseRef?: string;
@@ -84,11 +75,15 @@ export function buildDraftSessionCreateParams(draft: {
     draft.deferInitialTurn && draft.visibility !== "incognito"
       ? truncateUtf16Safe(draft.message.trim(), 1_000)
       : undefined;
-  const emptyWorkspace = draft.worktreeSource === "empty";
-  const repository = emptyWorkspace ? undefined : draft.repository;
+  const deviceFolder = draft.deviceFolder;
+  const emptyWorkspace = !deviceFolder && draft.worktreeSource === "empty";
+  const repository = deviceFolder || emptyWorkspace ? undefined : draft.repository;
   const projectId =
-    emptyWorkspace || repository ? undefined : normalizeOptionalString(draft.projectId);
+    deviceFolder || emptyWorkspace || repository
+      ? undefined
+      : normalizeOptionalString(draft.projectId);
   const projectGitUrl =
+    !deviceFolder &&
     !emptyWorkspace &&
     !repository &&
     !projectId &&
@@ -96,7 +91,13 @@ export function buildDraftSessionCreateParams(draft: {
       ? normalizeOptionalString(draft.projectGitUrl)
       : undefined;
   const customFolder =
-    !emptyWorkspace && !repository && !projectId && !projectGitUrl && cwd && cwd !== workspace
+    !deviceFolder &&
+    !emptyWorkspace &&
+    !repository &&
+    !projectId &&
+    !projectGitUrl &&
+    cwd &&
+    cwd !== workspace
       ? cwd
       : undefined;
   return {
@@ -124,9 +125,10 @@ export function buildDraftSessionCreateParams(draft: {
     ...(projectId ? { projectId } : {}),
     ...(projectGitUrl ? { projectGitUrl } : {}),
     ...(repository ? { repository: { ...repository } } : {}),
+    ...(deviceFolder ? { deviceFolder: { ...deviceFolder, path: deviceFolder.path.trim() } } : {}),
     ...(customFolder ? { cwd: customFolder } : {}),
     ...(emptyWorkspace ? { worktree: true, worktreeSource: "empty" as const } : {}),
-    ...(draft.worktree && !repository && !emptyWorkspace
+    ...(draft.worktree && !deviceFolder && !repository && !emptyWorkspace
       ? {
           worktree: true,
           // Passing the base explicitly also skips the create-time origin fetch.

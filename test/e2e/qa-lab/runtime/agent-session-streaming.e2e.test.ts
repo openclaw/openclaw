@@ -1,25 +1,26 @@
 import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
-import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../../../packages/gateway-protocol/src/client-info.js";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createDeferred } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  connectOperator,
+  messageRole,
+  messageText,
+  runCleanups,
+  startSessionGateway,
+} from "./agent-session.test-support.js";
+import { listenLoopback } from "./gateway-recovery.test-support.js";
 
 const TEST_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 20_000;
-const STREAM_INTERVAL_MS = 20;
-const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const SESSION_KEY = "agent:qa:qa:session-streaming";
 const IDEMPOTENCY_KEY = "qa-session-streaming";
 const REQUEST_MESSAGE = "Return exactly SESSION-STREAMING-OK.";
 const STREAM_DELTAS = ["SESSION-", "STREAMING-", "OK"] as const;
 const TERMINAL_TEXT = STREAM_DELTAS.join("");
 
-type GatewayHandle = QaGatewayChild;
 type AgentResult = {
   runId?: string;
   status?: string;
@@ -48,30 +49,7 @@ type AgentEvent = {
 
 const cleanups: Array<() => Promise<void>> = [];
 
-function createDeferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
-}
-
-afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    try {
-      await cleanup();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "session streaming cleanup failed");
-  }
-});
+afterEach(() => runCleanups(cleanups, "agent-session-streaming cleanup failed"));
 
 function writeEvent(response: ServerResponse, event: unknown): void {
   response.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -79,8 +57,9 @@ function writeEvent(response: ServerResponse, event: unknown): void {
 
 async function writeStreamingResponse(
   response: ServerResponse,
-  deltasSent: ReturnType<typeof createDeferred>,
-  terminalRelease: ReturnType<typeof createDeferred>,
+  deltasSent: ReturnType<typeof createDeferred<void>>,
+  firstDeltaObserved: ReturnType<typeof createDeferred<void>>,
+  terminalRelease: ReturnType<typeof createDeferred<void>>,
 ): Promise<void> {
   const message = {
     type: "message",
@@ -108,7 +87,9 @@ async function writeStreamingResponse(
       content_index: 0,
       delta,
     });
-    await delay(STREAM_INTERVAL_MS);
+    if (delta === STREAM_DELTAS[0]) {
+      await firstDeltaObserved.promise;
+    }
   }
   deltasSent.resolve();
   await terminalRelease.promise;
@@ -136,6 +117,7 @@ async function startStreamingProvider() {
   const providerRequests: Array<Record<string, unknown>> = [];
   const transportRequests: string[] = [];
   const deltasSent = createDeferred();
+  const firstDeltaObserved = createDeferred();
   const terminalRelease = createDeferred();
   let terminalReleased = false;
   const releaseTerminal = () => {
@@ -161,7 +143,7 @@ async function startStreamingProvider() {
         providerRequests.push(
           JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
         );
-        await writeStreamingResponse(response, deltasSent, terminalRelease);
+        await writeStreamingResponse(response, deltasSent, firstDeltaObserved, terminalRelease);
         return;
       }
       transportRequests.push(`${request.method ?? "UNKNOWN"} ${request.url ?? ""}`);
@@ -171,22 +153,17 @@ async function startStreamingProvider() {
       response.writeHead(500).end(error instanceof Error ? error.message : String(error));
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("streaming provider did not bind a loopback port");
-  }
+  const baseUrl = await listenLoopback(server, "streaming provider did not bind a loopback port");
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl,
     deltasSent: deltasSent.promise,
+    releaseRemainingDeltas: firstDeltaObserved.resolve,
     isTerminalReleased: () => terminalReleased,
     releaseTerminal,
     providerRequests,
     transportRequests,
     stop: async () => {
+      firstDeltaObserved.resolve();
       releaseTerminal();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
@@ -194,52 +171,6 @@ async function startStreamingProvider() {
       });
     },
   };
-}
-
-async function connectOperator(
-  gateway: GatewayHandle,
-  events: GatewayEvent[],
-): Promise<GatewayClient> {
-  return await new Promise<GatewayClient>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      if (error) {
-        client.stop();
-        reject(error);
-        return;
-      }
-      resolve(client);
-    };
-    const client = new GatewayClient({
-      url: gateway.wsUrl,
-      token: gateway.token,
-      env: gateway.runtimeEnv,
-      role: "operator",
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientDisplayName: "Session streaming QA operator",
-      clientVersion: "1.0.0",
-      platform: process.platform,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-      deviceIdentity: null,
-      requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      onEvent: (event) => events.push(event),
-      onHelloOk: () => finish(),
-      onConnectError: (error) => finish(error),
-      onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
-    });
-    const timeout = setTimeout(
-      () => finish(new Error(`Gateway client connection timed out:\n${gateway.logs()}`)),
-      REQUEST_TIMEOUT_MS,
-    );
-    timeout.unref();
-    client.start();
-  });
 }
 
 function asAgentEvent(event: GatewayEvent): AgentEvent | undefined {
@@ -254,31 +185,6 @@ function asChatEvent(event: GatewayEvent): ChatEventPayload | undefined {
     : undefined;
 }
 
-function messageRole(message: unknown): string | undefined {
-  const role = message && typeof message === "object" ? (message as { role?: unknown }).role : null;
-  return typeof role === "string" ? role : undefined;
-}
-
-function messageText(message: unknown): string {
-  if (!message || typeof message !== "object") {
-    return "";
-  }
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .flatMap((part) =>
-      part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string"
-        ? [(part as { text: string }).text]
-        : [],
-    )
-    .join("\n");
-}
-
 describe("agent session streaming", () => {
   it(
     "orders Gateway deltas before one terminal event and persists one assistant message",
@@ -288,30 +194,15 @@ describe("agent session streaming", () => {
       cleanups.push(() => provider.stop());
       const gatewayOwner = createQaGatewayChild();
       cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-      const gateway = await gatewayOwner.start({
-        repoRoot: process.cwd(),
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: ["dist/entry.js"],
-          cwd: process.cwd(),
-          usePackagedPlugins: true,
-        },
-        providerBaseUrl: `${provider.baseUrl}/v1`,
-        providerMode: "mock-openai",
-        primaryModel: MODEL_REF,
-        alternateModel: MODEL_REF,
+      const gateway = await startSessionGateway(gatewayOwner, provider.baseUrl, {
+        useRepoCli: false,
         transportBaseUrl: provider.baseUrl,
-        controlUiEnabled: false,
-        fastMode: true,
-        runtimeEnvPatch: {
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        },
-        mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
       });
 
       const gatewayEvents: GatewayEvent[] = [];
-      const client = await connectOperator(gateway, gatewayEvents);
+      const client = await connectOperator(gateway, "Session streaming QA operator", {
+        onEvent: (event) => gatewayEvents.push(event),
+      });
       cleanups.push(() => client.stopAndWait({ timeoutMs: 1_000 }));
       await client.request("sessions.messages.subscribe", { key: SESSION_KEY });
       const accepted = await client.request<AgentResult>("agent", {
@@ -325,6 +216,22 @@ describe("agent session streaming", () => {
         runId: IDEMPOTENCY_KEY,
       });
 
+      await vi.waitFor(
+        () => {
+          expect(
+            gatewayEvents
+              .map(asAgentEvent)
+              .some(
+                (event) =>
+                  event?.runId === IDEMPOTENCY_KEY &&
+                  event.stream === "assistant" &&
+                  event.data?.delta === STREAM_DELTAS[0],
+              ),
+          ).toBe(true);
+        },
+        { interval: 20, timeout: REQUEST_TIMEOUT_MS },
+      );
+      provider.releaseRemainingDeltas();
       await provider.deltasSent;
       await vi.waitFor(
         () => {

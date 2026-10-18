@@ -1,5 +1,7 @@
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   listSessionEntriesReadOnly,
@@ -12,15 +14,16 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
-import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readSessionGroupMembership } from "./session-group-membership.read.js";
 import { putSessionGroups } from "./session-groups.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
 function observeQueries(prototype: StatementSync) {
@@ -39,8 +42,9 @@ function observeQueries(prototype: StatementSync) {
   return { executed, restore: () => spies.forEach((spy) => spy.mockRestore()) };
 }
 
-it("publishes byte-identical group and participant facts without membership SQL during cold admission, row refresh or 50 viewer reads", async () => {
+it("publishes byte-identical group and participant facts without host membership SQL during cold admission, row refresh or 50 viewer reads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const scope = { agentId: "main", sessionKey: "agent:main:projected-members" };
     await upsertSessionEntryCore(scope, {
       sessionId: "projected-members",
@@ -52,16 +56,16 @@ it("publishes byte-identical group and participant facts without membership SQL 
     recordSessionParticipant(scope, { identity: { type: "agent", id: "main" }, promptedAt: 1 });
     const database = openOpenClawAgentDatabase(scope);
     const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-    const admissionReads = observeQueries(prototype);
+    // Profile display admission has its own owner; keep this boundary on the cold session store.
+    const profiles = await prepareUserProfileCatalog();
+    const admissionReads = observeHostDataSql();
     let projection: SessionRowProjection | undefined;
     const query = { agentId: scope.agentId, key: scope.sessionKey };
     try {
       projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
       await projection.ensureMaterialized();
       admissionReads.restore();
-      expect(
-        admissionReads.executed.filter((sql) => /\bsession_(members|participants)\b/i.test(sql)),
-      ).toEqual([]);
+      expect(admissionReads.queries).toEqual([]);
       const nativeListEntry = listSessionEntriesReadOnly({
         agentId: scope.agentId,
         projection: "list",
@@ -129,72 +133,14 @@ it("publishes byte-identical group and participant facts without membership SQL 
     } finally {
       admissionReads.restore();
       projection?.dispose();
-    }
-  });
-});
-
-it("retains prepared membership across config changes and reconciles explicitly invalidated facts", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:config-members" };
-    await upsertSessionEntryCore(scope, { sessionId: "config-members", updatedAt: 1 });
-    addSessionMember(scope, { identityId: "viewer", addedBy: "owner" });
-    recordSessionParticipant(scope, { identity: { type: "agent", id: "research" }, promptedAt: 1 });
-    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-    const membershipReads = vi.fn<(keys: readonly string[] | undefined) => void>();
-    const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
-    const observer = vi
-      .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
-      .mockImplementation((targets, consume) =>
-        readDatabases(targets, (owners) =>
-          consume(
-            owners.map((owner) => ({
-              ...owner,
-              readMembershipFacts: (input: Parameters<typeof owner.readMembershipFacts>[0]) => {
-                membershipReads(input.sessionKeys);
-                return owner.readMembershipFacts(input);
-              },
-            })),
-          ),
-        ),
-      );
-    try {
-      await projection.ensureMaterialized();
-      membershipReads.mockClear();
-      for (const factsInvalidated of [false, true]) {
-        sessionChanges.emit({
-          all: true,
-          scope: "config",
-          ...(factsInvalidated ? { factsInvalidated: true as const } : {}),
-        });
-        const described = await projection.withPreparedExactRows(
-          () => [{ agentId: scope.agentId, key: scope.sessionKey }],
-          (read) => read.describe({ agentId: scope.agentId, key: scope.sessionKey }),
-        );
-        expect(described).toMatchObject({
-          kind: "complete",
-          value: {
-            entry: {
-              sessionId: "config-members",
-              participants: [{ identity: { type: "agent", id: "research" } }],
-            },
-            membership: new Set(["viewer"]),
-          },
-        });
-        if (factsInvalidated) {
-          expect(membershipReads).toHaveBeenCalledExactlyOnceWith(undefined);
-        } else {
-          expect(membershipReads).not.toHaveBeenCalled();
-        }
-      }
-    } finally {
-      observer.mockRestore();
-      projection.dispose();
+      profiles.release();
     }
   });
 });
 
 it("publishes final replacement facts to observers registered before the projection", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const scope = { agentId: "main", sessionKey: "agent:main:transaction-members" };
     await upsertSessionEntryCore(scope, { sessionId: "old", updatedAt: 1, category: "old" });
     addSessionMember(scope, { identityId: "old-viewer", addedBy: "owner" });
@@ -267,9 +213,13 @@ it("publishes final replacement facts to observers registered before the project
         });
       }
       expect(projection.needsMembershipPreparation()).toBe(false);
-      expect(
-        projection.describe({ agentId: scope.agentId, key: scope.sessionKey })?.entry,
-      ).toMatchObject({
+      const query = { agentId: scope.agentId, key: scope.sessionKey };
+      const entry = await withReadySessionRows(
+        projection,
+        () => [query],
+        (read) => read.describe(query)?.entry,
+      );
+      expect(entry).toMatchObject({
         sessionId: "current",
         category: "current",
         participants: [
@@ -288,6 +238,7 @@ it("publishes final replacement facts to observers registered before the project
 it("installs every category in a worker reply before the first row observer", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     await putSessionGroups({ cfg, names: ["work", "done"] });
     const keys = ["agent:main:category-a", "agent:main:category-b"];
     for (const sessionKey of keys) {

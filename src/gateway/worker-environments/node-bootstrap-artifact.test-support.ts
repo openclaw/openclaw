@@ -116,16 +116,25 @@ export function useNodeBootstrapArtifactFixtures() {
       },
     };
     await write(packageRoot, "package.json", sourcePackage);
-    await fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";', {
-      mode: 0o755,
-    });
+    await fs.writeFile(
+      path.join(packageRoot, "openclaw.mjs"),
+      'import "./cli-invocation.mjs"; import "./dist/entry.js";',
+      { mode: 0o755 },
+    );
+    for (const filename of [
+      "cli-invocation.mjs",
+      "cli-parent-lifetime.mjs",
+      "gateway-shutdown-budget.mjs",
+    ]) {
+      await fs.copyFile(filename, path.join(packageRoot, filename));
+    }
     await write(packageRoot, "node-version.mjs", "export const supported = true;");
     await write(packageRoot, "node-sqlite.mjs", "export const probe = true;");
     await write(packageRoot, "node-runtime-update.mjs", "export const update = true;");
     await write(packageRoot, "node-runtime-recovery.mjs", "export const recovery = true;");
+    await write(packageRoot, "node-runtime-env.mjs", "export {};");
     await write(packageRoot, "cli-root-options.mjs", "export {};");
     await write(packageRoot, "gateway-run-argv.mjs", "export {};");
-    await write(packageRoot, "gateway-shutdown-budget.mjs", "export {};");
     await write(packageRoot, "node-host-launcher.mjs", "export const launcher = true;");
     await write(packageRoot, "node-compile-cache.mjs", "export {};");
     await write(packageRoot, "scripts/preinstall.mjs", "export {};\n");
@@ -147,6 +156,7 @@ export function useNodeBootstrapArtifactFixtures() {
     await write(packageRoot, "dist/worker/worker.mjs", 'console.log("separate-worker-bundle");');
     await write(packageRoot, "dist/worker/workspace-rsync-receiver.mjs", "export {};");
     await write(packageRoot, "dist/worker/github-exec-launcher.mjs", "export {};");
+    await write(packageRoot, "dist/worker-artifacts/fixture.tgz", "separate-worker-archive");
     await write(packageRoot, "dist/build-info.json", { version, buildId });
     await write(packageRoot, "dist/extensions/remote-runtime/package.json", pluginPackage);
     await write(packageRoot, "dist/extensions/remote-runtime/openclaw.plugin.json", {
@@ -217,7 +227,7 @@ export function useNodeBootstrapArtifactFixtures() {
       plugins: [{ id: "remote-runtime", root: pluginRoot }],
     };
     const provider = createProvider(options);
-    return { root, packageRoot, provider, sourcePackage, pluginPackage, options };
+    return { root, packageRoot, pluginRoot, provider, sourcePackage, pluginPackage, options };
   }
   return { fixture, createProvider, tempDirs };
 }

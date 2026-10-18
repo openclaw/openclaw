@@ -1,6 +1,11 @@
 import http from "node:http";
 import https from "node:https";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import type { ChannelMessageSendTextContext } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  PlatformMessageNotDispatchedError,
+  toErrorObject,
+} from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -65,7 +70,22 @@ const QA_BUS_STATE_TIMEOUT_MS = 10_000;
 type QaBusPostOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
+  beforeRequest?: () => void;
 };
+
+export type QaMessageSendHandoff = Pick<
+  ChannelMessageSendTextContext,
+  "signal" | "onPlatformSendDispatch" | "assertDirectAdapterHandoff"
+>;
+
+function messageNotDispatched(cause: unknown): PlatformMessageNotDispatchedError {
+  return cause instanceof PlatformMessageNotDispatchedError
+    ? cause
+    : new PlatformMessageNotDispatchedError(
+        cause instanceof Error ? cause.message : "QA message handoff refused",
+        { cause, retryable: false },
+      );
+}
 
 function buildQaBusUrl(baseUrl: string, path: string): URL {
   const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
@@ -97,6 +117,17 @@ async function postJson<T>(
   body: unknown,
   options: QaBusPostOptions = {},
 ): Promise<T> {
+  return captureEffectAuthority().initiate(() =>
+    initiateQaBusPost<T>(baseUrl, path, body, options),
+  );
+}
+
+async function initiateQaBusPost<T>(
+  baseUrl: string,
+  path: string,
+  body: unknown,
+  options: QaBusPostOptions,
+): Promise<T> {
   const url = buildQaBusUrl(baseUrl, path);
   const payload = JSON.stringify(body);
   const client = url.protocol === "https:" ? https : http;
@@ -105,6 +136,7 @@ async function postJson<T>(
   const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
 
   return await new Promise<T>((resolve, reject) => {
+    options.beforeRequest?.();
     const request = client.request(
       url,
       {
@@ -183,8 +215,29 @@ export async function pollQaBus(params: {
   );
 }
 
-export async function sendQaBusMessage(params: QaBusAccountRequest<QaBusOutboundMessageInput>) {
-  return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params, {
+export async function sendQaBusMessage(
+  params: QaBusAccountRequest<QaBusOutboundMessageInput> & QaMessageSendHandoff,
+) {
+  const { signal, onPlatformSendDispatch, assertDirectAdapterHandoff, ...body } = params;
+  const assertCurrent = () => {
+    try {
+      signal?.throwIfAborted();
+      assertDirectAdapterHandoff?.();
+    } catch (cause) {
+      throw messageNotDispatched(cause);
+    }
+  };
+  assertCurrent();
+  try {
+    await onPlatformSendDispatch?.();
+  } catch (cause) {
+    throw messageNotDispatched(cause);
+  }
+  // Preparation and durable timing can yield. Fence again at the native request;
+  // errors after that boundary remain ambiguous, never proof of no dispatch.
+  return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", body, {
+    signal,
+    beforeRequest: assertCurrent,
     timeoutMs: QA_BUS_MESSAGE_REQUEST_TIMEOUT_MS,
   });
 }

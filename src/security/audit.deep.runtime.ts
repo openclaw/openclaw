@@ -24,14 +24,6 @@ type SkillScanSummary = Awaited<
 
 export type CodeSafetySummaryCache = Map<string, Promise<SkillScanSummary>>;
 
-const loadAgentScopeModule = createLazyRuntimeModule(() => import("../agents/agent-scope.js"));
-
-const loadAgentWorkspaceDirsModule = createLazyRuntimeModule(
-  () => import("../agents/workspace-dirs.js"),
-);
-
-const loadSkillSourceModule = createLazyRuntimeModule(() => import("../skills/loading/source.js"));
-
 const loadSkillScannerModule = createLazyRuntimeModule(
   () => import("../skills/security/scanner.js"),
 );
@@ -259,7 +251,7 @@ export async function collectPluginsCodeSafetyFindings(params: {
         detail: `Found ${summary[severity]} ${critical ? "critical issue(s)" : "warning(s)"} in ${summary.scannedFiles} scanned file(s):\n${details}`,
         remediation: critical
           ? "Review the plugin source code carefully before use. If untrusted, remove the plugin from your OpenClaw extensions state directory."
-          : "Review the flagged code to ensure it is intentional and safe.",
+          : "Check that the flagged code is intentional and safe.",
       });
     }
   }
@@ -277,7 +269,10 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
   const [{ listAgentWorkspaceDirs, listExplicitAgentWorkspaceDirs }, { resolveSkillSource }] =
-    await Promise.all([loadAgentWorkspaceDirsModule(), loadSkillSourceModule()]);
+    await Promise.all([
+      import("../agents/workspace-dirs.js"),
+      import("../skills/loading/source.js"),
+    ]);
   const workspaceDirs = new Set(params.workspaceDir ? [params.workspaceDir] : []);
   try {
     for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
@@ -293,7 +288,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const entries = [...workspaceDirs].flatMap((workspaceDir) =>
     loadWorkspaceSkills(workspaceDir, { config: params.cfg }),
   );
-  const { listAgentIds } = await loadAgentScopeModule();
+  const { listAgentIds } = await import("../agents/agent-scope.js");
   const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
   const reportWorkshopScanFailure = (filePath: string, error: unknown) => {
     findings.push({
@@ -380,7 +375,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
         detail: `Found ${summary[severity]} ${critical ? "critical issue(s)" : "warning(s)"} in ${summary.scannedFiles} scanned file(s) under ${skillDir}:\n${details}`,
         remediation: critical
           ? `Review the skill source code before use. If untrusted, remove "${skillDir}".`
-          : "Review flagged lines to ensure the behavior is intentional and safe.",
+          : "Check that the behavior in flagged lines is intentional and safe.",
       });
     }
   }

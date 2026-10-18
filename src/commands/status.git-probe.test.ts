@@ -93,7 +93,9 @@ beforeEach(() => {
               ? "1700000000"
               : argv.includes("--porcelain")
                 ? ""
-                : "abc123",
+                : argv.includes("--is-shallow-repository")
+                  ? "false"
+                  : "abc123",
     }));
 });
 afterEach(() => {
@@ -132,6 +134,7 @@ function delayGitProbe(probe: string, delayMs: number | null, failure?: string) 
 async function runStatusProbe(
   params: { json: boolean; all?: boolean; timeoutMs?: number },
   started: Promise<void>,
+  advanceMs: number,
 ) {
   const runtime = createTestRuntime();
   const pending = statusCommand(params, runtime);
@@ -145,7 +148,7 @@ async function runStatusProbe(
     pending,
     "Status settled without starting the requested Git probe",
   );
-  await vi.runAllTimersAsync();
+  await vi.advanceTimersByTimeAsync(advanceMs);
   expect(await outcome).toBe("completed");
   expect(runtime.exit).not.toHaveBeenCalled();
   expect(runtime.error).not.toHaveBeenCalled();
@@ -164,7 +167,7 @@ async function runStatusProbe(
 describe("status optional Git probes", () => {
   it.each([false, true])("allows a cold 4 s local probe (JSON: %s)", async (json) => {
     vi.useFakeTimers();
-    const result = await runStatusProbe({ json }, delayGitProbe("--show-toplevel", 4000));
+    const result = await runStatusProbe({ json }, delayGitProbe("--show-toplevel", 4000), 4000);
     expect(result.output).not.toContain("update status unknown");
     if (json) {
       expect(result.update.installKind).toBe("git");
@@ -187,9 +190,9 @@ describe("status optional Git probes", () => {
     async ({ probe, budgetMs, ...opts }) => {
       vi.useFakeTimers();
       const startedAt = Date.now();
-      const { output, update } = await runStatusProbe(opts, delayGitProbe(probe, null));
+      const { output, update } = await runStatusProbe(opts, delayGitProbe(probe, null), budgetMs);
       expect(Date.now() - startedAt).toBe(budgetMs);
-      expect(output).toContain(`git probe did not finish within ${budgetMs / 1000} s (slow host)`);
+      expect(output).toContain(`git check did not finish within ${budgetMs / 1000} s (slow host)`);
       expect(output).not.toContain("remote reachability");
       if (opts.json) {
         expect(update.error).toMatchObject({ status: "unknown", timeoutMs: budgetMs });
@@ -208,6 +211,7 @@ describe("status optional Git probes", () => {
       const { output, update } = await runStatusProbe(
         { json },
         delayGitProbe("--abbrev-ref", 1, "fatal: permission denied"),
+        1,
       );
       expect(output).toContain("fatal: permission denied");
       expect(output).not.toContain("slow host");

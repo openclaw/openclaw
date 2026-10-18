@@ -1,7 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { logVerbose } from "../globals.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import type {
@@ -43,10 +42,6 @@ type WebFetchProviderCacheEntry = {
 
 const webFetchProviderCache = new WeakMap<OpenClawConfig, WebFetchProviderCacheEntry>();
 
-function resolveFetchConfig(config: OpenClawConfig | undefined): WebFetchConfig | undefined {
-  return resolveWebProviderConfig(config, "fetch") as NonNullable<WebFetchConfig> | undefined;
-}
-
 function hasEntryCredential(
   provider: WebProviderWithCredential,
   config: OpenClawConfig | undefined,
@@ -58,7 +53,6 @@ function hasEntryCredential(
   });
 }
 
-/** Reports whether a web_fetch provider has usable credentials. */
 export function isWebFetchProviderConfigured(params: {
   provider: Pick<
     PluginWebFetchProviderEntry,
@@ -73,7 +67,6 @@ export function isWebFetchProviderConfigured(params: {
   return hasEntryCredential(params.provider, params.config);
 }
 
-/** Lists web_fetch providers available to runtime selection. */
 export function listWebFetchProviders(params?: {
   config?: OpenClawConfig;
 }): PluginWebFetchProviderEntry[] {
@@ -84,49 +77,23 @@ export function listWebFetchProviders(params?: {
 
 /** Auto-detects a web_fetch provider after explicit selections have been resolved. */
 function resolveAutoWebFetchProviderId(params: {
-  fetch?: WebFetchConfig;
   config?: OpenClawConfig;
   providers: PluginWebFetchProviderEntry[];
 }): string {
-  const raw =
-    params.fetch && "provider" in params.fetch
-      ? normalizeLowercaseStringOrEmpty(params.fetch.provider)
-      : "";
-
   for (const provider of params.providers) {
-    if (!providerRequiresCredential(provider)) {
-      if (!hasEntryCredential({ ...provider, requiresCredential: true }, params.config)) {
-        continue;
-      }
-      logVerbose(
-        `web_fetch: ${raw ? `invalid configured provider "${raw}", ` : ""}auto-detected keyless provider "${provider.id}"`,
-      );
-      return provider.id;
-    }
-    if (!hasEntryCredential(provider, params.config)) {
+    const requiresCredential = providerRequiresCredential(provider);
+    if (
+      !hasEntryCredential(
+        requiresCredential ? provider : { ...provider, requiresCredential: true },
+        params.config,
+      )
+    ) {
       continue;
     }
-    logVerbose(
-      `web_fetch: ${raw ? `invalid configured provider "${raw}", ` : ""}auto-detected "${provider.id}" from available API keys`,
-    );
     return provider.id;
   }
 
   return "";
-}
-
-function resolveConfiguredWebFetchProviderId(params: {
-  fetch?: WebFetchConfig;
-  providers: PluginWebFetchProviderEntry[];
-}): string | undefined {
-  const raw =
-    params.fetch && "provider" in params.fetch
-      ? normalizeLowercaseStringOrEmpty(params.fetch.provider)
-      : "";
-  if (!raw) {
-    return undefined;
-  }
-  return params.providers.find((provider) => provider.id === raw)?.id;
 }
 
 function resolveWebFetchProvidersForOptions(
@@ -165,11 +132,10 @@ function resolveWebFetchProvidersForOptions(
   return providers;
 }
 
-/** Resolves the executable web_fetch provider tool definition. */
 export function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
 ): WebFetchDefinitionResolution {
-  const fetch = resolveFetchConfig(options?.config);
+  const fetch = resolveWebProviderConfig(options?.config, "fetch") as WebFetchConfig;
   if (fetch?.enabled === false) {
     return null;
   }
@@ -179,11 +145,14 @@ export function resolveWebFetchDefinition(
   if (providers.length === 0) {
     return null;
   }
+  const configuredProviderId = normalizeLowercaseStringOrEmpty(fetch?.provider);
   const providerId =
     options?.providerId ??
-    resolveConfiguredWebFetchProviderId({ fetch, providers }) ??
+    (configuredProviderId
+      ? providers.find((entry) => entry.id === configuredProviderId)?.id
+      : undefined) ??
     runtimeWebFetch?.selectedProvider ??
-    resolveAutoWebFetchProviderId({ config: options?.config, fetch, providers });
+    resolveAutoWebFetchProviderId({ config: options?.config, providers });
   const provider = providers.find((entry) => entry.id === providerId);
   if (!provider) {
     return null;

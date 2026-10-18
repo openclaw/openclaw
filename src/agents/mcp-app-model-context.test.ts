@@ -107,6 +107,21 @@ describe("MCP App model context", () => {
     }
   });
 
+  it("keeps replacement subscriptions active after a stale unsubscribe", () => {
+    const active = runtime();
+    const view = {};
+    const oldListener = vi.fn();
+    const unsubscribeOld = subscribeMcpAppModelContext(view, oldListener);
+    unsubscribeOld();
+    const listener = vi.fn();
+    const unsubscribe = subscribeMcpAppModelContext(view, listener);
+    unsubscribeOld();
+    updateMcpAppModelContext(active, view, text("replacement"));
+    expect(listener).toHaveBeenCalledExactlyOnceWith(getMcpAppModelContext(active, view));
+    expect(oldListener).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
   it("reserves each snapshot once, rolls back failures and preserves newer replacements", () => {
     const active = runtime();
     const view = {};

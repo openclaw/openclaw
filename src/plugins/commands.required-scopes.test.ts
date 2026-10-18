@@ -64,51 +64,50 @@ describe("plugin command required scopes", () => {
     },
   );
 
-  it("allows command owners to run scoped plugin commands without gateway scopes", async () => {
-    let observedOwnerStatus: boolean | undefined;
-    const handler = vi.fn(async (ctx: { senderIsOwner?: boolean }) => {
-      observedOwnerStatus = ctx.senderIsOwner;
-      return { text: "ok" };
-    });
-    const result = await executePluginCommand({
-      command: registerScopedCommand(handler),
-      channel: "telegram",
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      commandBody: "/pairlike",
-      config: {},
-    });
-
-    expect(result).toEqual({ text: "ok" });
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(observedOwnerStatus).toBe(true);
-  });
-
   it.each([
+    {
+      name: "command owners without gateway scopes",
+      senderIsOwner: true,
+      channel: "telegram",
+      gatewayClientScopes: undefined,
+      allowed: true,
+    },
     {
       name: "command owners with insufficient explicit gateway scopes",
       senderIsOwner: true,
       channel: "webchat",
       gatewayClientScopes: ["operator.write"],
+      allowed: false,
     },
     {
       name: "non-owners without gateway scopes",
       senderIsOwner: false,
       channel: "telegram",
       gatewayClientScopes: undefined,
+      allowed: false,
     },
-  ])("rejects $name", async ({ senderIsOwner, channel, gatewayClientScopes }) => {
-    const handler = vi.fn(async () => ({ text: "ok" }));
-    const result = await executePluginCommand({
-      command: registerScopedCommand(handler),
-      channel,
-      isAuthorizedSender: true,
-      senderIsOwner,
-      commandBody: "/pairlike",
-      gatewayClientScopes,
-      config: {},
-    });
-    expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
-    expect(handler).not.toHaveBeenCalled();
-  });
+  ])(
+    "enforces required scopes for $name",
+    async ({ senderIsOwner, channel, gatewayClientScopes, allowed }) => {
+      let observedOwnerStatus: boolean | undefined;
+      const handler = vi.fn(async (ctx: { senderIsOwner?: boolean }) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
+      });
+      const result = await executePluginCommand({
+        command: registerScopedCommand(handler),
+        channel,
+        isAuthorizedSender: true,
+        senderIsOwner,
+        commandBody: "/pairlike",
+        gatewayClientScopes,
+        config: {},
+      });
+      expect(result).toEqual({
+        text: allowed ? "ok" : "⚠️ This command requires gateway scope: operator.pairing.",
+      });
+      expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(observedOwnerStatus).toBe(allowed ? true : undefined);
+    },
+  );
 });

@@ -74,7 +74,7 @@ function addLogTapeMetaFields(
     const value = meta[sourceKey];
     if (typeof value === "string") {
       if (sourceKey === "name") {
-        const record = parseJsonRecord(value);
+        const record = safeParseJsonRecord(value.trim());
         if (record) {
           addLogObjectFields(sanitized, record, redaction);
           continue;
@@ -96,7 +96,8 @@ function addLogTapeArgFields(
 
   // LogTape stores message args as numeric keys; only structured safe fields survive.
   for (const [, value] of args) {
-    const record = typeof value === "string" ? parseJsonRecord(value) : asOptionalRecord(value);
+    const record =
+      typeof value === "string" ? safeParseJsonRecord(value.trim()) : asOptionalRecord(value);
     if (record) {
       addLogObjectFields(sanitized, record, redaction);
       continue;
@@ -130,14 +131,6 @@ function addOmittedLogMessageMetadata(sanitized: Record<string, unknown>, value:
 
 function numericLogMetadata(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-    return undefined;
-  }
-  return safeParseJsonRecord(trimmed);
 }
 
 function addLogObjectFields(

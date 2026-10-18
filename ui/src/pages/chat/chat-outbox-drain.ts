@@ -23,7 +23,6 @@ import {
   dispatchChatSlashCommand,
   readChatResetTargetAccess,
   type ChatCommandTarget,
-  type ChatCommandResetOptions,
 } from "./chat-commands.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
@@ -59,8 +58,6 @@ export type QueuedChatSendOptions = PendingComposerSnapshot & {
   /** Exact submit-time leaf; restored drains omit it so intervening advances park the draft. */
   expectedLeafEntryId?: string | null;
   pendingSettings?: Promise<boolean>;
-  restoreAttachments?: boolean;
-  restoreDraft?: boolean;
   /** Recognized remote commands remain editable when the Gateway rejects them. */
   restoreOnTerminalFailure?: boolean;
   routingSessionKey?: string;
@@ -75,11 +72,6 @@ export type ChatOutboxDrainDependencies = {
     opts?: QueuedChatSendOptions,
     queuedSessionKey?: string,
   ) => Promise<QueuedChatSendResult>;
-  sendResetSlashCommand: (
-    host: ChatHost,
-    message: string,
-    opts: ChatCommandResetOptions,
-  ) => Promise<void>;
 };
 
 type StoredChatOutboxDrainLane = {
@@ -108,7 +100,6 @@ export function scheduleStoredChatOutboxRetry(
   scope: StoredChatOutboxScope,
   delayMs: number,
   dependencies: ChatOutboxDrainDependencies,
-  suppressGenericWake = true,
 ) {
   const key = storedChatOutboxScopeKey(scope);
   scheduleChatOutboxRetry(
@@ -116,7 +107,6 @@ export function scheduleStoredChatOutboxRetry(
     key,
     delayMs,
     (owner) => void scheduleStoredChatOutboxDrain(owner, scope, dependencies),
-    suppressGenericWake,
   );
 }
 
@@ -166,7 +156,6 @@ async function reconcileStoredChatOutboxHead(
   } catch (error) {
     if (isCurrent()) {
       surfaceChatDeliveryFailure(host, outbox.sessionKey, outbox.agentId, formatUiError(error));
-      host.requestUpdate?.();
     }
     return "blocked";
   }
@@ -251,6 +240,7 @@ async function drainStoredChatOutbox(
     if (
       !host.connected ||
       !host.client ||
+      chatOutboxOwner(host).admissions.has(scope) ||
       chatSendHoldReason(host, scope.sessionKey, false, scope.agentId)
     ) {
       return "blocked";
@@ -411,10 +401,6 @@ async function drainStoredChatOutbox(
           host,
           claimed.localCommandName ?? item.localCommandName,
           claimed.localCommandArgs ?? "",
-          {
-            sendResetMessage: (message, resetOpts) =>
-              dependencies.sendResetSlashCommand(host, message, resetOpts),
-          },
         );
         if (dispatchResult === "deferred") {
           setCommandState("waiting-idle");
@@ -529,9 +515,6 @@ async function drainStoredChatOutbox(
       }
       return "blocked";
     }
-    if (result === "failed") {
-      continue;
-    }
   }
 }
 
@@ -624,7 +607,7 @@ export async function resumeStoredChatOutboxes(
     return;
   }
   // Refresh credential ownership; callers own frame-coalesced rendering.
-  chatOutboxOwner(host).syncHost(host, { requestUpdate: false });
+  chatOutboxOwner(host).syncHost(host, { notify: false });
   const eventScope = event ? readSessionChangedEvent(event.payload) : undefined;
   if (event && !eventScope) {
     return;

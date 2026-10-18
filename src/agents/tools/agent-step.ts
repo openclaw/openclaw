@@ -40,22 +40,22 @@ export async function runAgentStep(params: {
     sourceTool: params.sourceTool ?? "sessions_send",
     ...(params.sourceRole ? { sourceRole: params.sourceRole } : {}),
   };
-  const agentParams = {
-    message: annotateInterSessionPromptText(params.message, inputProvenance),
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionKey: params.sessionKey,
-    deliver: false,
-    sourceReplyDeliveryMode: "message_tool_only",
-    channel: params.deliveryContext?.channel ?? INTERNAL_MESSAGE_CHANNEL,
-    lane: resolveNestedAgentLaneForSession(params.sessionKey),
-    extraSystemPrompt: params.extraSystemPrompt,
-    inputProvenance,
-  } as const;
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   const response = await gatewayCall({
     method: "agent",
+    // This is a returned result, not a new request to the peer. Consuming it
+    // must not require an acknowledgment or repeat an already delivered final.
+    replyExpectation: "optional",
     params: {
-      ...agentParams,
+      message: annotateInterSessionPromptText(params.message, inputProvenance),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      sessionKey: params.sessionKey,
+      deliver: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+      channel: params.deliveryContext?.channel ?? INTERNAL_MESSAGE_CHANNEL,
+      lane: resolveNestedAgentLaneForSession(params.sessionKey),
+      extraSystemPrompt: params.extraSystemPrompt,
+      inputProvenance,
       idempotencyKey: stepIdem,
       expectedExistingSessionId: params.expectedSession?.sessionId,
       expectedExistingSessionLifecycleRevision: params.expectedSession

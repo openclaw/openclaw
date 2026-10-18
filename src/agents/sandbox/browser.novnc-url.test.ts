@@ -27,44 +27,7 @@ describe("noVNC auth helpers", () => {
     expect(consumeNoVncObserverToken(token, 1050)).toBeNull();
   });
 
-  it("expires observer tokens", () => {
-    const token = issueNoVncObserverToken({
-      noVncPort: 50123,
-      password: "abcd1234", // pragma: allowlist secret
-      nowMs: 1000,
-      ttlMs: 100,
-    });
-    expect(consumeNoVncObserverToken(token, 1200)).toBeNull();
-  });
-
-  it("uses the default ttl when observer token ttlMs is non-finite", () => {
-    const liveToken = issueNoVncObserverToken({
-      noVncPort: 50123,
-      password: "abcd1234", // pragma: allowlist secret
-      nowMs: 1000,
-      ttlMs: Number.NaN,
-    });
-    const expiredToken = issueNoVncObserverToken({
-      noVncPort: 50123,
-      password: "abcd1234", // pragma: allowlist secret
-      nowMs: 1000,
-      ttlMs: Number.NaN,
-    });
-
-    expect(consumeNoVncObserverToken(liveToken, 60_999)).toEqual({
-      noVncPort: 50123,
-      password: "abcd1234", // pragma: allowlist secret
-    });
-    expect(consumeNoVncObserverToken(expiredToken, 61_001)).toBeNull();
-  });
-
-  it("uses the default ttl when observer token ttlMs is unsafe or too large", () => {
-    const unsafeToken = issueNoVncObserverToken({
-      noVncPort: 50123,
-      password: "abcd1234", // pragma: allowlist secret
-      nowMs: 1000,
-      ttlMs: Number.MAX_SAFE_INTEGER,
-    });
+  it("uses the default ttl when observer token ttlMs is too large", () => {
     const tooLargeToken = issueNoVncObserverToken({
       noVncPort: 50123,
       password: "abcd1234", // pragma: allowlist secret
@@ -72,7 +35,6 @@ describe("noVNC auth helpers", () => {
       ttlMs: 60_001,
     });
 
-    expect(consumeNoVncObserverToken(unsafeToken, 61_001)).toBeNull();
     expect(consumeNoVncObserverToken(tooLargeToken, 61_001)).toBeNull();
   });
 

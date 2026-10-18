@@ -81,20 +81,7 @@ type ParsedRegisteredPluginContent = {
 type ParsedPluginContent = ParsedTrustedPluginContent | ParsedRegisteredPluginContent;
 
 export function parseManifest(value: string): ParsedBoardManifest {
-  const parsed = JSON.parse(value) as {
-    contentOwner?: unknown;
-    registeredContentKind?: unknown;
-    netOrigins?: unknown;
-    tools?: unknown;
-    grantSemanticsVersion?: unknown;
-    presentation?: unknown;
-    heightMode?: unknown;
-    nameIdentity?: unknown;
-    mcpAppInteractive?: unknown;
-    mcpAppInstanceId?: unknown;
-    registeredInstanceId?: unknown;
-    pluginInstanceId?: unknown;
-  };
+  const parsed = JSON.parse(value) as Record<string, unknown>;
   const contentOwnerPresent = Object.hasOwn(parsed, "contentOwner");
   const contentOwner =
     parsed.contentOwner === "html" ||
@@ -400,16 +387,8 @@ export function rowToBoardWidgetDocument(
     if (row.html === null || row.view_generation === null) {
       return undefined;
     }
-    const manifest = parseManifest(row.manifest);
-    const declared = manifest.declared;
-    return {
-      html: Buffer.from(row.html).toString("utf8"),
-      revision: row.revision,
-      sha256: row.sha256,
-      viewGeneration: row.view_generation,
-      grantState: effectiveGrantState(row.grant_state, manifest),
-      ...(declared ? { declared } : {}),
-    };
+    const metadata = rowToHtmlViewMetadata(row, parseManifest(row.manifest));
+    return metadata && { html: Buffer.from(row.html).toString("utf8"), ...metadata };
   }
   if (row.descriptor_json === null) {
     return undefined;
@@ -420,16 +399,15 @@ export function rowToBoardWidgetDocument(
     if (!("source" in content) || !manifest.registeredInstanceId) {
       return undefined;
     }
-    return {
-      pluginKind: content.pluginKind,
-      source: content.source,
-      ...(row.title !== null ? { title: row.title } : {}),
-      revision: row.revision,
-      sha256: row.sha256,
-      viewGeneration: manifest.registeredInstanceId,
-      grantState: effectiveGrantState(row.grant_state, manifest),
-      ...(manifest.declared ? { declared: manifest.declared } : {}),
-    };
+    const metadata = rowToHtmlViewMetadata(row, manifest);
+    return (
+      metadata && {
+        pluginKind: content.pluginKind,
+        source: content.source,
+        ...(row.title !== null ? { title: row.title } : {}),
+        ...metadata,
+      }
+    );
   }
   const manifest = parseManifest(row.manifest);
   if (manifest.mcpAppInteractive === undefined || manifest.mcpAppInstanceId === undefined) {

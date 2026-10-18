@@ -95,6 +95,11 @@ export class GatewayProtocolClient<TPlan> {
     return this.connectSent && !this.helloReceived;
   }
 
+  /** A transport upgrade is in flight; the socket adapter bounds how long it may stay open. */
+  get opening(): boolean {
+    return this.socket !== null && !this.socketOpened;
+  }
+
   get hasUnboundedPendingRequests(): boolean {
     return this.requests.hasUnboundedPending;
   }
@@ -397,6 +402,10 @@ export class GatewayProtocolClient<TPlan> {
             error: requestError,
             reconnectDelayMs: decision.reconnectDelayMs,
           };
+          if (decision.keepOpen) {
+            this.clearHandshakeTimer();
+            return;
+          }
           if (decision.stop) {
             this.stopped = true;
           }
@@ -456,8 +465,8 @@ export class GatewayProtocolClient<TPlan> {
         this.sendConnect(socket, generation);
         return;
       }
-      const seq = typeof parsed.seq === "number" ? parsed.seq : null;
-      if (seq !== null) {
+      const seq = parsed.seq;
+      if (seq !== undefined) {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
           const expected = this.lastSeq + 1;
           const state = asRecord(parsed.payload).state;
@@ -505,6 +514,11 @@ export class GatewayProtocolClient<TPlan> {
       "phase" in event.payload
     ) {
       this.requests.setSuspensionPhase(event.payload.phase);
+    } else if (
+      event.event === "shutdown" &&
+      typeof asRecord(event.payload).restartExpectedMs === "number"
+    ) {
+      this.requests.setSuspensionPhase("draining");
     }
     this.invoke("event", () => this.opts.onEvent?.(event));
     for (const [listener, subscription] of listeners) {

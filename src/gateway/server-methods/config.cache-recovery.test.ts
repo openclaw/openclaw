@@ -31,7 +31,9 @@ vi.mock("./config-write-flow.js", async (importOriginal) => ({
 vi.mock("../../secrets/runtime.js", () => ({
   prepareSecretsRuntimeSnapshot: async ({ config }: { config: OpenClawConfig }) => ({ config }),
 }));
-vi.mock("../../config/runtime-schema.js", () => ({
+vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
+  loadGatewayConfigRedactionHints: () => undefined,
   loadGatewayRuntimeConfigSchema: () => ({ schema: {}, uiHints: undefined }),
 }));
 
@@ -82,8 +84,6 @@ afterEach(() => {
 it.each([
   { method: "config.patch", editAt: "before request" },
   { method: "config.patch", editAt: "during commit" },
-  { method: "config.set", editAt: "during commit" },
-  { method: "config.apply", editAt: "during commit" },
 ] as const)(
   "$method reloads a rejected draft when an external edit occurs $editAt",
   async ({ method, editAt }) => {

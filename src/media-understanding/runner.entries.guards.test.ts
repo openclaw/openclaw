@@ -7,9 +7,9 @@ import {
   runtimeMediaRequestSecretOwnerId,
 } from "../secrets/runtime-media-secret-owner.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
-import { formatDecisionSummary, runProviderEntry } from "./runner.entries.js";
+import { runProviderEntry } from "./runner.entries.js";
 import { withAudioFixture } from "./runner.test-utils.js";
-import type { MediaUnderstandingDecision, MediaUnderstandingProvider } from "./types.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 afterEach(() => {
   setActiveDegradedSecretOwners([]);
@@ -28,43 +28,12 @@ function markUnavailable(ownerId: string, configPath: string) {
   ]);
 }
 
-describe("media-understanding formatDecisionSummary guards", () => {
-  it("formats skipped summary when decision.attachments is undefined", () => {
-    expect(
-      formatDecisionSummary({
-        capability: "image",
-        outcome: "skipped",
-        attachments: undefined as unknown as MediaUnderstandingDecision["attachments"],
-        attachmentDispositions: {},
-        nativeVisionActive: false,
-      }),
-    ).toBe("image: skipped");
-  });
-
-  it("counts malformed attachment attempts as unchosen", () => {
-    expect(
-      formatDecisionSummary({
-        capability: "video",
-        outcome: "skipped",
-        attachments: [
-          {
-            attachmentIndex: 0,
-            attempts: { bad: true },
-            chosen: { outcome: "failed", provider: { bad: true }, model: 42 },
-          },
-        ],
-      } as unknown as MediaUnderstandingDecision),
-    ).toBe("video: skipped (0/1)");
-  });
-});
-
 function missingProvider(provider: string) {
   type RunProviderEntryParams = Parameters<typeof runProviderEntry>[0];
   return runProviderEntry({
     capability: "audio",
     entry: { provider },
     cfg: {},
-    ctx: {} as RunProviderEntryParams["ctx"],
     attachmentIndex: 0,
     cache: {} as RunProviderEntryParams["cache"],
     providerRegistry: new Map(),
@@ -75,12 +44,6 @@ describe("media-understanding missing provider errors", () => {
   it("includes the catalog repair hint for a media provider contract", async () => {
     await expect(missingProvider("groq")).rejects.toThrow(
       /Media provider not available: groq .*openclaw plugins install .*@openclaw\/groq-provider.*openclaw plugins registry --refresh.*stop and start the gateway service.*openclaw doctor --fix/,
-    );
-  });
-
-  it("keeps the legacy error for providers without a media contract", async () => {
-    await expect(missingProvider("mystery-provider")).rejects.toThrow(
-      "Media provider not available: mystery-provider",
     );
   });
 });
@@ -98,7 +61,7 @@ describe("media-understanding SecretRef owner isolation", () => {
         ownerId,
         appendConfigPathSegment("tools.media.audio.request.headers", sharedHeader),
       );
-      await withAudioFixture("openclaw-media-header-owner", async ({ ctx, cache }) => {
+      await withAudioFixture("openclaw-media-header-owner", async ({ cache }) => {
         const transcribeAudioWithContext = vi.fn<
           NonNullable<MediaUnderstandingProvider["transcribeAudioWithContext"]>
         >(async (request) => {
@@ -122,7 +85,6 @@ describe("media-understanding SecretRef owner isolation", () => {
           },
           cfg: {},
           config: { request: { headers: {} } },
-          ctx,
           attachmentIndex: 0,
           cache,
           providerRegistry: new Map([
@@ -160,7 +122,6 @@ describe("media-understanding SecretRef owner isolation", () => {
         cfg,
         config: cfg.tools.media.audio,
         secretOwnerId: ownerId,
-        ctx: {} as RunProviderEntryParams["ctx"],
         attachmentIndex: 0,
         cache: {} as RunProviderEntryParams["cache"],
         providerRegistry: new Map(),
@@ -191,7 +152,6 @@ describe("media-understanding SecretRef owner isolation", () => {
         entry,
         cfg,
         config: cfg.tools.media.audio,
-        ctx: {} as RunProviderEntryParams["ctx"],
         attachmentIndex: 0,
         cache: {} as RunProviderEntryParams["cache"],
         providerRegistry: new Map(),

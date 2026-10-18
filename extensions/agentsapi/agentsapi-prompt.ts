@@ -10,9 +10,9 @@ import {
   buildSkillWorkshopPromptSection,
   buildTemporalContextText,
   buildUiPresentationPrompt,
-  buildWatchedSessionsHarnessContext,
   embeddedAgentLog,
   prepareAgentWorkspaceContext,
+  prepareWatchedSessionsHarnessContext,
   resolveMainSessionDelegationMode,
   SKILL_WORKSHOP_TOOL_NAME,
   type AgentHarnessAttemptParamsV2,
@@ -160,46 +160,40 @@ export async function buildAgentsApiInstructions(
   ]);
 }
 
-export function buildAgentsApiTurnInput(
+export async function buildAgentsApiTurnInput(
   params: AgentHarnessAttemptParamsV2,
   tools: readonly AgentToolParam.AgentToolConfigParamFunction[],
   prompt: string,
   mappingText: string,
   environmentType: AgentsApiEnvironment["type"],
+  assertCurrent: () => void,
   attachmentFeedback?: string,
-): string {
+): Promise<string> {
   // Deduplicate only after prompt hooks; a replacement prompt still needs
   // the workspace owner's freshly prepared executor paths.
   const attachmentNote =
     environmentType === "self_hosted" && prompt.endsWith(`\n\n${mappingText}`) ? "" : mappingText;
   return [
-    buildAgentsApiTurnContext(params, tools),
+    await buildAgentsApiTurnContext(params, tools, assertCurrent),
     prompt,
     attachmentNote,
     attachmentFeedback,
-    buildAgentsApiImageInputNotice(params.images, mappingText),
+    params.images?.length
+      ? mappingText
+        ? IMAGE_RECOVERY_WITH_PREPARED_ATTACHMENTS
+        : IMAGE_RECOVERY_WITHOUT_PREPARED_ATTACHMENTS
+      : undefined,
   ]
     .filter(Boolean)
     .join("\n\n");
 }
 
-function buildAgentsApiImageInputNotice(
-  images: AgentHarnessAttemptParamsV2["images"],
-  mappingText: string,
-): string | undefined {
-  if (!images?.length) {
-    return undefined;
-  }
-  return mappingText
-    ? IMAGE_RECOVERY_WITH_PREPARED_ATTACHMENTS
-    : IMAGE_RECOVERY_WITHOUT_PREPARED_ATTACHMENTS;
-}
-
 /** Current facts use the existing input carrier, not immutable session instructions. */
-function buildAgentsApiTurnContext(
+async function buildAgentsApiTurnContext(
   params: AgentHarnessAttemptParamsV2,
   tools: readonly AgentToolParam.AgentToolConfigParamFunction[],
-): string | undefined {
+  assertCurrent: () => void,
+): Promise<string | undefined> {
   if (!shouldIncludeAgentHarnessRuntimeContext(params)) {
     return undefined;
   }
@@ -218,10 +212,11 @@ function buildAgentsApiTurnContext(
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     }),
     params.permissionChange?.notice,
-    buildWatchedSessionsHarnessContext({
+    await prepareWatchedSessionsHarnessContext({
       config: params.config,
       sessionKey: params.sessionKey,
       toolNames,
+      assertCurrent,
     }),
     "Current user request:",
   ]);

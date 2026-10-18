@@ -1,5 +1,5 @@
 import type { ApiClientOptions } from "grammy";
-import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
+import { captureEffectAuthority, responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { extractTelegramApiMethod } from "./api-root.js";
 import type { TelegramTransport } from "./fetch.js";
 import {
@@ -34,10 +34,6 @@ export function asTelegramClientFetch(
   return fetchImpl as unknown as TelegramClientFetch;
 }
 
-function asTelegramCompatFetch(fetchImpl: TelegramClientFetch): TelegramCompatFetch {
-  return fetchImpl as unknown as TelegramCompatFetch;
-}
-
 function isTelegramAbortSignalLike(value: unknown): value is TelegramAbortSignalLike {
   return (
     typeof value === "object" &&
@@ -58,21 +54,18 @@ const TELEGRAM_TIMEOUT_FALLBACK_METHODS = new Set([
   "setwebhook",
 ]);
 
-function shouldRetryTimedOutTelegramControlRequest(method: string | null): boolean {
-  return method !== null && TELEGRAM_TIMEOUT_FALLBACK_METHODS.has(method);
-}
-
 export function createTelegramClientFetch(params: {
   fetchImpl: TelegramClientFetch;
   timeoutSeconds?: unknown;
   shutdownSignal?: unknown;
   transport?: Partial<Pick<TelegramTransport, "forceFallback" | "sourceFetch">>;
 }): TelegramCompatFetch {
-  const callFetch = asTelegramCompatFetch(params.fetchImpl);
+  const callFetch = params.fetchImpl as unknown as TelegramCompatFetch;
   const isRawSourceFetch =
     params.transport?.sourceFetch !== undefined &&
     params.fetchImpl === asTelegramClientFetch(params.transport.sourceFetch);
   return async (input: TelegramFetchInput, init?: TelegramFetchInit) => {
+    const effect = captureEffectAuthority();
     const assertCurrent = getTelegramRequestAuthority(init);
     const method = extractTelegramApiMethod(input);
     const requestTimeoutMs = resolveTelegramRequestTimeoutMs(method, params.timeoutSeconds);
@@ -126,10 +119,15 @@ export function createTelegramClientFetch(params: {
       };
 
       try {
-        const response = await callFetch(input, {
-          ...(isRawSourceFetch ? withoutTelegramRequestAuthority(init) : init),
-          signal: controller.signal,
-        });
+        const request = () => {
+          assertTelegramRequestAuthority(assertCurrent);
+          controller.signal.throwIfAborted();
+          return callFetch(input, {
+            ...(isRawSourceFetch ? withoutTelegramRequestAuthority(init) : init),
+            signal: controller.signal,
+          });
+        };
+        const response = await (isRawSourceFetch ? effect.initiate(request) : request());
         if (response.status === 421) {
           const retry =
             allowMisdirectedFallback && canForceTransportFallback("misdirected-request");
@@ -161,15 +159,11 @@ export function createTelegramClientFetch(params: {
         throw err;
       }
       if (
-        requestTimeoutMs &&
-        shouldRetryTimedOutTelegramControlRequest(method) &&
-        canForceTransportFallback("request-timeout")
-      ) {
-        return await runFetch();
-      }
-      if (
-        isTelegramMisdirectedRequestError(err) &&
-        canForceTransportFallback("misdirected-request")
+        (requestTimeoutMs &&
+          method !== null &&
+          TELEGRAM_TIMEOUT_FALLBACK_METHODS.has(method) &&
+          canForceTransportFallback("request-timeout")) ||
+        (isTelegramMisdirectedRequestError(err) && canForceTransportFallback("misdirected-request"))
       ) {
         return await runFetch();
       }

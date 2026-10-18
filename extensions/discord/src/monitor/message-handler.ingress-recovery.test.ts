@@ -1,4 +1,8 @@
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+import {
+  preflightDiscordMessageMock,
+  processDiscordMessageMock,
+} from "./message-handler.module-test-helpers.js";
 
 installDiscordIngressTestRuntime();
 // Discord tests cover durable retry recovery through full handler replacement.
@@ -14,8 +18,10 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as ingressRuntime from "./ingress.js";
+import type { DiscordIngressLifecycle } from "./ingress.js";
+const createDiscordIngressMonitor = ingressRuntime.createDiscordIngressMonitor;
 import { createDiscordMessageHandler } from "./message-handler.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
@@ -139,26 +145,29 @@ function createHandler(params: {
   preflight: (input: { data: { message?: { id?: string } } }) => Promise<null>;
   debounceMs?: number;
   beforeDispatch?: () => Promise<void>;
+  afterDispatch?: () => void;
 }) {
   const handlerParams = createDiscordHandlerParams();
   handlerParams.cfg.messages = { inbound: { debounceMs: params.debounceMs ?? 0 } };
+  preflightDiscordMessageMock.mockImplementation(params.preflight as never);
+  vi.spyOn(ingressRuntime, "createDiscordIngressMonitor").mockImplementation((monitorParams) =>
+    createDiscordIngressMonitor({
+      ...monitorParams,
+      queue: params.queue,
+      dispatch:
+        params.beforeDispatch || params.afterDispatch
+          ? async (event, lifecycle) => {
+              await params.beforeDispatch?.();
+              const result = await monitorParams.dispatch(event, lifecycle);
+              params.afterDispatch?.();
+              return result;
+            }
+          : monitorParams.dispatch,
+    }),
+  );
   return createDiscordMessageHandler({
     ...handlerParams,
     client: {} as never,
-    testing: {
-      preflightDiscordMessage: params.preflight as never,
-      createIngressMonitor: (monitorParams) =>
-        createDiscordIngressMonitor({
-          ...monitorParams,
-          queue: params.queue,
-          dispatch: params.beforeDispatch
-            ? async (event, lifecycle) => {
-                await params.beforeDispatch?.();
-                return await monitorParams.dispatch(event, lifecycle);
-              }
-            : monitorParams.dispatch,
-        }),
-    },
   });
 }
 
@@ -197,13 +206,15 @@ describe("Discord durable ingress replacement recovery", () => {
       expect(beforeDispatchPreflight).not.toHaveBeenCalled();
       expect(await retryFacts(queue, "poison")).toEqual(expectedFacts);
 
+      const bufferedDispatched = createDeferred<void>();
       const bufferedPreflight = vi.fn(async () => null);
       const bufferedHandler = createHandler({
         queue,
         preflight: bufferedPreflight,
         debounceMs: 60_000,
+        afterDispatch: () => bufferedDispatched.resolve(),
       });
-      await vi.waitFor(async () => expect(await queue.listClaims()).toHaveLength(1));
+      await bufferedDispatched.promise;
       await bufferedHandler.deactivate();
       expect(bufferedPreflight).not.toHaveBeenCalled();
       expect(await retryFacts(queue, "poison")).toEqual(expectedFacts);
@@ -267,12 +278,12 @@ describe("Discord durable ingress settlement", () => {
     const start = vi.fn();
     const stop = vi.fn(async () => {});
     const params = createDiscordHandlerParams();
+    vi.spyOn(ingressRuntime, "createDiscordIngressMonitor").mockImplementation(
+      vi.fn(() => ({ accept, start, stop })),
+    );
     const handler = createDiscordMessageHandler({
       ...params,
       client: {} as never,
-      testing: {
-        createIngressMonitor: vi.fn(() => ({ accept, start, stop })),
-      },
     });
     const handling = handler({ id: "m-admitting", channel_id: "ch-1" } as never, {} as never);
 
@@ -310,23 +321,24 @@ describe("Discord durable ingress settlement", () => {
           { laneKey: "channel:lane-a", receivedAt: 2 },
         );
         const processed: string[] = [];
+        preflightDiscordMessageMock.mockImplementation((async (
+          preflightParams: DiscordMessagePreflightParams,
+        ) => ({
+          ...createDiscordQueuePreflightContextForMessage(preflightParams.data),
+          turnAdoptionLifecycle: preflightParams.turnAdoptionLifecycle,
+        })) as never);
+        processDiscordMessageMock.mockImplementation(async (ctx) => {
+          processed.push(ctx.message.id);
+          if (ctx.message.id === "processing-poison") {
+            throw new Error("deterministic queued processing failure");
+          }
+        });
+        vi.spyOn(ingressRuntime, "createDiscordIngressMonitor").mockImplementation(
+          (monitorParams) => createDiscordIngressMonitor({ ...monitorParams, queue }),
+        );
         const handler = createDiscordMessageHandler({
           ...createDiscordHandlerParams(),
           client: {} as never,
-          testing: {
-            preflightDiscordMessage: (async (preflightParams: DiscordMessagePreflightParams) => ({
-              ...createDiscordQueuePreflightContextForMessage(preflightParams.data),
-              turnAdoptionLifecycle: preflightParams.turnAdoptionLifecycle,
-            })) as never,
-            processDiscordMessage: async (ctx) => {
-              processed.push(ctx.message.id);
-              if (ctx.message.id === "processing-poison") {
-                throw new Error("deterministic queued processing failure");
-              }
-            },
-            createIngressMonitor: (monitorParams) =>
-              createDiscordIngressMonitor({ ...monitorParams, queue }),
-          },
         });
         try {
           await vi.advanceTimersByTimeAsync(1_000);
@@ -361,23 +373,22 @@ describe("Discord durable ingress settlement", () => {
           }
         });
         const params = createDiscordHandlerParams();
+        preflightDiscordMessageMock.mockImplementation((async (preflightParams: {
+          abortSignal?: AbortSignal;
+          data: DiscordMessagePreflightParams["data"];
+          turnAdoptionLifecycle?: DiscordIngressLifecycle;
+        }) => ({
+          ...createDiscordQueuePreflightContextForMessage(preflightParams.data),
+          abortSignal: preflightParams.abortSignal,
+          turnAdoptionLifecycle: preflightParams.turnAdoptionLifecycle,
+        })) as never);
+        processDiscordMessageMock.mockImplementation(processDiscordMessage as never);
+        vi.spyOn(ingressRuntime, "createDiscordIngressMonitor").mockImplementation(
+          (monitorParams) => createDiscordIngressMonitor({ ...monitorParams, queue }),
+        );
         const handler = createDiscordMessageHandler({
           ...params,
           client: {} as never,
-          testing: {
-            preflightDiscordMessage: (async (preflightParams: {
-              abortSignal?: AbortSignal;
-              data: DiscordMessagePreflightParams["data"];
-              turnAdoptionLifecycle?: DiscordIngressLifecycle;
-            }) => ({
-              ...createDiscordQueuePreflightContextForMessage(preflightParams.data),
-              abortSignal: preflightParams.abortSignal,
-              turnAdoptionLifecycle: preflightParams.turnAdoptionLifecycle,
-            })) as never,
-            processDiscordMessage: processDiscordMessage as never,
-            createIngressMonitor: (monitorParams) =>
-              createDiscordIngressMonitor({ ...monitorParams, queue }),
-          },
         });
 
         await processingStarted.promise;
@@ -401,9 +412,9 @@ describe("Discord durable ingress settlement", () => {
       const before = await retryFacts(queue, id);
       const params = createDiscordHandlerParams();
       const processDiscordMessage = vi.fn(async () => {});
+      processDiscordMessageMock.mockImplementation(processDiscordMessage as never);
       const messageRunQueue = createDiscordMessageRunQueue({
         runtime: params.runtime,
-        testing: { processDiscordMessage: processDiscordMessage as never },
       });
       const skipped = createDeferred<void>();
       const monitor = createDiscordIngressMonitor({
@@ -438,3 +449,5 @@ describe("Discord durable ingress settlement", () => {
     });
   });
 });
+
+afterEach(() => vi.restoreAllMocks());

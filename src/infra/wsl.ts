@@ -1,4 +1,3 @@
-// Detects Windows Subsystem for Linux environments.
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -10,29 +9,9 @@ export function isWSLEnv(env: Record<string, string | undefined> = process.env):
   return Boolean(env.WSL_INTEROP || env.WSL_DISTRO_NAME || env.WSLENV);
 }
 
-/**
- * Synchronously detects WSL from env vars first, then `/proc/version`.
- */
-function isWSLSync(): boolean {
-  if (process.platform !== "linux") {
-    return false;
-  }
-  if (isWSLEnv()) {
-    return true;
-  }
-  try {
-    const release = normalizeLowercaseStringOrEmpty(readFileSync("/proc/version", "utf8"));
-    return release.includes("microsoft") || release.includes("wsl");
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Synchronously detects WSL2 from kernel-version markers after WSL detection.
- */
+/** Detects WSL2 from kernel-version markers, which also establish WSL itself. */
 export function isWSL2Sync(): boolean {
-  if (!isWSLSync()) {
+  if (process.platform !== "linux") {
     return false;
   }
   try {

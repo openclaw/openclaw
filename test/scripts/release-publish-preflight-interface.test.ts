@@ -10,32 +10,58 @@ import {
 } from "../../scripts/lib/release-publish-preflight-interface.mts";
 
 describe("release publish preflight operator interface", () => {
-  it("accepts a full workflow SHA without a workflow ref", () => {
-    expect(
-      parsePublishPreflightArgs(["--tag", "v2026.9.5", "--workflow-sha", "a".repeat(40)])?.options,
-    ).toMatchObject({
-      workflowRef: "",
-      workflowSha: "a".repeat(40),
-    });
+  it("parses exact tooling and selected plugin repair inputs", () => {
+    const cases = [
+      {
+        flags: ["--workflow-sha", "a".repeat(40)],
+        expected: { workflowRef: "", workflowSha: "a".repeat(40) },
+      },
+      {
+        flags: [
+          "--workflow-ref",
+          "release-publish/aaaaaaaaaaaa-123",
+          "--publish-openclaw-npm",
+          "false",
+          "--plugin-publish-scope",
+          "selected",
+          "--plugins",
+          "@openclaw/example",
+        ],
+        expected: {
+          publishOpenclawNpm: false,
+          pluginPublishScope: "selected",
+          plugins: "@openclaw/example",
+        },
+      },
+    ];
+    for (const { flags, expected } of cases) {
+      expect(parsePublishPreflightArgs(["--tag", "v2026.9.5", ...flags])?.options).toMatchObject(
+        expected,
+      );
+    }
   });
 
-  it.each([{ flags: [] }, { flags: ["--workflow-ref", "main", "--workflow-sha", "a".repeat(40)] }])(
-    "rejects missing or conflicting workflow selectors: $flags",
-    ({ flags }) => {
-      expect(() => parsePublishPreflightArgs(["--tag", "v2026.9.5", ...flags])).toThrow(
-        "--tag and exactly one of --workflow-ref or --workflow-sha are required.",
-      );
-    },
-  );
-
-  it.each(["a".repeat(12), "A".repeat(40), "g".repeat(40)])(
-    "rejects malformed workflow SHA %s",
-    (sha) => {
-      expect(() =>
-        parsePublishPreflightArgs(["--tag", "v2026.9.5", "--workflow-sha", sha]),
-      ).toThrow("--workflow-sha must be a lowercase 40-character commit SHA.");
-    },
-  );
+  it("rejects invalid selectors, publication booleans, and retired bypasses", () => {
+    const selectorError = "--tag and exactly one of --workflow-ref or --workflow-sha are required.";
+    const cases: { flags: string[]; error?: string }[] = [
+      { flags: [], error: selectorError },
+      { flags: ["--workflow-ref", "main", "--workflow-sha", "a".repeat(40)], error: selectorError },
+      ...["a".repeat(12), "A".repeat(40), "g".repeat(40)].map((sha) => ({
+        flags: ["--workflow-sha", sha],
+        error: "--workflow-sha must be a lowercase 40-character commit SHA.",
+      })),
+      ...["--stable-soak-waiver", "--lane-waiver"].map((flag) => ({
+        flags: ["--workflow-ref", "main", flag, "2026.9.5 approved"],
+      })),
+      ...["TRUE", "0"].map((value) => ({
+        flags: ["--workflow-ref", "main", "--publish-openclaw-npm", value],
+        error: "must be true or false",
+      })),
+    ];
+    for (const { flags, error } of cases) {
+      expect(() => parsePublishPreflightArgs(["--tag", "v2026.9.5", ...flags])).toThrow(error);
+    }
+  });
 
   it.skipIf(process.platform === "win32")(
     "prints a shell-safe POSIX dispatch that preserves artifact and exact resume inputs",
@@ -97,58 +123,6 @@ describe("release publish preflight operator interface", () => {
       "",
     );
     expect(command).not.toContain("finalize_release_before_docker");
-  });
-
-  it.each(["--stable-soak-waiver", "--lane-waiver"])(
-    "rejects removed publication bypass %s",
-    (flag) => {
-      expect(() =>
-        parsePublishPreflightArgs([
-          "--tag",
-          "v2026.9.5",
-          "--workflow-ref",
-          "main",
-          flag,
-          "2026.9.5 approved",
-        ]),
-      ).toThrow();
-    },
-  );
-
-  it.each(["TRUE", "0"])(
-    "rejects ambiguous publish-openclaw-npm=%s before observation",
-    (value) => {
-      expect(() =>
-        parsePublishPreflightArgs([
-          "--tag",
-          "v2026.9.5",
-          "--workflow-ref",
-          "main",
-          "--publish-openclaw-npm",
-          value,
-        ]),
-      ).toThrow("must be true or false");
-    },
-  );
-
-  it("accepts selected plugin repair inputs without inventing core publication", () => {
-    const parsed = parsePublishPreflightArgs([
-      "--tag",
-      "v2026.9.5",
-      "--workflow-ref",
-      "release-publish/aaaaaaaaaaaa-123",
-      "--publish-openclaw-npm",
-      "false",
-      "--plugin-publish-scope",
-      "selected",
-      "--plugins",
-      "@openclaw/example",
-    ]);
-    expect(parsed?.options).toMatchObject({
-      publishOpenclawNpm: false,
-      pluginPublishScope: "selected",
-      plugins: "@openclaw/example",
-    });
   });
 
   it("retains failure and remediation in the table without duplicating a prepared command", () => {

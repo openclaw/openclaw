@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable, Updateable } from "kysely";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { ensureSessionRepositoryWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB, SessionRepositoryWorkspaces } from "./openclaw-state-db.generated.js";
+import { repositoryWorkspacePublication } from "./session-repository-workspaces.receipts.js";
 import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
@@ -16,7 +17,7 @@ import type {
 } from "./session-repository-workspaces.types.js";
 
 const table = "session_repository_workspaces";
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
 const manifestPattern = /^sha256:[a-f0-9]{64}$/u;
 const resultRefPattern = /^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u;
 
@@ -48,7 +49,7 @@ function project(row: Selectable<SessionRepositoryWorkspaces>): SessionRepositor
 }
 
 export function readSessionRepositoryWorkspaceInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   workspaceId: string,
 ): SessionRepositoryWorkspaceRecord | undefined {
   if (!tableExists(db, table)) {
@@ -62,7 +63,7 @@ export function readSessionRepositoryWorkspaceInDatabase(
 }
 
 export function findSessionRepositoryWorkspaceInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: RepositoryWorkspaceOwner,
 ): SessionRepositoryWorkspaceRecord | undefined {
   if (!tableExists(db, table)) {
@@ -79,7 +80,11 @@ export function findSessionRepositoryWorkspaceInDatabase(
   return row ? project(row) : undefined;
 }
 
-function changed(workspace: SessionRepositoryWorkspaceRecord): RepositoryWorkspaceMutationResult {
+function changed(
+  db: EngineConnection,
+  workspace: SessionRepositoryWorkspaceRecord,
+): RepositoryWorkspaceMutationResult {
+  repositoryWorkspacePublication.stagePostimages(db, [workspace]);
   return {
     workspaceId: workspace.workspaceId,
     workspace,
@@ -90,7 +95,7 @@ function changed(workspace: SessionRepositoryWorkspaceRecord): RepositoryWorkspa
 
 /** The caller owns the synchronous transaction and its live commit admission. */
 export function createSessionRepositoryWorkspaceInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: RepositoryWorkspaceCreate,
   nowMs: number,
 ): RepositoryWorkspaceMutationResult {
@@ -112,7 +117,7 @@ export function createSessionRepositoryWorkspaceInDatabase(
     ) {
       throw new Error("Session already owns a different repository workspace");
     }
-    return { ...changed(existing), changed: false };
+    return { ...changed(db, existing), changed: false };
   }
   const workspaceId = randomUUID();
   const inserted = executeSqliteQueryTakeFirstSync(
@@ -140,11 +145,11 @@ export function createSessionRepositoryWorkspaceInDatabase(
   if (!inserted) {
     throw new Error("Repository workspace creation failed");
   }
-  return changed(project(inserted));
+  return changed(db, project(inserted));
 }
 
 function mutate(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: RepositoryWorkspaceMutation,
   nowMs: number,
   values: (current: SessionRepositoryWorkspaceRecord) => Updateable<SessionRepositoryWorkspaces>,
@@ -169,11 +174,11 @@ function mutate(
   if (!updated) {
     throw new Error("Repository workspace revision changed");
   }
-  return changed(project(updated));
+  return changed(db, project(updated));
 }
 
 export function bindSessionRepositoryWorkspaceBaseInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: RepositoryWorkspaceBase,
   nowMs: number,
 ): RepositoryWorkspaceMutationResult {
@@ -200,7 +205,7 @@ export function bindSessionRepositoryWorkspaceBaseInDatabase(
 }
 
 export function acceptSessionRepositoryWorkspaceCheckpointInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: RepositoryWorkspaceCheckpoint,
   nowMs: number,
 ): RepositoryWorkspaceMutationResult {
@@ -216,7 +221,7 @@ export function acceptSessionRepositoryWorkspaceCheckpointInDatabase(
 }
 
 export function deleteSessionRepositoryWorkspaceInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   workspaceId: string,
 ): RepositoryWorkspaceMutationResult {
   const deleted = tableExists(db, table)
@@ -225,6 +230,7 @@ export function deleteSessionRepositoryWorkspaceInDatabase(
         query(db).deleteFrom(table).where("workspace_id", "=", workspaceId).returningAll(),
       )
     : undefined;
+  repositoryWorkspacePublication.stageDeletions(db, [workspaceId]);
   return {
     workspaceId,
     workspace: undefined,

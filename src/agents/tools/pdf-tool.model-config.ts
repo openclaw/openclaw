@@ -27,6 +27,7 @@ type PdfModelConfigContext = {
   agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
 };
 
 function formatProviderModelRef(providerId: string, modelId: string): string {
@@ -50,15 +51,12 @@ function resolveConfiguredTextModelFromConfig(params: {
   providerId: string;
 }): string | undefined {
   const providers = params.cfg?.models?.providers;
-  if (!providers || typeof providers !== "object") {
+  if (!providers) {
     return undefined;
   }
   const providerCfg = findNormalizedProviderValue(providers, params.providerId);
   const modelId = providerCfg?.models
-    ?.find(
-      (model: { id?: string; input?: readonly string[] }) =>
-        Boolean(model?.id?.trim()) && Array.isArray(model?.input) && model.input.includes("text"),
-    )
+    ?.find((model) => Boolean(model?.id?.trim()) && model.input?.includes("text"))
     ?.id?.trim();
   return modelId || undefined;
 }
@@ -177,25 +175,15 @@ function resolveTextExtractionCandidateRefs(
 export function resolvePdfModelConfigForTool(
   params: PdfModelConfigContext & { activeModel?: PdfToolActiveModel },
 ): ImageModelConfig | null {
-  const explicitPdf = coercePdfModelConfig(params.cfg);
-  if (explicitPdf.primary?.trim() || (explicitPdf.fallbacks?.length ?? 0) > 0) {
-    // PDF-specific config wins over generic image model config.
-    return resolveConfiguredImageModelRefs({
-      cfg: params.cfg,
-      imageModelConfig: explicitPdf,
-    });
-  }
-
-  const explicitImage = coerceImageModelConfig(params.cfg);
-  if (explicitImage.primary?.trim() || (explicitImage.fallbacks?.length ?? 0) > 0) {
-    return resolveConfiguredImageModelRefs({
-      cfg: params.cfg,
-      imageModelConfig: explicitImage,
-    });
+  // PDF-specific config wins over generic image model config.
+  for (const coerce of [coercePdfModelConfig, coerceImageModelConfig]) {
+    const explicit = coerce(params.cfg);
+    if (explicit.primary?.trim() || (explicit.fallbacks?.length ?? 0) > 0) {
+      return resolveConfiguredImageModelRefs({ cfg: params.cfg, imageModelConfig: explicit });
+    }
   }
 
   const primary = resolveDefaultModelRef(params.cfg);
-  const googleOk = hasProviderAuthForTool({ ...params, provider: "google" });
 
   const activeProvider = params.activeModel?.provider.trim();
   const activeModel = params.activeModel?.model.trim();
@@ -213,8 +201,6 @@ export function resolvePdfModelConfigForTool(
     hasProviderAuthForTool({ ...params, provider: activeProvider })
       ? formatProviderModelRef(activeProvider, activeModel)
       : null;
-  let preferred: string | null = null;
-
   const providerOk = hasProviderAuthForTool({ ...params, provider: primary.provider });
   const providerVision = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
@@ -247,7 +233,7 @@ export function resolvePdfModelConfigForTool(
   const preferPrimaryTextExtraction =
     providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
 
-  if (params.cfg?.models?.providers && typeof params.cfg.models.providers === "object") {
+  if (params.cfg?.models?.providers) {
     // Configured provider vision models are added even when not present in static media defaults.
     for (const [providerKey, providerCfg] of Object.entries(params.cfg.models.providers)) {
       const providerId = providerKey.trim();
@@ -269,12 +255,7 @@ export function resolvePdfModelConfigForTool(
       }
       const models = providerCfg?.models ?? [];
       const modelId = models
-        .find(
-          (model) =>
-            Boolean(model?.id?.trim()) &&
-            Array.isArray(model?.input) &&
-            model.input.includes("image"),
-        )
+        .find((model) => Boolean(model?.id?.trim()) && model.input?.includes("image"))
         ?.id?.trim();
       if (!modelId) {
         continue;
@@ -290,14 +271,10 @@ export function resolvePdfModelConfigForTool(
     ? [...nativePdfCandidates, ...textExtractionCandidates, ...genericImageCandidates]
     : [...nativePdfCandidates, ...genericImageCandidates, ...textExtractionCandidates];
 
-  if (primary.provider === "google" && googleOk && providerVision && primarySupportsNativePdf) {
-    // Google native PDF handling is preferred when auth and a configured vision model are present.
-    preferred = providerVision;
-  } else if (providerOk && primarySupportsNativePdf && (providerVision || providerDefault)) {
-    preferred = providerVision ?? `${primary.provider}/${providerDefault}`;
-  } else {
-    preferred = fallbackCandidates[0] ?? null;
-  }
+  let preferred =
+    providerOk && primarySupportsNativePdf && (providerVision || providerDefault)
+      ? (providerVision ?? `${primary.provider}/${providerDefault}`)
+      : (fallbackCandidates[0] ?? null);
 
   // Preserve every existing native/auto candidate decision. The admitted session model
   // only fills the previous no-model gap when it can inspect images and has usable auth.

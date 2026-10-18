@@ -3,24 +3,20 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BuzzBus } from "./buzz-bus.js";
+import type { BuzzBus, startBuzzBus } from "./buzz-bus.js";
+import type { BuzzConfigInput } from "./config-schema.js";
+
+type BusOptions = Parameters<typeof startBuzzBus>[0];
+type GatewayOptions = Parameters<typeof startBuzzGatewayAccount>[0];
 
 const gatewayMocks = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
   busSendText: vi.fn(async () => "event-id"),
   busSendTyping: vi.fn(async () => undefined),
   sendBuzzTextOneShot: vi.fn(async () => "standalone-event-id"),
-  onMessage: undefined as
-    | ((
-        message: import("./message-event.js").BuzzInboundMessage,
-        bus: BuzzBus,
-        signal: AbortSignal,
-        assertCurrent: () => void,
-      ) => Promise<void>)
-    | undefined,
-  onMessageError: undefined as ((error: Error) => void) | undefined,
-  onFatalError: undefined as ((error: Error) => void) | undefined,
-  onRoomDirectoryChanged: undefined as (() => void) | undefined,
+  onMessage: undefined as BusOptions["onMessage"] | undefined,
+  onMessageError: undefined as BusOptions["onMessageError"],
+  onFatalError: undefined as BusOptions["onFatalError"],
   resolveAgentIdentity: vi.fn(),
   resolveAgentRoute: vi.fn(),
   recoveryEntries: vi.fn(),
@@ -45,20 +41,21 @@ import {
 } from "./gateway.js";
 import { BUZZ_NORMAL_MESSAGE_KIND } from "./message-event.js";
 import { setBuzzRuntime } from "./runtime.js";
+import { isConfiguredBuzzChannel } from "./target.js";
 import { resolveBuzzAccount } from "./types.js";
 
 const CHANNEL_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const BOT_PUBLIC_KEY = "a".repeat(64);
 
-function createBuzzConfig(name?: string): OpenClawConfig {
+function createBuzzConfig(overrides: Partial<BuzzConfigInput> = {}): OpenClawConfig {
   return {
     channels: {
       buzz: {
-        ...(name ? { name } : {}),
         relayUrl: "wss://buzz.example.com",
         privateKey: PRIVATE_KEY,
         groups: { [CHANNEL_ID]: {} },
+        ...overrides,
       },
     },
   } as OpenClawConfig;
@@ -67,20 +64,13 @@ function createBuzzConfig(name?: string): OpenClawConfig {
 function createUnavailableBuzzConfig(credential: "privateKey" | "authTag"): OpenClawConfig {
   vi.stubEnv("BUZZ_PRIVATE_KEY", PRIVATE_KEY);
   vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth-tag");
-  return {
-    channels: {
-      buzz: {
-        relayUrl: "wss://buzz.example.com",
-        privateKey: PRIVATE_KEY,
-        groups: { [CHANNEL_ID]: {} },
-        [credential]: {
-          source: "env",
-          provider: "default",
-          id: credential === "privateKey" ? "MISSING_BUZZ_PRIVATE_KEY" : "MISSING_BUZZ_AUTH_TAG",
-        },
-      },
-    },
-  } as OpenClawConfig;
+  const cfg = createBuzzConfig();
+  cfg.channels!.buzz![credential] = {
+    source: "env",
+    provider: "default",
+    id: credential === "privateKey" ? "MISSING_BUZZ_PRIVATE_KEY" : "MISSING_BUZZ_AUTH_TAG",
+  };
+  return cfg;
 }
 
 function startTestGateway(
@@ -88,32 +78,31 @@ function startTestGateway(
     cfg?: OpenClawConfig;
     accountId?: string;
     profileName?: string;
-    setStatus?: Parameters<typeof startBuzzGatewayAccount>[0]["setStatus"];
-    logInfo?: NonNullable<Parameters<typeof startBuzzGatewayAccount>[0]["log"]>["info"];
-    logError?: NonNullable<Parameters<typeof startBuzzGatewayAccount>[0]["log"]>["error"];
-    invalidateDirectoryCache?: Parameters<
-      typeof startBuzzGatewayAccount
-    >[0]["invalidateDirectoryCache"];
-    omitLog?: boolean;
+    setStatus?: GatewayOptions["setStatus"];
+    logInfo?: NonNullable<GatewayOptions["log"]>["info"];
+    logError?: NonNullable<GatewayOptions["log"]>["error"];
+    invalidateDirectoryCache?: GatewayOptions["invalidateDirectoryCache"];
   } = {},
 ) {
   const abortController = new AbortController();
-  const cfg = options.cfg ?? createBuzzConfig(options.profileName);
+  const cfg = options.cfg ?? createBuzzConfig({ name: options.profileName });
   const account = resolveBuzzAccount({ cfg, accountId: options.accountId });
   const setStatus = options.setStatus ?? vi.fn();
   const lifecycle = startBuzzGatewayAccount({
     ...createStartAccountContext({ account, abortSignal: abortController.signal, cfg }),
     scheduler: createTestPluginServiceScheduler(),
-    log: options.omitLog
-      ? undefined
-      : { info: options.logInfo ?? vi.fn(), warn: vi.fn(), error: options.logError ?? vi.fn() },
+    log: { info: options.logInfo ?? vi.fn(), warn: vi.fn(), error: options.logError ?? vi.fn() },
     setStatus,
     invalidateDirectoryCache: options.invalidateDirectoryCache,
   });
-  return { abortController, cfg, account, setStatus, lifecycle };
+  const stop = async () => {
+    abortController.abort();
+    await expect(lifecycle).resolves.toBeUndefined();
+  };
+  return { abortController, cfg, account, setStatus, lifecycle, stop };
 }
 
-function createMockBus(): BuzzBus {
+function createMockBus(overrides: Partial<BuzzBus> = {}): BuzzBus {
   return {
     publicKey: BOT_PUBLIC_KEY,
     directory: new BuzzDirectoryState({
@@ -126,6 +115,7 @@ function createMockBus(): BuzzBus {
     sendText: gatewayMocks.busSendText,
     sendTyping: gatewayMocks.busSendTyping,
     close: gatewayMocks.close,
+    ...overrides,
   };
 }
 
@@ -136,13 +126,38 @@ function resolveBusSince(callIndex: number): number {
   return since(CHANNEL_ID);
 }
 
+function sendText(
+  cfg: OpenClawConfig,
+  text: string,
+  overrides: Partial<Parameters<typeof buzzOutboundAdapter.sendText>[0]> = {},
+) {
+  return buzzOutboundAdapter.sendText({ cfg, to: `buzz:${CHANNEL_ID}`, text, ...overrides });
+}
+
+function typeInRoom(
+  cfg: OpenClawConfig,
+  overrides: Partial<Parameters<typeof sendBuzzTyping>[0]> = {},
+) {
+  return sendBuzzTyping({ cfg, to: `buzz:${CHANNEL_ID}`, ...overrides });
+}
+
+async function expectRetiredBusSend(cfg: OpenClawConfig, accountId: string, count: number) {
+  expect(getActiveBuzzBus(accountId)).toBeUndefined();
+  await expect(sendText(cfg, "while retired", { accountId })).resolves.toMatchObject({
+    messageId: "standalone-event-id",
+  });
+  await typeInRoom(cfg, { accountId });
+  expect(gatewayMocks.sendBuzzTextOneShot).toHaveBeenCalledTimes(count);
+  expect(gatewayMocks.busSendText).not.toHaveBeenCalled();
+  expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
+}
+
 describe("Buzz gateway lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     gatewayMocks.onMessage = undefined;
     gatewayMocks.onMessageError = undefined;
     gatewayMocks.onFatalError = undefined;
-    gatewayMocks.onRoomDirectoryChanged = undefined;
     gatewayMocks.busSendText.mockResolvedValue("event-id");
     gatewayMocks.busSendTyping.mockResolvedValue(undefined);
     gatewayMocks.sendBuzzTextOneShot.mockResolvedValue("standalone-event-id");
@@ -153,13 +168,9 @@ describe("Buzz gateway lifecycle", () => {
       Array.from(recoveryRooms, ([key, value]) => ({ key, value })),
     );
     setBuzzRuntime({
-      agent: {
-        resolveAgentIdentity: gatewayMocks.resolveAgentIdentity,
-      },
+      agent: { resolveAgentIdentity: gatewayMocks.resolveAgentIdentity },
       channel: {
-        routing: {
-          resolveAgentRoute: gatewayMocks.resolveAgentRoute,
-        },
+        routing: { resolveAgentRoute: gatewayMocks.resolveAgentRoute },
         text: {
           resolveMarkdownTableMode: () => "preserve",
           convertMarkdownTables: (text: string) => text,
@@ -176,25 +187,12 @@ describe("Buzz gateway lifecycle", () => {
         }),
       },
     } as never);
-    gatewayMocks.startBuzzBus.mockImplementation(
-      async (options: {
-        onMessage: (
-          message: import("./message-event.js").BuzzInboundMessage,
-          bus: BuzzBus,
-          signal: AbortSignal,
-          assertCurrent: () => void,
-        ) => Promise<void>;
-        onMessageError?: (error: Error) => void;
-        onFatalError?: (error: Error) => void;
-        onRoomDirectoryChanged?: () => void;
-      }): Promise<BuzzBus> => {
-        gatewayMocks.onMessage = options.onMessage;
-        gatewayMocks.onMessageError = options.onMessageError;
-        gatewayMocks.onFatalError = options.onFatalError;
-        gatewayMocks.onRoomDirectoryChanged = options.onRoomDirectoryChanged;
-        return createMockBus();
-      },
-    );
+    gatewayMocks.startBuzzBus.mockImplementation(async (options: BusOptions): Promise<BuzzBus> => {
+      gatewayMocks.onMessage = options.onMessage;
+      gatewayMocks.onMessageError = options.onMessageError;
+      gatewayMocks.onFatalError = options.onFatalError;
+      return createMockBus();
+    });
   });
 
   afterEach(() => {
@@ -202,72 +200,31 @@ describe("Buzz gateway lifecycle", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    {
-      label: "implicit root",
-      accountId: "default",
-      nested: false,
-      path: "channels.buzz",
-      rooms: "missing",
-      groups: undefined,
-    },
-    {
-      label: "named",
-      accountId: "ada",
-      nested: true,
-      path: "channels.buzz.accounts.ada",
-      rooms: "empty",
-      groups: {},
-    },
-    {
-      label: "explicit default",
-      accountId: "default",
-      nested: true,
-      path: "channels.buzz.accounts.default",
-      rooms: "disabled",
-      groups: { [CHANNEL_ID]: { enabled: false } },
-    },
-  ])(
-    "reports the $label account path when rooms are $rooms",
-    async ({ accountId, nested, path, groups }) => {
-      const cfg = createBuzzConfig();
-      const selected = { relayUrl: "wss://buzz.example.com", privateKey: PRIVATE_KEY, groups };
-      cfg.channels!.buzz = nested
-        ? { ...cfg.channels!.buzz, accounts: { [accountId]: selected } }
-        : selected;
-      const account = resolveBuzzAccount({ cfg, accountId });
-      const abortController = new AbortController();
-      await expect(
-        startBuzzGatewayAccount({
-          ...createStartAccountContext({ account, cfg, abortSignal: abortController.signal }),
-          scheduler: createTestPluginServiceScheduler(),
-        }),
-      ).rejects.toThrow(`Buzz requires at least one enabled ${path}.groups entry`);
-      expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
-      expect(gatewayMocks.recoveryEntries).not.toHaveBeenCalled();
-    },
-  );
+  it("reports the implicit root account path when rooms are missing", async () => {
+    await expect(
+      startTestGateway({ cfg: createBuzzConfig({ groups: undefined }) }).lifecycle,
+    ).rejects.toThrow("Buzz requires at least one enabled channels.buzz.groups entry");
+    expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
+    expect(gatewayMocks.recoveryEntries).not.toHaveBeenCalled();
+  });
 
   it("invalidates cached room targets after initial discovery and newer room metadata", async () => {
     const invalidateDirectoryCache = vi.fn();
-    const { abortController, lifecycle } = startTestGateway({
-      invalidateDirectoryCache,
-      omitLog: true,
-    });
-
-    await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
-    expect(invalidateDirectoryCache).toHaveBeenCalledOnce();
-    gatewayMocks.onRoomDirectoryChanged?.();
-    expect(invalidateDirectoryCache).toHaveBeenCalledTimes(2);
-
-    abortController.abort();
-    await expect(lifecycle).resolves.toBeUndefined();
+    const { stop } = startTestGateway({ invalidateDirectoryCache });
+    try {
+      await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+      expect(invalidateDirectoryCache).toHaveBeenCalledOnce();
+      gatewayMocks.startBuzzBus.mock.calls[0]?.[0].onRoomDirectoryChanged?.();
+      expect(invalidateDirectoryCache).toHaveBeenCalledTimes(2);
+    } finally {
+      await stop();
+    }
   });
 
   it("reports unreadable recovery state without connecting or skipping room history", async () => {
     gatewayMocks.recoveryEntries.mockRejectedValueOnce(new Error("room activation unreadable"));
     const setStatus = vi.fn();
-    const { abortController, lifecycle } = startTestGateway({ setStatus });
+    const { stop } = startTestGateway({ setStatus });
 
     await vi.waitFor(() =>
       expect(setStatus).toHaveBeenCalledWith({
@@ -279,15 +236,14 @@ describe("Buzz gateway lifecycle", () => {
     );
     expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
 
-    abortController.abort();
-    await expect(lifecycle).resolves.toBeUndefined();
+    await stop();
   });
 
   it("restarts the account lifecycle when the bus reports a failure", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     gatewayMocks.resolveAgentIdentity.mockReturnValue({ name: "Molt" });
     const setStatus = vi.fn();
-    const { abortController, account, lifecycle } = startTestGateway({ setStatus });
+    const { stop, account } = startTestGateway({ setStatus });
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
     expect(gatewayMocks.startBuzzBus.mock.calls[0]?.[0].profileName).toBe("Molt");
@@ -318,18 +274,14 @@ describe("Buzz gateway lifecycle", () => {
       lastError: "relay failed",
     });
 
-    abortController.abort();
-    await expect(lifecycle).resolves.toBeUndefined();
+    await stop();
     expect(gatewayMocks.close).toHaveBeenCalledTimes(2);
   });
 
   it("uses a one-shot authenticated connection when no gateway bus is running", async () => {
-    const cfg = createBuzzConfig();
+    const cfg = createBuzzConfig({ replyToMode: "off" });
 
-    const result = await buzzOutboundAdapter.sendText({
-      cfg,
-      to: `buzz:${CHANNEL_ID}`,
-      text: "hello",
+    const result = await sendText(cfg, "hello", {
       accountId: "default",
       threadId: "root-id",
       replyToId: "parent-id",
@@ -352,14 +304,12 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("routes a named default send with only that account's credentials", async () => {
-    const cfg = createBuzzConfig();
-    cfg.channels!.buzz = {
-      ...cfg.channels!.buzz,
+    const cfg = createBuzzConfig({
       defaultAccount: "ada",
       authTag: "root-auth",
       accounts: { ada: { relayUrl: "wss://ada.example.com", privateKey: "22".repeat(32) } },
-    };
-    await buzzOutboundAdapter.sendText({ cfg, to: CHANNEL_ID, text: "Ada says hello" });
+    });
+    await sendText(cfg, "Ada says hello", { to: CHANNEL_ID });
     expect(gatewayMocks.sendBuzzTextOneShot).toHaveBeenCalledWith(
       expect.objectContaining({
         relayUrl: "wss://ada.example.com",
@@ -370,80 +320,27 @@ describe("Buzz gateway lifecycle", () => {
     );
   });
 
-  it("preserves an explicit send's thread even when automatic replies are flat", async () => {
-    const cfg = createBuzzConfig();
-    const flatCfg = {
-      ...cfg,
-      channels: { ...cfg.channels, buzz: { ...cfg.channels?.buzz, replyToMode: "off" as const } },
-    };
-    await buzzOutboundAdapter.sendText({
-      cfg: flatCfg,
-      to: CHANNEL_ID,
-      text: "explicit thread send",
-      threadId: "requested-thread",
-      replyToId: "requested-parent",
-    });
-    expect(gatewayMocks.sendBuzzTextOneShot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: "requested-thread",
-        replyToId: "requested-parent",
-        text: "explicit thread send",
-      }),
-    );
-  });
-
   it("blocks direct sends before opening a relay when an auth-tag SecretRef is unavailable", async () => {
     const cfg = createUnavailableBuzzConfig("authTag");
 
-    await expect(
-      buzzOutboundAdapter.sendText({
-        cfg,
-        to: `buzz:${CHANNEL_ID}`,
-        text: "must not send",
-        accountId: "default",
-      }),
-    ).rejects.toThrow(/configured.*unavailable|unresolved/i);
+    await expect(sendText(cfg, "must not send", { accountId: "default" })).rejects.toThrow(
+      /configured.*unavailable|unresolved/i,
+    );
     expect(gatewayMocks.sendBuzzTextOneShot).not.toHaveBeenCalled();
     expect(gatewayMocks.busSendText).not.toHaveBeenCalled();
   });
 
   it("blocks gateway startup before opening a relay when a private-key SecretRef is unavailable", async () => {
-    const cfg = createUnavailableBuzzConfig("privateKey");
-    const account = resolveBuzzAccount({ cfg });
-
-    await expect(
-      startBuzzGatewayAccount({
-        ...createStartAccountContext({ account, cfg }),
-        scheduler: createTestPluginServiceScheduler(),
-      }),
-    ).rejects.toThrow(/configured.*unavailable|unresolved/i);
+    const { lifecycle } = startTestGateway({ cfg: createUnavailableBuzzConfig("privateKey") });
+    await expect(lifecycle).rejects.toThrow(/configured.*unavailable|unresolved/i);
     expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
-  });
-
-  it("drops heartbeat typing when no gateway bus is running", async () => {
-    const cfg = createBuzzConfig();
-
-    await sendBuzzTyping({
-      cfg,
-      to: `buzz:${CHANNEL_ID}`,
-      accountId: "default",
-      threadId: "root-id",
-    });
-
-    expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
-    expect(gatewayMocks.sendBuzzTextOneShot).not.toHaveBeenCalled();
   });
 
   it.each(["resolves", "rejects"] as const)(
     "retires the active bus before asynchronous shutdown %s",
     async (closeOutcome) => {
-      let resolveClose: (() => void) | undefined;
-      let rejectClose: ((error: Error) => void) | undefined;
-      const closePending = new Promise<void>((resolve, reject) => {
-        resolveClose = resolve;
-        rejectClose = reject;
-      });
-      gatewayMocks.close.mockImplementationOnce(() => closePending);
+      const close = createDeferred<void>();
+      gatewayMocks.close.mockImplementationOnce(() => close.promise);
       const { abortController, cfg, account, lifecycle, setStatus } = startTestGateway();
 
       try {
@@ -451,64 +348,25 @@ describe("Buzz gateway lifecycle", () => {
         abortController.abort();
         await vi.waitFor(() => expect(gatewayMocks.close).toHaveBeenCalledOnce());
 
-        expect(getActiveBuzzBus(account.accountId)).toBeUndefined();
-        expect(setStatus).not.toHaveBeenCalledWith({
-          accountId: account.accountId,
-          running: false,
-        });
-
-        const pendingResult = await buzzOutboundAdapter.sendText({
-          cfg,
-          to: `buzz:${CHANNEL_ID}`,
-          text: "while closing",
-          accountId: account.accountId,
-        });
-        await sendBuzzTyping({
-          cfg,
-          to: `buzz:${CHANNEL_ID}`,
-          accountId: account.accountId,
-        });
-
-        expect(pendingResult.messageId).toBe("standalone-event-id");
-        expect(gatewayMocks.sendBuzzTextOneShot).toHaveBeenCalledOnce();
-        expect(gatewayMocks.busSendText).not.toHaveBeenCalled();
-        expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
+        const stoppedStatus = { accountId: account.accountId, running: false };
+        expect(setStatus).not.toHaveBeenCalledWith(stoppedStatus);
+        await expectRetiredBusSend(cfg, account.accountId, 1);
 
         if (closeOutcome === "rejects") {
           const closeError = new Error("Buzz close failed");
-          rejectClose?.(closeError);
+          close.reject(closeError);
           await expect(lifecycle).rejects.toBe(closeError);
-          expect(setStatus).not.toHaveBeenCalledWith({
-            accountId: account.accountId,
-            running: false,
-          });
+          expect(setStatus).not.toHaveBeenCalledWith(stoppedStatus);
         } else {
-          resolveClose?.();
+          close.resolve();
           await expect(lifecycle).resolves.toBeUndefined();
-          expect(setStatus).toHaveBeenLastCalledWith({
-            accountId: account.accountId,
-            running: false,
-          });
+          expect(setStatus).toHaveBeenLastCalledWith(stoppedStatus);
         }
 
-        expect(getActiveBuzzBus(account.accountId)).toBeUndefined();
-        await buzzOutboundAdapter.sendText({
-          cfg,
-          to: `buzz:${CHANNEL_ID}`,
-          text: "after closing",
-          accountId: account.accountId,
-        });
-        await sendBuzzTyping({
-          cfg,
-          to: `buzz:${CHANNEL_ID}`,
-          accountId: account.accountId,
-        });
-        expect(gatewayMocks.sendBuzzTextOneShot).toHaveBeenCalledTimes(2);
-        expect(gatewayMocks.busSendText).not.toHaveBeenCalled();
-        expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
+        await expectRetiredBusSend(cfg, account.accountId, 2);
       } finally {
         abortController.abort();
-        resolveClose?.();
+        close.resolve();
         await lifecycle.catch(() => undefined);
       }
     },
@@ -526,14 +384,13 @@ describe("Buzz gateway lifecycle", () => {
     };
     expect(resolveBuzzAccount({ cfg, accountId: "default" })).toEqual(rootAccount);
     const adaClose = createDeferred<void>();
-    const rootBus: BuzzBus = {
-      ...createMockBus(),
+    const rootBus = createMockBus({
       sendText: vi.fn(async () => "root-event"),
       sendTyping: vi.fn(async () => {}),
       close: vi.fn(async () => {}),
-    };
-    const adaBus: BuzzBus = { ...createMockBus(), close: vi.fn(() => adaClose.promise) };
-    const replacementBus: BuzzBus = { ...createMockBus(), close: vi.fn(async () => {}) };
+    });
+    const adaBus = createMockBus({ close: vi.fn(() => adaClose.promise) });
+    const replacementBus = createMockBus({ close: vi.fn(async () => {}) });
     gatewayMocks.startBuzzBus
       .mockResolvedValueOnce(rootBus)
       .mockResolvedValueOnce(adaBus)
@@ -546,6 +403,12 @@ describe("Buzz gateway lifecycle", () => {
       ada = startTestGateway({ cfg, accountId: "ada" });
       await vi.waitFor(() => expect(getActiveBuzzBus("ada")).toBe(adaBus));
       const rootStatus = vi.mocked(root.setStatus).mock.calls.slice();
+      const expectRootUnchanged = () => {
+        expect(root.abortController.signal.aborted).toBe(false);
+        expect(getActiveBuzzBus("default")).toBe(rootBus);
+        expect(rootBus.close).not.toHaveBeenCalled();
+        expect(vi.mocked(root.setStatus).mock.calls).toEqual(rootStatus);
+      };
       let adaStopped = false;
       void ada.lifecycle.then(() => {
         adaStopped = true;
@@ -554,19 +417,11 @@ describe("Buzz gateway lifecycle", () => {
       await vi.waitFor(() => expect(adaBus.close).toHaveBeenCalledOnce());
       expect(getActiveBuzzBus("ada")).toBeUndefined();
       expect(adaStopped).toBe(false);
-      expect(root.abortController.signal.aborted).toBe(false);
-      expect(getActiveBuzzBus("default")).toBe(rootBus);
-      expect(rootBus.close).not.toHaveBeenCalled();
-      expect(vi.mocked(root.setStatus).mock.calls).toEqual(rootStatus);
+      expectRootUnchanged();
       await expect(
-        buzzOutboundAdapter.sendText({
-          cfg,
-          accountId: "default",
-          to: `buzz:${CHANNEL_ID}`,
-          text: "root during Ada shutdown",
-        }),
+        sendText(cfg, "root during Ada shutdown", { accountId: "default" }),
       ).resolves.toMatchObject({ messageId: "root-event" });
-      await sendBuzzTyping({ cfg, accountId: "default", to: `buzz:${CHANNEL_ID}` });
+      await typeInRoom(cfg, { accountId: "default" });
       expect(rootBus.sendText).toHaveBeenCalledOnce();
       expect(rootBus.sendTyping).toHaveBeenCalledOnce();
       expect(gatewayMocks.sendBuzzTextOneShot).not.toHaveBeenCalled();
@@ -582,10 +437,7 @@ describe("Buzz gateway lifecycle", () => {
         "ada",
       ]);
       expect(gatewayMocks.startBuzzBus.mock.calls[2]?.[0].privateKey).toBe("2".repeat(64));
-      expect(getActiveBuzzBus("default")).toBe(rootBus);
-      expect(root.abortController.signal.aborted).toBe(false);
-      expect(rootBus.close).not.toHaveBeenCalled();
-      expect(vi.mocked(root.setStatus).mock.calls).toEqual(rootStatus);
+      expectRootUnchanged();
     } finally {
       root.abortController.abort();
       ada?.abortController.abort();
@@ -596,11 +448,8 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("does not retire a replacement bus when an earlier generation finishes closing", async () => {
-    let resolveClose: (() => void) | undefined;
-    const closePending = new Promise<void>((resolve) => {
-      resolveClose = resolve;
-    });
-    gatewayMocks.close.mockImplementationOnce(() => closePending);
+    const close = createDeferred<void>();
+    gatewayMocks.close.mockImplementationOnce(() => close.promise);
     const first = startTestGateway();
     let replacement: ReturnType<typeof startTestGateway> | undefined;
 
@@ -615,12 +464,12 @@ describe("Buzz gateway lifecycle", () => {
       await vi.waitFor(() => expect(gatewayMocks.close).toHaveBeenCalledOnce());
       expect(getActiveBuzzBus(first.account.accountId)).toBe(replacementBus);
 
-      resolveClose?.();
+      close.resolve();
       await expect(first.lifecycle).resolves.toBeUndefined();
       expect(getActiveBuzzBus(first.account.accountId)).toBe(replacementBus);
     } finally {
       first.abortController.abort();
-      resolveClose?.();
+      close.resolve();
       await first.lifecycle.catch(() => undefined);
       replacement?.abortController.abort();
       await replacement?.lifecycle.catch(() => undefined);
@@ -628,17 +477,12 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("reuses the gateway bus for sends in the running process", async () => {
-    const { abortController, cfg, lifecycle } = startTestGateway({ profileName: "BuzzClaw" });
+    const { stop, cfg } = startTestGateway({ profileName: "BuzzClaw" });
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
     expect(gatewayMocks.startBuzzBus.mock.calls[0]?.[0].profileName).toBe("BuzzClaw");
     expect(gatewayMocks.resolveAgentRoute).not.toHaveBeenCalled();
 
-    await buzzOutboundAdapter.sendText({
-      cfg,
-      to: `buzz:${CHANNEL_ID}`,
-      text: "hello",
-      accountId: "default",
-    });
+    await sendText(cfg, "hello", { accountId: "default" });
 
     expect(gatewayMocks.busSendText).toHaveBeenCalledWith({
       channelId: CHANNEL_ID,
@@ -648,112 +492,79 @@ describe("Buzz gateway lifecycle", () => {
     });
     expect(gatewayMocks.sendBuzzTextOneShot).not.toHaveBeenCalled();
 
-    abortController.abort();
-    await expect(lifecycle).resolves.toBeUndefined();
+    await stop();
   });
 
-  it.each(["all", "off"] as const)(
-    "uses %s-mode heartbeat typing without destabilizing the account",
-    async (replyToMode) => {
-      const { abortController, cfg, lifecycle } = startTestGateway();
-      await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
-      const typingCfg = {
-        ...cfg,
-        channels: { ...cfg.channels, buzz: { ...cfg.channels?.buzz, replyToMode } },
-      };
+  it("uses threaded heartbeat typing without destabilizing the account", async () => {
+    const { stop, cfg } = startTestGateway();
+    await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+    const typingCfg = createBuzzConfig({ replyToMode: "all" });
 
-      await sendBuzzTyping({
-        cfg: typingCfg,
-        to: `buzz:${CHANNEL_ID}`,
-        accountId: "default",
-        threadId: "root-id",
-      });
+    await typeInRoom(typingCfg, { accountId: "default", threadId: "root-id" });
+    expect(gatewayMocks.busSendTyping).toHaveBeenCalledWith({
+      channelId: CHANNEL_ID,
+      threadId: "root-id",
+    });
+
+    gatewayMocks.busSendTyping.mockRejectedValueOnce(new Error("socket closing"));
+    await expect(typeInRoom(cfg, { accountId: "default" })).rejects.toThrow("socket closing");
+    expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce();
+    expect(gatewayMocks.close).not.toHaveBeenCalled();
+
+    await stop();
+  });
+
+  it("drops typing for a root-disabled named identity even with an active bus", async () => {
+    const cfg = createBuzzConfig({
+      defaultAccount: "ada",
+      accounts: {
+        ada: {
+          relayUrl: "wss://ada.example.com",
+          privateKey: "22".repeat(32),
+          groups: { [CHANNEL_ID]: {} },
+          replyToMode: "off",
+        },
+      },
+    });
+    const { stop } = startTestGateway({ cfg });
+    try {
+      await vi.waitFor(() => expect(getActiveBuzzBus("ada")).toBeDefined());
+      await typeInRoom(cfg, { to: CHANNEL_ID, threadId: "root-id" });
       expect(gatewayMocks.busSendTyping).toHaveBeenCalledWith({
         channelId: CHANNEL_ID,
-        threadId: replyToMode === "off" ? undefined : "root-id",
+        threadId: undefined,
       });
-
-      gatewayMocks.busSendTyping.mockRejectedValueOnce(new Error("socket closing"));
-      await expect(
-        sendBuzzTyping({
-          cfg,
-          to: `buzz:${CHANNEL_ID}`,
-          accountId: "default",
-        }),
-      ).rejects.toThrow("socket closing");
-      expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce();
-      expect(gatewayMocks.close).not.toHaveBeenCalled();
-
-      abortController.abort();
-      await expect(lifecycle).resolves.toBeUndefined();
-    },
-  );
-
-  it.each(["root", "account"])(
-    "drops typing for a %s-disabled named identity even with an active bus",
-    async (disabledScope) => {
-      const cfg = createBuzzConfig();
-      cfg.channels!.buzz = {
-        ...cfg.channels!.buzz,
-        defaultAccount: "ada",
-        accounts: {
-          ada: {
-            relayUrl: "wss://ada.example.com",
-            privateKey: "22".repeat(32),
-            groups: { [CHANNEL_ID]: {} },
-            replyToMode: "off",
-          },
-        },
-      };
-      const account = resolveBuzzAccount({ cfg });
-      const controller = new AbortController();
-      const lifecycle = startBuzzGatewayAccount({
-        ...createStartAccountContext({ account, cfg, abortSignal: controller.signal }),
-        scheduler: createTestPluginServiceScheduler(),
-      });
-      try {
-        await vi.waitFor(() => expect(getActiveBuzzBus("ada")).toBeDefined());
-        await sendBuzzTyping({ cfg, to: CHANNEL_ID, threadId: "root-id" });
-        expect(gatewayMocks.busSendTyping).toHaveBeenCalledWith({
-          channelId: CHANNEL_ID,
-          threadId: undefined,
-        });
-        gatewayMocks.busSendTyping.mockClear();
-        if (disabledScope === "root") {
-          cfg.channels!.buzz!.enabled = false;
-        } else {
-          cfg.channels!.buzz!.accounts!.ada.enabled = false;
-        }
-        await sendBuzzTyping({ cfg, to: CHANNEL_ID, threadId: "root-id" });
-        expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
-      } finally {
-        controller.abort();
-        await lifecycle;
-      }
-    },
-  );
+      gatewayMocks.busSendTyping.mockClear();
+      cfg.channels!.buzz!.enabled = false;
+      await typeInRoom(cfg, { to: CHANNEL_ID, threadId: "root-id" });
+      expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
+    } finally {
+      await stop();
+    }
+  });
 
   it("preserves room activation after a failed initial session", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(1_700_000_000_900);
     gatewayMocks.startBuzzBus.mockRejectedValueOnce(new Error("connect failed"));
-    const { abortController, lifecycle } = startTestGateway();
-    await vi.advanceTimersByTimeAsync(1_200);
-
-    await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
-      timeout: 3_000,
-    });
-    const firstSince = resolveBusSince(0);
-    const secondSince = resolveBusSince(1);
-    expect(secondSince).toBe(firstSince);
-
-    abortController.abort();
-    await expect(lifecycle).resolves.toBeUndefined();
+    const { stop } = startTestGateway();
+    try {
+      await vi.advanceTimersByTimeAsync(1_200);
+      await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
+        timeout: 3_000,
+      });
+      expect(resolveBusSince(0)).toBe(1_700_000_000);
+      expect(resolveBusSince(1)).toBe(1_700_000_000);
+      expect(Math.floor(Date.now() / 1_000)).toBeGreaterThan(1_700_000_000);
+    } finally {
+      await stop();
+    }
   });
 
   it("keeps the account running when one message fails", async () => {
     const setStatus = vi.fn();
     const logError = vi.fn();
-    const { abortController, account, lifecycle } = startTestGateway({ setStatus, logError });
+    const { stop, account } = startTestGateway({ setStatus, logError });
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
     gatewayMocks.onMessageError?.(new Error("dispatch failed"));
@@ -761,8 +572,7 @@ describe("Buzz gateway lifecycle", () => {
       `[${account.accountId}] Buzz message failed: dispatch failed`,
     );
 
-    abortController.abort();
-    await expect(lifecycle).resolves.toBeUndefined();
+    await stop();
     expect(setStatus).toHaveBeenLastCalledWith({
       accountId: account.accountId,
       running: false,
@@ -772,7 +582,7 @@ describe("Buzz gateway lifecycle", () => {
   it("preserves the activation floor on reconnect without trusting sender time", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const invalidateDirectoryCache = vi.fn();
-    const { abortController, lifecycle } = startTestGateway({ invalidateDirectoryCache });
+    const { stop } = startTestGateway({ invalidateDirectoryCache });
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
     const createdAt = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
@@ -803,7 +613,18 @@ describe("Buzz gateway lifecycle", () => {
     expect(secondSince).toBeLessThanOrEqual(reconnectStartedAt);
     expect(secondSince).toBeLessThan(createdAt);
 
-    abortController.abort();
-    await expect(lifecycle).resolves.toBeUndefined();
+    await stop();
+  });
+});
+
+describe("Buzz gateway channel admission", () => {
+  it("accepts only configured channel UUIDs", () => {
+    const configuredChannelIds = new Set([CHANNEL_ID]);
+    expect(isConfiguredBuzzChannel(configuredChannelIds, CHANNEL_ID)).toBe(true);
+    expect(isConfiguredBuzzChannel(configuredChannelIds, CHANNEL_ID.toUpperCase())).toBe(true);
+    expect(
+      isConfiguredBuzzChannel(configuredChannelIds, "45c84a8d-5ed9-4e2c-b846-acedecc82bd1"),
+    ).toBe(false);
+    expect(isConfiguredBuzzChannel(configuredChannelIds, "not-a-channel")).toBe(false);
   });
 });

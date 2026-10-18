@@ -3,7 +3,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTimezone } from "openclaw/plugin-sdk/time-runtime";
 import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
@@ -140,18 +144,16 @@ function sanitizeEnvelopeHeaderPart(value: string) {
 function resolveEnvelopeOptionsMock(cfg?: {
   agents?: {
     defaults?: {
-      envelopeTimezone?: string;
-      envelopeTimestamp?: "on" | "off";
-      envelopeElapsed?: "on" | "off";
       userTimezone?: string;
     };
   };
 }): TestEnvelopeOptions {
   const defaults = cfg?.agents?.defaults;
+  const configuredTimezone = normalizeOptionalString(defaults?.userTimezone);
   return {
-    timezone: defaults?.envelopeTimezone,
-    includeTimestamp: defaults?.envelopeTimestamp !== "off",
-    includeElapsed: defaults?.envelopeElapsed !== "off",
+    timezone: configuredTimezone ? (resolveTimezone(configuredTimezone) ?? "local") : undefined,
+    includeTimestamp: true,
+    includeElapsed: true,
     userTimezone: defaults?.userTimezone,
   };
 }
@@ -457,7 +459,8 @@ vi.mock("./inbound/runtime-api.js", () => ({
   })),
 }));
 
-vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
+vi.mock("./auto-reply/monitor/runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auto-reply/monitor/runtime-api.js")>()),
   buildHistoryContextFromEntries: (params: {
     entries: Array<{ sender?: string; body: string; timestamp?: number }>;
     currentMessage: string;
@@ -485,7 +488,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   resolveChunkMode: () => undefined,
   resolveIdentityNamePrefix: resolveIdentityNamePrefixMock,
   resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
-  resolveInboundSessionEnvelopeContext: (params: {
+  resolveInboundSessionEnvelopeContextAsync: async (params: {
     cfg: { session?: { store?: string } } & Parameters<typeof resolveEnvelopeOptionsMock>[0];
     agentId: string;
   }) => ({
@@ -506,82 +509,6 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   shouldComputeCommandAuthorized: () => false,
   shouldLogVerbose: () => false,
   toLocationContext: toLocationContextMock,
-}));
-
-vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
-  createChannelHistoryWindow: (params: { historyMap: Map<string, unknown[]> }) => ({
-    record: (recordParams: { historyKey: string; limit: number; entry: unknown }) => {
-      const current = params.historyMap.get(recordParams.historyKey) ?? [];
-      const next = [...current, recordParams.entry].slice(-recordParams.limit);
-      params.historyMap.set(recordParams.historyKey, next);
-    },
-  }),
-  hasControlCommand: (body: string) => body.trim().startsWith("/"),
-  implicitMentionKindWhen: (kind: string, enabled: boolean) => (enabled ? [kind] : []),
-  normalizeE164: normalizePhoneLikeToE164,
-  parseActivationCommand: (body: string) => ({
-    hasCommand: body.trim().startsWith("/"),
-  }),
-  recordPendingHistoryEntryIfEnabled: (params: {
-    historyMap: Map<string, unknown[]>;
-    historyKey: string;
-    limit: number;
-    entry: unknown;
-  }) => {
-    const current = params.historyMap.get(params.historyKey) ?? [];
-    const next = [...current, params.entry].slice(-params.limit);
-    params.historyMap.set(params.historyKey, next);
-  },
-  resolveInboundMentionDecision: (params: {
-    facts?: {
-      canDetectMention: boolean;
-      wasMentioned: boolean;
-      implicitMentionKinds?: string[];
-    };
-    policy?: {
-      isGroup: boolean;
-      requireMention: boolean;
-      allowTextCommands: boolean;
-      hasControlCommand: boolean;
-      commandAuthorized: boolean;
-    };
-    isGroup?: boolean;
-    requireMention?: boolean;
-    canDetectMention?: boolean;
-    wasMentioned?: boolean;
-    implicitMentionKinds?: string[];
-    allowTextCommands?: boolean;
-    hasControlCommand?: boolean;
-    commandAuthorized?: boolean;
-  }) => {
-    const facts =
-      "facts" in params && params.facts
-        ? params.facts
-        : {
-            canDetectMention: Boolean(params.canDetectMention),
-            wasMentioned: Boolean(params.wasMentioned),
-            implicitMentionKinds: params.implicitMentionKinds,
-          };
-    const policy =
-      "policy" in params && params.policy
-        ? params.policy
-        : {
-            isGroup: Boolean(params.isGroup),
-            requireMention: Boolean(params.requireMention),
-            allowTextCommands: Boolean(params.allowTextCommands),
-            hasControlCommand: Boolean(params.hasControlCommand),
-            commandAuthorized: Boolean(params.commandAuthorized),
-          };
-    const effectiveWasMentioned = facts.wasMentioned || Boolean(facts.implicitMentionKinds?.length);
-    return {
-      effectiveWasMentioned,
-      shouldSkip:
-        policy.isGroup && policy.requireMention && facts.canDetectMention && !effectiveWasMentioned,
-      shouldBypassMention: false,
-      implicitMention: Boolean(facts.implicitMentionKinds?.length),
-      matchedImplicitMentionKinds: facts.implicitMentionKinds ?? [],
-    };
-  },
 }));
 
 vi.mock("./auto-reply/monitor/group-activation.runtime.js", () => ({

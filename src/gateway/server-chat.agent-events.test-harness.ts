@@ -28,6 +28,38 @@ export type AgentEventTestHarnessOptions = {
   getSessionRowProjection?: AgentEventHandlerOptions["getSessionRowProjection"];
 };
 
+export function answerCandidate(
+  itemId: string,
+  progressText: string,
+  status: "candidate" | "selected" | "superseded" = "candidate",
+) {
+  return {
+    itemId,
+    kind: "answer_candidate",
+    title: "Answer candidate",
+    phase: "update",
+    status,
+    progressText,
+    source: "codex-app-server",
+    hideFromChannelProgress: true,
+  };
+}
+
+export function widgetResult(id: string, target = "assistant_message", title = id) {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          kind: "canvas",
+          presentation: { target, title, sandbox: "scripts" },
+          view: { id, url: `/__openclaw__/canvas/documents/${id}/index.html` },
+        }),
+      },
+    ],
+  };
+}
+
 export function createAgentEventTestHarness(params?: AgentEventTestHarnessOptions) {
   const nowSpy =
     params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -130,5 +162,5 @@ function sessionAgentCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
 }
 
 function emitLifecycleEnd(handler: Parameters<typeof emitAgentEvent>[0], runId: string, seq = 2) {
-  emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq });
+  return emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq });
 }
