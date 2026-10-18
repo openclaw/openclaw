@@ -19,7 +19,7 @@ import {
   isModelCatalogRetired,
 } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog, peekModelCatalog } from "../../lib/model-catalog-store.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import {
   isUiSelectedGlobalSessionKey,
@@ -608,7 +608,7 @@ async function refreshChat(
     const snapshotConfirmsCurrentRun = Boolean(
       snapshotRunId &&
       host.chatRunId === snapshotRunId &&
-      isSessionRunActive(history.sessionInfo) &&
+      isSessionRunStateActive(history.sessionInfo) &&
       (!Array.isArray(activeRunIds) || activeRunIds.includes(snapshotRunId)),
     );
     if (snapshotConfirmsCurrentRun) {
@@ -624,7 +624,7 @@ async function refreshChat(
       historyRun:
         history.observation.run &&
         history.sessionInfo.hasActiveRun === false &&
-        !isSessionRunActive(history.sessionInfo) &&
+        !isSessionRunStateActive(history.sessionInfo) &&
         !history.inFlightRun &&
         history.sessionInfo.sessionId === history.observation.run.sessionId
           ? history.observation.run

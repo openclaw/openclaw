@@ -106,9 +106,9 @@ export async function prepareSessionSubagentKillSelection(params: {
       }
     };
     try {
-      const { cancelSubagentRequesterSettleWake } = await import("./subagent-registry.js");
+      const { retireSubagentObligations } = await import("./subagent-registry.js");
       assertCurrent();
-      await cancelSubagentRequesterSettleWake(entry, assertCurrent);
+      await retireSubagentObligations(entry, assertCurrent, { requesterNotified: true });
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;

@@ -535,6 +535,9 @@ it("runs on the prepared plugin registry without another registration", async ()
   expect(registrations).toEqual(["discovery"]);
 });
 
+// This suite owns LiteLLM first-request capability proof. Authored models must
+// have capabilities that differ from the bundled defaults in both merge and
+// replace modes, or the cases cannot show which source won.
 describe("agent command static capabilities", () => {
   const cases = [
     { inventory: "empty", contextTokens: 1_000_000, thinking: "medium" },

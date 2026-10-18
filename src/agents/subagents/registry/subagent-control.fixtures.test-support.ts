@@ -1,10 +1,10 @@
 import { expect } from "vitest";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import {
-  beginSessionWorkAdmission,
-  getActiveSessionLifecycleMutationCount,
-  getActiveSessionWorkAdmissionCount,
-} from "../../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  getSessionMutationCount,
+  getSessionControllerWorkCount,
+} from "../../../sessions/session-controller.lifecycle.js";
 import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
@@ -86,9 +86,10 @@ export function beginControlAdmission(
   scope: string,
   sessionKey: string,
   sessionId: string,
-  onInterrupt?: Parameters<typeof beginSessionWorkAdmission>[0]["onInterrupt"],
+  onInterrupt?: Parameters<typeof beginSessionEffect>[0]["onInterrupt"],
 ) {
-  return beginSessionWorkAdmission({
+  return beginSessionEffect({
+    agentId: "main",
     scope,
     identities: [sessionKey, sessionId],
     assertAllowed: () => {},
@@ -97,8 +98,8 @@ export function beginControlAdmission(
 }
 
 export function expectControlIdle() {
-  expect(getActiveSessionWorkAdmissionCount()).toBe(0);
-  expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+  expect(getSessionControllerWorkCount()).toBe(0);
+  expect(getSessionMutationCount()).toBe(0);
 }
 
 type QueueOptions = Parameters<typeof enqueueSwarmRun>[0];

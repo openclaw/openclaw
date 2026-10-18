@@ -8,8 +8,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway } from "../../../gateway/call.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
-import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
-import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { immutableSubagentRun, subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -20,12 +18,7 @@ type DeliveryRuntimeMockOptions = {
   loadSessionStore: (storePath: string) => unknown;
   resolveMainSessionKey: (cfg: unknown) => string;
   resolveSessionStorePathCore: (store: unknown, options: unknown) => string;
-  isEmbeddedAgentRunActive: (sessionId: string) => boolean;
-  queueEmbeddedAgentMessageWithOutcome: (
-    sessionId: string,
-    text: string,
-    options?: EmbeddedAgentQueueMessageOptions,
-  ) => EmbeddedAgentQueueMessageOutcome;
+  isSessionRunActive: (sessionId: string) => boolean;
   hasHooks?: () => boolean;
 };
 
@@ -89,12 +82,7 @@ export async function createSubagentAnnounceDeliveryRuntimeMock(
     loadSessionStore: options.loadSessionStore,
     resolveMainSessionKey: options.resolveMainSessionKey,
     resolveSessionStorePathCore: options.resolveSessionStorePathCore,
-    isEmbeddedAgentRunActive: options.isEmbeddedAgentRunActive,
-    queueEmbeddedAgentMessageWithOutcome: options.queueEmbeddedAgentMessageWithOutcome,
-    formatEmbeddedAgentQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
-      outcome.reason && outcome.sessionId
-        ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
-        : undefined,
+    isSessionRunActive: options.isSessionRunActive,
     getGlobalHookRunner: () => ({ hasHooks: () => options.hasHooks?.() ?? false }),
     resolveBoundDeliveryDestination: async () => null,
     resolveConversationIdFromTargets: () => "",

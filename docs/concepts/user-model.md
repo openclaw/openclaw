@@ -277,8 +277,13 @@ When a newly spawned visible session starts agent-owned, the agent can assign it
 to the trusted requester profile and verify the stored owner with `sessions_list`.
 This changes responsibility, not creator attribution or access. Unlinked or
 asserted senders receive no requester profile: link the verified sender first
-rather than guessing from a name or pasted ID. Unlinking takes effect on
-subsequent turns without a restart.
+rather than guessing from a name or pasted ID. An owner-authorized agent can use
+`sessions` with `action: "owner_profiles"` and a verified `githubAccountIds` selection
+to resolve an existing canonical profile without visitor-management access. This
+lookup does not prove or create a Discord or Slack identity link. An unresolved
+assignee is a responsibility-metadata issue, not a permission denial: report it
+separately and continue independently authorized work in a prepared workspace.
+Unlinking takes effect on subsequent turns without a restart.
 
 ## GitHub connections
 

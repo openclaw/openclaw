@@ -150,7 +150,6 @@ function buildCtx(overrides: Partial<NodeEventContext> = {}): NodeEventContext {
     broadcastVoiceWakeChanged: () => {},
     addChatRun: () => {},
     removeChatRun: () => undefined,
-    chatAbortControllers: new Map(),
     dedupe: new Map(),
     agentRunSeq: new Map(),
     getHealthCache: () => null,

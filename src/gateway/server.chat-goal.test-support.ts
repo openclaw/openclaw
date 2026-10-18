@@ -144,3 +144,60 @@ export function installReplyDispatchHook(eligibleDispatchKinds?: readonly ["acp"
   initializeGlobalHookRunner(registry);
   return handler;
 }
+
+export function registerGoalChatOperationCollisionCases({
+  scope,
+  goalStart,
+  rpc,
+  withHeldModel,
+  userMessages,
+  waitForModelRun,
+}: {
+  scope: () => GoalChatScope;
+  goalStart: (
+    message: string,
+    idempotencyKey: string,
+  ) => ReturnType<typeof createGoalChatStartRequest>;
+  rpc: (method: "chat.send", params: Record<string, unknown>) => Promise<Mock<RespondFn>>;
+  withHeldModel: (run: () => Promise<void>) => Promise<void>;
+  userMessages: () => ReturnType<typeof readGoalChatUserMessages>;
+  waitForModelRun: () => Promise<void>;
+}) {
+  it.each(["objective", "issuedAtMs"] as const)(
+    "rejects a concurrent operation ID collision on %s",
+    async (collision) => {
+      const firstRequest = goalStart("Finish the release checklist", `goal-collision-${collision}`);
+      const secondRequest = {
+        ...firstRequest,
+        ...(collision === "objective"
+          ? { message: "Review the migration plan" }
+          : { intent: { ...firstRequest.intent, issuedAtMs: firstRequest.intent.issuedAtMs + 1 } }),
+      };
+      await withHeldModel(async () => {
+        const responses = await Promise.all([
+          rpc("chat.send", firstRequest),
+          rpc("chat.send", secondRequest),
+        ]);
+        const accepted = responses.flatMap((response, index) =>
+          response.mock.calls[0]?.[0] ? [index] : [],
+        );
+        expect(accepted).toHaveLength(1);
+        const rejected = responses[accepted[0] === 0 ? 1 : 0];
+        expect(rejected?.mock.calls[0]).toEqual([
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: expect.objectContaining({ reason: "goal-operation-conflict" }),
+          }),
+        ]);
+        const acceptedRequest = [firstRequest, secondRequest][accepted[0]!];
+        expect(loadSessionEntry(scope())?.goal?.objective).toBe(acceptedRequest?.message);
+        expect(userMessages()).toEqual([
+          expect.objectContaining({ content: acceptedRequest?.message }),
+        ]);
+        await waitForModelRun();
+      });
+    },
+  );
+}

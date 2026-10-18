@@ -100,7 +100,7 @@ describe("session event authorization store work", () => {
         }
         const params = {
           client: identifiedClient("owner"),
-          context: { chatAbortControllers: new Map(), getRuntimeConfig: () => cfg } as never,
+          context: { getRuntimeConfig: () => cfg } as never,
           method: "chat.send",
           requestParams: scope,
         };
@@ -424,7 +424,7 @@ describe("session mutation authorization store caches", () => {
           targets: [{ key: sessionKey, agentId: "main" }],
           patch: { archived: true },
         },
-        context: { chatAbortControllers: new Map(), getRuntimeConfig: () => ({}) } as never,
+        context: { getRuntimeConfig: () => ({}) } as never,
       });
       expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
     });
@@ -534,7 +534,7 @@ describe("session mutation authorization store caches", () => {
         client: identifiedClient("viewer@example.com"),
         method: "sessions.patchMany",
         requestParams: { targets, patch: { archived: true } },
-        context: { chatAbortControllers: new Map(), getRuntimeConfig: () => ({}) } as never,
+        context: { getRuntimeConfig: () => ({}) } as never,
       });
 
       expect(result.error).toBeNull();

@@ -9,6 +9,9 @@ import {
   withPluginRuntimeGenerationScope,
 } from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
+import { resolveSessionControllerOperationForSignal } from "../../sessions/session-controller.state.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
@@ -52,6 +55,7 @@ import type { EmbeddedAgentCompactResult } from "./types.js";
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 
 export async function compactNativeCliSession(params: {
+  replyOperation?: ReplyOperation;
   runtime: string | undefined;
   compactParams: CompactEmbeddedAgentSessionParams;
   runControlOperation?: (run: () => Promise<void>) => Promise<void>;
@@ -95,6 +99,7 @@ export async function compactNativeCliSession(params: {
   try {
     const runControlOperation = async () => {
       await runCliAgent({
+        replyOperation: params.replyOperation,
         preparedRunAdmission,
         sessionId: params.compactParams.sessionId,
         sessionKey: params.compactParams.sessionKey,
@@ -246,6 +251,9 @@ export async function compactEmbeddedAgentSessionDirect(
   // Run them before generic model preparation so subscription-only CLI sessions do
   // not incorrectly require an OpenClaw model API credential.
   const nativeCliResult = await compactNativeCliSession({
+    replyOperation:
+      resolveSessionControllerOperationForSignal(paramsInput.abortSignal) ??
+      getCurrentSessionControllerOwner(),
     runtime: runtimeSelection.selectedHarnessRuntime,
     compactParams: {
       ...requestedParams,

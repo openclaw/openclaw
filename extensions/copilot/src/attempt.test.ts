@@ -23,7 +23,10 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createMockPluginRegistry,
+  runInHarnessToolAuthorityForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -33,12 +36,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCopilotCleanupTests } from "./attempt-cleanup.test-support.js";
 import type { AttemptParamsLike, CopilotAttemptDeps } from "./attempt-types.js";
 import { registerCopilotWorkspaceTests } from "./attempt-workspace.test-support.js";
-import { runCopilotAttempt } from "./attempt.js";
+import { runCopilotAttempt as runCopilotAttemptEntry } from "./attempt.js";
 import {
   makeAssistantMessageEvent,
   makeFakePool,
   makeFakeSdk,
   projectAgentRunAttemptTerminal,
+  runCopilotAttempt,
   type FakeSdk,
   type FakeSession,
   type SessionEventShape,
@@ -362,6 +366,12 @@ function installHooks(
 function makeParams(overrides: Partial<AttemptParamsLike> = {}): AgentHarnessAttemptParams {
   const prompt = overrides.prompt ?? "hello";
   const transcriptPrompt = overrides.transcriptPrompt ?? prompt;
+  const model = {
+    api: "openai-responses",
+    id: "gpt-4o",
+    provider: "github-copilot",
+    ...(typeof overrides.model === "object" ? overrides.model : {}),
+  };
   return {
     agentDir: "C:\\copilot-home",
     agentId: "agent-1",
@@ -372,12 +382,9 @@ function makeParams(overrides: Partial<AttemptParamsLike> = {}): AgentHarnessAtt
     hostCapabilities: createCopilotTestHostCapabilities(),
     initialReplayState: undefined,
     messages: [userMessage()],
-    model: {
-      api: "openai-responses",
-      id: "gpt-4o",
-      provider: "github-copilot",
-      ...(typeof overrides.model === "object" ? overrides.model : {}),
-    },
+    model,
+    modelId: model.id,
+    provider: model.provider,
     prompt,
     runId: "run-1",
     sessionFile: "session.json",
@@ -1049,26 +1056,26 @@ describe("runCopilotAttempt", () => {
           });
         }
       });
-
-      if (stage === "before start") {
-        controller.abort();
-      }
-      const attempt = run(
-        { abortSignal: controller.signal },
-        {
-          ...(stage === "mid-stream"
-            ? { createToolBridge: async () => createStubToolBridge() }
-            : {}),
-          ...(stage === "session establishment"
-            ? {
-                onSessionEstablished: async () => {
-                  await waitForEventLoopTurn();
-                  controller.abort();
-                },
-              }
-            : {}),
-        },
-      );
+      const params = { abortSignal: controller.signal };
+      const deps: Partial<CopilotAttemptDeps> = {
+        ...(stage === "mid-stream" ? { createToolBridge: async () => createStubToolBridge() } : {}),
+        ...(stage === "session establishment"
+          ? {
+              onSessionEstablished: async () => {
+                await waitForEventLoopTurn();
+                controller.abort();
+              },
+            }
+          : {}),
+      };
+      const attempt =
+        stage === "before start"
+          ? runInHarnessToolAuthorityForTest(makeParams(params), "copilot", (admitted) => {
+              // Abort after host admission, before the plugin entry handles cancellation.
+              controller.abort();
+              return runCopilotAttemptEntry(admitted, { pool, ...deps });
+            })
+          : run(params, deps);
       if (stage === "mid-stream") {
         const session = await sendStarted.promise;
         expect(session.sendAndWait).toHaveBeenCalledTimes(1);
@@ -1268,7 +1275,7 @@ describe("runCopilotAttempt", () => {
   it("registers ask_user and resolves it from the active OpenClaw queue", async () => {
     const controller = new AbortController();
     const onBlockReply = vi.fn();
-    const { sdk, run } = makeTurnAttempt(async (session, cfg) => {
+    const { sdk, pool } = makeTurnAttempt(async (session, cfg) => {
       session.emit("user.message", { __eventId: "initial-user", content: "hello" });
       const handler = cfg.onUserInputRequest;
       if (typeof handler !== "function") {
@@ -1281,8 +1288,8 @@ describe("runCopilotAttempt", () => {
       return makeAssistantMessageEvent(`selected ${response.answer}`);
     });
 
-    const toolAuthorityFingerprint = "ask-user-authority";
-    const attempt = run({ abortSignal: controller.signal, onBlockReply, toolAuthorityFingerprint });
+    const params = makeParams({ abortSignal: controller.signal, onBlockReply });
+    const attempt = runCopilotAttempt(params, { pool });
     const settledAttempt = attempt.catch(() => undefined);
 
     try {
@@ -1292,7 +1299,7 @@ describe("runCopilotAttempt", () => {
       expect(
         queueAgentHarnessMessage("session-1", "2", {
           isInboundUserMessage: true,
-          toolAuthorityFingerprint,
+          toolAuthorityFingerprint: params.toolAuthorityFingerprint,
         }),
       ).toBe(true);
       const result = await vi.waitFor(() => attempt);
@@ -1611,9 +1618,10 @@ describe("runCopilotAttempt", () => {
   it("accepts string model ids and falls back to top-level provider metadata", async () => {
     const { sdk, run } = makeAttempt();
 
-    const result = await run({ model: "gpt-4.1" as never, provider: "github-copilot" } as never, {
-      now: () => 123,
-    });
+    const result = await run(
+      { model: "gpt-4.1" as never, modelId: "gpt-4.1", provider: "github-copilot" },
+      { now: () => 123 },
+    );
 
     expect(getPromptErrorCode(result)).toBeUndefined();
     expect(sdk.createSession).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-4.1" }));

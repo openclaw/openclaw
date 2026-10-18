@@ -2,7 +2,12 @@ import { EventEmitter } from "node:events";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
-import { createWorkerComputeCapacity } from "./worker-task-capacity.js";
+import {
+  createWorkerComputeCapacity,
+  DEFAULT_WORKER_PENDING_BYTES,
+  type WorkerComputeCapacity,
+} from "./worker-task-capacity.js";
+import { WorkerTaskError } from "./worker-task-error.js";
 import type { WorkerTaskHost } from "./worker-task-host.js";
 import { WorkerTaskPoolCore } from "./worker-task-pool-core.js";
 import type { WorkerTaskPoolOptions, WorkerTaskResponse } from "./worker-task-pool.types.js";
@@ -62,8 +67,12 @@ afterEach(async () => {
 });
 
 function createPool(
-  options: Pick<WorkerTaskPoolOptions<string>, "maxWorkers"> & {
+  options: Pick<
+    WorkerTaskPoolOptions<string>,
+    "maxWorkers" | "maxPendingTasks" | "maxPendingBytes" | "sharedCompute"
+  > & {
     requiresReady?: false;
+    computeCapacity?: WorkerComputeCapacity;
   } = {},
 ) {
   const workers: FixtureWorker[] = [];
@@ -93,7 +102,7 @@ function createPool(
     receiveMessage: () => false,
     workerStarted() {},
     workerRetiring() {},
-    computeCapacity: createWorkerComputeCapacity(4),
+    computeCapacity: options.computeCapacity ?? createWorkerComputeCapacity(4),
     pools: {
       register: (pool) => pool,
       async close(_pool, closures, finish) {
@@ -106,6 +115,9 @@ function createPool(
     {
       workerUrl: new URL("file:///synthetic-worker.mjs"),
       maxWorkers: options.maxWorkers ?? 1,
+      maxPendingTasks: options.maxPendingTasks,
+      maxPendingBytes: options.maxPendingBytes,
+      sharedCompute: options.sharedCompute,
       idleTimeoutMs: 0,
     },
     host,
@@ -325,4 +337,74 @@ it("preserves arbitrary worker recovery without a served-protocol readiness requ
   await failedResult;
   workers[1]!.reply();
   await expect(queued).resolves.toBe("custom response");
+});
+
+it.each(["local-first", "shared-first"] as const)(
+  "notifies overload readiness only after local and shared capacity return (%s)",
+  async (order) => {
+    const computeCapacity = createWorkerComputeCapacity(4);
+    const local = createPool({
+      requiresReady: false,
+      maxPendingTasks: 1,
+      maxPendingBytes: 32,
+      sharedCompute: true,
+      computeCapacity,
+    });
+    const other = createPool({ requiresReady: false, sharedCompute: true, computeCapacity });
+    const localWork = local.pool.run("local", { inputBytes: 8 });
+    const sharedWork = other.pool.run("shared", { inputBytes: DEFAULT_WORKER_PENDING_BYTES - 8 });
+    const overload = await local.pool
+      .run("retry", { inputBytes: 16 })
+      .catch((error: unknown) => error);
+    expect(overload).toBeInstanceOf(WorkerTaskError);
+    if (!(overload instanceof WorkerTaskError) || !overload.capacityAvailable) {
+      throw new Error("Expected an overload readiness signal");
+    }
+    expect(overload.code).toBe("overloaded");
+    let ready = false;
+    void overload.capacityAvailable.then(() => {
+      ready = true;
+    });
+    const first = order === "local-first" ? local : other;
+    const firstWork = order === "local-first" ? localWork : sharedWork;
+    first.workers[0]!.reply();
+    await firstWork;
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    const second = order === "local-first" ? other : local;
+    second.workers[0]!.reply();
+    await Promise.all([localWork, sharedWork, overload.capacityAvailable]);
+    expect(ready).toBe(true);
+    const retry = local.pool.run("retry", { inputBytes: 16 });
+    local.workers[0]!.reply();
+    await expect(retry).resolves.toBe("retry");
+    expect(computeCapacity.getSnapshot().pendingTasks).toBe(0);
+    expect(computeCapacity.getSnapshot().pendingBytes).toBe(0);
+  },
+);
+
+it("wakes an overloaded caller on close and rejects its retry as unavailable", async () => {
+  const { pool } = createPool({ requiresReady: false, maxPendingTasks: 1 });
+  const held = pool.run("held", {});
+  const heldOutcome = Promise.allSettled([held]);
+  const overload = await pool.run("retry", {}).catch((error: unknown) => error);
+  if (!(overload instanceof WorkerTaskError) || !overload.capacityAvailable) {
+    throw new Error("Expected an overload readiness signal");
+  }
+  await pool.close();
+  await overload.capacityAvailable;
+  expect(await heldOutcome).toMatchObject([{ status: "rejected" }]);
+  await expect(pool.run("retry", {})).rejects.toMatchObject({ code: "unavailable" });
+});
+
+it("does not promise readiness for input that exceeds the pool byte limit", async () => {
+  const { pool } = createPool({ requiresReady: false, maxPendingBytes: 8 });
+  const overload = await pool.run("oversized", { inputBytes: 16 }).catch((error: unknown) => error);
+  expect(overload).toBeInstanceOf(WorkerTaskError);
+  if (!(overload instanceof WorkerTaskError)) {
+    throw new Error("Expected the oversized input to be rejected");
+  }
+  expect(overload.code).toBe("overloaded");
+  expect(overload.capacityAvailable).toBeUndefined();
+  expect(pool.getSnapshot().pendingTasks).toBe(0);
 });

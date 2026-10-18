@@ -20,7 +20,8 @@ import {
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { getActiveSessionWorkAdmissionCount } from "../../sessions/session-lifecycle-admission.js";
+import { getSessionControllerWorkCount } from "../../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
@@ -56,14 +57,13 @@ async function createRebuildingFixture() {
   };
   const assertNoDispatch = async () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(fixture.context.chatAbortControllers.size).toBe(0);
-    expect(fixture.context.chatQueuedTurns.size).toBe(0);
+    expect(rpcSourceTesting.size).toBe(0);
     expect(
       fixture.context.dedupe.has(pendingChatSendDedupeKey(fixture.params.idempotencyKey)),
     ).toBe(false);
     expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
     expect(loadTranscriptEventsSync(fixture.scope)).toEqual(before);
-    expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+    expect(getSessionControllerWorkCount()).toBe(0);
   };
   const send = async () => {
     const respond = vi.fn<RespondFn>();

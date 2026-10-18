@@ -6,7 +6,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqlite from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
-import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
+import { isSessionMutationActive } from "../../sessions/session-controller.lifecycle.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
@@ -44,16 +44,13 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     Worker: observeWorkerSqliteIntegrity(actual.Worker, () => hook.integrityGate),
   };
 });
-vi.mock("../../sessions/session-lifecycle-admission.js", async (importOriginal) => {
+vi.mock("../../sessions/session-controller.lifecycle.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../../sessions/session-lifecycle-admission.js")>();
+    await importOriginal<typeof import("../../sessions/session-controller.lifecycle.js")>();
   return {
     ...actual,
-    runExclusiveSessionLifecycleMutation: <T>(
-      operation: Parameters<typeof actual.runExclusiveSessionLifecycleMutation<T>>[0],
-      params: Parameters<typeof actual.runExclusiveSessionLifecycleMutation<T>>[1],
-    ) =>
-      actual.runExclusiveSessionLifecycleMutation(operation, {
+    runSessionMutation: <T>(params: Parameters<typeof actual.runSessionMutation<T>>[0]) =>
+      actual.runSessionMutation({
         ...params,
         run: async () => {
           await hook.beforePlan?.();
@@ -259,7 +256,7 @@ it.each([
       // transaction ordering resumes only when the reclaimer requests its write.
       expect(laterWriterRan).toBe(true);
       expect(followingWriterRan).toBe(true);
-      expect(isSessionLifecycleMutationActive(storePath, [oldSessionId])).toBe(true);
+      expect(isSessionMutationActive(storePath, [oldSessionId])).toBe(true);
       if (outcome === "protected") {
         // A peer connection can refresh the live entry while its worker validates.
         const peer = realOpen(database.path);
@@ -300,7 +297,7 @@ it.each([
     expect(boundary).toBe(cold ? "worker" : "completed");
     expect(parentChecks).toBe(0);
     expect(integrityGate.count()).toBe(cold ? 1 : 0);
-    expect(isSessionLifecycleMutationActive(storePath, [oldSessionId])).toBe(false);
+    expect(isSessionMutationActive(storePath, [oldSessionId])).toBe(false);
     if (outcome === "revoked") {
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
     }

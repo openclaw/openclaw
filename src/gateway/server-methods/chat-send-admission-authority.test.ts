@@ -12,9 +12,10 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import {
-  beginSessionWorkAdmission,
-  getSessionWorkAdmissionRelease,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  getCompetingSessionWorkAdmissionRelease,
+} from "../../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -49,7 +50,7 @@ const expectFailed = (outcome: { value: unknown } | { error: unknown }) =>
     "error" in outcome ? { error: expect.any(Error) } : { value: { ok: false } },
   );
 function lifecycleRelease(fixture: Awaited<ReturnType<typeof createBrowserFollowupFixture>>) {
-  return getSessionWorkAdmissionRelease({
+  return getCompetingSessionWorkAdmissionRelease({
     scope: fixture.scope.storePath,
     identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
   });
@@ -87,7 +88,7 @@ it.each([
     });
     if (revokeInCallback) {
       await expect(admitting).rejects.toThrow("caller revoked during admission");
-      expect(fixture.context.chatAbortControllers.size).toBe(0);
+      expect(rpcSourceTesting.size).toBe(0);
     } else {
       const admitted = await admitting;
       assert(admitted.ok);
@@ -119,7 +120,7 @@ it("clears a pending reservation when its retained reader is revoked after publi
     expect(reservedIdentity).toBe(first.request.requestIdentity);
     await closing;
     expect(fixture.context.dedupe.has(pendingKey)).toBe(false);
-    expect(fixture.context.chatAbortControllers.size).toBe(0);
+    expect(rpcSourceTesting.size).toBe(0);
     expect(lifecycleRelease(fixture)).toBeUndefined();
 
     fixture.params.message = "Corrected input after the failed reservation.";
@@ -182,7 +183,7 @@ it("retains callback custody during database closure", async () => {
     expect(released).toBeDefined();
     expect(getActiveGatewayRootWorkCount()).toBe(rootsBefore + 1);
     expect(caller.isCurrent()).toBe(true);
-    expect(fixture.context.chatAbortControllers.size).toBe(1);
+    expect(rpcSourceTesting.size).toBe(1);
     finishCallback.resolve();
     const result = await outcome;
     if (readerOutcome.status === "rejected") {
@@ -194,7 +195,7 @@ it("retains callback custody during database closure", async () => {
     await released;
     expect(getActiveGatewayRootWorkCount()).toBe(rootsBefore);
     expect(caller.isCurrent()).toBe(false);
-    expect(fixture.context.chatAbortControllers.size).toBe(0);
+    expect(rpcSourceTesting.size).toBe(0);
     expect(onAdmissionOwned).toHaveBeenCalledOnce();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   } finally {
@@ -235,7 +236,7 @@ it("rejects membership revoked inside retained chat admission before dispatch", 
     }),
   ).resolves.toEqual({ ok: false });
   expect(fixture.context.dedupe.size).toBe(0);
-  expect(fixture.context.chatAbortControllers.size).toBe(0);
+  expect(rpcSourceTesting.size).toBe(0);
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.anything());
 });
@@ -254,7 +255,7 @@ it("joins a session write still publishing when durable recovery reconciliation 
     openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
   );
   assert(typeof identity === "string", "Expected durable session store identity");
-  const cancelledTurn = await beginSessionWorkAdmission({
+  const cancelledTurn = await beginSessionEffect({
     scope: session.storePath,
     identities: [session.sessionKey, fixture.scope.sessionId],
   });

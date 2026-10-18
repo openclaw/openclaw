@@ -1,6 +1,6 @@
-import type { KillPublicationPreparation } from "../../agents/subagents/registry/subagent-control-kill-scope.js";
 import {
   SUBAGENT_KILL_TASK_ERROR,
+  type KillPublicationPreparation,
   type SubagentAdminKillResult,
 } from "../../agents/subagents/registry/subagent-control.types.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";

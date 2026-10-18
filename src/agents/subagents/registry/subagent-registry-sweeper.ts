@@ -17,7 +17,10 @@ import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { retryDeferredSubagentCompletionSource } from "./subagent-registry-gateway-owner.js";
-import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  PROVISIONAL_KILL_RECONCILIATION_MS,
+  safeRemoveAttachmentsDir,
+} from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
@@ -65,7 +68,6 @@ const STALE_ACTIVE_SUBAGENT_GRACE_MS = isFastTestRuntimeEnv() ? 1_000 : 60_000;
 const restartRecoveryLoader = createLazyImportLoader(
   () => import("./subagent-registry-restart-recovery.js"),
 );
-const killRuntimeLoader = createLazyImportLoader(() => import("./subagent-control.runtime.js"));
 type CompletionRuntime = ReturnType<typeof createSubagentRegistryCompletionRuntime>;
 
 export function createSubagentRegistrySweeper(params: {
@@ -77,9 +79,10 @@ export function createSubagentRegistrySweeper(params: {
   completeSubagentRunWithRecovery: CompletionRuntime["completeSubagentRunWithRecovery"];
   getGatewayRecoveryRuntime: () => GatewayRecoveryRuntime | undefined;
   finalizeInterruptedSubagentRun: CompletionRuntime["finalizeInterruptedSubagentRun"];
-  resumeRequesterSettleWake: SubagentLifecycleController["resumeRequesterSettleWake"];
   startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
   completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
+  resumeRequesterSettleWake: SubagentLifecycleController["resumeRequesterSettleWake"];
+  resumePendingRequesterSettlements: SubagentLifecycleController["resumePendingRequesterSettlements"];
   isCleanupOwnerCurrent: SubagentLifecycleController["isCleanupOwnerCurrent"];
   isTerminalTailActive: SubagentLifecycleController["isTerminalTailActive"];
   sessionEffectsHostCurrent: SubagentLifecycleController["sessionEffectsHostCurrent"];
@@ -92,6 +95,7 @@ export function createSubagentRegistrySweeper(params: {
   runContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
   notifyContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
   retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
+  retireObligations: (entry: SubagentRunRecord) => Promise<void>;
   getRunsForChildSession: (
     childSessionKey: string,
     childAgentId?: string,
@@ -132,6 +136,13 @@ export function createSubagentRegistrySweeper(params: {
     clearTimeout(scheduled?.timer);
     scheduled = undefined;
     rerunRequested = false;
+  }
+
+  function stopIfIdle() {
+    const pendingRequesterSettlements = params.resumePendingRequesterSettlements();
+    if (runs.size === 0 && !pendingRequesterSettlements) {
+      stop();
+    }
   }
 
   function schedule(options?: { delayMs?: number }) {
@@ -298,8 +309,8 @@ export function createSubagentRegistrySweeper(params: {
         ) {
           continue;
         }
-        // Yield freezes the parent's wake before its children finish. Keep
-        // terminal delivery priority while unfinished children reach recovery.
+        // Recover retained receipts even when the last child has already settled.
+        // The lifecycle and controller still own evaluation and turn admission.
         if (
           entry.requesterSettleWake &&
           entry.execution.status !== "running" &&
@@ -328,17 +339,19 @@ export function createSubagentRegistrySweeper(params: {
             ...params,
             runId,
             entry,
-            loadKillRuntime: () => killRuntimeLoader.load(),
           });
           continue;
         }
         if (entry.killReconciliation) {
-          await reconcileProvisionalSubagentKill({
-            ...params,
-            runId,
-            entry,
-            now,
-          });
+          // Live operation settlement confirms kills immediately; this is the dormant fallback.
+          if (entry.killReconciliation.killedAt + PROVISIONAL_KILL_RECONCILIATION_MS <= now) {
+            await reconcileProvisionalSubagentKill({
+              ...params,
+              runId,
+              entry,
+              now,
+            });
+          }
           continue;
         }
         if (await recovery.recover(runId, entry)) {
@@ -633,9 +646,7 @@ export function createSubagentRegistrySweeper(params: {
       }
       params.sweepPendingLifecycle(now);
 
-      if (runs.size === 0) {
-        stop();
-      }
+      stopIfIdle();
     } finally {
       sweepInProgress = false;
       // Count retained delivery after expiry, even when unrelated sweep work fails.
@@ -650,6 +661,7 @@ export function createSubagentRegistrySweeper(params: {
   return {
     start,
     stop,
+    stopIfIdle,
     schedule,
     sweepOnce: () => trackWork(sweepOnce),
     runTick: () => trackWork(runTick),

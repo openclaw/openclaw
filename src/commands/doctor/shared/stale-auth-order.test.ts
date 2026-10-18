@@ -1,3 +1,4 @@
+import "../../../agents/auth-profiles/external-auth.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -7,7 +8,6 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "../../../agents/auth-profiles/credential-fixtures.test-support.js";
-import { testing as externalAuthTesting } from "../../../agents/auth-profiles/external-auth.test-support.js";
 import { resolveAuthProfileOrder } from "../../../agents/auth-profiles/order.js";
 import {
   resolveAuthProfileDatabasePath,
@@ -33,6 +33,9 @@ import {
   maybeRepairStaleConfiguredAuthOrders,
 } from "./stale-auth-order.js";
 import { withStateDir } from "./stale-auth-order.test-support.js";
+
+const { testing: externalAuthTesting } =
+  await import("../../../agents/auth-profiles/external-auth.test-support.js");
 
 const pluginMetadataMocks = vi.hoisted(() => {
   const snapshot = {

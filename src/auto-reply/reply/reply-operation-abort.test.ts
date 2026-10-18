@@ -6,12 +6,12 @@ import {
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
 } from "../../agents/run-termination.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import {
   isReplyOperationSuperseded,
   resolveReplyOperationAbortReason,
   resolveReplyOperationTerminationFields,
 } from "./reply-operation-abort.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 
 describe("reply-operation-abort", () => {
   it("preserves failure for session placement settlement closed in fallback summary error", () => {

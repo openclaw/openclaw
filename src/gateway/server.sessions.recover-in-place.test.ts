@@ -4,7 +4,11 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
-import * as sessionLifecycle from "../sessions/session-lifecycle-admission.js";
+import * as sessionLifecycle from "../sessions/session-controller.lifecycle.js";
+import {
+  listRpcSourceEntriesForSession,
+  requestRpcSourceCancellation,
+} from "../sessions/session-controller.rpc-sources.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
@@ -255,8 +259,13 @@ test.for([false, true])(
     } finally {
       finish.resolve();
       if (failure) {
-        for (const active of current.context.chatAbortControllers.values()) {
-          active.controller.abort(failure);
+        for (const { entry } of listRpcSourceEntriesForSession({
+          sessionKeys: [current.key],
+          sessionIds: [current.sessionId],
+          agentId: "main",
+          storeScope: current.storePath,
+        })) {
+          requestRpcSourceCancellation(entry, failure);
         }
       }
       try {
@@ -387,25 +396,25 @@ test("operator revocation while resume waits for admission preserves the tombsto
   const unlock = createDeferredCore();
   const admissionQueued = createDeferredCore();
   let authorized = true;
-  const originalMutation = sessionLifecycle.runExclusiveSessionLifecycleMutation;
-  const mutation = vi
-    .spyOn(sessionLifecycle, "runExclusiveSessionLifecycleMutation")
-    .mockImplementation((operation, params) => {
-      const pending = originalMutation(operation, params);
-      if (operation === "recovery-drain") {
-        admissionQueued.resolve();
-      }
-      return pending;
-    });
-  const blocker = sessionLifecycle.runExclusiveSessionLifecycleMutation("recover", {
-    scope: current.storePath,
-    identities: [current.key, current.sessionId],
+  const blocker = sessionLifecycle.runSessionMutation({
+    target: sessionLifecycle.captureSessionTarget({
+      storeScope: current.storePath,
+      sessionKey: current.key,
+      incarnation: current.sessionId,
+      agentId: "main",
+    }),
     run: async () => {
       locked.resolve();
       await unlock.promise;
     },
   });
   await locked.promise;
+  const originalMutation = sessionLifecycle.runSessionMutation;
+  const mutation = vi.spyOn(sessionLifecycle, "runSessionMutation").mockImplementation((params) => {
+    const pending = originalMutation(params);
+    admissionQueued.resolve();
+    return pending;
+  });
   const request = recover(current, {
     hasCurrentClientAuthority: () => authorized,
   });

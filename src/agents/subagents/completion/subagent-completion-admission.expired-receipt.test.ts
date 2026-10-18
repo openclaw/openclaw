@@ -11,10 +11,7 @@ import { isDeliverySuspended } from "../registry/subagent-delivery-state.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
 import { bindSubagentRunRuntimeKey } from "../registry/subagent-run-generation.js";
-import {
-  blockSubagentCompletionDelivery,
-  mutateRequesterCompletionBatch,
-} from "./subagent-completion-admission.store.js";
+import { blockSubagentCompletionDelivery } from "./subagent-completion-admission.store.js";
 import {
   currentCompletionRun,
   armRequesterWake,
@@ -23,6 +20,7 @@ import {
   requesterWakeDriver,
   admitCompletionFixtureDatabase,
   seedSubagentCompletionDelivery,
+  settleRequesterCompletionBatch,
 } from "./subagent-completion-admission.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -82,12 +80,9 @@ describe("requester receipts after completion expiry", () => {
   }
 
   function settle(input: ReturnType<typeof records>, delivered: boolean) {
-    return mutateRequesterCompletionBatch({
+    return settleRequesterCompletionBatch({
       entries: [input.subagent],
-      operation: {
-        kind: "settle",
-        outcome: { delivered, path: "direct", error: delivered ? undefined : "requester failed" },
-      },
+      outcome: { delivered, path: "direct", error: delivered ? undefined : "requester failed" },
       assertCurrent: () => {},
       databaseOptions: { database },
     });
@@ -141,7 +136,7 @@ describe("requester receipts after completion expiry", () => {
         expect(stored?.requesterSettleWake).toBeUndefined();
         expect(stored?.completion?.resultText).toBe(resultText);
       } finally {
-        driver.controller.clearScheduledResumeTimers();
+        driver.controller.clearRuntimeState();
       }
     },
   );

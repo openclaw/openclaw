@@ -13,7 +13,8 @@ import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-ru
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
@@ -64,11 +65,15 @@ export function registerWorkerGoalChatCases(
       const { sessionKey, sessionId, storePath } = scope();
       const context = getContext();
       const waitForDispatchEnd = async () => {
-        await getSessionWorkAdmissionRelease({
+        await captureSessionControllerSettlement({
           scope: storePath,
           identities: [sessionKey, sessionId],
         });
-        expect(context.chatAbortControllers.size).toBe(0);
+        expect(
+          listRpcSourceEntries().some(
+            ([, source]) => source.input.target?.storeScope === storePath,
+          ),
+        ).toBe(false);
       };
       registerAgentHarness({
         id: "codex",

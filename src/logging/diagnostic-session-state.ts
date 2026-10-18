@@ -201,7 +201,8 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   return created;
 }
 
-export function peekDiagnosticSessionState(ref: SessionRef): SessionState | undefined {
+/** Looks up diagnostic state without creating a new entry. */
+function peekDiagnosticSessionState(ref: SessionRef): SessionState | undefined {
   const key = resolveSessionKey(ref);
   return (
     diagnosticSessionStates.get(key) ??
@@ -232,9 +233,7 @@ export function touchDiagnosticSessionState(state: SessionState): void {
 /** Retires collector observations without resetting independent tool-loop or poll policy. */
 export function retireDiagnosticSessionObservations(): void {
   for (const state of diagnosticSessionStates.values()) {
-    // Recovery accepts one completion increment. A collector boundary must
-    // advance beyond that exception before this session can collect fresh work.
-    state.generation = (state.generation ?? 0) + 2;
+    state.generation = (state.generation ?? 0) + 1;
     state.state = "idle";
     state.queueDepth = 0;
     state.activeQueuedTurn = false;

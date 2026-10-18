@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import { showToast } from "../lib/toast.ts";
 import type { ApplicationContext } from "./context.ts";
 import { createNativeConversationBridge } from "./native-conversation-bridge.ts";
@@ -56,7 +56,7 @@ function fixture(features: string[] = []) {
       presentation: { result: { sessions: [row] } },
       state: { result: { sessions: [row] } },
       subscribe,
-      isRunVisuallyActive: isSessionRunActive,
+      isRunVisuallyActive: isSessionRunStateActive,
     },
     agents: { state: { agentsList: null } },
     agentSelection: { state: { selectedId: "main" } },
