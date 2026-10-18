@@ -2391,6 +2391,8 @@ export const en: TranslationMap & {
       versionsHelpLabel: "About versions",
       versionsHelp:
         "Saved copies of this conversation from rewinds or repairs. You can return to an earlier version here.",
+      versionsEmptyTitle: "No earlier versions",
+      versionsEmptyDescription: "Saved versions appear after a rewind or repair.",
       branchSwitchUnavailable: "Versions cannot be switched while the agent is working.",
       untitledBranch: "Untitled version",
       oneMessage: "{count} message",

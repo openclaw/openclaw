@@ -567,7 +567,7 @@ export function createPageState(
   state.handleCloseImage = () => {
     invalidateImageLightbox(state);
   };
-  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
+  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory", "branchQuery"]);
   {
     let value = state.chatQueue;
     const queue = projectSource(state, {

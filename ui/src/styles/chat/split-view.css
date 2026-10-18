@@ -363,8 +363,8 @@
 /* Menu-item check only. The branches trigger is a .chat-icon-btn in the header
    row, so it keeps the shared 18px action glyph from .btn--icon svg. */
 .chat-pane__branch-active svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
 }
 
 .chat-pane__branches-menu {
@@ -374,15 +374,15 @@
 .chat-pane__versions-heading {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 12px;
+  gap: 0;
+  min-height: 28px;
+  padding: 0 8px 4px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
 }
 
 .chat-pane__versions-info {
-  margin-inline-start: auto;
   width: var(--versions-icon-column);
   min-width: var(--versions-icon-column);
   height: 28px;
@@ -395,26 +395,37 @@
 }
 
 .chat-pane__versions-help {
-  --oc-overlay-max-width: 280px;
+  --oc-overlay-max-width: min(360px, calc(100vw - 24px));
+  --oc-popover-padding: 12px 16px;
 
+  width: 360px;
   font-size: 13px;
   font-weight: 400;
   line-height: 1.5;
 }
 
 .chat-pane__branches-menu > .oc-menu {
-  width: min(360px, calc(100vw - 24px));
+  --oc-overlay-distance: 8px;
+
+  width: min(300px, calc(100vw - 24px));
+  margin-inline: 12px;
+  padding: 8px;
+  border-color: var(--border-strong);
+  border-radius: 12px;
 }
 
 .chat-pane__branch-item {
   min-width: 0;
-  padding: 8px 12px;
-  font-size: 13px;
-  line-height: 1.4;
+  min-height: 56px;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 /* Current is a readable selection, not an unavailable action. */
 .chat-pane__branch-item[data-active="true"] {
+  margin-bottom: 4px;
   opacity: 1;
   cursor: var(--cursor-action);
 }
@@ -434,14 +445,30 @@
 .chat-pane__branch-meta {
   color: var(--muted);
   font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
 }
 
-.chat-pane__branch-active {
+.chat-pane__branch-active,
+.chat-pane__branch-more {
   display: inline-flex;
   width: var(--versions-icon-column);
   align-items: center;
   justify-content: center;
+}
+
+.chat-pane__branch-active {
   color: var(--accent);
+}
+
+/* Management remains deferred; this glyph does not introduce another action. */
+.chat-pane__branch-more {
+  color: var(--muted);
+}
+
+.chat-pane__branch-more svg {
+  width: 16px;
+  height: 16px;
 }
 
 .chat-pane__workspace-chip:hover,
