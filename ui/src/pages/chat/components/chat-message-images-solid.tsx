@@ -39,6 +39,7 @@ import {
   releaseChatMediaResourceOwner,
   type ImageBlock,
   type ImageRenderOptions,
+  type MessageMediaAction,
 } from "./chat-message-media.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 
@@ -704,4 +705,52 @@ function ImageFrame(props: {
       </Show>
     </span>
   );
+}
+
+/** Catalogs consume the same admitted image resource and viewer as transcript tiles. */
+type MessageImageActionProps = MessageImageProps & {
+  render: (action: () => MessageMediaAction) => JSX.Element;
+};
+export function MessageImageAction(props: MessageImageActionProps): JSX.Element {
+  // Match the transcript slot's retirement when its scope or policy changes.
+  const scope = () =>
+    JSON.stringify([
+      props.options.sessionKey,
+      props.options.agentId,
+      props.options.connectionEpoch,
+      props.options.resourceBasePath,
+      props.options.authToken,
+      props.options.policyKey,
+      props.options.canonicalMessageKey,
+    ]);
+  return (
+    <Show when={scope()} keyed>
+      {(_scope) => (
+        <MessageImageActionContent
+          image={props.image}
+          options={props.options}
+          render={props.render}
+        />
+      )}
+    </Show>
+  );
+}
+
+function MessageImageActionContent(props: MessageImageActionProps): JSX.Element {
+  const presentation = createMessageImagePresentation(props);
+  const action = createMemo<MessageMediaAction>(() => {
+    const model = presentation.model();
+    const previewUrl = model.previewUrl;
+    return {
+      ...model.actions,
+      pending: model.state === "loading",
+      reason: model.reason,
+      observeElement: presentation.observeFrame,
+      onFocus: model.state === "unavailable" ? undefined : presentation.admit,
+      onOpen: previewUrl
+        ? () => openMessageImage(props.image, previewUrl, props.options)
+        : undefined,
+    };
+  });
+  return props.render(action);
 }

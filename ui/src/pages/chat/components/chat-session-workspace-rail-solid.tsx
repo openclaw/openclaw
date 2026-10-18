@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { shortestFileLabels } from "../../../components/file-kind.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
@@ -12,6 +12,7 @@ import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
+import { DesktopWorkspaceContents } from "./chat-session-workspace-desktop.tsx";
 import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 
@@ -482,7 +483,13 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
 export function SessionWorkspaceRail(props: { workspace?: SessionWorkspaceProps }) {
   return (
     <Show when={props.workspace}>
-      {(workspace) => <WorkspaceContents workspace={workspace()} />}
+      {(workspace) => (
+        <Switch fallback={<WorkspaceContents workspace={workspace()} />}>
+          <Match when={workspace().presentation === "desktop"}>
+            <DesktopWorkspaceContents workspace={workspace()} />
+          </Match>
+        </Switch>
+      )}
     </Show>
   );
 }

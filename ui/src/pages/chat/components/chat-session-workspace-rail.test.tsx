@@ -1,10 +1,18 @@
 /* @vitest-environment jsdom */
 
 import { createSignal, flush } from "solid-js";
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createSessionCapabilityFixture,
+} from "../chat-pane.test-support.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
-import { getSessionWorkspace, loadSessionWorkspace } from "./chat-session-workspace-state.ts";
+import {
+  getSessionWorkspace,
+  loadSessionWorkspace,
+  sessionWorkspaceForHost,
+} from "./chat-session-workspace-state.ts";
 import {
   createSessionWorkspaceProps,
   type SessionWorkspaceHost,
@@ -378,4 +386,196 @@ describe("session workspace path actions", () => {
     update({ ...workspace, browserSearch: "   " });
     expect(mount.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(6);
   });
+});
+
+function setupDesktopLayout() {
+  // JSDOM has no layout observation or font loading. These tests exercise the
+  // workspace owner; real-browser proof owns overflow and disclosure motion.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  vi.stubGlobal("matchMedia", (media: string) => ({
+    media,
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+  Object.defineProperty(document, "fonts", {
+    configurable: true,
+    value: { ready: Promise.resolve() },
+  });
+  onTestFinished(() => {
+    if (previousFonts) {
+      Object.defineProperty(document, "fonts", previousFonts);
+    } else {
+      Reflect.deleteProperty(document, "fonts");
+    }
+  });
+}
+
+it("desktop browses lazy directories and restores activity after global search closes", async () => {
+  setupDesktopLayout();
+  const listFiles = vi.fn(
+    async (_sessionKey: string, options?: { path?: string; search?: string }) => ({
+      sessionKey: "agent:main:workspace",
+      root: "/workspace",
+      files: [
+        { ...file("changed.ts"), workspacePath: "src/changed.ts" },
+        { ...file("read.md", "read"), workspacePath: "docs/read.md" },
+        { ...file("/outside/notes.md", "read"), workspacePath: "/outside/notes.md" },
+      ],
+      browser: {
+        path: options?.path ?? "",
+        ...(options?.search ? { search: options.search } : {}),
+        entries: options?.search
+          ? [{ path: "docs/read.md", name: "read.md", kind: "file" as const }]
+          : options?.path === "docs"
+            ? [{ path: "docs/untouched.md", name: "untouched.md", kind: "file" as const }]
+            : [
+                { path: "docs", name: "docs", kind: "directory" as const },
+                { path: "src", name: "src", kind: "directory" as const },
+              ],
+      },
+    }),
+  );
+  const state: SessionWorkspaceHost = {
+    sessionKey: "agent:main:workspace",
+    connected: true,
+    connectionEpoch: 1,
+    hello: null,
+    agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+    client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
+    sessions: createSessionCapabilityFixture({ listFiles }),
+    sidebarContent: null,
+    handleOpenSidebar: () => {},
+  };
+  const props = () =>
+    createSessionWorkspaceProps(state, { expanded: true, presentation: "desktop" });
+  const mounted = mountWorkspace(props());
+  const unsubscribe = sessionWorkspaceForHost(state).subscribe(() => mounted.update(props()));
+  try {
+    await vi.waitFor(() => expect(button(mounted.container, "docs")).not.toBeNull());
+    button(mounted.container, "docs")!.click();
+    await vi.waitFor(() => expect(button(mounted.container, "docs/untouched.md")).not.toBeNull());
+    expect(listFiles.mock.calls.map(([, options]) => options?.path)).toEqual(["", "docs"]);
+    props().onSetFilter("changed");
+    flush();
+    button(mounted.container, "Search files")!.click();
+    flush();
+    search(mounted.container, "read");
+    await vi.waitFor(() =>
+      expect(mounted.container.querySelector(".workspace-desktop__results")?.textContent).toContain(
+        "read.md",
+      ),
+    );
+    expect(getSessionWorkspace(state).filter).toBe("changed");
+    button(mounted.container, "Close file search")!.click();
+    flush();
+    expect(getSessionWorkspace(state).browserSearch).toBe("");
+    expect(getSessionWorkspace(state).tree?.searchOpen).toBe(false);
+    expect(getSessionWorkspace(state).tree?.expandedPaths).toContain("docs");
+    expect(getSessionWorkspace(state).filter).toBe("changed");
+  } finally {
+    unsubscribe();
+    mounted.unmount();
+  }
+});
+
+it("desktop preserves directory limits without displaying the partial-search notice", () => {
+  setupDesktopLayout();
+  const warning = "Showing the first matching files. Refine the search to narrow results.";
+  const navigation = {
+    browserPath: "",
+    browserSearch: "",
+    filter: "all" as const,
+    expandedPaths: ["", "docs"],
+    searchOpen: false,
+    sessionExpanded: true,
+    treeVisible: true,
+    treeScroll: 0,
+    sessionScroll: 0,
+  };
+  const workspace = createWorkspace({
+    presentation: "desktop",
+    navigation,
+    list: {
+      root: "/workspace",
+      files: [],
+      browser: { path: "", search: "report", entries: [], truncated: true },
+    },
+    directories: {
+      "": {
+        loading: false,
+        error: null,
+        browser: {
+          path: "",
+          entries: [{ path: "docs", name: "docs", kind: "directory" }],
+          truncated: true,
+        },
+      },
+      docs: {
+        loading: false,
+        error: null,
+        browser: { path: "docs", entries: [], truncated: true },
+      },
+    },
+  });
+  const mounted = mountWorkspace(workspace);
+  try {
+    expect(
+      [
+        ...mounted.container.querySelectorAll(".workspace-desktop__project-scroll [role=status]"),
+      ].filter((node) => node.textContent === warning),
+    ).toHaveLength(2);
+    mounted.update({
+      ...workspace,
+      browserSearch: "different",
+      navigation: { ...navigation, searchOpen: true },
+    });
+    expect(
+      mounted.container.querySelector(".workspace-desktop__results")?.textContent,
+    ).not.toContain(warning);
+    mounted.update({
+      ...workspace,
+      browserSearch: "report",
+      navigation: { ...navigation, searchOpen: true },
+    });
+    expect(
+      mounted.container.querySelector(".workspace-desktop__results")?.textContent,
+    ).not.toContain(warning);
+  } finally {
+    mounted.unmount();
+  }
+});
+
+it("desktop folder falls back from a saved session-only filter without mutating it", () => {
+  setupDesktopLayout();
+  const workspace = createWorkspace({
+    presentation: "desktop",
+    folderView: true,
+    filter: "artifacts",
+    list: {
+      root: "/workspace",
+      files: [],
+      artifacts: [artifact("report", "report.md")],
+      browser: {
+        path: "",
+        entries: [{ path: "README.md", name: "README.md", kind: "file" }],
+      },
+    },
+  });
+  const mounted = mountWorkspace(workspace);
+  try {
+    expect(button(mounted.container, "README.md")).not.toBeNull();
+    expect(button(mounted.container, "report.md")).toBeNull();
+    expect(workspace.filter).toBe("artifacts");
+    expect(workspace.onSetFilter).not.toHaveBeenCalled();
+  } finally {
+    mounted.unmount();
+  }
 });

@@ -30,6 +30,7 @@ export type ChatDetailSlotProps = {
   chat: ChatProps;
   content: SidebarSelection;
   host: ChatPageHost;
+  onWorkspaceIntent?: () => void;
 };
 
 export type SidebarPanelDefinitionParams = {
@@ -71,6 +72,7 @@ export type SidebarPanelDefinitionParams = {
   ) => void;
   dashboard: Parameters<typeof ChatBoardPanel>[0] | null;
   workspace: SessionWorkspaceProps | undefined;
+  workspacePresented?: PresentationValue;
   detail: Omit<ChatDetailSlotProps, "content">;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;

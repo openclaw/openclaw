@@ -366,3 +366,29 @@ export function setChatError(
   state.lastError = message;
   state.chatError = message;
 }
+
+/** Read-only catalog input from the adopted transcript; never starts a history read. */
+export function readChatTranscriptAttachmentSource(state: ChatState) {
+  const load = getChatHistoryLoadState(state);
+  const accepted = chatHistoryRequests(state).acceptedHistory;
+  const known = Boolean(
+    accepted &&
+    accepted.sessionKey === state.sessionKey &&
+    accepted.sessions === state.sessions &&
+    accepted.client === state.client &&
+    accepted.connectionEpoch === state.connectionEpoch &&
+    (accepted.sessionInfo?.sessionId ?? accepted.sessionId) === state.currentSessionId &&
+    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+      accepted.requestAgentId === resolveUiSelectedSessionAgentId(state)),
+  );
+  return {
+    sessionKey: state.sessionKey,
+    sessionId: state.currentSessionId,
+    connectionEpoch: state.connectionEpoch,
+    messages: state.chatMessages,
+    pagination: state.chatHistoryPagination,
+    coverage: known ? (state.chatHistoryPagination.hasMore ? "partial" : "complete") : "unknown",
+    loading: load.phase === "in-flight" || load.phase === "pending-connection",
+    error: load.phase === "failed" ? load.message : undefined,
+  } as const;
+}
