@@ -1,6 +1,5 @@
 import { toErrorObject } from "@openclaw/normalization-core";
 import { createEffect, onCleanup } from "solid-js";
-import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { nativeGatewaysCapability } from "../../../app/native-gateways.runtime.ts";
 import {
   isStaleChunkImportError,
@@ -8,7 +7,6 @@ import {
   scheduleStaleChunkReload,
 } from "../../../app/stale-chunk-reload.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
@@ -16,6 +14,12 @@ import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
 import { createAttachmentDownload } from "./chat-attachment-download.ts";
+import {
+  chatDetailPanelProperties,
+  createFilePresentationActions,
+  createFilePresentationState,
+  renderFilePanelPresentation,
+} from "./chat-detail-file-presentation.ts";
 import { createFileCopy } from "./chat-file-copy.ts";
 import { captureFileEditorDraft, readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { createFileHtmlPreview } from "./chat-html-preview.ts";
@@ -24,19 +28,11 @@ import type {
   AttachmentSidebarRuntime,
   FileSidebarContent,
   ChatDetailPanelContent,
+  FileReaderDraftState,
+  FileReaderInteraction,
+  FileReaderViewRequest,
 } from "./chat-sidebar-content-types.ts";
-import {
-  buildRawContent,
-  handleSidebarClick,
-  handleSidebarKeydown,
-  SidebarPanel,
-  type SidebarPanelProps,
-} from "./chat-sidebar-content.tsx";
-import {
-  computeFileMatches,
-  loadFileWrapPreference,
-  saveFileWrapPreference,
-} from "./chat-sidebar-file-view.tsx";
+import { buildRawContent, SidebarPanel, type SidebarPanelProps } from "./chat-sidebar-content.tsx";
 import type { ChatDetailPanelProps } from "./chat-sidebar-view-types.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
@@ -57,12 +53,12 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   const isConnected = () => !disposed && host.isConnected;
   let visibleContent: ChatDetailPanelContent | null = null;
   let error: Error | null = null;
-  let fileSearchOpen = false;
-  let fileWrap = loadFileWrapPreference();
-  let fileSearchQuery = "";
-  let fileSearchMatchIndex = 0;
-  let fileEditorMenuOpen = false;
-  const fileCopy = createFileCopy(() => visibleContent, isConnected);
+  const presentation = createFilePresentationState(props.filePresentation === "mobile");
+  const fileCopy = createFileCopy(
+    () => visibleContent,
+    isConnected,
+    () => currentFileText(),
+  );
   let fileEditorLoading = false;
   let fileEditing = false;
   let fileDirty = false;
@@ -80,12 +76,90 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   let rawView: { file: FileSidebarContent | null } | null = null;
   let fileEditor: FileEditorViewHandle | null = null;
   let editorMount: HTMLElement | undefined;
-  let searchInput: HTMLInputElement | undefined;
-  let searchToggle: HTMLButtonElement | undefined;
   let fileEditorLoad: Promise<void> | null = null;
   let fileDraftContent: string | null = null;
   let fileSavedContent = "";
   let fileHash = "";
+  let publishedDraft: FileReaderDraftState | null = null;
+  let draftListener: ChatDetailPanelProps["onFileDraftChange"];
+
+  const {
+    syncFileEditor,
+    restoreFileReadingPresentation,
+    showRequestedReadingMode,
+    handlePanelClick,
+    handlePanelKeyDown,
+    resetFilePresentation,
+    beginEditPresentation,
+    fileSearchMatches,
+    closeFileSearch,
+    toggleFileSearch,
+    toggleFileWrap,
+    updateFileSearch,
+    moveFileSearch,
+    handleFileSearchKeydown,
+    openInEditor,
+    changeFileReadingMode,
+  } = createFilePresentationActions({
+    props,
+    presentation,
+    htmlPreview,
+    currentFileText,
+    afterCommit,
+    isConnected,
+    invalidate,
+    interact,
+    fileCopy,
+    content: () => visibleContent,
+    editor: () => fileEditor,
+    editing: () => fileEditing,
+    reloading: () => fileReloading,
+  });
+
+  function interact(interaction: FileReaderInteraction) {
+    if (
+      visibleContent?.kind === "file" ||
+      visibleContent?.kind === "image" ||
+      visibleContent?.kind === "attachment"
+    ) {
+      props.onFileInteraction?.(visibleContent, interaction);
+    }
+  }
+
+  function publishDraft() {
+    const listener = props.onFileDraftChange;
+    const file = visibleContent?.kind === "file" ? visibleContent : null;
+    if (
+      listener === draftListener &&
+      (publishedDraft?.file ?? null) === file &&
+      publishedDraft?.dirty === fileDirty &&
+      publishedDraft?.editing === fileEditing &&
+      publishedDraft?.saving === fileSaving
+    ) {
+      return;
+    }
+    draftListener = listener;
+    const version = fileOperationVersion;
+    const current = () =>
+      isConnected() && visibleContent === file && fileOperationVersion === version;
+    publishedDraft = file
+      ? {
+          file,
+          dirty: fileDirty,
+          editing: fileEditing,
+          saving: fileSaving,
+          save: async () => current() && (await saveFile()) && current(),
+          discard: () => {
+            if (!current() || fileSaving) {
+              return false;
+            }
+            discardFileEdits();
+            return !fileDirty;
+          },
+        }
+      : null;
+    listener?.(publishedDraft);
+  }
   const attachmentDownload = createAttachmentDownload(
     () => (props.content === visibleContent ? props.content : null),
     () => props.attachmentRuntime,
@@ -104,6 +178,13 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       attachmentDownload.cancel();
     }
     if (!contentChanged) {
+      if (
+        navigationChanged &&
+        navigation?.line != null &&
+        presentation.fileReadingMode === "preview"
+      ) {
+        presentation.fileReadingMode = "highlighted";
+      }
       // A line link is navigation, not replacement content: keep drafts, undo,
       // save operations, and the mounted editor intact. Plain tab selection
       // does not change this request and must not reset raw view or scroll.
@@ -117,10 +198,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     visibleContent = content;
     error = null;
     rawView = null;
-    fileSearchOpen = false;
-    fileSearchQuery = "";
-    fileSearchMatchIndex = 0;
-    fileEditorMenuOpen = false;
+    resetFilePresentation(content, navigation);
     fileCopy.reset();
     fileOperationVersion += 1;
     fileReloading = false;
@@ -141,13 +219,25 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       restoredDraft?.expectedHash ?? (content?.kind === "file" ? (content.edit?.hash ?? "") : "");
     fileEditing = Boolean(restoredDraft);
     fileDirty = Boolean(restoredDraft);
-    fileEditorLoading = content?.kind === "file" && !htmlPreview.showing;
+    if (restoredDraft) {
+      beginEditPresentation();
+    }
+    fileEditorLoading =
+      content?.kind === "file" &&
+      !htmlPreview.showing &&
+      presentation.fileReadingMode !== "preview";
     destroyFileEditor();
   }
 
   function updateEditor(navigate: boolean) {
     const content = visibleContent;
-    if (content?.kind === "file" && !rawView && !htmlPreview.showing && !error) {
+    if (
+      content?.kind === "file" &&
+      !rawView &&
+      !htmlPreview.showing &&
+      presentation.fileReadingMode !== "preview" &&
+      !error
+    ) {
       void ensureFileEditor().then(() => {
         syncFileEditor();
         if (navigate && (props.fileNavigation?.line ?? content.line) != null) {
@@ -166,7 +256,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   }
 
   const toggleHtmlSource = () => {
-    fileSearchOpen = false;
+    presentation.fileSearchOpen = false;
     htmlPreview.toggle();
   };
 
@@ -193,7 +283,12 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     }
     const content = visibleContent;
     const parent = editorMount;
-    if (content?.kind !== "file" || !parent || htmlPreview.showing) {
+    if (
+      content?.kind !== "file" ||
+      !parent ||
+      htmlPreview.showing ||
+      presentation.fileReadingMode === "preview"
+    ) {
       return Promise.resolve();
     }
     const version = fileOperationVersion;
@@ -208,9 +303,15 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
           parent,
           content: fileDraftContent ?? content.content,
           name: content.name,
+          language: content.language,
+          isCurrent: () =>
+            version === fileOperationVersion && isConnected() && parent === editorMount,
           editable: fileEditing,
-          wrap: fileWrap,
-          onSave: saveFile,
+          wrap: presentation.fileWrap,
+          highlight: presentation.fileReadingMode === "highlighted",
+          scrollFades: props.filePresentation === "mobile",
+          onSelectContent: () => interact("selection"),
+          onSave: () => void saveFile(),
         });
         if (version !== fileOperationVersion || !isConnected()) {
           editor.destroy();
@@ -272,111 +373,32 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     }
   };
 
-  function syncFileEditor() {
+  const editFile = async (requestCurrent: () => boolean = () => true) => {
     const content = visibleContent;
-    const editor = fileEditor;
-    if (content?.kind !== "file" || !editor) {
+    if (content?.kind !== "file" || !content.edit || error || fileSaving || fileReloading) {
       return;
     }
+    const version = fileOperationVersion;
+    const current = () =>
+      requestCurrent() &&
+      isConnected() &&
+      visibleContent === content &&
+      version === fileOperationVersion &&
+      Boolean(content.edit) &&
+      !error &&
+      !fileSaving &&
+      !fileReloading;
+    interact("edit");
     if (!fileEditing) {
-      editor.setContent(content.content);
-    }
-    editor.setEditable(fileEditing && !fileReloading);
-    editor.setLineWrapping(fileWrap);
-    const matches = fileSearchMatches();
-    editor.setDecorations({
-      targetLine: props.fileNavigation?.line ?? content.line,
-      matches,
-      currentMatch: matches[fileSearchMatchIndex] ?? null,
-    });
-  }
-
-  function fileSearchMatches(): number[] {
-    const content = visibleContent;
-    return content?.kind === "file" ? computeFileMatches(content.content, fileSearchQuery) : [];
-  }
-
-  async function scrollToCurrentFileMatch() {
-    await afterCommit();
-    const line = fileSearchMatches()[fileSearchMatchIndex];
-    if (line != null) {
-      fileEditor?.scrollToLine(line, true);
-    }
-  }
-
-  const toggleFileWrap = () => {
-    fileWrap = !fileWrap;
-    saveFileWrapPreference(fileWrap);
-    invalidate();
-  };
-
-  const toggleFileSearch = () => {
-    htmlPreview.showSource();
-    fileSearchOpen = !fileSearchOpen;
-    fileEditorMenuOpen = false;
-    invalidate();
-    if (!fileSearchOpen) {
-      fileSearchQuery = "";
-      fileSearchMatchIndex = 0;
-      return;
-    }
-    void afterCommit().then(() => {
-      searchInput?.focus();
-    });
-  };
-
-  const updateFileSearch = (query: string) => {
-    fileSearchQuery = query;
-    fileSearchMatchIndex = 0;
-    void scrollToCurrentFileMatch();
-  };
-
-  function moveFileSearch(offset: number) {
-    const matches = fileSearchMatches();
-    if (matches.length === 0) {
-      return;
-    }
-    fileSearchMatchIndex = (fileSearchMatchIndex + offset + matches.length) % matches.length;
-    void scrollToCurrentFileMatch();
-  }
-
-  const handleFileSearchKeydown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      toggleFileSearch();
-      searchToggle?.focus({ preventScroll: true });
-      return;
-    }
-    if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
-      event.preventDefault();
-      moveFileSearch(event.shiftKey ? -1 : 1);
-    }
-  };
-
-  const openInEditor = (editor: EditorId) => {
-    const content = visibleContent;
-    if (content?.kind !== "file") {
-      return;
-    }
-    const absPath = localEditorFilePath(content, props.execNode);
-    if (!absPath) {
-      return;
-    }
-    fileEditorMenuOpen = false;
-    openEditor(editor, absPath, props.fileNavigation?.line ?? content.line);
-    invalidate();
-  };
-
-  const editFile = async () => {
-    const content = visibleContent;
-    if (content?.kind !== "file" || !content.edit) {
-      return;
+      beginEditPresentation();
     }
     htmlPreview.showSource();
     await afterCommit();
+    if (!current()) {
+      return;
+    }
     await ensureFileEditor();
-    if (visibleContent !== content || !fileEditor) {
+    if (!current() || !fileEditor) {
       return;
     }
     if (fileEditing) {
@@ -387,14 +409,33 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     fileHash = content.edit.hash;
     fileDirty = false;
     fileSaveNotice = null;
-    fileSearchOpen = false;
-    fileSearchQuery = "";
-    fileSearchMatchIndex = 0;
-    fileEditorMenuOpen = false;
+    presentation.fileSearchOpen = false;
+    presentation.fileSearchQuery = "";
+    presentation.fileSearchMatchIndex = 0;
+    presentation.fileEditorMenuOpen = false;
     fileEditing = true;
     fileEditor.setEditable(true);
-    void afterCommit().then(() => fileEditor?.focus());
+    void afterCommit().then(() => {
+      if (current()) {
+        fileEditor?.focus();
+      }
+    });
   };
+
+  function applyFileViewRequest(request: FileReaderViewRequest, current: () => boolean) {
+    if (!current() || error) {
+      return;
+    }
+    if (request.view === "edit") {
+      void editFile(current);
+      return;
+    }
+    // A view request never saves, discards, or exits an existing edit session.
+    if (fileEditing) {
+      return;
+    }
+    showRequestedReadingMode({ ...request, view: request.view });
+  }
 
   const discardFileEdits = () => {
     if (!fileEditing || fileSaving) {
@@ -411,6 +452,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     fileDirty = false;
     fileSaveNotice = null;
     fileEditing = false;
+    restoreFileReadingPresentation();
     fileEditor?.setEditable(false);
     invalidate();
   };
@@ -453,16 +495,23 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     }
   }
 
-  const saveFile = () => {
+  const saveFile = async (): Promise<boolean> => {
     const content = visibleContent;
+    if (!fileDirty && !fileSaving) {
+      return true;
+    }
     if (content?.kind !== "file" || !content.edit || !fileEditing || !fileDirty || fileSaving) {
-      return;
+      return false;
     }
     const version = fileOperationVersion;
     fileSaving = true;
     fileSaveNotice = null;
     invalidate();
-    trackFileOperation(saveFileContent(content, currentFileText(), fileHash, version), version);
+    await trackFileOperation(
+      saveFileContent(content, currentFileText(), fileHash, version),
+      version,
+    );
+    return version === fileOperationVersion && !fileDirty && !fileSaveNotice;
   };
 
   const reloadFile = () => startLatestFileOperation("reload");
@@ -482,7 +531,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       fileEditor?.setEditable(false);
     }
     invalidate();
-    trackFileOperation(
+    void trackFileOperation(
       content.edit.fetchLatest().then(async (latest) => {
         if (version !== fileOperationVersion) {
           return;
@@ -523,7 +572,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   }
 
   function trackFileOperation(operation: Promise<unknown>, version: number) {
-    void operation
+    return operation
       .catch((cause: unknown) => {
         if (version === fileOperationVersion) {
           fileSaveNotice = { kind: "error", message: formatUiError(cause) };
@@ -561,13 +610,11 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     invalidate();
   };
 
-  const handlePanelClick = (event: MouseEvent) => handleSidebarClick(event, props);
-
-  const handlePanelKeyDown = (event: KeyboardEvent) => handleSidebarKeydown(event, props);
-
   let previousContent: ChatDetailPanelContent | null | undefined;
   let previousNavigation: FileSidebarNavigation | null | undefined;
   let previousRuntime: AttachmentSidebarRuntime | undefined;
+  let handledFileViewRequest: FileReaderViewRequest | undefined;
+  let fileViewRequestVersion = 0;
   let navigate = false;
   function renderPanel(): SidebarPanelProps {
     nativeGateways?.read();
@@ -576,8 +623,18 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     const runtime = props.attachmentRuntime;
     const contentChanged = content !== previousContent;
     const navigationChanged = navigation !== previousNavigation;
+    if (
+      contentChanged ||
+      navigation?.view !== previousNavigation?.view ||
+      runtime.sessionKey !== previousRuntime?.sessionKey ||
+      runtime.agentId !== previousRuntime?.agentId ||
+      runtime.connectionEpoch !== previousRuntime?.connectionEpoch ||
+      runtime.policyKey !== previousRuntime?.policyKey
+    ) {
+      fileViewRequestVersion += 1;
+    }
     if (contentChanged || navigationChanged || runtime !== previousRuntime) {
-      navigate ||= contentChanged || navigationChanged;
+      navigate ||= contentChanged || (navigationChanged && navigation?.line != null);
       updateSelection(
         contentChanged,
         navigationChanged,
@@ -592,79 +649,53 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     }
 
     t("common.loading");
-    const file = htmlPreview.file;
-    const matches = fileSearchMatches();
-    const currentMatchIndex = matches.length
-      ? Math.min(fileSearchMatchIndex, matches.length - 1)
-      : 0;
-    return {
-      content: visibleContent,
-      showingRawText: Boolean(rawView),
-      error: file ? null : error,
-      onRetry: retryFileEditor,
-      fileView: {
-        htmlPreview: htmlPreview.controls({
-          error,
-          onRetry: retryFileEditor,
-          onToggle: toggleHtmlSource,
-          runtime: props.attachmentRuntime,
-          mode: props.embedSandboxMode,
-        }),
-        copyFeedback: fileCopy.feedback(),
-        editorRef: (element) => {
-          editorMount = element;
-        },
-        searchInputRef: (element) => {
-          searchInput = element;
-        },
-        searchToggleRef: (element) => {
-          searchToggle = element;
-        },
-        currentMatchIndex,
-        dirty: fileDirty,
-        execNode: props.execNode,
-        editorMenuOpen: fileEditorMenuOpen,
-        editing: fileEditing,
-        loadingEditor: fileEditorLoading,
-        mountKey: fileOperationVersion,
-        matches,
-        query: fileSearchQuery,
-        saveNotice: fileSaveNotice,
-        saving: fileSaving,
-        searchOpen: fileSearchOpen,
-        wrap: fileWrap,
-        onCopy: fileCopy.copy,
-        onDiscard: discardFileEdits,
-        onEdit: () => void editFile(),
-        onNextMatch: () => moveFileSearch(1),
-        onOpenEditor: openInEditor,
-        onOverwrite: overwriteFile,
-        onPreviousMatch: () => moveFileSearch(-1),
-        onReload: reloadFile,
-        onReveal: props.onRevealInWorkspace ?? undefined,
-        onSave: saveFile,
-        onSearchInput: updateFileSearch,
-        onSearchKeydown: handleFileSearchKeydown,
-        onEditorMenuOpenChange: (open) => {
-          fileEditorMenuOpen = open;
-          invalidate();
-        },
-        onToggleSearch: toggleFileSearch,
-        onToggleWrap: toggleFileWrap,
-      },
-      canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-      embedSandboxMode: props.embedSandboxMode,
-      allowExternalEmbedUrls: props.allowExternalEmbedUrls,
-      ...props.githubContext,
-      embedded: props.embedded,
-      onClose: close,
-      onOpenImage: props.onOpenImage ?? undefined,
-      onViewRawText: showRawText,
-      onClick: handlePanelClick,
-      onKeydown: handlePanelKeyDown,
-      attachmentRuntime: props.attachmentRuntime,
+    return renderFilePanelPresentation({
+      props,
+      presentation,
+      htmlPreview,
+      fileCopy,
       attachmentDownload,
-    };
+      state: {
+        visibleContent,
+        error,
+        rawView,
+        fileSavedContent,
+        fileDirty,
+        fileEditing,
+        fileEditorLoading,
+        fileOperationVersion,
+        fileSaveNotice,
+        fileSaving,
+      },
+      setEditorMount: (element) => {
+        editorMount = element;
+      },
+      actions: {
+        fileSearchMatches,
+        currentFileText,
+        retryFileEditor,
+        toggleHtmlSource,
+        closeFileSearch,
+        interact,
+        changeFileReadingMode,
+        discardFileEdits,
+        editFile,
+        moveFileSearch,
+        openInEditor,
+        overwriteFile,
+        reloadFile,
+        saveFile,
+        updateFileSearch,
+        handleFileSearchKeydown,
+        toggleFileSearch,
+        toggleFileWrap,
+        close,
+        showRawText,
+        handlePanelClick,
+        handlePanelKeyDown,
+        invalidate,
+      },
+    });
   }
 
   const lifecycle = createSolidRenderLifecycle({
@@ -676,6 +707,19 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   createEffect(
     () => lifecycle.snapshot(),
     () => {
+      publishDraft();
+      const request = props.fileNavigation?.view;
+      if (request && request !== handledFileViewRequest) {
+        // Consume even a mismatched request: it must not wait for a later selection.
+        handledFileViewRequest = request;
+        const version = fileViewRequestVersion;
+        const current = () =>
+          isConnected() &&
+          version === fileViewRequestVersion &&
+          props.content === request.file &&
+          visibleContent === request.file;
+        lifecycle.afterCommit(() => applyFileViewRequest(request, current));
+      }
       const scrollToNavigation = navigate;
       navigate = false;
       // Mount CodeMirror after the sidebar has committed its editor host.
@@ -688,6 +732,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   );
   onCleanup(() => {
     disposed = true;
+    draftListener?.(null);
     if (fileDirty) {
       fileDraftContent = currentFileText();
     }
@@ -697,36 +742,5 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
 }
 
 export const ChatDetailPanel = defineSolidBridge("openclaw-chat-detail-panel", DetailPanel, {
-  properties: {
-    content: { default: null, attribute: false },
-    fileNavigation: { default: null, attribute: false },
-    execNode: { default: null, attribute: false },
-    attachmentRuntime: { default: {}, attribute: false },
-    basePath: { default: "" },
-    canvasPluginSurfaceUrl: { default: null },
-    embedSandboxMode: { default: "scripts" },
-    allowExternalEmbedUrls: { default: false },
-    githubContext: { default: {}, attribute: false },
-    embedded: { default: false },
-    onOpenWorkspaceFile: { default: null, attribute: false },
-    onOpenSessionLink: { default: null, attribute: false },
-    onRevealInWorkspace: { default: null, attribute: false },
-    onOpenImage: { default: null, attribute: false },
-  },
+  properties: chatDetailPanelProperties,
 });
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-chat-detail-panel": ChatDetailPanel;
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-detail-panel": HTMLAttributes<ChatDetailPanel> & {
-        [Key in keyof ChatDetailPanelProps as `prop:${Key}`]?: ChatDetailPanelProps[Key];
-      };
-    }
-  }
-}

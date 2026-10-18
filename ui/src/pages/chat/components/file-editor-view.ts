@@ -11,6 +11,7 @@ import {
 } from "@codemirror/view";
 import { classHighlighter } from "@lezer/highlight";
 import { loadCodeLanguage } from "../../../components/code-language.ts";
+import { observeFileScroll } from "./chat-file-scroll.ts";
 import { detectLineSeparator } from "./file-line-separator.ts";
 
 export type FileEditorDecorations = {
@@ -39,17 +40,28 @@ export async function createFileEditorView(params: {
   parent: HTMLElement;
   content: string;
   name: string;
+  language?: string;
+  isCurrent?: () => boolean;
   editable?: boolean;
   wrap?: boolean;
+  highlight?: boolean;
+  scrollFades?: boolean;
+  onSelectContent?: () => void;
   onSave: () => void;
 }) {
   const editable = new Compartment();
   const wrapping = new Compartment();
-  const language = await loadCodeLanguage(params.name);
+  const highlighting = new Compartment();
+  const language = await loadCodeLanguage(params.name, params.language);
+  // Language chunks may finish after selection changed; never clear a newer editor.
+  if (params.isCurrent && !params.isCurrent()) {
+    throw new DOMException("Editor selection changed", "AbortError");
+  }
   let docChanged: ((content: string) => void) | null = null;
   let destroyed = false;
   let isEditable = params.editable === true;
   let isWrapped = params.wrap === true;
+  let isHighlighted = params.highlight !== false;
   let separator = detectLineSeparator(params.content);
   let sourceContent = params.content;
   const readContent = (state: EditorState) =>
@@ -78,13 +90,16 @@ export async function createFileEditorView(params: {
             },
           },
         ]),
-        syntaxHighlighting(classHighlighter),
+        highlighting.of(isHighlighted ? syntaxHighlighting(classHighlighter) : []),
         ...(language ? [language] : []),
         EditorView.contentAttributes.of({ "aria-label": params.name, tabindex: "0" }),
         editable.of([EditorState.readOnly.of(!isEditable), EditorView.editable.of(isEditable)]),
         wrapping.of(isWrapped ? EditorView.lineWrapping : []),
         lineDecorations,
         EditorView.updateListener.of((update) => {
+          if (update.selectionSet && !update.state.selection.main.empty) {
+            params.onSelectContent?.();
+          }
           if (update.docChanged) {
             docChanged?.(readContent(update.state));
           }
@@ -105,6 +120,12 @@ export async function createFileEditorView(params: {
     state: initialState,
   });
 
+  const scrollFades = observeFileScroll(
+    view.scrollDOM,
+    view.contentDOM,
+    params.scrollFades === true,
+  );
+
   // The detail-panel owner derives a fresh match array for each synchronization.
   let previousDecorations:
     | (FileEditorDecorations & { document: EditorState["doc"]; matches: readonly number[] })
@@ -114,9 +135,11 @@ export async function createFileEditorView(params: {
     destroy: () => {
       if (!destroyed) {
         destroyed = true;
+        scrollFades.destroy();
         view.destroy();
       }
     },
+    setScrollFades: (enabled: boolean) => scrollFades.setEnabled(enabled),
     setContent: (content: string) => {
       if (destroyed) {
         return;
@@ -156,6 +179,36 @@ export async function createFileEditorView(params: {
       // Tracked so a setContent state rebuild keeps the current wrap mode.
       isWrapped = wrap;
       view.dispatch({ effects: wrapping.reconfigure(wrap ? EditorView.lineWrapping : []) });
+    },
+    setSyntaxHighlighting: (highlight: boolean) => {
+      if (destroyed || highlight === isHighlighted) {
+        return;
+      }
+      const domSelection = view.dom.ownerDocument.getSelection();
+      const restoreSelection =
+        !isEditable &&
+        !view.hasFocus &&
+        domSelection?.anchorNode != null &&
+        domSelection.focusNode != null &&
+        view.contentDOM.contains(domSelection.anchorNode) &&
+        view.contentDOM.contains(domSelection.focusNode);
+      isHighlighted = highlight;
+      view.dispatch({
+        effects: highlighting.reconfigure(highlight ? syntaxHighlighting(classHighlighter) : []),
+      });
+      // Rewritten token spans can collapse the browser range while toolbar focus
+      // prevents CodeMirror from syncing it. Keep the reader selection and focus.
+      if (restoreSelection && domSelection) {
+        const { anchor, head } = view.state.selection.main;
+        const anchorDOM = view.domAtPos(anchor);
+        const headDOM = view.domAtPos(head);
+        domSelection.setBaseAndExtent(
+          anchorDOM.node,
+          anchorDOM.offset,
+          headDOM.node,
+          headDOM.offset,
+        );
+      }
     },
     setDecorations: ({ targetLine, matches = [], currentMatch }: FileEditorDecorations) => {
       if (destroyed) {

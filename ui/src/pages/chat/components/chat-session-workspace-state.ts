@@ -1,21 +1,21 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createChangeListeners } from "../../../../../src/shared/listeners.js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
+import { showConfirmChoiceDialog } from "../../../components/confirm-dialog.ts";
+import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import {
-  scopedAgentParamsForSession,
-  type SessionScopeHostWithKey,
-} from "../../../lib/sessions/index.ts";
-import {
-  normalizeAgentId,
-  resolveAgentIdFromSessionKey,
-} from "../../../lib/sessions/session-key.ts";
+import { showToast } from "../../../lib/toast.ts";
+import { readFileDraft, reviewRetainedFileDrafts } from "./chat-file-drafts.ts";
+import { createSessionWorkspaceState, resolvePaneAgent } from "./chat-session-workspace-model.ts";
 import type {
   SessionWorkspaceArtifacts,
   SessionWorkspaceHost,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
-import type { SessionWorkspaceNavigation, SidebarSelection } from "./chat-sidebar-content-types.ts";
+import type {
+  SessionWorkspaceNavigation,
+  FileReaderDraftState,
+  SidebarSelection,
+} from "./chat-sidebar-content-types.ts";
 
 type SessionWorkspaceOwner = {
   readonly state: SessionWorkspaceState | undefined;
@@ -42,21 +42,6 @@ export function sessionWorkspaceForHost(host: SessionWorkspaceHost): SessionWork
   return owner;
 }
 
-function resolvePaneAgent(state: SessionScopeHostWithKey): string {
-  if (normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "global") {
-    return resolveAgentIdFromSessionKey(state.sessionKey);
-  }
-  return (
-    scopedAgentParamsForSession(state, state.sessionKey).agentId ??
-    normalizeAgentId(
-      state.assistantAgentId ??
-        state.agentsList?.defaultId ??
-        state.agentsList?.agents?.[0]?.id ??
-        "main",
-    )
-  );
-}
-
 export function clearWorkspaceTimer(workspace: SessionWorkspaceState | undefined) {
   if (workspace?.browserSearchTimer) {
     globalThis.clearTimeout(workspace.browserSearchTimer);
@@ -74,35 +59,6 @@ function clearSessionCheckoutSidebar(state: SessionWorkspaceHost) {
   if (state.sidebarContent && checkoutSidebarContents.has(state.sidebarContent)) {
     state.sidebarContent = null;
   }
-}
-
-function createSessionWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
-  return {
-    tree: {
-      expandedPaths: [""],
-      searchOpen: false,
-      sessionExpanded: true,
-      treeVisible: true,
-      treeScroll: 0,
-      sessionScroll: 0,
-    },
-    directories: Object.create(null),
-    artifacts: { items: [], resolved: false, loaded: false, loading: false, error: null },
-    previews: [],
-    activePreviewId: null,
-    activeId: null,
-    agentId: resolvePaneAgent(state),
-    browserPath: "",
-    browserSearch: "",
-    filter: "all",
-    browserSearchTimer: null,
-    connectionEpoch: state.connectionEpoch,
-    error: null,
-    list: null,
-    loading: false,
-    pendingReload: false,
-    sessionKey: state.sessionKey,
-  };
 }
 
 export function isCurrentSessionWorkspace(
@@ -463,24 +419,99 @@ export function openSessionWorkspacePreview(
   id: string,
   label: string,
   content: SidebarSelection,
+  disposition: "pinned" | "preview" = content.fileTab?.disposition ?? "pinned",
+  context?: {
+    canonicalKey?: string;
+    navigation?: SessionWorkspaceNavigation;
+    replaceTemporary?: boolean;
+  },
 ) {
   const workspace = getSessionWorkspace(state);
+  if (context?.navigation) {
+    const previous = workspace.previews.find((entry) => entry.id === workspace.activePreviewId);
+    if (previous) {
+      previous.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
+    } else {
+      workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
+    }
+  }
   let preview = workspace.previews.find(
-    (entry) => entry.id === id || entry.requestIds?.includes(id),
+    (entry) =>
+      entry.id === id ||
+      entry.canonicalKey === id ||
+      entry.requestIds?.includes(id) ||
+      (context?.canonicalKey !== undefined && entry.canonicalKey === context.canonicalKey),
   );
   if (!preview) {
-    preview = { id, label, content };
-    workspace.previews = [...workspace.previews, preview];
+    const temporary =
+      disposition === "preview" || context?.replaceTemporary
+        ? workspace.previews.find((entry) => entry.pinned === false)
+        : undefined;
+    // Dirty facts remain owned by the existing draft store. A delayed reader
+    // interaction notification must not let navigation retire its editor.
+    if (temporary?.content.kind === "file" && readFileDraft(temporary.content)) {
+      temporary.pinned = true;
+    }
+    const created = { id, label, content, pinned: disposition === "pinned" };
+    preview = created;
+    workspace.previews =
+      temporary?.pinned === false
+        ? workspace.previews.map((entry) => (entry === temporary ? created : entry))
+        : [...workspace.previews, created];
+  } else if (disposition === "pinned" && preview.pinned === false) {
+    preview.pinned = true;
+    workspace.previews = [...workspace.previews];
+  }
+  if (context?.navigation) {
+    preview.catalogNavigation = context.navigation;
+    preview.catalogVisible = false;
+  }
+  if (context?.canonicalKey) {
+    preview.canonicalKey = context.canonicalKey;
+  }
+  if (id !== preview.id) {
+    preview.requestIds = [...new Set([...(preview.requestIds ?? []), id])];
   }
   workspace.activePreviewId = preview.id;
   sessionWorkspaceForHost(state).publish();
   return preview;
 }
 
+/** Reader interaction fixes the existing tab without replacing its content or DOM key. */
+export function pinSessionWorkspacePreview(state: SessionWorkspaceHost, id: string): boolean {
+  const workspace = state.sessionWorkspaceState;
+  const preview = workspace?.previews.find((entry) => entry.id === id);
+  if (!workspace || !preview || !isCurrentSessionWorkspace(state, workspace)) {
+    return false;
+  }
+  if (preview.pinned === false) {
+    preview.pinned = true;
+    workspace.previews = [...workspace.previews];
+    sessionWorkspaceForHost(state).publish();
+  }
+  return true;
+}
+
 export function selectSessionWorkspacePreview(state: SessionWorkspaceHost, id: string | null) {
   const workspace = getSessionWorkspace(state);
   if (id === null || workspace.previews.some((entry) => entry.id === id)) {
-    workspace.activePreviewId = id;
+    workspace.pendingPreview = undefined;
+    if (workspace.activePreviewId !== id) {
+      const previous = workspace.previews.find((entry) => entry.id === workspace.activePreviewId);
+      if (previous?.catalogNavigation) {
+        previous.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
+      } else if (workspace.activePreviewId === null && workspace.catalogNavigation) {
+        workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
+      }
+      const next = workspace.previews.find((entry) => entry.id === id);
+      workspace.activePreviewId = id;
+      workspace.activeId = next?.canonicalKey ?? next?.id ?? null;
+      const navigation =
+        next?.catalogNavigation ?? (id === null ? workspace.catalogNavigation : undefined);
+      if (navigation) {
+        restoreSessionWorkspaceNavigation(state, navigation);
+      }
+    }
     sessionWorkspaceForHost(state).publish();
   }
 }
@@ -491,10 +522,13 @@ export function closeSessionWorkspacePreview(state: SessionWorkspaceHost, id: st
   if (index < 0) {
     return;
   }
+  workspace.pendingPreview = undefined;
   workspace.previews = workspace.previews.filter((entry) => entry.id !== id);
   if (workspace.activePreviewId === id) {
-    workspace.activePreviewId =
-      workspace.previews[Math.min(index, workspace.previews.length - 1)]?.id ?? null;
+    selectSessionWorkspacePreview(
+      state,
+      workspace.previews[Math.min(index, workspace.previews.length - 1)]?.id ?? null,
+    );
   }
   sessionWorkspaceForHost(state).publish();
 }
@@ -502,8 +536,154 @@ export function closeSessionWorkspacePreview(state: SessionWorkspaceHost, id: st
 export function clearSessionWorkspacePreviews(state: SessionWorkspaceHost) {
   const workspace = state.sessionWorkspaceState;
   if (workspace) {
+    workspace.pendingPreview = undefined;
     workspace.previews = [];
     workspace.activePreviewId = null;
     sessionWorkspaceForHost(state).publish();
   }
+}
+
+/** Reader facts are references to the native editor's operations, never another draft store. */
+export function setSessionWorkspacePreviewDraft(
+  state: SessionWorkspaceHost,
+  id: string,
+  draft: FileReaderDraftState | null,
+) {
+  const workspace = state.sessionWorkspaceState;
+  const preview = workspace?.previews.find((entry) => entry.id === id);
+  if (!workspace || !preview || !isCurrentSessionWorkspace(state, workspace)) {
+    return;
+  }
+  if (draft && draft.file !== preview.content) {
+    return;
+  }
+  preview.readerDraft = draft ?? undefined;
+  if (draft?.dirty) {
+    pinSessionWorkspacePreview(state, id);
+  }
+}
+
+/** UI close path; session teardown keeps the raw close/clear operations and retained draft guard. */
+export async function requestCloseSessionWorkspacePreview(
+  state: SessionWorkspaceHost,
+  id: string,
+): Promise<boolean> {
+  const workspace = state.sessionWorkspaceState;
+  const preview = workspace?.previews.find((entry) => entry.id === id);
+  if (!workspace || !preview) {
+    return true;
+  }
+  if (!isCurrentSessionWorkspace(state, workspace)) {
+    return false;
+  }
+  const file = preview.content;
+  const current = () =>
+    isCurrentSessionWorkspace(state, workspace) &&
+    workspace.previews.includes(preview) &&
+    preview.content === file;
+  const reveal = () => {
+    if (!current()) {
+      return;
+    }
+    showSessionWorkspacePreviewReader(state, id);
+    state.handleOpenSidebar({
+      ...file,
+      fileTab: {
+        id,
+        label: preview.label,
+        disposition: preview.pinned === false ? "preview" : "pinned",
+      },
+    });
+  };
+  if (file.kind === "file" && (readFileDraft(file) || preview.readerDraft?.saving)) {
+    const draft = preview.readerDraft;
+    if (draft?.saving) {
+      return false;
+    }
+    if (!file.edit || !draft || draft.file !== file || !draft.editing) {
+      // Read-only readers do not restore retained edits. Their no-op Discard
+      // cannot settle them; the draft owner exposes the recoverable bytes.
+      await reviewRetainedFileDrafts({ file, isCurrent: current });
+      if (!current() || readFileDraft(file)) {
+        return false;
+      }
+    } else {
+      const choice = await showConfirmChoiceDialog({
+        message: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
+        confirmLabel: t("common.save"),
+        alternativeLabel: t("chat.detailPanel.discard"),
+        cancelLabel: t("common.cancel"),
+      });
+      if (!choice || !current()) {
+        return false;
+      }
+      try {
+        const settled = choice === "confirm" ? await draft.save() : draft.discard();
+        if (!current()) {
+          return false;
+        }
+        if (!settled || readFileDraft(file)) {
+          reveal();
+          return false;
+        }
+      } catch (error) {
+        if (current()) {
+          reveal();
+          showToast({ message: formatUiError(error) });
+        }
+        return false;
+      }
+    }
+  }
+  if (!current()) {
+    return false;
+  }
+  closeSessionWorkspacePreview(state, id);
+  return !workspace.previews.includes(preview);
+}
+
+/** Breadcrumb navigation changes the same tab's view; the keyed reader stays retained. */
+export function browseSessionWorkspacePreviewPath(
+  state: SessionWorkspaceHost,
+  id: string,
+  path: string,
+): boolean {
+  const workspace = state.sessionWorkspaceState;
+  const preview = workspace?.previews.find((entry) => entry.id === id);
+  if (
+    !workspace ||
+    !preview ||
+    workspace.activePreviewId !== id ||
+    !isCurrentSessionWorkspace(state, workspace)
+  ) {
+    return false;
+  }
+  const navigation = captureSessionWorkspaceNavigation(workspace);
+  preview.catalogNavigation = {
+    ...navigation,
+    browserPath: path,
+    browserSearch: "",
+    searchOpen: false,
+    filter: "all",
+    treeVisible: true,
+    treeScroll: 0,
+    expandedPaths: [...new Set([...navigation.expandedPaths, path])],
+  };
+  preview.catalogVisible = true;
+  restoreSessionWorkspaceNavigation(state, preview.catalogNavigation);
+  return true;
+}
+
+export function showSessionWorkspacePreviewReader(
+  state: SessionWorkspaceHost,
+  id: string,
+): boolean {
+  const workspace = state.sessionWorkspaceState;
+  const preview = workspace?.previews.find((entry) => entry.id === id);
+  if (!workspace || !preview || !isCurrentSessionWorkspace(state, workspace)) {
+    return false;
+  }
+  preview.catalogVisible = false;
+  selectSessionWorkspacePreview(state, id);
+  return true;
 }

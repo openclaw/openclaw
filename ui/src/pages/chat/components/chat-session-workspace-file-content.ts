@@ -1,8 +1,12 @@
 import { formatInlineCodeSpan } from "../../../../../src/shared/markdown-code.js";
+import { isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
 import type { SessionFileDownload } from "../../../api/session-file-download.ts";
-import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
+import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
+import { readBlobAsDataUrl } from "../../../lib/blob-data-url.ts";
+import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
-import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import type { FilePreviewSource, SidebarContent } from "./chat-sidebar-content-types.ts";
+import { isTextAttachment } from "./chat-text-attachment.tsx";
 
 function formatMarkdownCodeSpan(value: string): string {
   // Markdown finds block boundaries before inline spans, so filenames must
@@ -52,6 +56,82 @@ export function unsupportedFileSidebarContent(
 
 export function hasUniformLineEndings(content: string): boolean {
   return new Set(content.match(/\r\n?|\n/g)).size <= 1;
+}
+
+export async function loadArtifactSidebarContent(
+  result: ArtifactDownloadResult & { blob?: Blob },
+  download: (signal: AbortSignal) => Promise<Blob | null>,
+  resourceBasePath?: string,
+): Promise<SidebarContent> {
+  const { data, encoding, url, blob } = result;
+  const { title } = result.artifact;
+  const mimeType = result.artifact.mimeType ?? "";
+  const file: FilePreviewSource = {
+    path: "",
+    artifactId: result.artifact.id,
+    download: async (signal) => {
+      const downloaded = await download(signal);
+      return downloaded ? { blob: downloaded, filename: title } : null;
+    },
+  };
+  let imageSource: string | undefined;
+  let text: string | undefined;
+  if (blob) {
+    if (mimeType.startsWith("image/")) {
+      // Workspace previews outlive the ticket, so retain the image in the existing data URL form.
+      imageSource = await readBlobAsDataUrl(blob, {
+        readError: "Artifact image could not be decoded",
+        invalidResultError: "Artifact image could not be decoded",
+      });
+    } else if (isTextAttachment(mimeType, title)) {
+      text = await blob.text();
+    }
+  } else if (encoding === "base64" && data !== undefined) {
+    if (mimeType.startsWith("image/")) {
+      imageSource = `data:${mimeType};base64,${data}`;
+    } else if (isTextAttachment(mimeType, title)) {
+      text = new TextDecoder().decode(base64ToBytes(data));
+    }
+  }
+  if (imageSource) {
+    return {
+      kind: "image",
+      title,
+      src: imageSource,
+      mimeType,
+      rawText: url ?? null,
+      file,
+    };
+  }
+  if (text !== undefined) {
+    const language = mimeType === "application/json" ? "json" : "";
+    return {
+      kind: "file",
+      path: "",
+      artifactId: result.artifact.id,
+      name: title,
+      content: text,
+      rawText: text,
+      mimeType,
+      language,
+      download: file.download,
+    };
+  }
+
+  if (blob || encoding === "base64" || (url && isHttpArtifactDownloadUrl(url, resourceBasePath))) {
+    return {
+      kind: "attachment",
+      attachmentKind: "document",
+      title,
+      mimeType,
+      download,
+      file,
+    };
+  }
+  const content = url
+    ? `# ${title}\n\n[Open artifact](${url})`
+    : `# ${title}\n\nArtifact download is not previewable in the sidebar.`;
+  return { kind: "markdown", content, rawText: content };
 }
 
 export function readWorkspaceFileText(

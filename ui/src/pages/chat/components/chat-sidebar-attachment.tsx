@@ -1,0 +1,281 @@
+import { createMemo, Match, onCleanup, refresh, Show, Switch } from "solid-js";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
+import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
+import { AttachmentStateCard, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
+import {
+  isCrossOriginHttpSource,
+  safeAttachmentHref,
+  safePlainTextAttachmentHref,
+  safeMediaAttachmentHref,
+} from "./chat-attachment-href.ts";
+import "./chat-audio-player.tsx";
+import "./chat-video-player.tsx";
+import { openResolvedImage } from "./chat-message-image-open.ts";
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
+import { ChatPdfPreview, isPdfAttachment } from "./chat-pdf-preview.tsx";
+import type {
+  AttachmentSidebarRuntime,
+  SidebarContent,
+  MobileFileBack,
+} from "./chat-sidebar-content-types.ts";
+import {
+  SidebarFileMobileRail,
+  SidebarFileMobileImageControls,
+} from "./chat-sidebar-file-mobile.tsx";
+import { ChatTextAttachment, isTextAttachment } from "./chat-text-attachment.tsx";
+
+type SidebarAttachmentProps = {
+  content: Extract<SidebarContent, { kind: "attachment" }>;
+  runtime: AttachmentSidebarRuntime;
+  embedSandboxMode: EmbedSandboxMode;
+  download?: { pending: boolean; error: string | null; onDownload: () => void };
+  mobile?: boolean;
+  back?: MobileFileBack;
+  onOpenImage?: (item: ImageLightboxItem) => void;
+};
+
+function prepareAttachment(input: SidebarAttachmentProps, onSourceChange: () => void) {
+  const content = input.content;
+  const resolution = content.resolveSource?.(onSourceChange, input.runtime);
+  const source = resolution ? (resolution.status === "ready" ? resolution : null) : content;
+  const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  const kind: NonNullable<SidebarAttachmentProps["content"]["attachmentKind"]> =
+    content.attachmentKind === "video" || mimeType.startsWith("video/")
+      ? "video"
+      : content.attachmentKind === "audio" || mimeType.startsWith("audio/")
+        ? "audio"
+        : content.attachmentKind === "image" || mimeType.startsWith("image/")
+          ? "image"
+          : "document";
+  const src = (
+    content.plainText
+      ? safePlainTextAttachmentHref
+      : kind === "audio" || kind === "video"
+        ? safeMediaAttachmentHref
+        : safeAttachmentHref
+  )(source?.src ?? "");
+  const pending = resolution?.status === "pending";
+  const inferTypeFromExtension = !mimeType || mimeType === "application/octet-stream";
+  const blockedExternalSvg =
+    (mimeType === "image/svg+xml" ||
+      (inferTypeFromExtension &&
+        (isSvgImageMediaPath(content.sourceIdentity ?? "", undefined) ||
+          isSvgImageMediaPath(src ?? "", undefined) ||
+          isSvgImageMediaPath(content.title, undefined)))) &&
+    isCrossOriginHttpSource(src ?? "");
+  const imagePreview = (src || pending) && !blockedExternalSvg && kind === "image";
+  const width = source?.width ?? content.width;
+  const height = source?.height ?? content.height;
+  return {
+    source,
+    mimeType,
+    kind,
+    src,
+    pending,
+    imagePreview,
+    ratio: width && height ? `${width} / ${height}` : undefined,
+    sourceIdentity: [
+      input.runtime.connectionEpoch ?? "",
+      input.runtime.agentId ?? "",
+      input.runtime.sessionKey ?? "",
+      content.sourceIdentity ?? src ?? "",
+    ].join("\u0000"),
+    error: resolution?.status === "error" ? resolution.reason : undefined,
+    retry:
+      resolution?.status === "error" || resolution?.status === "unavailable"
+        ? resolution.onRetry
+        : undefined,
+  };
+}
+
+export function SidebarAttachment(props: SidebarAttachmentProps) {
+  // Download-only attachments never resolve preview sources.
+  return (
+    <Show
+      when={props.content.download && props.download}
+      fallback={<AttachmentPreview {...props} />}
+    >
+      {(download) => (
+        <>
+          <Show when={props.mobile}>
+            <SidebarFileMobileRail
+              name={props.content.title}
+              identity={props.content.sourceIdentity ?? props.content.title}
+              back={props.back}
+              actions={
+                <button
+                  type="button"
+                  class="sidebar-file-mobile__button"
+                  aria-label={t("chat.mediaPlayer.download", { filename: props.content.title })}
+                  aria-busy={download().pending ? "true" : "false"}
+                  disabled={download().pending}
+                  onClick={() => download().onDownload()}
+                >
+                  <Icon name="download" />
+                </button>
+              }
+            />
+          </Show>
+          <CompactAttachmentCard
+            kind="document"
+            label={props.content.title}
+            mimeType={props.content.mimeType ?? undefined}
+            sizeBytes={props.content.sizeBytes}
+            onDownload={download().onDownload}
+            downloadPending={download().pending}
+          />
+          <Show when={download().error}>{(error) => <div role="alert">{error()}</div>}</Show>
+        </>
+      )}
+    </Show>
+  );
+}
+
+function AttachmentPreview(props: SidebarAttachmentProps) {
+  const sourceChanged = () => void refresh(model);
+  let resolver: SidebarAttachmentProps["content"]["resolveSource"];
+  let identity: string | undefined;
+  const model = createMemo(() => {
+    const nextResolver = props.content.resolveSource;
+    const nextIdentity = props.content.sourceIdentity ?? props.content.src;
+    if (resolver !== nextResolver || identity !== nextIdentity) {
+      releaseChatMediaResourceOwner(sourceChanged);
+      resolver = nextResolver;
+      identity = nextIdentity;
+    }
+    return prepareAttachment(props, sourceChanged);
+  });
+  onCleanup(() => releaseChatMediaResourceOwner(sourceChanged));
+  const mediaProps = () => ({
+    "prop:sourceIdentity": props.content.sourceIdentity ?? props.content.src ?? model().src ?? "",
+    "prop:label": props.content.title,
+    "prop:mimeType": props.content.mimeType ?? "",
+    "prop:playback": model().source?.playback ?? props.content.playback ?? "native",
+    "prop:authToken": model().source?.authToken ?? null,
+    "prop:sizeBytes": model().source?.sizeBytes ?? props.content.sizeBytes,
+  });
+  const preview = (
+    <Switch
+      fallback={
+        <CompactAttachmentCard
+          kind={props.content.attachmentKind ?? "document"}
+          label={props.content.title}
+          mimeType={props.content.mimeType ?? undefined}
+          sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+          downloadHref={model().src ?? undefined}
+        />
+      }
+    >
+      <Match
+        when={
+          (model().src || model().pending) &&
+          model().kind === "document" &&
+          isPdfAttachment(model().mimeType, props.content.title) &&
+          !isCrossOriginHttpSource(model().src ?? "")
+        }
+      >
+        <ChatPdfPreview
+          src={model().src ?? ""}
+          sourceIdentity={model().sourceIdentity}
+          label={props.content.title}
+          mimeType={props.content.mimeType ?? ""}
+          sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+        />
+      </Match>
+      <Match
+        when={
+          (model().src || model().pending) &&
+          isTextAttachment(model().mimeType, props.content.title) &&
+          !isCrossOriginHttpSource(model().src ?? "")
+        }
+      >
+        <ChatTextAttachment
+          plainText={props.content.plainText ?? false}
+          actions={props.content.renderActions?.()}
+          embedSandboxMode={props.embedSandboxMode}
+          src={model().src ?? ""}
+          sourceIdentity={model().sourceIdentity}
+          label={props.content.title}
+          mimeType={props.content.mimeType ?? ""}
+          sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+        />
+      </Match>
+      <Match when={model().kind === "video" && (model().src || model().pending)}>
+        <openclaw-chat-video-player
+          prop:src={model().src ?? ""}
+          prop:preview={true}
+          {...mediaProps()}
+          prop:mediaWidth={model().source?.width ?? props.content.width}
+          prop:mediaHeight={model().source?.height ?? props.content.height}
+        />
+      </Match>
+      <Match when={!model().src || model().imagePreview}>
+        <AttachmentStateCard
+          kind={model().kind}
+          label={props.content.title}
+          mimeType={props.content.mimeType ?? undefined}
+          sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+          downloadHref={model().src ?? undefined}
+          downloadPending={model().pending}
+          imagePreview={Boolean(model().imagePreview)}
+          previewRatio={model().ratio}
+          error={model().error}
+          onRetry={model().retry}
+        >
+          <Show when={props.mobile && props.onOpenImage && model().imagePreview && model().src}>
+            <SidebarFileMobileImageControls
+              name={props.content.title}
+              onExpand={() =>
+                openResolvedImage(props.onOpenImage, model().src!, props.content.title)
+              }
+            />
+          </Show>
+        </AttachmentStateCard>
+      </Match>
+      <Match when={model().kind === "audio"}>
+        <openclaw-chat-audio-player
+          prop:src={model().src ?? ""}
+          {...mediaProps()}
+          prop:serverDurationMs={model().source?.durationMs ?? props.content.durationMs}
+          prop:voiceNote={props.content.voiceNote === true}
+        />
+      </Match>
+    </Switch>
+  );
+  return (
+    <>
+      <Show when={props.mobile}>
+        <SidebarFileMobileRail
+          name={props.content.title}
+          identity={props.content.sourceIdentity ?? props.content.title}
+          back={props.back}
+          actions={
+            <Show when={model().src}>
+              {(src) => (
+                <a
+                  class="sidebar-file-mobile__button"
+                  href={src()}
+                  download={props.content.title}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={t("chat.mediaPlayer.download", { filename: props.content.title })}
+                >
+                  <Icon name="download" />
+                </a>
+              )}
+            </Show>
+          }
+        />
+      </Show>
+      <div
+        class={props.mobile ? "sidebar-file-mobile__body" : undefined}
+        style={{ display: props.mobile ? undefined : "contents" }}
+      >
+        {preview}
+      </div>
+    </>
+  );
+}
