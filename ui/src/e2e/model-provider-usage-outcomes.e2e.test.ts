@@ -7,11 +7,14 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  readyProvider,
+  button,
   catalogModel,
+  configKeyProvider,
   configSnapshot,
+  createScreenshots,
   keyCapability,
   pageOptions,
-  recordShot,
   text,
 } from "./model-provider-fixtures.test-support.ts";
 
@@ -32,19 +35,16 @@ function providerUsageResponses(usageStatus: unknown) {
     "models.list": { models: [] },
     "models.authStatus": {
       ts: now,
-      providers: [
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          status: "ok",
-          profiles: [],
-        },
-      ],
+      providers: [readyProvider("openai", "OpenAI", [])],
     },
     "sessions.usage": { aggregates: { byProvider: [] } },
     "usage.status": usageStatus,
   };
 }
+
+const capture = createScreenshots(() => path.join(suite.artifactDir, "model-providers"), {
+  animations: "disabled",
+});
 
 suite.define(() => {
   it("shows usage request failures with no configured providers", async () => {
@@ -61,14 +61,7 @@ suite.define(() => {
         .toBeGreaterThan(0);
       await text(page.locator(".settings-page")).toContain(unavailableMessage);
       expect(await page.locator("[data-provider-id]").count()).toBe(0);
-      await recordShot(page, {
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(
-          path.join(suite.artifactDir, "model-providers"),
-          "provider-usage-request-failed.png",
-        ),
-      });
+      await capture(page, "provider-usage-request-failed.png", { fullPage: true });
     });
   });
 
@@ -96,13 +89,7 @@ suite.define(() => {
         .toBeGreaterThan(0);
       await text(card).toContain("provider API unavailable");
       await text(page.locator(".settings-page")).not.toContain(unavailableMessage);
-      await recordShot(card, {
-        animations: "disabled",
-        path: path.join(
-          path.join(suite.artifactDir, "model-providers"),
-          "provider-usage-provider-error.png",
-        ),
-      });
+      await capture(card, "provider-usage-provider-error.png");
     });
   });
 
@@ -124,15 +111,7 @@ suite.define(() => {
           },
           "models.authStatus": {
             ts: now,
-            providers: [
-              {
-                provider: "openai",
-                displayName: "OpenAI",
-                status: "static",
-                profiles: [],
-                apiKey: { source: "config" },
-              },
-            ],
+            providers: [configKeyProvider("openai", "OpenAI")],
           },
         },
       });
@@ -161,7 +140,7 @@ suite.define(() => {
       await expect
         .poll(() => catalogWarning.textContent(), { timeout: 5_000 })
         .toContain("Model catalog temporarily unavailable");
-      await catalogWarning.getByRole("button", { name: "Retry", exact: true }).waitFor();
+      await button(catalogWarning, "Retry").waitFor();
       expect(await page.locator(".provider-usage-error").count()).toBe(0);
       expect(await page.locator('[data-model-readiness="model-required"]').count()).toBe(0);
       const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
@@ -170,20 +149,13 @@ suite.define(() => {
       await gateway.setMethodResponse("models.list", {
         models: [catalogModel("openai", "gpt-5.5", "GPT-5.5")],
       });
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await button(page, "Refresh").click();
 
       await expect.poll(() => catalogWarning.count()).toBe(0);
       await expect.poll(() => page.locator(".provider-usage-error").count()).toBe(0);
       await text(card).toContain("API key set in config");
       await expect.poll(() => pickerValue(primary)).toBe("openai/gpt-5.5");
-      await recordShot(page, {
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(
-          path.join(suite.artifactDir, "model-providers"),
-          "model-catalog-request-recovered.png",
-        ),
-      });
+      await capture(page, "model-catalog-request-recovered.png", { fullPage: true });
     });
   });
 
@@ -215,15 +187,7 @@ suite.define(() => {
           "models.authStatus": {
             ts: now,
             providerCapabilities: [keyCapability("openai"), keyCapability("google")],
-            providers: [
-              {
-                provider: "openai",
-                displayName: "OpenAI",
-                status: "static",
-                profiles: [],
-                apiKey: { source: "config" },
-              },
-            ],
+            providers: [configKeyProvider("openai", "OpenAI")],
           },
         },
       });
@@ -232,13 +196,7 @@ suite.define(() => {
       const openaiCard = page.locator('[data-provider-id="openai"]');
       await text(openaiCard).toContain("Credentials for Main");
       await openaiCard.getByRole("button", { name: "Set API key" }).click();
-      await recordShot(page, {
-        path: path.join(
-          path.join(suite.artifactDir, "model-providers"),
-          "provider-credential-scope-before.png",
-        ),
-        fullPage: true,
-      });
+      await capture(page, "provider-credential-scope-before.png", { fullPage: true });
       await openaiCard.getByLabel("API key").fill("synthetic-main-provider-key");
 
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
@@ -247,13 +205,7 @@ suite.define(() => {
       await text(openaiCard).toContain("Credentials for Writer");
       await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-      await recordShot(page, {
-        path: path.join(
-          path.join(suite.artifactDir, "model-providers"),
-          "provider-credential-scope-inline-cleared.png",
-        ),
-        fullPage: true,
-      });
+      await capture(page, "provider-credential-scope-inline-cleared.png", { fullPage: true });
 
       await page.locator("[data-models-connect]").click();
       await page.locator('[data-models-login-provider="google"]').click();
@@ -269,13 +221,7 @@ suite.define(() => {
       await expect.poll(async () => page.locator("[data-models-key-dialog]").count()).toBe(0);
       await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-      await recordShot(page, {
-        path: path.join(
-          path.join(suite.artifactDir, "model-providers"),
-          "provider-credential-scope-after.png",
-        ),
-        fullPage: true,
-      });
+      await capture(page, "provider-credential-scope-after.png", { fullPage: true });
     });
   });
 });
