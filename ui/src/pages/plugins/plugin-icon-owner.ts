@@ -6,7 +6,7 @@ import {
   type PluginIconFetchContext,
 } from "./icon-loader.ts";
 
-type PluginIconControllerHost = {
+type PluginIconOwnerHost = {
   readonly kind?: "plugin" | "catalog";
   getFetchContext: () => PluginIconFetchContext;
   isConnected: (key: string) => boolean;
@@ -32,7 +32,7 @@ export function pluginIconFetchContext(context: ApplicationContext): PluginIconF
   };
 }
 
-export class PluginIconController {
+export class PluginIconOwner {
   private readonly misses = new Set<string>();
   private readonly requests = new Map<
     string,
@@ -40,7 +40,7 @@ export class PluginIconController {
   >();
   private urls: Record<string, string> = {};
 
-  constructor(private readonly host: PluginIconControllerHost) {}
+  constructor(private readonly host: PluginIconOwnerHost) {}
 
   syncCatalog(
     entries: readonly PluginDiscoveryEntry[],

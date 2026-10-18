@@ -437,6 +437,60 @@ describe("kysely sync helpers", () => {
     expect(prepares()).toBe(6);
   });
 
+  // Explicit statement disposal is a public Node API starting in 26.8.
+  it
+    .skipIf(!Object.getOwnPropertyDescriptor(StatementSync.prototype, Symbol.dispose))
+    .each(["uncached", "candidate", "oversized", "first", "iterator", "iterator-return", "error"])(
+    "releases native bindings when a %s query settles",
+    (mode) => {
+      if (mode !== "uncached") {
+        enableNodeSqliteKyselyStatementCache(database);
+      }
+      const prepareSpy = vi.spyOn(database, "prepare");
+      const value = "x".repeat(mode === "oversized" ? 128 * 1024 : 1024);
+      const query = scalar<number>(mode === "error" ? "json" : "length", value);
+      if (mode === "error") {
+        expect(() => run(query)).toThrow(/malformed JSON/iu);
+      } else if (mode === "first") {
+        expect(first(query)).toEqual({ value: value.length });
+      } else if (mode.startsWith("iterator")) {
+        const iterator = iterateSqliteQuerySync(database, query);
+        expect(iterator.next().value).toEqual({ value: value.length });
+        if (mode === "iterator-return") {
+          iterator.return?.();
+        } else {
+          expect(iterator.next().done).toBe(true);
+        }
+      } else {
+        expectRows(query, [{ value: value.length }]);
+      }
+      const statement = prepareSpy.mock.results[0]!.value as StatementSync;
+      expect(() => statement.get(value)).toThrow(/finalized/iu);
+    },
+  );
+
+  it.skipIf(!Object.getOwnPropertyDescriptor(StatementSync.prototype, Symbol.dispose))(
+    "finalizes evicted and cleared statements while retaining reusable queries",
+    () => {
+      enableNodeSqliteKyselyStatementCache(database);
+      const prepareSpy = vi.spyOn(database, "prepare");
+      createItems(["Ada"]);
+      prepareSpy.mockClear();
+      const select = selectItems();
+      expectRows(select, itemRows("Ada"), 3);
+      const retained = prepareSpy.mock.results[1]!.value as StatementSync;
+      expect(retained.all()).toEqual(itemRows("Ada"));
+      for (let count = 1; count <= 64; count++) {
+        expectRows(variableSelect(count), [], 2);
+      }
+      expect(() => retained.all()).toThrow(/finalized/iu);
+      const last = prepareSpy.mock.results.at(-1)!.value as StatementSync;
+      expect(last.all(...Array.from({ length: 64 }, (_, index) => index + 1))).toEqual([]);
+      clearNodeSqliteKyselyCacheForDatabase(database);
+      expect(() => last.all()).toThrow(/finalized/iu);
+    },
+  );
+
   it("invalidates prepared statements when the database is deserialized", () => {
     createItems(["Ada"]);
     let replacementBytes = new Uint8Array();

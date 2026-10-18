@@ -25,7 +25,6 @@ const sandboxMocks = vi.hoisted(() => ({
   resolveSandboxContext: vi.fn(),
   ensureSandboxWorkspaceForSession: vi.fn(),
 }));
-vi.mock("../agents/sandbox.js", () => sandboxMocks);
 vi.mock("../agents/sandbox/context.js", () => sandboxMocks);
 vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),

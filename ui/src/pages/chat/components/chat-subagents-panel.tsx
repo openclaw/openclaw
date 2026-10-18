@@ -32,10 +32,23 @@ let panelSequence = 0;
 export const ChatSubagentsPanel = defineSolidBridge<Props>(
   "openclaw-chat-subagents-panel",
   (props) => {
-    const [selected, setSelected] = createSignal<{ key: string; agentId: string } | null>(null);
     const [finishedOpen, setFinishedOpen] = createSignal(true);
     const finishedId = `chat-subagents-finished-${++panelSequence}`;
     const data = useSessionPanel(props, SubagentsPanelData, () => setSelected(null));
+    // Keep a local choice until the authoritative roster removes it or denies access.
+    const [selected, setSelected] = createSignal<{ key: string; agentId: string } | null>(
+      (previous) => {
+        const owner = data();
+        return previous &&
+          !owner.loading &&
+          ((owner.error && !owner.rows.length) ||
+            (owner.hasResult &&
+              !owner.error &&
+              !owner.rows.some((row) => row.session.key === previous.key)))
+          ? null
+          : (previous ?? null);
+      },
+    );
     const subagentAgentId = (key: string) =>
       data().rows.find((row) => row.session.key === key)?.session.agentId ??
       parseAgentSessionKey(key)?.agentId ??
@@ -46,25 +59,6 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         const key = request?.();
         if (key !== undefined) {
           setSelected(key ? { key, agentId: subagentAgentId(key) } : null);
-        }
-      },
-    );
-    createEffect(
-      () => {
-        const value = selected();
-        const owner = data();
-        return (
-          value &&
-          !owner.loading &&
-          ((owner.error && !owner.rows.length) ||
-            (owner.hasResult &&
-              !owner.error &&
-              !owner.rows.some((row) => row.session.key === value.key)))
-        );
-      },
-      (removed) => {
-        if (removed) {
-          setSelected(null);
         }
       },
     );

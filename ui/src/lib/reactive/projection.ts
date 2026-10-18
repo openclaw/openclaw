@@ -44,7 +44,8 @@ export function projectSource<S, T>(
   contract: SourceContract<S, T>,
 ): SourceProjection<S, T> {
   let source = initialSource;
-  let value = untrack(() => contract.read(source));
+  const readSnapshot = () => untrack(() => contract.read(source));
+  let value = readSnapshot();
   let lastRead = value;
   let disposed = false;
   let observed = false;
@@ -76,7 +77,7 @@ export function projectSource<S, T>(
     connected = true;
     // Owners remove their listeners synchronously; detached callbacks are not replayed.
     disconnect = contract.subscribe(source, () => {
-      const next = untrack(() => contract.read(source));
+      const next = readSnapshot();
       const changed = contract.equality === "revision" || !contract.equality(value, next);
       value = next;
       lastRead = next;
@@ -84,7 +85,7 @@ export function projectSource<S, T>(
         publish();
       }
     });
-    value = untrack(() => contract.read(source));
+    value = readSnapshot();
     lastRead = value;
   };
   // A lazy, dependency-free memo gives probes a temporary lifetime and tracked
@@ -98,7 +99,7 @@ export function projectSource<S, T>(
           release();
         }
       });
-      untrack(connect);
+      connect();
       return true;
     },
     { lazy: true },
@@ -114,7 +115,7 @@ export function projectSource<S, T>(
     if (disposed) {
       return;
     }
-    setRevision(untrack(revision));
+    setRevision(revision());
     disposed = true;
     listeners.clear();
     release();
@@ -127,7 +128,7 @@ export function projectSource<S, T>(
     read() {
       observe();
       if (!disposed) {
-        lastRead = untrack(() => contract.read(source));
+        lastRead = readSnapshot();
       }
       return lastRead;
     },
@@ -153,7 +154,7 @@ export function projectSource<S, T>(
       }
       release();
       source = next;
-      value = untrack(() => contract.read(source));
+      value = readSnapshot();
       lastRead = value;
       if (observed || listeners.size > 0) {
         connect();

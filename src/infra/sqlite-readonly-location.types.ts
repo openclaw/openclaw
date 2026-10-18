@@ -2,6 +2,9 @@ import type { BigIntStats } from "node:fs";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
 
+/** Transient facts minted before an owned private family is exposed to readers. */
+export type SqlitePrivateSnapshotFamily = { root: string; main: string; wal: string | null };
+
 export type PreparedSqliteReadOnlyLocation = {
   cleanup: () => boolean;
   cleanupAsync: () => Promise<boolean>;
@@ -11,6 +14,8 @@ export type PreparedSqliteReadOnlyLocation = {
   cleanupRoot?: string;
   // Bound to the captured source digest, with no journal or WAL frames to apply.
   journalFreeContent?: SqliteFileContent & { identity: BigIntStats };
+  // Only read-owned producers grant this before publishing bytes to any borrower.
+  privateFamily?: SqlitePrivateSnapshotFamily;
 };
 
 export type AsyncPreparedSqliteReadOnlyLocation = Omit<PreparedSqliteReadOnlyLocation, "cleanup">;
