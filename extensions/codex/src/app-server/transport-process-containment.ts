@@ -17,6 +17,30 @@ export type CodexAppServerProcessIdentity = Pick<PosixProcess, "pid" | "pgid" | 
 const MAX_CONTAINED_PROCESSES = 512;
 const MAX_PROCESS_CONTAINMENT_MS = 2_000;
 const MAX_PROCESS_QUIESCE_PASSES = 16;
+const heldStoppedRoots = new Map<PosixProcess, ContainableTransport>();
+
+// A stopped root never observes its owner exiting: it is reparented and stays
+// stopped forever. Kill held roots when the owner exits mid-containment.
+function killHeldStoppedRootsOnExit(): void {
+  for (const [root, child] of heldStoppedRoots) {
+    // An unreaped direct child still owns its PID.
+    if (child.exitCode == null && child.signalCode == null) {
+      signalProcess(root.pgid === root.pid ? -root.pid : root.pid, "SIGKILL");
+    }
+  }
+}
+
+function holdStoppedRoot(root: PosixProcess, child: ContainableTransport): () => void {
+  if (heldStoppedRoots.size === 0) {
+    process.on("exit", killHeldStoppedRootsOnExit);
+  }
+  heldStoppedRoots.set(root, child);
+  return () => {
+    if (heldStoppedRoots.delete(root) && heldStoppedRoots.size === 0) {
+      process.off("exit", killHeldStoppedRootsOnExit);
+    }
+  };
+}
 
 /** Discharges the registered root obligation, including an already-obsolete PID. */
 export async function terminateCodexAppServerOrphan(
@@ -119,7 +143,12 @@ export async function terminateCodexAppServerDescendants(
     return undefined;
   }
   const stoppedDescendants = new Map<string, PosixProcess>();
+  // Hold before the awaited SIGSTOP; process.exit can land in any await below.
+  // Orphans lack an unreaped handle, so their durable registration keeps cleanup.
+  // An owner SIGKILL runs no exit handler; that remains the accepted gap.
+  const release = expected ? undefined : holdStoppedRoot(root, child);
   if (!(await signalSameProcess(root, "SIGSTOP", deadline, "root"))) {
+    release?.();
     return undefined;
   }
   let resumeRootOnUnwind = true;
@@ -187,6 +216,7 @@ export async function terminateCodexAppServerDescendants(
         }
         resumed = true;
         resumeTransportRoot(child, root, false);
+        release?.();
       },
     };
   } finally {
@@ -206,6 +236,7 @@ export async function terminateCodexAppServerDescendants(
         }
         resumeTransportRoot(child, root, true);
       }
+      release?.();
     }
   }
 }
