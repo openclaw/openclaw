@@ -126,7 +126,7 @@ function mountPopup(
     document,
     "pointerdown",
     (event) => {
-      if (!popup.contains(event.target as Node | null)) {
+      if (!(event.target instanceof Node) || !popup.contains(event.target)) {
         removeChatSelectionPopup();
       }
     },
