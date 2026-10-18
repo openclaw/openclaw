@@ -13,6 +13,7 @@ import { resolveMessageActionAgentRuntimeIdentity } from "../../agents/tools/gat
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "../../auto-reply/reply/restart-recovery-claim.js";
 import { createReplyRecoveryActorFixture } from "../../auto-reply/reply/restart-recovery-claim.test-support.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -23,6 +24,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { QaBusStateSnapshot } from "../../plugin-sdk/qa-channel-protocol.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
@@ -40,14 +42,21 @@ import type { RespondFn } from "./types.js";
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
+type QaBusState = { getSnapshot: () => QaBusStateSnapshot };
+
 it("keeps an accepted QA reply pending after a lost HTTP response and refuses a distinct same-source call", async (test) => {
   await withOpenClawTestState({ prefix: "gateway-qa-reply-ambiguity-" }, async (state) => {
-    const { qaChannelPlugin } = await loadBundledPluginFacade<
-      typeof import("../../../extensions/qa-channel/api.js")
-    >({ pluginId: "qa-channel", artifactBasename: "api.js" });
-    const { createQaBusState, startQaBusServer } = await loadBundledPluginFacade<
-      typeof import("../../../extensions/qa-lab/bus-api.js")
-    >({ pluginId: "qa-lab", artifactBasename: "bus-api.js" });
+    const { qaChannelPlugin } = await loadBundledPluginFacade<{ qaChannelPlugin: ChannelPlugin }>({
+      pluginId: "qa-channel",
+      artifactBasename: "api.js",
+    });
+    const { createQaBusState, startQaBusServer } = await loadBundledPluginFacade<{
+      createQaBusState: () => QaBusState;
+      startQaBusServer: (params: { state: QaBusState }) => Promise<{
+        baseUrl: string;
+        stop: () => Promise<void>;
+      }>;
+    }>({ pluginId: "qa-lab", artifactBasename: "api.js" });
     const busState = createQaBusState();
     const bus = await startQaBusServer({ state: busState });
     const accepted = createDeferred();
@@ -91,7 +100,7 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
         accepted.resolve();
         await releaseResponse.promise;
         downstream.destroy();
-      })().catch((error) => {
+      })().catch((error: unknown) => {
         exchangeErrors.push(error);
         accepted.reject(error);
         downstream.destroy();
@@ -193,7 +202,10 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
       const context = makeContext(() => cfg);
       context.validateAgentRuntimeApprovalAuthority =
         createAgentRuntimeApprovalAuthorityValidator();
-      const handler = expectDefined(sendHandlers["message.action"]);
+      const handler = expectDefined(
+        sendHandlers["message.action"],
+        "Gateway message.action handler",
+      );
       const invoke = (toolCallId: string, idempotencyKey: string) => {
         const running = withGatewayToolCallerIdentity(
           {
@@ -213,6 +225,7 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
                 sourceReplyFinal: true,
                 sourceReplyToolCallId: toolCallId,
               }),
+              "admitted message-action runtime identity",
             );
             expect(runtimeIdentity.messageActionContext).toMatchObject({
               sessionId: identity.sessionId,
@@ -237,7 +250,7 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
               respond,
             });
             expect(respond).toHaveBeenCalledOnce();
-            return expectDefined(respond.mock.calls[0]);
+            return expectDefined(respond.mock.calls[0], "Gateway message.action response");
           },
         );
         calls.push(running);
@@ -293,10 +306,8 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
       try {
         const settled = await Promise.allSettled([...calls, proxyClosed]);
         await Promise.all(exchanges);
-        const proxySettlement = settled.at(-1);
-        if (proxySettlement?.status === "rejected") {
-          throw proxySettlement.reason;
-        }
+        // Report cleanup failure without replacing the determining assertion or request error.
+        expect.soft(settled.at(-1)).toMatchObject({ status: "fulfilled" });
       } finally {
         try {
           await bus.stop();
