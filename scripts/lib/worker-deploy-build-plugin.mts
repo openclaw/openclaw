@@ -48,6 +48,7 @@ const WS_DIRECT_RUNTIME_FRAGMENTS = [
 ] as const;
 const TREE_SITTER_INIT = "TreeSitter.Parser.init()";
 const TREE_SITTER_BASH_WASM = 'require.resolve("tree-sitter-bash/tree-sitter-bash.wasm")';
+const FS_SAFE_WATCH_WORKER = 'new URL("./watch-io-worker.js", import.meta.url)';
 const PHOTON_WASM_INIT = `const path = require('path').join(__dirname, 'photon_rs_bg.wasm');
 const bytes = require('fs').readFileSync(path);`;
 const FS_SAFE_NATIVE_BATCH = `    if (options.native) {
@@ -125,6 +126,9 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       "dist/windows-security-command.js",
     ),
   );
+  const fsSafeWatchIoPath = fs.realpathSync(
+    path.join(path.dirname(require.resolve("@openclaw/fs-safe/package.json")), "dist/watch-io.js"),
+  );
   const [packageJsonPath, browsersJsonPath, , treeSitterWasmPath, bashWasmPath, photonWasmPath] =
     resolveWorkerDeployGeneratorInputs(rootDir);
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
@@ -180,6 +184,16 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       }
       if (resolvedId === browserRuntimeBridgePath) {
         return WORKER_BROWSER_RUNTIME_COMPOSITION;
+      }
+      if (resolvedId === fsSafeWatchIoPath) {
+        if (code.split(FS_SAFE_WATCH_WORKER).length !== 2) {
+          this.error("fs-safe watch worker bootstrap changed; update the worker deploy transform");
+        }
+        // The archive carries the dependency worker as a bundled entry, not its source sibling.
+        return code.replace(
+          FS_SAFE_WATCH_WORKER,
+          'new URL("./worker-chunk-fs-safe-watch-io.mjs", import.meta.url)',
+        );
       }
       if (resolvedId === fsSafeWindowsSecurityPath) {
         if (code.split(FS_SAFE_NATIVE_BATCH).length !== 2) {

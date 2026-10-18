@@ -200,9 +200,13 @@ export { readOwnerAndDaclBatch } from "@openclaw/fs-safe/permissions";`;
         const builtEntries = vi
           .mocked(build)
           .mock.calls.flatMap(([options]) => Object.keys(options?.entry ?? {}));
-        expect(builtEntries.length).toBe(workerEntryNames.length + 1);
+        expect(builtEntries.length).toBe(workerEntryNames.length + 2);
         expect(builtEntries.toSorted()).toEqual(
-          [...workerEntryNames, "worker/worker-chunk-highlight"].toSorted(),
+          [
+            ...workerEntryNames,
+            "worker/worker-chunk-highlight",
+            "worker/worker-chunk-fs-safe-watch-io",
+          ].toSorted(),
         );
         const chunks = bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName));
         expect(chunks).toContain("worker/worker.mjs");
@@ -459,6 +463,19 @@ const {
   getNativeFallbackDiagnostic,
   readOwnerAndDaclBatch,
 } = await import(pathToFileURL(entry).href);
+const { Worker } = await import("node:worker_threads");
+const { once } = await import("node:events");
+const watcher = new Worker(new URL("./worker-chunk-fs-safe-watch-io.mjs", pathToFileURL(entry)), {
+  execArgv: [],
+  workerData: { native: getFsSafeNativeConfig(), diagnostics: false },
+});
+try {
+  const reply = once(watcher, "message");
+  watcher.postMessage({ id: 1, method: "metrics", args: [] });
+  assert.deepEqual((await reply)[0], { id: 1, value: {}, cleanupErrors: [] });
+} finally {
+  await watcher.terminate();
+}
 assert.equal(getFsSafeNativeConfig().mode, "off", "sealed policy must override host native mode");
 const diagnostic = getNativeFallbackDiagnostic();
 assert.equal(diagnostic.reason, "disabled");
@@ -972,6 +989,12 @@ export async function createAttachedBrowserToolRuntime(params) {
   });
 
   it.each([
+    {
+      name: "fs-safe watch worker",
+      modulePath: "node_modules/@openclaw/fs-safe/dist/watch-io.js",
+      mutate: (source: string) => source.replace("./watch-io-worker.js", "./changed-worker.js"),
+      error: "fs-safe watch worker bootstrap changed",
+    },
     {
       name: "fs-safe native batch",
       modulePath: "node_modules/@openclaw/fs-safe/dist/windows-security-command.js",
