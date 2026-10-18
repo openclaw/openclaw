@@ -8,7 +8,7 @@ import type { GatewaySessionRow } from "./session-utils.types.js";
 // Selection and presentation have separate keys: 512 slots cover 256 complete queries.
 const MAX_VIEWS = 512;
 const MAX_ESTIMATED_BYTES = 32 * 1024 * 1024;
-const SIDEBAR_ROW_HISTORY_LIMIT = 32;
+const ROW_HISTORY_LIMIT = 32;
 let retainedViews = 0;
 let retainedRefs = 0;
 let retainedBytes = 0;
@@ -63,15 +63,15 @@ export type SessionListView = {
   encodedBytes?: number;
   rows?: GatewaySessionRow[];
   rowHistory?: SessionRowGeneration[];
-  sidebar?: boolean;
+  conditional?: boolean;
   selection?: SessionEntrySelection;
   selectedAt?: number;
   activityExpiresAt?: number;
   partitions?: SelectionPartitions;
 };
 
-function hasSidebarBaseline(view: SessionListView): boolean {
-  return view.sidebar === true && (view.rows !== undefined || Boolean(view.rowHistory?.length));
+function hasRowBaseline(view: SessionListView): boolean {
+  return view.conditional === true && (view.rows !== undefined || Boolean(view.rowHistory?.length));
 }
 
 /** The publication owns admission, recency, accounting and retirement of every list view. */
@@ -85,9 +85,9 @@ export class SessionListViewCache {
     return this.lists.values();
   }
 
-  hasSidebarBaselines() {
+  hasRowBaselines() {
     for (const view of this.lists.values()) {
-      if (hasSidebarBaseline(view)) {
+      if (hasRowBaseline(view)) {
         return true;
       }
     }
@@ -116,7 +116,7 @@ export class SessionListViewCache {
     if (view.rows && this.lists.get(view.key) === view) {
       this.releaseRowEncodings(view.rows);
     }
-    if (view.sidebar && view.rows) {
+    if (view.conditional && view.rows) {
       this.retainRows(view, view.rows);
     }
     view.rows = undefined;
@@ -127,7 +127,7 @@ export class SessionListViewCache {
   setRows(
     view: SessionListView,
     rows: GatewaySessionRow[],
-    sidebar: boolean,
+    conditional: boolean,
     sharedBytes = 0,
     extraRowEncodingBytes?: (row: GatewaySessionRow) => number,
   ) {
@@ -135,11 +135,11 @@ export class SessionListViewCache {
     if (retained && view.rows) {
       this.releaseRowEncodings(view.rows);
     }
-    if (sidebar && view.rows) {
+    view.conditional ||= conditional;
+    if (view.conditional && view.rows) {
       this.retainRows(view, view.rows);
     }
     view.rows = rows;
-    view.sidebar = sidebar;
     view.encodedBytes =
       (retained ? this.retainRowEncodings(rows, extraRowEncodingBytes) : 0) +
       serializedJsonArrayBytes(rows) +
@@ -184,7 +184,7 @@ export class SessionListViewCache {
     const history = (view.rowHistory ??= []);
     history.push(captureSessionRowGeneration(rows));
     view.historyRefs += rows.length;
-    if (history.length > SIDEBAR_ROW_HISTORY_LIMIT) {
+    if (history.length > ROW_HISTORY_LIMIT) {
       view.historyRefs -= history.shift()!.ids.length;
       emitTrustedDiagnosticEvent({
         type: "sessions.list.baseline.retired",
@@ -234,7 +234,7 @@ export class SessionListViewCache {
     if (view.rows) {
       this.releaseRowEncodings(view.rows);
     }
-    if (hasSidebarBaseline(view)) {
+    if (hasRowBaseline(view)) {
       emitTrustedDiagnosticEvent({
         type: "sessions.list.baseline.retired",
         cause: "view-evicted",

@@ -202,7 +202,7 @@ function buildSessionsListResult(
           metadataSnapshot,
         })?.forAgent(defaultsAgentId, defaultsCatalog);
   const sharedRows =
-    opts.rowMode === "sidebar"
+    opts.rowMode === "sidebar" || opts.ifRowsRevision !== undefined
       ? shareSidebarSessionRows(sessions, opts.ifRowsRevision, rowHistory)
       : { sessions };
   const result = {

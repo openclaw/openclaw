@@ -600,13 +600,15 @@ export function prepareProjectedSessionPresentation(
       // Current authorization and temporal presentation precede reuse. The retained vector
       // owns bytes only; it never retains a connection or grants permission to a later read.
       const view = listView(opts);
+      const conditional = opts.rowMode === "sidebar" || opts.ifRowsRevision !== undefined;
       const previous = view.rows;
       if (previous?.length === rows.length && rows.every((row, index) => row === previous[index])) {
+        view.conditional ||= conditional;
         return { sessions: previous, rowHistory: view.rowHistory };
       }
       Object.freeze(rows);
       let sharedBytes = 0;
-      if (opts.rowMode === "sidebar") {
+      if (conditional) {
         // Prepare before admission so the byte limit includes everything this vector pins.
         const shared = shareSidebarSessionRows(rows);
         sharedBytes =
@@ -618,7 +620,7 @@ export function prepareProjectedSessionPresentation(
       publicationState?.lists.setRows(
         view,
         rows,
-        opts.rowMode === "sidebar",
+        conditional,
         sharedBytes,
         sessionRowFactEncodingBytes,
       );
