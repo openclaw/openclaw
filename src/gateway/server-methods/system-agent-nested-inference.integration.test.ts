@@ -4,7 +4,7 @@
  */
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -24,7 +24,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   enqueueCommandInLane,
-  getCommandLaneSnapshot,
+  getCommandLaneSnapshot as lane,
   listCommandLaneTotals,
 } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -46,6 +46,7 @@ import {
   type SystemAgentPluginMetadataTestSnapshot,
 } from "../../system-agent/system-agent.test-helpers.js";
 import { withLocalGatewayRequestScope } from "../local-request-context.js";
+import { quietGreetingFacts } from "./system-agent-chat-fixture.test-support.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient } from "./types.js";
 
@@ -88,10 +89,7 @@ vi.mock("../../agents/harness/runtime-plugin.js", async (importOriginal) => ({
 const client: GatewayClient = {
   connId: "nested-inference-test-connection",
   connect: {
-    minProtocol: 4,
-    maxProtocol: 4,
     client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-    role: "operator",
   },
 };
 let metadata: SystemAgentPluginMetadataTestSnapshot;
@@ -119,10 +117,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function completedResult(): EmbeddedAgentRunResult {
-  return { meta: { durationMs: 1, finalAssistantVisibleText: RESPONSE_TEXT } };
-}
-
 async function createConversation() {
   resetCommandQueueStateForTest();
   const root = tempDirs.make("openclaw-nested-inference-integration-");
@@ -136,10 +130,8 @@ async function createConversation() {
     },
   };
   setRuntimeConfigSnapshot(config);
-  const proof = await metadata.run(
-    () => createSystemAgentVerifiedInferenceTestFixture(config),
-    config,
-  );
+  const scoped = <T>(run: () => T) => metadata.run(run, config);
+  const proof = await scoped(() => createSystemAgentVerifiedInferenceTestFixture(config));
   const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => ({
     exists: true,
     valid: true,
@@ -156,18 +148,13 @@ async function createConversation() {
     legacyIssues: [],
   });
   const observed = createDeferred<"waiting" | "dispatched">();
-  const captured: {
-    mainActiveAtDispatch?: number;
-    inferenceActiveAtDispatch?: number;
-  } = {};
+  const captured: Partial<Record<"main" | "inference", number>> = {};
   dispatch.mockImplementation(async (params) => {
-    captured.mainActiveAtDispatch = getCommandLaneSnapshot(CommandLane.Main).activeCount;
-    captured.inferenceActiveAtDispatch = getCommandLaneSnapshot(
-      CommandLane.SystemAgentInference,
-    ).activeCount;
+    captured.main = lane(CommandLane.Main).activeCount;
+    captured.inference = lane(CommandLane.SystemAgentInference).activeCount;
     await expectDefined(params.preparedRunAdmission, "prepared admission").admit("embedded");
     observed.resolve("dispatched");
-    return completedResult();
+    return { meta: { durationMs: 1, finalAssistantVisibleText: RESPONSE_TEXT } };
   });
   const overview: SystemAgentOverview = {
     config: {
@@ -236,37 +223,30 @@ async function createConversation() {
   ]);
   const respond = vi.fn();
   const invoke = () =>
-    metadata.run(
-      () =>
-        withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => config }, () => {
-          const context = expectDefined(
-            getPluginRuntimeGatewayRequestScope()?.context,
-            "local Gateway context",
-          );
-          context.systemAgentSessions = sessions;
-          const params = { sessionId, message: "What is the next setup step?" };
-          return systemAgentHandlers["openclaw.chat"]!({
-            req: { type: "req", id: "nested-inference", method: "openclaw.chat", params },
-            params,
-            client,
-            context,
-            isWebchatConnect: () => false,
-            respond,
-          });
-        }),
-      config,
+    scoped(() =>
+      withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => config }, () => {
+        const context = expectDefined(
+          getPluginRuntimeGatewayRequestScope()?.context,
+          "local Gateway context",
+        );
+        context.systemAgentSessions = sessions;
+        const params = { sessionId, message: "What is the next setup step?" };
+        return systemAgentHandlers["openclaw.chat"]!({
+          req: { type: "req", id: "nested-inference", method: "openclaw.chat", params },
+          params,
+          client,
+          context,
+          isWebchatConnect: () => false,
+          respond,
+        });
+      }),
     );
   const greet = () =>
     metadata.run(
       () =>
         engine.planGreeting({
           overview,
-          facts: {
-            updateAvailable: null,
-            channelHealth: { available: true, degraded: [] },
-            recentExternalEdit: false,
-            auditSequence: 0,
-          },
+          facts: quietGreetingFacts,
           timeoutMs: 20_000,
         }),
       config,
@@ -274,70 +254,69 @@ async function createConversation() {
   return { captured, invoke, greet, observed, respond, executeOperation };
 }
 
-describe("system-agent nested inference through real Gateway admission", () => {
-  it.for(["chat", "greeting"] as const)(
-    "completes %s while its parent occupies the only main slot",
-    async (entry, { signal }) => {
-      const conversation = await createConversation();
-      expect(getCommandLaneSnapshot(CommandLane.Main).maxConcurrent).toBe(1);
-      const releaseParent = createDeferred();
-      const handlerStarted = createDeferred();
-      let handler: Promise<unknown> | undefined;
-      const parent = enqueueCommandInLane(CommandLane.Main, async () => {
-        handler = Promise.resolve(entry === "chat" ? conversation.invoke() : conversation.greet());
-        handlerStarted.resolve();
-        await Promise.race([handler, releaseParent.promise]);
+it.for(["chat", "greeting"] as const)(
+  "completes %s while its parent occupies the only main slot",
+  async (entry, { signal }) => {
+    const conversation = await createConversation();
+    expect(lane(CommandLane.Main).maxConcurrent).toBe(1);
+    const releaseParent = createDeferred();
+    const handlerStarted = createDeferred();
+    let handler: Promise<unknown> | undefined;
+    const parent = enqueueCommandInLane(CommandLane.Main, async () => {
+      handler = Promise.resolve(entry === "chat" ? conversation.invoke() : conversation.greet());
+      handlerStarted.resolve();
+      await Promise.race([handler, releaseParent.promise]);
+    });
+    await handlerStarted.promise;
+    if (!handler) {
+      throw new Error("gateway handler did not start");
+    }
+    try {
+      // The parent holds the process-wide main lane until finally; bind the wait to the test.
+      const observation = await withinTest(
+        awaitGateBeforeSettlement(
+          conversation.observed.promise,
+          handler,
+          "fixture did not reach the real runner admission boundary",
+        ),
+        signal,
+      );
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
       });
-      await handlerStarted.promise;
-      if (!handler) {
-        throw new Error("gateway handler did not start");
-      }
-      try {
-        // The parent holds the process-wide main lane until finally; bind the wait to the test.
-        const observation = await withinTest(
-          awaitGateBeforeSettlement(
-            conversation.observed.promise,
-            handler,
-            "fixture did not reach the real runner admission boundary",
-          ),
-          signal,
+      expect({
+        observation,
+        queued: [
+          lane(CommandLane.Main).queuedCount,
+          lane(CommandLane.SystemAgentInference).queuedCount,
+        ],
+        dispatchCount: dispatch.mock.calls.length,
+        ...conversation.captured,
+      }).toEqual({
+        observation: "dispatched",
+        queued: [0, 0],
+        dispatchCount: 1,
+        main: 1,
+        inference: 1,
+      });
+      await parent;
+      if (entry === "chat") {
+        expect(conversation.respond).toHaveBeenCalledExactlyOnceWith(
+          true,
+          expect.objectContaining({ reply: RESPONSE_TEXT, action: "none" }),
+          undefined,
         );
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        const snapshot = {
-          observation,
-          main: getCommandLaneSnapshot(CommandLane.Main),
-          inference: getCommandLaneSnapshot(CommandLane.SystemAgentInference),
-          dispatchCount: dispatch.mock.calls.length,
-        };
-        // The repair changes this from waiting/queued-on-main to dispatched on
-        // the dedicated inference lane while main remains occupied.
-        expect(observation, JSON.stringify(snapshot)).toBe("dispatched");
-        expect(snapshot.main.queuedCount).toBe(0);
-        expect(snapshot.inference.queuedCount).toBe(0);
-        expect(snapshot.dispatchCount).toBe(1);
-        expect(conversation.captured.mainActiveAtDispatch).toBe(1);
-        expect(conversation.captured.inferenceActiveAtDispatch).toBe(1);
-        await parent;
-        if (entry === "chat") {
-          expect(conversation.respond).toHaveBeenCalledExactlyOnceWith(
-            true,
-            expect.objectContaining({ reply: RESPONSE_TEXT, action: "none" }),
-            undefined,
-          );
-        } else {
-          expect(await handler).toMatchObject({ text: RESPONSE_TEXT });
-        }
-        expect(conversation.executeOperation).not.toHaveBeenCalled();
-        expect(
-          listCommandLaneTotals().filter((lane) => lane.activeCount || lane.queuedCount),
-        ).toEqual([]);
-      } finally {
-        releaseParent.resolve();
-        await parent;
-        await handler;
+      } else {
+        expect(await handler).toMatchObject({ text: RESPONSE_TEXT });
       }
-    },
-  );
-});
+      expect(conversation.executeOperation).not.toHaveBeenCalled();
+      expect(
+        listCommandLaneTotals().filter((item) => item.activeCount || item.queuedCount),
+      ).toEqual([]);
+    } finally {
+      releaseParent.resolve();
+      await parent;
+      await handler;
+    }
+  },
+);
