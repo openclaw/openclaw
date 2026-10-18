@@ -1,4 +1,3 @@
-/** Extracts message delivery evidence from embedded-agent tool calls and results. */
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {

@@ -192,7 +192,7 @@ export function createAttemptTranscriptJournal(params: {
     write: PendingWrite,
     options: { singleton?: boolean } = {},
   ): TranscriptMessage | undefined => {
-    const message = structuredClone(write.message) as TranscriptMessage;
+    const message = write.message;
     const originalReplayPayload = projectReplayPayload(message);
     const hooked = runAgentHarnessBeforeMessageWriteHook({
       message: structuredClone(message) as TranscriptMessage,

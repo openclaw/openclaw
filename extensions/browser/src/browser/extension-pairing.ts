@@ -50,7 +50,6 @@ export async function buildBrowserExtensionPairing(params: {
   gatewayUrl?: string;
   localTransport?: "relay" | "gateway";
   profile?: string;
-  ensureToken?: typeof ensureExtensionRelayToken;
 }): Promise<BrowserExtensionPairing> {
   const resolved = resolveBrowserConfig(params.cfg.browser, params.cfg);
   const profileName = params.profile || resolveFirstExtensionProfileName(resolved);
@@ -59,7 +58,7 @@ export async function buildBrowserExtensionPairing(params: {
     throw new Error("Native bootstrap requires an existing extension profile");
   }
   const relayPort = profile?.cdpPort ?? resolved.extensionRelayDefaultPort;
-  const token = await (params.ensureToken ?? ensureExtensionRelayToken)();
+  const token = await ensureExtensionRelayToken();
   const gateway = params.gatewayUrl?.trim();
   const configuredRemote =
     !gateway && params.cfg.gateway?.mode === "remote" ? params.cfg.gateway.remote?.url?.trim() : "";

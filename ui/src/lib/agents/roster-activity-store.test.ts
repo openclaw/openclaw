@@ -334,7 +334,7 @@ describe("roster activity lifecycle", () => {
     },
   );
 
-  it("does not let an in-flight window replace a newer broadcast row", async () => {
+  it("merges newer broadcast rows into an in-flight window without a trailing read", async () => {
     vi.useFakeTimers();
     const row: GatewaySessionRow = {
       key: "agent:main:main",
@@ -349,7 +349,7 @@ describe("roster activity lifecycle", () => {
       .mockResolvedValueOnce({ ...result(""), sessions: [row] })
       .mockReturnValueOnce(stale.promise)
       .mockResolvedValue({ ...result(""), sessions: [updated] });
-    const { store, emit } = createStore(load);
+    const { store, emit, sessions } = createStore(load);
     const stop = store.subscribe(() => {});
     try {
       await vi.advanceTimersByTimeAsync(0);
@@ -369,12 +369,13 @@ describe("roster activity lifecycle", () => {
       stale.resolve({ ...result("Stale"), sessions: [row] });
       await refresh;
       await vi.advanceTimersByTimeAsync(20_000);
-      expect(load).toHaveBeenCalledTimes(3);
+      expect(load).toHaveBeenCalledTimes(2);
       expect(store.snapshot.result?.sessions[0]).toEqual(updated);
       expect(store.snapshot.loading).toBe(false);
     } finally {
       stale.resolve(result(""));
       stop();
+      sessions.dispose();
       vi.useRealTimers();
     }
   });

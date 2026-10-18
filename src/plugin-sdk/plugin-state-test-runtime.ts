@@ -4,8 +4,14 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+import {
+  createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
+} from "../plugin-state/plugin-state-store.js";
 import type { PluginStateOperationModule } from "../plugin-state/plugin-state-store.native-binding.js";
+
+export { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
+export { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 
 let fixturePackageRoot: string | undefined;
 const fixtureOperationModules = new Map<string, PluginStateOperationModule>();
@@ -71,8 +77,24 @@ export function createPluginStateKeyedStoreForTests<T>(
   );
 }
 
+/** Bundled V2 fixtures resolve operations through the same package boundary as the host. */
+export function createPluginStateKeyedStoreV2ForTests<T>(
+  ...args: Parameters<typeof createPluginStateKeyedStoreV2<T>>
+) {
+  const [pluginId, options, assertCurrent, moduleSource] = args;
+  return createPluginStateKeyedStoreV2<T>(
+    pluginId,
+    options,
+    assertCurrent,
+    moduleSource ?? {
+      resolve(moduleName) {
+        return resolveFixtureOperationModule(pluginId, moduleName);
+      },
+    },
+  );
+}
+
 export {
-  createPluginStateKeyedStoreV2 as createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStore as createPluginStateSyncKeyedStoreForTests,
   getPluginStateCapacity as getPluginStateCapacityForTests,
   importPluginStateEntriesForDoctor as importPluginStateEntriesForDoctorForTests,

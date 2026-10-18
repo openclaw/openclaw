@@ -20,7 +20,9 @@ export const RECOVERY_REPLY_DELIVERY_CONTRACT =
 export const REASONING_ONLY_RETRY_BODY =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 export const EMPTY_RESPONSE_RETRY_BODY =
-  "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current state; do not restart from scratch.";
+export const REQUIRED_RESULT_RETRY_BODY =
+  "Your turn ended without a final result. Continue from the current state and produce the required result now. NO_REPLY is not allowed. Do not restart from scratch.";
 export const TEXT_TOOL_CALL_RETRY_BODY =
   "You wrote a tool call as text, so nothing ran for that call. Continue from the current state and call the tool natively through the tool interface. Do not print tool-call JSON or markup as your answer.";
 export const TOOL_USE_WITHOUT_CALL_RETRY_BODY =
@@ -28,7 +30,9 @@ export const TOOL_USE_WITHOUT_CALL_RETRY_BODY =
 export const REJECTED_TOOL_CALL_RETRY_BODY =
   "The previous assistant turn's tool call was rejected before it ran because the provider returned incomplete or malformed tool-call arguments, so nothing ran for that call. Continue from the current state: re-issue the call you need through the tool interface with complete, valid JSON arguments, or produce the visible answer now. Do not repeat completed tool calls or restart from scratch.";
 export const SETTLED_TOOL_TERMINAL_CONTINUATION_BODY =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+export const REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_BODY =
+  "Your turn ended without a final result. Continue from the current transcript and produce the required result now. NO_REPLY is not allowed. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 export const COMPACTION_CONTINUATION_RETRY_BODY =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 export const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_BODY =
@@ -37,6 +41,13 @@ export const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_BODY =
 export function withRecoveryDeliveryContract(body: string): string {
   return `${body} ${RECOVERY_REPLY_DELIVERY_CONTRACT}`;
 }
+
+export const COMPACTION_CONTINUATION_RETRY_INSTRUCTION = withRecoveryDeliveryContract(
+  COMPACTION_CONTINUATION_RETRY_BODY,
+);
+export const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX = withRecoveryDeliveryContract(
+  BEFORE_AGENT_FINALIZE_RETRY_PROMPT_BODY,
+);
 
 // Eight consecutive words are long enough that an ordinary answer will not
 // contain the runner's wording. Two of them are required, and they must not
@@ -47,10 +58,12 @@ const RECOVERY_INSTRUCTION_ECHO_MIN_MATCHES = 2;
 const RECOVERY_NUDGE_TEXTS = [
   REASONING_ONLY_RETRY_BODY,
   EMPTY_RESPONSE_RETRY_BODY,
+  REQUIRED_RESULT_RETRY_BODY,
   TEXT_TOOL_CALL_RETRY_BODY,
   TOOL_USE_WITHOUT_CALL_RETRY_BODY,
   REJECTED_TOOL_CALL_RETRY_BODY,
   SETTLED_TOOL_TERMINAL_CONTINUATION_BODY,
+  REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_BODY,
   COMPACTION_CONTINUATION_RETRY_BODY,
   BEFORE_AGENT_FINALIZE_RETRY_PROMPT_BODY,
   RECOVERY_REPLY_DELIVERY_CONTRACT,
@@ -83,10 +96,16 @@ function buildRecoveryInstructionEchoRuns(texts: readonly string[]): Set<string>
       nudgeCounts.set(run, (nudgeCounts.get(run) ?? 0) + 1);
     }
   }
-  // Wording shared by several nudges is boilerplate ("do not restart from
-  // scratch") and never on its own proof of a restatement. With a single text
-  // every run is unique to it, so nothing is filtered out.
-  return new Set([...nudgeCounts].filter(([, nudges]) => nudges === 1).map(([run]) => run));
+  // Wording shared by every nudge is universal boilerplate ("do not restart
+  // from scratch") and never on its own proof of a restatement. Wording shared
+  // by only some variants still identifies the family they belong to; with a
+  // single text every run is unique to it, so nothing is filtered out.
+  if (texts.length === 1) {
+    return new Set(nudgeCounts.keys());
+  }
+  return new Set(
+    [...nudgeCounts].filter(([, nudges]) => nudges < texts.length).map(([run]) => run),
+  );
 }
 
 function countNonOverlappingEchoRuns(words: string[], runs: ReadonlySet<string>): number {

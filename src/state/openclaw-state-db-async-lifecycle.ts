@@ -83,11 +83,13 @@ export function createOpenClawDatabaseMaintenanceScope(
   options?:
     | {
         schemaMaintenance?: false;
+        sqliteIntegrityCheck?: "quick" | "full";
         assertOwnerCurrent?: (access?: "read") => void;
         assertDatabaseAccess?: (databasePath: string) => void;
       }
     | {
         schemaMaintenance: true;
+        sqliteIntegrityCheck?: "quick" | "full";
         assertOwnerCurrent: (access?: "read") => void;
         assertDatabaseAccess?: (databasePath: string) => void;
       },
@@ -116,6 +118,7 @@ export function createOpenClawDatabaseMaintenanceScope(
   const scope: OpenClawDatabaseMaintenanceScope = {
     ownsSchemaMaintenance:
       options?.schemaMaintenance === true || parent?.ownsSchemaMaintenance === true,
+    sqliteIntegrityCheck: options?.sqliteIntegrityCheck ?? parent?.sqliteIntegrityCheck,
     assertOwnerCurrent(access) {
       assertOpen();
       if (checkingOwner) {
@@ -159,6 +162,17 @@ export function createOpenClawDatabaseMaintenanceScope(
         assertDatabaseAccess(databasePath);
       } else if (parent) {
         parent.assertDatabaseAccess(databasePath);
+      } else {
+        throw new Error("Database maintenance scope does not own this database");
+      }
+    },
+    assertCleanupDatabaseAccess(databasePath) {
+      assertOpen();
+      // Revoked operation authority cannot strand resources under the same physical owner.
+      if (assertDatabaseAccess) {
+        assertDatabaseAccess(databasePath);
+      } else if (parent) {
+        parent.assertCleanupDatabaseAccess(databasePath);
       } else {
         throw new Error("Database maintenance scope does not own this database");
       }

@@ -8,7 +8,10 @@ import type {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
-import { withEphemeralCodexAuthStore } from "./auth-start-options.js";
+import {
+  withEphemeralCodexAuthStore,
+  withManagedCodexThreadUnloading,
+} from "./auth-start-options.js";
 import type { CodexAppServerPreparedAuth } from "./auth-types.js";
 import { CodexAppServerClient } from "./client.js";
 import {
@@ -181,7 +184,9 @@ export async function captureExpectedRuntimeArtifact(
 ) {
   const { captureCodexAppServerRuntimeArtifactBeforeStart, finalizeCodexAppServerRuntimeArtifact } =
     await import("./runtime-artifact.js");
-  const startOptions = withEphemeralCodexAuthStore({ startOptions: appServer.start });
+  const startOptions = withManagedCodexThreadUnloading(
+    withEphemeralCodexAuthStore({ startOptions: appServer.start }),
+  );
   const spawnIdentity = resolveCodexAppServerSpawnIdentity(startOptions);
   const before = await captureCodexAppServerRuntimeArtifactBeforeStart({
     startOptions,

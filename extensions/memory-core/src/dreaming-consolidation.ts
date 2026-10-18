@@ -1,3 +1,4 @@
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,
@@ -97,8 +98,7 @@ function parseConsolidationPlan(
       if (
         typeof value.candidateKey !== "string" ||
         (value.action !== "added" && value.action !== "merged" && value.action !== "superseded") ||
-        !Array.isArray(value.priorEntries) ||
-        !value.priorEntries.every((entry): entry is string => typeof entry === "string")
+        !isStringArray(value.priorEntries)
       ) {
         return [];
       }

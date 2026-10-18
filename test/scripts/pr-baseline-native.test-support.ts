@@ -15,6 +15,14 @@ export function createBaselineFixture(root: string, productCount = 16) {
   for (const dir of [repo, home, bin]) {
     mkdirSync(dir);
   }
+  // Baseline operations require these at preflight but must not run builds or searches.
+  for (const command of ["rg", "pnpm"]) {
+    writeFileSync(
+      join(bin, command),
+      `#!/bin/sh\necho 'Unexpected fixture command: ${command}' >&2\nexit 99\n`,
+      { mode: 0o755 },
+    );
+  }
   const env = {
     PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
     HOME: home,

@@ -1,5 +1,3 @@
-// Gateway maintenance timers.
-// Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
@@ -76,6 +74,8 @@ import { startWorktreeMaintenance } from "./worktree-maintenance.js";
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
 const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
+// Maintenance phases can run 10s early; keep cleanup beyond the two-minute reconnect wave.
+const MEDIA_CLEANUP_STARTUP_DELAY_MS = 130_000;
 const TELEMETRY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
@@ -166,9 +166,17 @@ export function startGatewayMaintenanceTimers(params: {
     // Inspection and admission commit are synchronous: no new work can enter
     // between them, and a busy tick never changes the admission phase.
     let invalidated = false;
-    const admission = tryBeginGatewaySuspendAdmission(() => {
-      invalidated = true;
-    });
+    const admission = tryBeginGatewaySuspendAdmission(
+      () => {
+        invalidated = true;
+      },
+      {
+        owner: "host-thaw-recovery",
+        leaseId: `host-thaw-${scheduler.now()}`,
+        caller: "maintenance:host-thaw",
+        reason: mode,
+      },
+    );
     if (!admission?.commit()) {
       return { status: "retry", reason: "admission-closed" };
     }
@@ -274,6 +282,7 @@ export function startGatewayMaintenanceTimers(params: {
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
   const mediaScheduler = params.scheduler.scope();
+  const mediaCleanupAtMs = mediaScheduler.now() + MEDIA_CLEANUP_STARTUP_DELAY_MS;
   const runDeliveryQueueMediaGc =
     params.runDeliveryQueueMediaGc ??
     (async () => {
@@ -287,7 +296,7 @@ export function startGatewayMaintenanceTimers(params: {
   const scheduleMedia = (id: string, run: () => Promise<unknown>) => {
     mediaScheduler.schedule({
       id: `maintenance:${id}`,
-      atMs: mediaScheduler.now(),
+      atMs: mediaCleanupAtMs,
       everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
       phase: "maintenance",
       run,
@@ -314,7 +323,7 @@ export function startGatewayMaintenanceTimers(params: {
   schedulePeriodic("dedupe", 60_000, () => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = scheduler.now();
-    pruneExpiredArtifactDownloads(params.clients, now);
+    pruneExpiredArtifactDownloads(now);
     params.chatRunState.toolEventRecipients.pruneExpired(now);
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
       const keyRunId = key.slice(key.indexOf(":") + 1);

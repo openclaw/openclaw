@@ -183,7 +183,11 @@ function writeBaseline(root: string, entries: string[]) {
 
 function envVarCountArgs(argv: string[]) {
   const args = parseRatchetArgs(argv);
-  return [...(args.staged ? ["--staged"] : []), ...(args.base ? ["--base", args.base] : [])];
+  return [
+    ...(args.staged ? ["--staged"] : []),
+    ...(args.base ? ["--base", args.base] : []),
+    ...(!args.mergeBase ? ["--no-merge-base"] : []),
+  ];
 }
 
 export function main(
@@ -208,7 +212,7 @@ export function main(
       envVarNames,
     });
     const { added, removed: stale } = compareRatchetSets(current, baseline, compareStrings);
-    const baseRef = resolveRatchetBase(root, { base: args.base, staged: args.staged });
+    const baseRef = resolveRatchetBase(root, args);
     const baseBaseline = baseRef
       ? loadRatchetReference(root, baseRef, BASELINE_PATH, parseRatchetPaths)
       : null;

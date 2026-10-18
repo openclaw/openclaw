@@ -17,22 +17,10 @@ import {
   PR_PROTECTED_RUNTIME_TEST_FILES,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import { fallbackGroups, selectedFiles } from "./ci-changed-node-test-plan.test-support.js";
 
 // Real-checkout compositions share the planner's process-scoped import-graph cache.
 // Small synthetic graphs and canonical process selection remain in the unit file.
-function fallbackGroups(shards: NonNullable<ReturnType<typeof createChangedNodeTestShards>>) {
-  return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
-}
-
-function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
-  return (shards ?? []).flatMap((shard) =>
-    (shard.targets ?? []).concat(
-      shard.includePatterns ?? [],
-      shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? [],
-    ),
-  );
-}
-
 function canonicalOwner(jobs: CompactNodeTestShard[], shardName: string) {
   const job = expectDefined(
     jobs.find((candidate) => candidate.groups.some((group) => group.shard_name === shardName)),
@@ -92,19 +80,10 @@ it("keeps the hybrid hourly plan within the main-tier cap", () => {
   expect(hourly.length).toBeLessThanOrEqual(79);
 });
 
-it.each(
-  [
-    {
-      target: "test/scripts/bench-gateway-installed.test.ts",
-      sources: ["scripts/bench-gateway-startup.ts"],
-      preciseSubjects: true,
-    },
-  ].flatMap(({ target, sources, preciseSubjects }) =>
-    [target, ...sources].map((changedPath) => ({ target, changedPath, preciseSubjects })),
-  ),
-)(
-  "opts in $target for $changedPath beside hub inputs",
-  ({ target, changedPath, preciseSubjects }) => {
+it.each(["test/scripts/bench-gateway-installed.test.ts", "scripts/bench-gateway-startup.ts"])(
+  "opts in the installed benchmark for %s beside hub inputs",
+  (changedPath) => {
+    const target = "test/scripts/bench-gateway-installed.test.ts";
     expect(listPrExemptRuntimeTestFiles()).toContain(target);
     const options = {
       runnerBackend: "github",
@@ -112,26 +91,12 @@ it.each(
       includePrExemptRuntimeTests: false,
       includeReleaseOnlyToolingShards: false,
     };
-    const fallbackFiles = (changedPaths: string[]) =>
-      createNodeTestShardBundles({
-        ...options,
-        compactMode: "pull-request",
-        changedPaths,
-      }).flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []));
     const precise = createChangedNodeTestShards([changedPath], options);
-    if (preciseSubjects || changedPath === target) {
-      expect(precise, changedPath).not.toBeNull();
-    }
-    expect(precise ? selectedFiles(precise) : fallbackFiles([changedPath]), changedPath).toContain(
-      target,
-    );
+    expect(precise, changedPath).not.toBeNull();
+    expect(selectedFiles(precise), changedPath).toContain(target);
     const withHub = createChangedNodeTestShards(["tsconfig.json", changedPath], options);
-    if (preciseSubjects) {
-      expect(withHub, changedPath).not.toBeNull();
-    }
-    const withHubFiles = withHub
-      ? selectedFiles(withHub)
-      : fallbackFiles(["tsconfig.json", changedPath]);
+    expect(withHub, changedPath).not.toBeNull();
+    const withHubFiles = selectedFiles(withHub);
     expect(withHubFiles, changedPath).toContain(target);
     expect(withHubFiles).not.toContain(
       "extensions/acpx/src/runtime-advertised-model.process.test.ts",

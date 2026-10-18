@@ -472,7 +472,7 @@ describe("handleSendChat immediate local commands", () => {
         chatMessage: draft,
         chatAttachments: [attachment],
         exportCurrentChat,
-        renderLifecycle: { invalidate: vi.fn(), afterCommit },
+        renderLifecycle: { afterCommit },
         requestHandlers: {},
       });
       await handleSendChat(host);

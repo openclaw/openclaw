@@ -16,30 +16,32 @@ minimumReleaseAgeExclude:
   # Solid itself is exempt from the release-age gate (Peter, 2026-10-11).
   - "solid-js"
   - "@solidjs/*"
-  # Reviewed fs-safe 0.26.3 release and native helpers; remove after 2026-10-20T05:44:19Z.
-  - "@openclaw/fs-safe@0.26.3"
-  - "@openclaw/fs-safe-darwin-arm64@0.26.3"
-  - "@openclaw/fs-safe-darwin-x64@0.26.3"
-  - "@openclaw/fs-safe-freebsd-arm64@0.26.3"
-  - "@openclaw/fs-safe-freebsd-x64@0.26.3"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.3"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.26.3"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.26.3"
-  - "@openclaw/fs-safe-linux-x64-musl@0.26.3"
-  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.3"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.26.3"
-  # Reviewed proc-safe 0.2.0 release and native helpers; remove after 2026-10-18T04:40:03.765Z.
-  - "@openclaw/proc-safe@0.2.0"
-  - "@openclaw/proc-safe-darwin-arm64@0.2.0"
-  - "@openclaw/proc-safe-darwin-x64@0.2.0"
-  - "@openclaw/proc-safe-freebsd-arm64@0.2.0"
-  - "@openclaw/proc-safe-freebsd-x64@0.2.0"
-  - "@openclaw/proc-safe-linux-arm64-gnu@0.2.0"
-  - "@openclaw/proc-safe-linux-arm64-musl@0.2.0"
-  - "@openclaw/proc-safe-linux-x64-gnu@0.2.0"
-  - "@openclaw/proc-safe-linux-x64-musl@0.2.0"
-  - "@openclaw/proc-safe-win32-arm64-msvc@0.2.0"
-  - "@openclaw/proc-safe-win32-x64-msvc@0.2.0"
+  # Reviewed Edge TTS 403 fix; remove after 2026-10-19T16:27:27.581Z.
+  - "node-edge-tts@1.2.11"
+  # Reviewed fs-safe 0.26.7 release and native helpers; remove after 2026-10-24T03:52:12.618Z.
+  - "@openclaw/fs-safe@0.26.7"
+  - "@openclaw/fs-safe-darwin-arm64@0.26.7"
+  - "@openclaw/fs-safe-darwin-x64@0.26.7"
+  - "@openclaw/fs-safe-freebsd-arm64@0.26.7"
+  - "@openclaw/fs-safe-freebsd-x64@0.26.7"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.7"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.26.7"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.26.7"
+  - "@openclaw/fs-safe-linux-x64-musl@0.26.7"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.7"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.26.7"
+  # Reviewed proc-safe 0.3.0 release and native helpers; remove after 2026-10-20T18:53:55.137Z.
+  - "@openclaw/proc-safe@0.3.0"
+  - "@openclaw/proc-safe-darwin-arm64@0.3.0"
+  - "@openclaw/proc-safe-darwin-x64@0.3.0"
+  - "@openclaw/proc-safe-freebsd-arm64@0.3.0"
+  - "@openclaw/proc-safe-freebsd-x64@0.3.0"
+  - "@openclaw/proc-safe-linux-arm64-gnu@0.3.0"
+  - "@openclaw/proc-safe-linux-arm64-musl@0.3.0"
+  - "@openclaw/proc-safe-linux-x64-gnu@0.3.0"
+  - "@openclaw/proc-safe-linux-x64-musl@0.3.0"
+  - "@openclaw/proc-safe-win32-arm64-msvc@0.3.0"
+  - "@openclaw/proc-safe-win32-x64-msvc@0.3.0"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
@@ -57,17 +59,18 @@ overrides:
   "chevrotain>lodash-es": 4.18.1
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
-  "@agentclientprotocol/codex-acp@2.1.1>@openai/codex": 0.160.0
-  "@codemirror/commands@6.11.1>@codemirror/view": 6.43.13
-  "@codemirror/view@6.43.13>@codemirror/state": 6.7.6
-  "@anthropic-ai/sdk": 0.131.0
-  "@anthropic-ai/vertex-sdk@0.20.2>google-auth-library": 11.1.0
-  "@opentelemetry/core": 2.11.0
-  "@opentelemetry/propagator-jaeger": 2.11.0
+  "@agentclientprotocol/codex-acp@2.1.1>@openai/codex": 0.162.0
+  "@codemirror/commands@6.11.1>@codemirror/view": 6.43.14
+  "@codemirror/view@6.43.14>@codemirror/state": 6.7.6
+  "@anthropic-ai/sdk": 0.133.0
+  "@anthropic-ai/vertex-sdk@0.20.4>google-auth-library": 11.2.0
+  "@opentelemetry/core": 2.12.0
+  "@opentelemetry/propagator-jaeger": 2.12.0
+  "@solidjs/vite-plugin@3.0.0-next.49>@solidjs/babel-plugin": 2.0.0-rc.14
   "@aws-sdk/core": 3.978.1
   "@aws-sdk/credential-provider-node": 3.972.84
   "@aws-sdk/xml-builder": 3.972.41
-  "@hono/node-server": 2.1.3
+  "@hono/node-server": 2.1.4
   axios: 1.20.0
   fast-uri: 4.2.1
   follow-redirects: 1.16.1
@@ -75,20 +78,20 @@ overrides:
   fast-xml-parser: 5.11.2
   request: "npm:@cypress/request@4.0.1"
   request-promise: "npm:@cypress/request-promise@5.0.0"
-  basic-ftp: 6.2.2
+  basic-ftp: 6.2.3
   brace-expansion: 5.0.12
   # GHSA-68fv-2mgg-jv7q: source-map-js <1.2.2 event-loop DoS (via css-tree).
   source-map-js: 1.2.2
   file-type: 22.1.1
   form-data: 4.0.6
   ip-address: 10.7.3
-  "mailauth@7.1.1>nodemailer": 10.0.15
+  "mailauth@7.1.1>nodemailer": 10.0.16
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   proxy-addr: 2.0.8
   qs: 6.16.0
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
-  typebox: 1.3.35
+  typebox: 1.3.36
   tar: 7.5.22
   tough-cookie: 6.0.2
   "tsdown>rolldown-plugin-dts": 0.28.6
@@ -126,16 +129,11 @@ packageExtensions:
     peerDependenciesMeta:
       sharp:
         optional: true
-  # lit-analyzer imports the classic compiler without declaring it; match its analyzer dependency.
-  "lit-analyzer@2.0.3":
-    dependencies:
-      typescript: 5.9.3
 
 patchedDependencies:
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch
-  "matrix-js-sdk@42.4.0": patches/matrix-js-sdk@42.4.0.patch
+  "matrix-js-sdk@43.0.0": patches/matrix-js-sdk@43.0.0.patch
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch
-  vitest@5.0.1: patches/vitest@5.0.1.patch
-  "@awesome.me/webawesome@3.13.0": patches/@awesome.me__webawesome@3.13.0.patch
+  vitest@5.0.3: patches/vitest@5.0.3.patch
   ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch
   chrome-devtools-mcp@1.10.1: patches/chrome-devtools-mcp@1.10.1.patch

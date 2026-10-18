@@ -1,7 +1,10 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
-import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import {
+  createGitHubIdentityForTest,
+  githubIdentityViewFixture,
+} from "../../features/github-connections/github-identity.test-support.ts";
+import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts";
 import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";
@@ -282,12 +285,14 @@ describe("agents tools panel (browser)", () => {
       oauthScopes: [],
       repositoryGrants: "unknown" as const,
     };
-    params.githubIdentity.status = {
-      agentId: "main",
-      selectedScope: "system",
-      selected: { scope: "system", configured: false, identity: nativeIdentity },
-      effective: nativeIdentity,
-    };
+    params.githubIdentity = githubIdentityViewFixture({
+      status: {
+        agentId: "main",
+        selectedScope: "system",
+        selected: { scope: "system", configured: false, identity: nativeIdentity },
+        effective: nativeIdentity,
+      },
+    });
     mountSolid(AgentTools, params, container);
     await settleGitHubIdentity(container);
 
@@ -330,8 +335,7 @@ describe("agents tools panel (browser)", () => {
         pollAfterMs: 60_000,
       })),
     } as never;
-    const githubIdentity = new GitHubIdentityController({
-      requestUpdate: () => undefined,
+    const githubIdentity = createGitHubIdentityForTest({
       runExternalMutation: async () => ({
         ok: false,
         reason: "unavailable",
@@ -341,7 +345,14 @@ describe("agents tools panel (browser)", () => {
     githubIdentity.sync({
       client,
       connected: true,
-      target: { kind: "shared", scope: "agent", agentId: "main", config: {} },
+      permissionsReady: true,
+      target: {
+        kind: "shared",
+        scope: "agent",
+        agentId: "main",
+        config: {},
+        profileId: "profile-a",
+      },
       statusReadable: true,
       configurable: true,
       authorizable: true,
@@ -380,12 +391,14 @@ describe("agents tools panel (browser)", () => {
       oauthScopes: ["repo", "workflow"],
       repositoryGrants: "unknown" as const,
     };
-    params.githubIdentity.status = {
-      agentId: "main",
-      selectedScope: "agent",
-      selected: { scope: "agent", configured: false, identity: null },
-      effective,
-    };
+    params.githubIdentity = githubIdentityViewFixture({
+      status: {
+        agentId: "main",
+        selectedScope: "agent",
+        selected: { scope: "agent", configured: false, identity: null },
+        effective,
+      },
+    });
 
     mountSolid(AgentTools, params, container);
     await settleGitHubIdentity(container);
@@ -401,8 +414,7 @@ describe("agents tools panel (browser)", () => {
   it("keeps PAT fields hidden until the explicit fallback is selected", async () => {
     const container = document.createElement("div");
     const client = { request: vi.fn() } as never;
-    const githubIdentity = new GitHubIdentityController({
-      requestUpdate: () => undefined,
+    const githubIdentity = createGitHubIdentityForTest({
       runExternalMutation: async () => ({
         ok: false,
         reason: "unavailable",
@@ -412,7 +424,14 @@ describe("agents tools panel (browser)", () => {
     githubIdentity.sync({
       client,
       connected: true,
-      target: { kind: "shared", scope: "agent", agentId: "main", config: {} },
+      permissionsReady: true,
+      target: {
+        kind: "shared",
+        scope: "agent",
+        agentId: "main",
+        config: {},
+        profileId: "profile-a",
+      },
       statusReadable: true,
       configurable: true,
       authorizable: true,
@@ -425,35 +444,20 @@ describe("agents tools panel (browser)", () => {
     expect(container.textContent).toContain("Use a PAT instead");
 
     githubIdentity.showPatFallback();
-    view.update(createBaseParams({ githubIdentity }));
     await settleGitHubIdentity(container);
     expect(container.querySelector(".settings-secret input")).not.toBeNull();
     expect(container.textContent).not.toContain("Continue with GitHub");
 
-    githubIdentity.busy = true;
-    view.update(createBaseParams({ githubIdentity }));
+    view.update(
+      createBaseParams({
+        githubIdentity: githubIdentityViewFixture({ ...githubIdentity.read(), busy: true }),
+      }),
+    );
     await settleGitHubIdentity(container);
     const cancel = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.trim() === "Cancel",
     );
     expect(cancel?.disabled).toBe(true);
-  });
-
-  it("shows fallback warning when runtime catalog fails", async () => {
-    const container = document.createElement("div");
-    mountSolid(
-      AgentTools,
-      createBaseParams({
-        toolsCatalogError: "unavailable",
-        toolsCatalogResult: null,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
-      "Could not load runtime tool catalog. Showing built-in fallback list instead.",
-    );
   });
 
   it("enables the fallback setup helper without selecting Full", async () => {
@@ -464,6 +468,7 @@ describe("agents tools panel (browser)", () => {
       AgentTools,
       createBaseParams({
         configForm: { agents: { entries: { main: { tools: { profile: "coding" } } } } },
+        toolsCatalogError: "unavailable",
         toolsCatalogResult: null,
         onOverridesChange,
         onProfileChange,
@@ -472,6 +477,9 @@ describe("agents tools panel (browser)", () => {
     );
     await Promise.resolve();
 
+    expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
+      "Could not load runtime tool catalog. Showing built-in fallback list instead.",
+    );
     expect(container.textContent).toContain(
       "Full selects tools; it does not grant Full Access execution permissions.",
     );

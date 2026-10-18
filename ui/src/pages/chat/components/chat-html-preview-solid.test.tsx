@@ -2,10 +2,12 @@
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ChatHtmlPreview } from "./chat-html-preview-element.tsx";
+import "./chat-html-preview-element.tsx";
+import { HtmlPreview } from "./chat-html-preview-view.tsx";
 import { ChatSvgAttachment } from "./chat-svg-attachment.tsx";
 
 afterEach(() => {
@@ -20,23 +22,30 @@ describe("Solid preview consumers", () => {
       sandboxUrl: "/mcp-app-sandbox?frames=none",
       sandboxPort: 8444,
     });
-    const provider = createSolidApplicationContextProvider({
+    const context = {
       gateway: {
         snapshot: { client: { request }, phase: "connected" },
         connection: { gatewayUrl: "ws://gateway.example:8443" },
         subscribe: () => () => {},
       },
-    } as unknown as ApplicationContext);
+    } as unknown as ApplicationContext;
+    const provider = createSolidApplicationContextProvider(context);
     const [mode, setMode] = createSignal<"scripts" | "strict">("scripts");
     const view = mountSolid(
       () => (
-        <ChatHtmlPreview
-          html="<h1>Preview</h1>"
+        <HtmlPreview
+          state={undefined}
+          onRetry={() => {}}
+          content="<h1>Preview</h1>"
           sourceIdentity="preview.html"
+          title="Preview"
           embedSandboxMode={mode()}
         />
       ),
-      { wrapper: provider.wrapper },
+      {
+        wrapper: provider.wrapper,
+        container: document.body.appendChild(createApplicationContextProvider(context)),
+      },
     );
     await waitForSolid(() => expect(view.container.querySelector("iframe")).not.toBeNull());
     const frame = view.container.querySelector("iframe");
@@ -49,7 +58,6 @@ describe("Solid preview consumers", () => {
   });
 
   it("loads an SVG image when mounted from a Solid parent", async () => {
-    vi.stubGlobal("IntersectionObserver", undefined);
     const fetchMock = vi.fn(
       async () => new Response('<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>'),
     );

@@ -15,7 +15,7 @@ function ownerFunction(name) {
 // Execute maintained deadline, RPC-budget, and lease-proof control flow with a
 // virtual clock and inert transport. This does not exercise GNU timeout itself.
 function deadlinePoll(t, { firstExit = 124, fresh = "draining", interrupt = 1, generation = 0,
-  firstMalformed = false, firstPayload = "", firstFailures = 1, elapsed = 30, freshExit = 0, second = null } = {}) {
+  expireBeforeRpc = false, firstMalformed = false, firstPayload = "", firstFailures = 1, elapsed = 30, freshExit = 0, second = null, drainBudget, leaseMs = 45_000 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "team-drain-deadline-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const library = join(root, "release-lib.mjs");
@@ -24,21 +24,22 @@ function deadlinePoll(t, { firstExit = 124, fresh = "draining", interrupt = 1, g
     'const suspensionContractPath = "/usr/local/lib/openclaw-team/gateway-suspension-contract.mjs";',
     `const suspensionContractPath = ${JSON.stringify(join(import.meta.dirname, "gateway-suspension-contract.mjs"))};`,
   ));
-  const expiry = Date.now() + 120_000;
+  const expiry = Date.now() + leaseMs;
   const blockers = [{ kind: "terminal-session", count: 1, message: "fixture terminal" }];
   const prepared = { status: "draining", suspensionId: "fixture-lease", expiresAtMs: expiry,
     activeCount: 1, retryAfterMs: 1000, blockers };
   let response = { status: "draining", expiresAtMs: expiry, activeCount: 1, retryAfterMs: 1000, blockers };
-  if (fresh === "ready") response = { status: "ready", expiresAtMs: expiry };
-  if (fresh === "persistence") response.blockers = [{ kind: "terminal-persistence", count: 1, message: "fixture write" }];
-  if (fresh === "unknown") response.blockers = [{ kind: "future-kind", count: 1, message: "fixture unknown" }];
-  if (fresh === "changed") response.expiresAtMs += 1;
-  if (fresh === "expired") response.expiresAtMs = Date.now() - 1;
-  if (fresh === "refused") response = { status: "running" };
-  if (fresh === "custody") response = { status: "draining", expiresAtMs: expiry, activeCount: 1, retryAfterMs: 1000,
-    blockers: [{ kind: "session-mutation", count: 1, message: "fixture mutation" }], writeCustody: [{ phase: "final-chat-write", count: 1 }] };
-  const functions = ["proof_json", "run_gateway_node", "run_gateway", "retain_suspension_cleanup_offer", "request_suspension",
+  if (fresh === "ready") {response = { status: "ready", expiresAtMs: expiry };}
+  if (fresh === "persistence") {response.blockers = [{ kind: "terminal-persistence", count: 1, message: "fixture write" }];}
+  if (fresh === "unknown") {response.blockers = [{ kind: "future-kind", count: 1, message: "fixture unknown" }];}
+  if (fresh === "changed") {response.expiresAtMs += 1;}
+  if (fresh === "expired") {response.expiresAtMs = Date.now() - 1;}
+  if (fresh === "refused") {response = { status: "running" };}
+  if (fresh === "custody") {response = { status: "draining", expiresAtMs: expiry, activeCount: 1, retryAfterMs: 1000,
+    blockers: [{ kind: "session-mutation", count: 1, message: "fixture mutation" }], writeCustody: [{ phase: "final-chat-write", count: 1 }] };}
+  const functions = ["proof_json", "run_gateway_node", "retain_suspension_cleanup_offer", "request_suspension",
     "prepare_suspension", "check_suspension"].map(ownerFunction).join("\n");
+  const gateway = ownerFunction("run_gateway").replace(/^run_gateway/, "fixture_run_gateway");
   const originalPoll = ownerFunction("poll_suspension").replace(/^poll_suspension/, "fixture_poll_suspension");
   const program = `set -Eeuo pipefail
 unset SECONDS
@@ -46,18 +47,20 @@ SECONDS=0
 node_bin="$FIXTURE_NODE"
 runuser_bin=unused
 runtime_home=unused; config_file=unused; state_database=unused; runtime_dir=unused; bus_address=unused
-verification_deadline=0; drain_deadline=0; drain_budget=30; drain_poll_interval=25
-custody_wait_budget=6; custody_wait_interval=2
+verification_deadline=0; drain_deadline=0; drain_poll_interval=25
+${source.match(/^drain_budget=.*$/m)[0]}
+custody_wait_budget=5; custody_wait_interval=2
 held_suspension=""; suspension_expiry=""; suspension_blockers=""
-suspension_cleanup_only=0; suspension_handoff_started=0; suspension_prearm_renewal_attempted=0
+suspension_cleanup_only=0; suspension_handoff_started=0
 suspension_scope=system; suspension_pid=123; suspension_generation=456
-poll_count=0; last_suspension_prepare=0; interrupt_after_drain="$INTERRUPT"
+poll_count=0; interrupt_after_drain="$INTERRUPT"
 proof() { "$node_bin" --no-warnings "$FIXTURE_LIB" "$@"; }
 fail() { printf '%s\\n' "$*" >&2; return 1; }
 sleep() { SECONDS=$((SECONDS + $1)); }
 bounded() {
   local budget="$1"; shift
   if [[ "$*" == *'gateway call gateway.suspend.prepare '* ]]; then
+    printf 'prepare\\n' >>"$EVENTS"
     printf '%s' "$PREPARED"
   elif [[ "$*" == *'gateway call gateway.suspend.status '* ]]; then
     printf 'status budget=%s poll=%s\\n' "$budget" "$poll_count" >>"$EVENTS"
@@ -83,6 +86,12 @@ recheck_generation() {
 }
 ${functions}
 ${originalPoll}
+${gateway}
+run_gateway() {
+  # Request preparation can consume the last second after the loop's deadline check.
+  if ((EXPIRE_BEFORE_RPC && poll_count == 1)); then SECONDS=30; fi
+  fixture_run_gateway "$@"
+}
 poll_suspension() {
   local result
   poll_count=$((poll_count + 1))
@@ -97,8 +106,9 @@ prepare_suspension /fixture
     encoding: "utf8", timeout: 10_000,
     env: { PATH: "/usr/bin:/bin", LANG: "C", FIXTURE_NODE: process.execPath,
       OPENCLAW_TEAM_OPERATOR_PROFILE: process.env.OPENCLAW_TEAM_OPERATOR_PROFILE,
+      ...(drainBudget === undefined ? {} : { OPENCLAW_TEAM_DRAIN_BUDGET: String(drainBudget) }),
       FIXTURE_LIB: library, EVENTS: join(root, "events"),
-      ELAPSED: String(elapsed), FRESH_EXIT: String(freshExit),
+      EXPIRE_BEFORE_RPC: String(Number(expireBeforeRpc)), ELAPSED: String(elapsed), FRESH_EXIT: String(freshExit),
       INTERRUPT: String(interrupt), FIRST_FAILURES: String(firstFailures), FIRST_EXIT: String(firstExit), GENERATION_EXIT: String(generation),
       PREPARED: JSON.stringify(prepared), FIRST_PAYLOAD: firstMalformed ? "{}" : firstPayload,
       SECOND_PAYLOAD: second ? JSON.stringify(second(expiry)) : "",
@@ -109,8 +119,9 @@ prepare_suspension /fixture
   assert.equal(result.signal, null, result.stderr + result.stdout);
   let events;
   try { events = readFileSync(join(root, "events"), "utf8").trim().split("\n"); }
-  catch (error) { throw new Error(result.stderr + result.stdout, { cause: error }); }
-  return { result, events };
+  catch (error) { if (error.code === "ENOENT") {events = [];} else {throw error;} }
+  const preparations = events.filter((event) => event === "prepare").length;
+  return { result, preparations, events: events.filter((event) => event !== "prepare") };
 }
 
 for (const fresh of ["draining", "ready"]) {
@@ -119,16 +130,16 @@ for (const fresh of ["draining", "ready"]) {
     assert.equal(result.status, 0, result.stderr + result.stdout);
     assert.match(result.stderr, /SUSPENSION_POLL_FAILED stage=rpc method=gateway.suspend.status exit=124/);
     assert.doesNotMatch(result.stderr, /SUSPENSION_CHECK_FAILED/);
-    assert.deepEqual(events, ["status budget=5 poll=1", "status budget=45 poll=2", "generation"]);
-    if (fresh === "draining") assert.match(result.stdout, /INTERRUPTING authorized/);
-    else assert.doesNotMatch(result.stdout, /INTERRUPTING/);
+    assert.deepEqual(events, ["status budget=5 poll=1", "status budget=5 poll=2", "generation"]);
+    if (fresh === "draining") {assert.match(result.stdout, /INTERRUPTING authorized/);}
+    else {assert.doesNotMatch(result.stdout, /INTERRUPTING/);}
   });
 }
 for (const fresh of ["persistence", "unknown", "changed", "expired", "refused", "malformed"]) {
   test(`deadline transition refuses fresh ${fresh} evidence`, (t) => {
     const { result, events } = deadlinePoll(t, { fresh });
     assert.equal(result.status, 75);
-    assert.deepEqual(events.slice(0, 2), ["status budget=5 poll=1", "status budget=45 poll=2"]);
+    assert.deepEqual(events.slice(0, 2), ["status budget=5 poll=1", "status budget=5 poll=2"]);
     if (fresh === "persistence") {
       assert.match(result.stderr, /SUSPENSION_CHECK_FAILED stage=policy exit=1 state=DRAINING activeCount=1 blockers=terminal-persistence:1 custody=unknown interruptAfterDrain=1 drainBudgetElapsed=1/);
       assert.doesNotMatch(result.stderr, /SUSPENSION_CHECK_FAILED stage=(status|generation)/);
@@ -164,7 +175,7 @@ for (const options of [{ interrupt: 0 }, { firstExit: 1 }, { firstExit: 137 },
 test("deadline transition refuses a failed fresh status read", (t) => {
   const { result, events } = deadlinePoll(t, { freshExit: 1 });
   assert.equal(result.status, 75);
-  assert.deepEqual(events, ["status budget=5 poll=1", "status budget=45 poll=2"]);
+  assert.deepEqual(events, ["status budget=5 poll=1", "status budget=5 poll=2"]);
   assert.match(result.stderr, /SUSPENSION_POLL_FAILED stage=rpc method=gateway.suspend.status exit=1/);
   assert.match(result.stderr, /SUSPENSION_CHECK_FAILED stage=status exit=1/);
   assert.doesNotMatch(result.stderr, /SUSPENSION_CHECK_FAILED stage=policy/);
@@ -240,3 +251,33 @@ test("repeated transient polls exhaust only the original drain budget", (t) => {
   assert.match(result.stdout, /exceeded its 30-second budget/);
   assert.doesNotMatch(result.stdout, /INTERRUPTING/);
 });
+
+for (const options of [{ fresh: "draining" }, { fresh: "persistence" }, { interrupt: 0 }]) {
+  test(`drain deadline before RPC dispatch uses the deadline policy: ${JSON.stringify(options)}`, (t) => {
+    const { result, events } = deadlinePoll(t, { expireBeforeRpc: true, ...options });
+    assert.equal(result.status, options.fresh === "draining" ? 0 : 75, result.stderr + result.stdout);
+    assert.match(result.stderr, /SUSPENSION_POLL_FAILED stage=rpc method=gateway.suspend.status exit=124/);
+    if (options.interrupt === 0) {
+      assert.deepEqual(events, []);
+      assert.match(result.stdout, /exceeded its 30-second budget/);
+    } else {
+      assert.deepEqual(events, ["status budget=5 poll=2", "generation"]);
+    }
+    if (options.fresh === "draining") {assert.match(result.stdout, /INTERRUPTING authorized/);}
+    else {assert.doesNotMatch(result.stdout, /INTERRUPTING/);}
+  });
+}
+
+for (const drainBudget of [undefined, 600]) {
+  test(`drain defaults and overrides remain bounded without renewing: ${drainBudget ?? "default"}`, (t) => {
+    const { result, preparations } = deadlinePoll(t, {
+      drainBudget, leaseMs: 20_000, interrupt: 0,
+    });
+    assert.equal(result.status, 75, result.stderr + result.stdout);
+    assert.equal(preparations, 1, "drain polling must not prepare another lease");
+    assert.match(result.stdout, /exceeded its 30-second budget/);
+    if (drainBudget !== undefined) {
+      assert.match(result.stderr, /DRAIN_BUDGET_CAPPED requested=600 effective=30/);
+    }
+  });
+}

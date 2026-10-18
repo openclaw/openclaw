@@ -401,11 +401,13 @@ openclaw_e2e_wait_gateway_ready() {
     fi
     if [ "$saw_ready_log" = "true" ]; then
       [ -n "$ready_port" ] || ready_port="${OPENCLAW_E2E_GATEWAY_READY_PORT:-18789}"
-      if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
-        openclaw_e2e_probe_tcp 127.0.0.1 "$ready_port" 400 && return 0
-      else
-        openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" ok 400 && return 0
-      fi
+    fi
+    if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
+      [ "$saw_ready_log" = "true" ] && openclaw_e2e_probe_tcp 127.0.0.1 "$ready_port" 400 && return 0
+    elif [ -n "$ready_port" ]; then
+      # Deferred admission can settle after the one-time startup log check.
+      # The owned port's modern readiness JSON is authoritative, not any HTTP 200.
+      openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" gateway-ready 400 && return 0
     fi
     sleep 0.25
   done
@@ -440,7 +442,9 @@ openclaw_e2e_probe_http() {
     let response;
     try {
       response = await fetch(process.argv[1], { signal: controller.signal });
-      const passed = expected === "ok" ? response.ok : response.status === Number(expected);
+      const passed = expected === "gateway-ready"
+        ? response.status === 200 && (await response.json())?.ready === true
+        : expected === "ok" ? response.ok : response.status === Number(expected);
       exitCode = passed ? 0 : 1;
     } catch {
       exitCode = 1;

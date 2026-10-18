@@ -1,0 +1,174 @@
+.skill-file-hovercard {
+  position: fixed;
+  inset: auto;
+  z-index: 1990;
+  display: flex;
+  flex-direction: column;
+  width: min(480px, calc(100vw - 24px));
+  max-height: min(410px, calc(100dvh - 24px));
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.skill-file-hovercard__header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 7px 10px 7px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.skill-file-hovercard__icon,
+.skill-file-hovercard__actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.skill-file-hovercard svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.skill-file-hovercard__header strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.skill-file-hovercard__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-file-hovercard__actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.skill-file-hovercard__actions button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+
+.skill-file-hovercard__actions button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.skill-file-hovercard :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.skill-file-hovercard__source {
+  min-height: 0;
+  padding: 12px 12px 12px 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--bg);
+  scrollbar-width: thin;
+}
+
+.skill-file-hovercard__line {
+  display: flex;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.skill-file-hovercard__number {
+  width: 42px;
+  flex-shrink: 0;
+  padding-right: 12px;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+  opacity: 0.6;
+}
+
+.skill-file-hovercard__line code {
+  min-width: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.skill-file-hovercard__footer {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 16px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.skill-file-hovercard__path {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.skill-file-hovercard__status {
+  display: flex;
+  min-height: 150px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.skill-file-hovercard__source .hljs-attr {
+  color: var(--hljs-attribute);
+}
+
+.skill-file-hovercard__source .hljs-string {
+  color: var(--hljs-string);
+}
+
+.skill-file-hovercard__source .hljs-literal,
+.skill-file-hovercard__source .hljs-number {
+  color: var(--hljs-number);
+}
+
+.skill-file-hovercard__source .hljs-section {
+  color: var(--hljs-title);
+  font-weight: 600;
+}
+
+.skill-file-hovercard__source .hljs-bullet,
+.skill-file-hovercard__source .hljs-link {
+  color: var(--accent-2);
+}

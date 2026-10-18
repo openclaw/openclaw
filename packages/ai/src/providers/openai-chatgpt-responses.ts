@@ -84,9 +84,7 @@ import {
   type OpenAICodexResponsesOptions,
 } from "./openai-chatgpt-responses-request.js";
 import {
-  addCodexWebSocketSseFallback,
   buildCodexWebSocketHeaders,
-  hasCodexWebSocketSseFallback,
   matchesCodexWebSocketAuthority,
   resolveCodexWebSocketAuthority,
   type CodexWebSocketAuthority,
@@ -369,7 +367,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       };
       const transport = options?.transport || "auto";
       let websocketAuthority: CodexWebSocketAuthority | undefined;
-      if (!transportHost.requiresManagedTransport(model)) {
+      if (!transportHost.requiresManagedTransport(model, "fetch")) {
         try {
           websocketAuthority = resolveCodexWebSocketAuthority({
             transport,
@@ -399,11 +397,8 @@ export const streamOpenAICodexResponses: StreamFunction<
       const websocketDisabledForSession =
         transport === "auto" &&
         websocketAuthority !== undefined &&
-        hasCodexWebSocketSseFallback(
-          websocketState.sseFallbacks,
-          options?.sessionId,
-          websocketAuthority,
-        );
+        options?.sessionId !== undefined &&
+        websocketState.sseFallbacks.get(options.sessionId) === websocketAuthority.url;
 
       if (websocketAuthority && !websocketDisabledForSession) {
         let websocketStarted = false;
@@ -495,11 +490,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               options?.sessionId &&
               !independentResponsesRequest.has(options)
             ) {
-              addCodexWebSocketSseFallback(
-                websocketState.sseFallbacks,
-                options.sessionId,
-                websocketAuthority,
-              );
+              websocketState.sseFallbacks.set(options.sessionId, websocketAuthority.url);
             }
             if (websocketStarted || transport !== "auto") {
               throw transportError;
@@ -654,9 +645,6 @@ export const streamOpenAICodexResponses: StreamFunction<
           ? formatRequestTimeoutError(requestTimeoutMs, error)
           : error;
       compactRequest?.reject(normalizedError);
-      for (const block of output.content.filter((candidate) => candidate.type === "toolCall")) {
-        delete block.partialJson;
-      }
       const providerRefusal = readCodexProviderRefusal(normalizedError);
       if (providerRefusal) {
         appendAssistantMessageDiagnostic(output, {
@@ -864,10 +852,10 @@ function createWebSocketTransportError(message: string, cause?: Error): Error {
 }
 
 async function connectWebSocket(
-  url: string,
-  headers: Headers,
+  authority: CodexWebSocketAuthority,
   signal?: AbortSignal,
 ): Promise<WebSocketLike> {
+  const { url, headers, transportHost } = authority;
   const WebSocketCtor = await getWebSocketConstructor();
   if (!WebSocketCtor) {
     throw new Error("WebSocket transport is not available in this runtime");
@@ -881,7 +869,10 @@ async function connectWebSocket(
     let socket: WebSocketLike;
 
     try {
-      socket = new WebSocketCtor(url, { headers: wsHeaders });
+      // The cached socket outlives the turn; its native resources must not retain that turn.
+      socket = transportHost.runInDetachedAsyncContext(
+        () => new WebSocketCtor(url, { headers: wsHeaders }),
+      );
     } catch (error) {
       reject(error instanceof Error ? error : new Error(String(error)));
       return;
@@ -936,7 +927,6 @@ async function acquireWebSocket(
   entry?: CachedWebSocketConnection;
   release: (options?: { keep?: boolean }) => void;
 }> {
-  const { url, headers } = authority;
   const lease = (socket: WebSocketLike, entry?: CachedWebSocketConnection) => ({
     socket,
     entry,
@@ -956,7 +946,7 @@ async function acquireWebSocket(
     },
   });
   if (!sessionId) {
-    return lease(await connectWebSocket(url, headers, signal));
+    return lease(await connectWebSocket(authority, signal));
   }
 
   const cached = state.sessionCache.get(sessionId);
@@ -980,7 +970,7 @@ async function acquireWebSocket(
       return lease(cached.socket, cached);
     }
     if (cached.busy) {
-      return lease(await connectWebSocket(url, headers, signal));
+      return lease(await connectWebSocket(authority, signal));
     }
 
     if (!isWebSocketReusable(cached.socket)) {
@@ -990,7 +980,7 @@ async function acquireWebSocket(
     }
   }
 
-  const socket = await connectWebSocket(url, headers, signal);
+  const socket = await connectWebSocket(authority, signal);
   const entry: CachedWebSocketConnection = {
     socket,
     authority,
@@ -1336,7 +1326,7 @@ async function readChatGptResponsesErrorTextLimited(
     signal?.removeEventListener("abort", onAbort);
     if (!completed) {
       // This provider module is browser-safe, so keep error-body cleanup on Web APIs.
-      await cancel();
+      void cancel();
     }
     try {
       reader.releaseLock();

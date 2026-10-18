@@ -525,15 +525,15 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
         lastAssistantEvent,
         startedCount,
         streamError,
-        toolMetas: toolMetas.map((toolMeta) => Object.assign({}, toolMeta)),
-        usage: usage ? { ...usage } : undefined,
+        toolMetas: [...toolMetas],
+        usage,
       };
     },
     buildAssistantMessage(
       args: Pick<Parameters<typeof buildAssistantMessage>[0], "modelRef" | "now">,
     ) {
       const group = pendingAssistantProjection ?? lastAssistantProjection;
-      return group
+      const message = group
         ? buildAssistantProjectionGroup(
             group,
             args.modelRef,
@@ -550,6 +550,7 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
             usage: resolveAssistantUsage(lastAssistantEvent, usage, usageByApiCallId),
             assistantTexts: finalizeAssistantTexts(messagesById, lastAssistantEvent),
           });
+      return message?.content.length ? message : undefined;
     },
     finalizeAssistantTexts() {
       return finalizeAssistantTexts(messagesById, lastAssistantEvent);
@@ -579,7 +580,7 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
         return;
       }
       detached = true;
-      for (const unsubscribe of [...unsubscribeFns].toReversed()) {
+      for (const unsubscribe of unsubscribeFns.toReversed()) {
         try {
           unsubscribe();
         } catch {

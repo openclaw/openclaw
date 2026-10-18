@@ -24,15 +24,13 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import {
-  collectServiceInspectionFailureFacts,
-  createUpdateCommandFailureResult,
-} from "./update-command-result.js";
+import { createUpdateCommandFailureResult } from "./update-command-result.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service-maintenance.js";
 import {
+  collectServiceInspectionFailureFacts,
   assertGatewayServiceAdmissionUnchanged,
   GatewayServiceUpdateOwnershipError,
   inspectManagedGatewayServiceBeforeUpdate,
@@ -110,7 +108,15 @@ it.each(["authority-lost", "ordinary"] as const)(
     }),
 );
 
-it.each(["doctor", "warning", "refresh", "no-restart", "changed-during-refresh"])(
+const maintenanceOperations = [
+  "doctor",
+  "warning",
+  "refresh",
+  "no-restart",
+  "no-restart-text",
+  "changed-during-refresh",
+];
+it.each(maintenanceOperations)(
   "refreshes maintenance policy while retaining the admitted service: %s",
   (operation) =>
     withServiceHome(async (home) => {
@@ -138,9 +144,12 @@ it.each(["doctor", "warning", "refresh", "no-restart", "changed-during-refresh"]
         if (operation === "changed-during-refresh") {
           command.environment.OPENCLAW_SERVICE_VERSION = "2026.9.6";
         }
-        return true;
+        return { kind: "refreshed" };
       });
-      const runId = operation === "warning" ? createUpdateRun({ trigger: "cli" }).runId : undefined;
+      const runId =
+        operation === "warning" || operation.startsWith("no-restart")
+          ? createUpdateRun({ trigger: "cli" }).runId
+          : undefined;
       const warning =
         "Resident budget 25000ms: admitted turn interrupted; next Gateway starts with 330s.";
       mocks.drain.mockImplementationOnce(async ({ warn }, stop) => {
@@ -159,8 +168,9 @@ it.each(["doctor", "warning", "refresh", "no-restart", "changed-during-refresh"]
       const params = {
         root: process.cwd(),
         updateInstallKind: "package" as const,
-        shouldRestart: operation !== "no-restart",
-        jsonMode: true,
+        shouldRestart: !operation.startsWith("no-restart"),
+        jsonMode: operation !== "no-restart-text",
+        warn: vi.fn(),
         updateRun,
         recordPhase,
       };
@@ -186,7 +196,20 @@ it.each(["doctor", "warning", "refresh", "no-restart", "changed-during-refresh"]
           return;
         }
         const stopped = await stop;
-        if (["offline", "refresh", "no-restart"].includes(operation)) {
+        if (operation.startsWith("no-restart")) {
+          assert(runId);
+          expect(params.warn).toHaveBeenCalledExactlyOnceWith(
+            "--no-restart skips only the updater's managed restart; the running Gateway will restart itself when it detects the replaced package installation.",
+          );
+          expect(getUpdateRun(runId)?.steps).toContainEqual(
+            expect.objectContaining({
+              step: expect.stringMatching(/^warning:gateway-maintenance:/),
+              detail:
+                "--no-restart skips only the updater's managed restart; the running Gateway will restart itself when it detects the replaced package installation.",
+            }),
+          );
+        }
+        if (["offline", "refresh", "no-restart", "no-restart-text"].includes(operation)) {
           expect(timeout).toBe(330);
           expect(stopped.stopped).toBe(false);
           expect(service.stop).not.toHaveBeenCalled();
@@ -298,7 +321,7 @@ it.each(["systemd-user-bus-unavailable", undefined] as const)(
         throw new Error("Expected service inspection refusal");
       }
       const detail = reason
-        ? formatServiceInspectionReason(reason)
+        ? (formatServiceInspectionReason(reason).split(".", 1)[0] ?? "")
         : "Gateway service inspection is unavailable";
       expect(failure.message).toContain(detail);
       expect(failure.message).not.toContain("identity changed");
@@ -334,6 +357,9 @@ it.each(["systemd-user-bus-unavailable", undefined] as const)(
         failure: { cause: failure },
       });
       expect(result.reason).toBe("managed-service-preflight");
+      expect(result.failedStep.stderrTail).toContain(
+        "installation and Gateway were left unchanged",
+      );
       expect(result.failedStep.failureFacts).toEqual(failure.failureFacts);
 
       const verdict = await inspectManagedGatewayServiceBeforeUpdate({
@@ -341,9 +367,7 @@ it.each(["systemd-user-bus-unavailable", undefined] as const)(
         state: await readGatewayServiceState(service),
       });
       expect(() => assertGatewayServiceAdmissionUnchanged(before, verdict)).toThrow(
-        reason
-          ? detail
-          : "Gateway service ownership could not be verified because inspection is unavailable.",
+        reason ? detail : "Gateway service inspection is unavailable",
       );
       if (reason) {
         expect(collectServiceInspectionFailureFacts(verdict)?.[0]).toMatchObject({

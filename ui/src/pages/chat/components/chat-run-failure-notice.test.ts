@@ -1,16 +1,30 @@
 // @vitest-environment jsdom
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid as mountStatefulSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { projectChatSystemNotice } from "../chat-system-notice.ts";
 import { renderChatComposerNotices } from "../chat-view-notices.tsx";
-import { renderChatNotice } from "./chat-divider.ts";
+import { ChatNotice } from "./chat-divider.tsx";
 
 let container: HTMLDivElement;
+let noticeView: { update: (props: Parameters<typeof ChatNotice>[0]) => void } | undefined;
+function drawNotice(
+  item: Parameters<typeof ChatNotice>[0]["item"],
+  onPermissionRetry?: Parameters<typeof ChatNotice>[0]["onPermissionRetry"],
+  recovery?: Parameters<typeof ChatNotice>[0]["recovery"],
+) {
+  const props: Parameters<typeof ChatNotice>[0] = { item, onPermissionRetry, recovery };
+  if (noticeView) {
+    noticeView.update(props);
+  } else {
+    noticeView = mountStatefulSolid(ChatNotice, props, container);
+  }
+}
 const writeText = vi.fn<(text: string) => Promise<void>>();
 
 beforeEach(() => {
+  noticeView = undefined;
   vi.useFakeTimers();
   writeText.mockReset().mockResolvedValue(undefined);
   vi.stubGlobal("navigator", { clipboard: { writeText } });
@@ -19,7 +33,6 @@ beforeEach(() => {
 
 afterEach(async () => {
   cleanupSolid();
-  render(nothing, container);
   container.remove();
   // The bridge defers disposal one microtask to preserve synchronous reparenting.
   await Promise.resolve();
@@ -43,24 +56,18 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
     throw new Error("Expected failure notice");
   }
   const onRetry = vi.fn();
-  const onChangeModel = vi.fn();
-  render(
-    renderChatNotice(item, undefined, {
-      failureActionsRunId: "run-a",
-      onRetryRun: onRetry,
-      onChangeFailureModel: onChangeModel,
-    }),
-    container,
-  );
+  drawNotice(item, undefined, {
+    failureActionsRunId: "run-a",
+    onRetryRun: onRetry,
+  });
   await container.querySelector("openclaw-chat-run-failure-notice")?.updateComplete;
   expect(container.querySelectorAll(".chat-run-failure")).toHaveLength(1);
   expect(container.textContent).toContain("Unable to finish this reply");
   expect(container.textContent).not.toContain("⚠");
   expect(container.querySelector(".chat-run-failure__icon svg")).not.toBeNull();
-  expect(container.querySelector("details")?.open).toBe(false);
-  container.querySelector("summary")?.click();
-  expect(container.querySelector("details")?.open).toBe(true);
-  expect(container.querySelector("pre")?.textContent).toBe(
+  expect(container.querySelector("details")).toBeNull();
+  expect(container.textContent).not.toContain("Change model");
+  expect(container.querySelector(".chat-run-failure__summary")?.textContent).toBe(
     "The AI service needs a short break. Please try again in a few minutes.",
   );
   container.querySelector<HTMLButtonElement>('button[aria-label="Copy error"]')?.click();
@@ -68,9 +75,7 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
   expect(writeText).toHaveBeenCalledExactlyOnceWith(summary);
   const buttons = [...container.querySelectorAll("button")];
   buttons.find((b) => b.textContent?.includes("Try again"))?.click();
-  buttons.find((b) => b.textContent?.includes("Change model"))?.click();
   expect(onRetry).toHaveBeenCalledExactlyOnceWith("run-a");
-  expect(onChangeModel).toHaveBeenCalledExactlyOnceWith("run-a");
   const matchingFailure = mountSolid(() =>
     renderChatComposerNotices({ messages: [message], runError: { runId: "run-a", summary } }),
   );
@@ -87,7 +92,6 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
 
 it("updates bridge text and callbacks without closing expanded details", async () => {
   const onRetry = vi.fn();
-  const onChangeModel = vi.fn();
   const item = {
     kind: "notice" as const,
     key: "failure",
@@ -96,31 +100,22 @@ it("updates bridge text and callbacks without closing expanded details", async (
     timestamp: 1,
     runError: { runId: "run-a", summary: "First failure\nFirst details" },
   };
-  render(
-    renderChatNotice(item, undefined, {
-      failureActionsRunId: "run-a",
-      onRetryRun: onRetry,
-      onChangeFailureModel: onChangeModel,
-    }),
-    container,
-  );
+  drawNotice(item, undefined, {
+    failureActionsRunId: "run-a",
+    onRetryRun: onRetry,
+  });
   const host = container.querySelector("openclaw-chat-run-failure-notice");
   await host?.updateComplete;
   expect(container.querySelector(".chat-run-failure__summary")?.textContent).toBe("First failure");
   container.querySelector("summary")?.click();
 
   const nextRetry = vi.fn();
-  const nextChangeModel = vi.fn();
   const detail = `${"Long failure ".repeat(30)}\nUpdated details`;
   const summary = `⚠️ ${detail}`;
-  render(
-    renderChatNotice({ ...item, runError: { runId: "run-a", summary } }, undefined, {
-      failureActionsRunId: "run-a",
-      onRetryRun: nextRetry,
-      onChangeFailureModel: nextChangeModel,
-    }),
-    container,
-  );
+  drawNotice({ ...item, runError: { runId: "run-a", summary } }, undefined, {
+    failureActionsRunId: "run-a",
+    onRetryRun: nextRetry,
+  });
   await host?.updateComplete;
   expect(container.querySelector("openclaw-chat-run-failure-notice")).toBe(host);
   expect(container.querySelector("details")?.open).toBe(true);
@@ -130,11 +125,8 @@ it("updates bridge text and callbacks without closing expanded details", async (
   expect(container.querySelector("pre")?.textContent).toBe(detail);
   const buttons = [...container.querySelectorAll("button")];
   buttons.find((button) => button.textContent?.includes("Try again"))?.click();
-  buttons.find((button) => button.textContent?.includes("Change model"))?.click();
   expect(onRetry).not.toHaveBeenCalled();
-  expect(onChangeModel).not.toHaveBeenCalled();
   expect(nextRetry).toHaveBeenCalledExactlyOnceWith("run-a");
-  expect(nextChangeModel).toHaveBeenCalledExactlyOnceWith("run-a");
   container.querySelector<HTMLButtonElement>('button[aria-label="Copy error"]')?.click();
   await vi.advanceTimersByTimeAsync(0);
   expect(writeText).toHaveBeenCalledExactlyOnceWith(summary);
@@ -153,17 +145,14 @@ it.each([
     timestamp: 1,
     runError: { runId: "run-a", summary: "Failure details" },
   };
-  const actions = { onRetryRun: vi.fn(), onChangeFailureModel: vi.fn() };
-  render(
-    renderChatNotice(item, undefined, { failureActionsRunId: "run-a", ...actions }),
-    container,
-  );
+  const actions = { onRetryRun: vi.fn() };
+  drawNotice(item, undefined, { failureActionsRunId: "run-a", ...actions });
   const host = container.querySelector("openclaw-chat-run-failure-notice");
   await host?.updateComplete;
-  expect(container.querySelectorAll(".chat-run-failure__actions button")).toHaveLength(2);
-  render(renderChatNotice(item, undefined, { ...recovery, ...actions }), container);
+  expect(container.querySelectorAll(".chat-run-failure__header button")).toHaveLength(2);
+  drawNotice(item, undefined, { ...recovery, ...actions });
   await host?.updateComplete;
-  expect(container.querySelectorAll(".chat-run-failure__actions button")).toHaveLength(0);
+  expect(container.querySelectorAll(".chat-run-failure__header button")).toHaveLength(1);
   expect(container.querySelector('button[aria-label="Copy error"]')).not.toBeNull();
 });
 

@@ -27,13 +27,6 @@ export function manualProviderActivation(
     : null;
 }
 
-export function revealManualProvider(root: ParentNode): void {
-  const input = root.querySelector<HTMLInputElement>('.model-setup__manual input[type="password"]');
-  root.querySelector("openclaw-modal-dialog")?.setReturnFocusTarget(input);
-  input?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
-  input?.focus({ preventScroll: true });
-}
-
 export function manualProviderName(provider: ManualProvider): string {
   return provider.groupLabel?.trim() || provider.label;
 }
@@ -47,6 +40,7 @@ type ManualProviderPickerProps = Parameters<typeof renderProviderIcon>[0] & {
   manualProviderId: string;
   actionsDisabled: boolean;
   onManualProviderChange: (providerId: string) => void;
+  nextTabTarget?: () => HTMLInputElement | undefined;
 };
 
 export function ManualProviderPicker(
@@ -106,13 +100,7 @@ export function ManualProviderPicker(
       ref={(handle) => {
         menu = handle;
       }}
-      tabFocusTarget={(backward) =>
-        backward
-          ? menu.overlay.trigger
-          : (menu.overlay.trigger
-              ?.closest(".model-setup__manual")
-              ?.querySelector<HTMLInputElement>('input[type="password"]') ?? undefined)
-      }
+      tabFocusTarget={(backward) => (backward ? menu.overlay.trigger : props.nextTabTarget?.())}
       onSelect={(item) => {
         if (item.id !== props.manualProviderId) {
           props.onManualProviderChange(item.id);

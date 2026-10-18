@@ -20,7 +20,7 @@ export const opencodeMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "opencode",
   capabilities: ["image"],
   defaultModels: {
-    image: "gpt-5-nano",
+    image: "minimax-m3",
   },
   describeImage: (request) =>
     describeImageWithModelPayloadTransform(request, stripDisabledResponsesReasoning),

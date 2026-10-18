@@ -171,7 +171,7 @@ export function mapActivationResult(params: {
       phase: "success",
       modelRef: result.modelRef,
       ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
-      ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
+      ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
       ...(warning ? { warning } : {}),
     };
   }
@@ -189,7 +189,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
       phase: "ok",
       modelRef: result.modelRef,
       ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
-      ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
+      ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
     };
   }
   return { phase: "failed", status: result.status, error: formatUiExternalText(result.error) };

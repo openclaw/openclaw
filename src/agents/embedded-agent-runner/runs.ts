@@ -121,10 +121,7 @@ export type {
   EmbeddedAgentQueueMessageOutcome,
 } from "./run-state.js";
 
-export type EmbeddedRunTimeoutRecoveryMarker = {
-  sessionId: string;
-  recoveryToken: symbol;
-};
+export type EmbeddedRunTimeoutRecoveryMarker = AbandonedEmbeddedRun;
 
 function createQueueFailureOutcome(
   sessionId: string,
@@ -269,10 +266,8 @@ export function markEmbeddedRunRecoveringTimeout(params: {
   ) {
     return undefined;
   }
-  const recoveryToken = Symbol("openclaw.embeddedRunTimeoutRecovery");
   abandoned.reason = "recovering_timeout";
-  abandoned.recoveryToken = recoveryToken;
-  return { sessionId: abandoned.sessionId, recoveryToken };
+  return abandoned;
 }
 
 /** Restores terminal-timeout suppression when recovery cannot continue. */
@@ -280,15 +275,10 @@ export function restoreEmbeddedRunTimeoutAbandonment(
   marker: EmbeddedRunTimeoutRecoveryMarker,
 ): boolean {
   const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(marker.sessionId.trim());
-  if (
-    !abandoned ||
-    abandoned.reason !== "recovering_timeout" ||
-    abandoned.recoveryToken !== marker.recoveryToken
-  ) {
+  if (abandoned !== marker || abandoned.reason !== "recovering_timeout") {
     return false;
   }
   abandoned.reason = "timeout";
-  delete abandoned.recoveryToken;
   return true;
 }
 
@@ -610,35 +600,71 @@ const queueEmbeddedAgentMessageAsync = createEmbeddedMessageInjectionQueue(async
     }
     return outcome;
   }
-  try {
-    if (prepared.prepareQueueMessage) {
-      await prepared.prepareQueueMessage();
-    }
-    const delivery = prepared.queueMessage(text, {
-      ...prepared.options,
-      onQueueAccepted: (accepted) => {
-        // Once the backend owns input, observer failures cannot release it for replay.
-        queueAccepted ||= accepted;
-        prepared.options.onQueueAccepted?.(accepted);
-      },
-    });
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const registration = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+  const idempotencyKey = options?.userTurnTranscriptRecorder?.message?.idempotencyKey;
+  const admissions =
+    registration && idempotencyKey ? (registration.messageAdmissions ??= new Map()) : undefined;
+  const existing = idempotencyKey && admissions?.get(idempotencyKey);
+  if (existing) {
+    // A duplicate owns no backend input and must not hold up unrelated FIFO work.
     release();
-    const queueResult = await delivery;
-    queueAccepted = true;
-    if (queueResult?.transcriptCommit === "unconfirmed") {
-      return unconfirmed(queueResult.errorMessage);
+    const outcome = await existing;
+    if (outcome.queued) {
+      options?.onQueueSettled?.();
     }
-    const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
-    logActiveRunMessageAccepted(sessionId);
-    return {
-      ...queuedOutcome,
-      ...(prepared.runId ? { runId: prepared.runId } : {}),
-      ...(deliveredAtMs !== undefined ? { deliveredAtMs } : {}),
-      enqueuedAtMs,
-    };
-  } catch (err) {
-    return failed(err);
+    return outcome;
   }
+  const target = prepared;
+  const dispatch = async (): Promise<EmbeddedAgentQueueMessageOutcome> => {
+    try {
+      if (target.prepareQueueMessage) {
+        await target.prepareQueueMessage();
+      }
+      const delivery = target.queueMessage(text, {
+        ...target.options,
+        onQueueAccepted: (accepted) => {
+          // Once the backend owns input, observer failures cannot release it for replay.
+          queueAccepted ||= accepted;
+          target.options.onQueueAccepted?.(accepted);
+        },
+      });
+      release();
+      const queueResult = await delivery;
+      queueAccepted = true;
+      if (queueResult?.transcriptCommit === "unconfirmed") {
+        return unconfirmed(queueResult.errorMessage);
+      }
+      const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
+      logActiveRunMessageAccepted(sessionId);
+      return {
+        ...queuedOutcome,
+        ...(target.runId ? { runId: target.runId } : {}),
+        ...(deliveredAtMs !== undefined ? { deliveredAtMs } : {}),
+        enqueuedAtMs,
+      };
+    } catch (err) {
+      return failed(err);
+    }
+  };
+  const delivery = dispatch();
+  if (!admissions || !idempotencyKey) {
+    return delivery;
+  }
+  const admission = delivery.then(
+    (outcome) => {
+      if (!outcome.queued) {
+        admissions.delete(idempotencyKey);
+      }
+      return outcome;
+    },
+    (error: unknown) => {
+      admissions.delete(idempotencyKey);
+      throw error;
+    },
+  );
+  admissions.set(idempotencyKey, admission);
+  return admission;
 });
 
 function prepareEmbeddedAgentQueueMessage(
@@ -867,13 +893,6 @@ export async function preemptAndDrainEmbeddedHeartbeatRun(
   return (await drainPromise) ? "drained" : "timed-out";
 }
 
-function logActiveRunCheck(sessionId: string, active: boolean, label: string): boolean {
-  if (active) {
-    diag.debug(`${label}: sessionId=${sessionId} active=true`);
-  }
-  return active;
-}
-
 export function prepareEmbeddedAgentRunCompletionClaim(sessionId: string, runId: string) {
   const { promise: registered, resolve: settleRegistration } = createDeferredCore<
     EmbeddedRunCompletionRegistration | undefined
@@ -1049,13 +1068,11 @@ export function isEmbeddedAgentSessionHeldByOtherRun(sessionId: string, runId: s
 }
 
 export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
-  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId);
-  return logActiveRunCheck(sessionId, active, "run handle active check");
+  return ACTIVE_EMBEDDED_RUNS.has(sessionId);
 }
 
 export function isEmbeddedAgentRunAbortableForCompaction(sessionId: string): boolean {
-  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunAbortableForCompaction(sessionId);
-  return logActiveRunCheck(sessionId, active, "run compact coordination check");
+  return ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunAbortableForCompaction(sessionId);
 }
 
 export function isEmbeddedAgentRunStreaming(sessionId: string): boolean {
@@ -1412,9 +1429,6 @@ export function setActiveEmbeddedRun(
     runId: handle.runId,
     owner: handle.diagnosticOwner,
   });
-  if (!sessionId.startsWith("probe-")) {
-    diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
-  }
   const completionClaim = EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId);
   if (
     completionClaim &&
@@ -1471,11 +1485,6 @@ export function clearActiveEmbeddedRun(
     removeActiveEmbeddedRun({ sessionId, sessionKey, sessionFile }, handle, reason, {
       retainFinalizing: true,
     });
-    if (!sessionId.startsWith("probe-")) {
-      diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
-    }
-  } else if (activeHandle !== undefined) {
-    diag.debug(`run clear skipped: sessionId=${sessionId} reason=handle_mismatch`);
   }
   EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.delete(handle);
   // Exact-handle waiters own teardown even after another run takes the session slot.

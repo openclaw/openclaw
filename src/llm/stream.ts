@@ -6,9 +6,12 @@ import { defaultApiRegistry, defaultLlmRuntime } from "@openclaw/ai/internal/run
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
+import { assertProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { getModelLlmRuntime } from "./model-runtime-binding.js";
+import { getModelTransportContext } from "./model-transport-context.js";
+import { createProviderRateLimitRequest } from "./provider-rate-limit.js";
 import "./ai-transport-host.js";
 import type {
   Api,
@@ -44,15 +47,24 @@ function createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantM
   };
 }
 
-function deferUntilTransportRuntimeHost(
+function deferUntilTransportRuntimeHost<T extends SimpleStreamOptions>(
   model: Model,
-  start: () => AssistantMessageEventStreamContract,
+  start: (options: T) => AssistantMessageEventStreamContract,
+  options: T,
 ): AssistantMessageEventStreamContract {
   const output = createAssistantMessageEventStream();
+  const admission = createProviderRateLimitRequest(model, options);
+  const transportContext = getModelTransportContext();
   void (async () => {
     try {
       await ensureTransportRuntimeHost();
-      for await (const event of start()) {
+      await admission.wait(transportContext?.onRateLimitWait, transportContext?.priority);
+      assertProviderAuthAuthority(model);
+      options?.signal?.throwIfAborted();
+      for await (const event of start(admission.options)) {
+        if (event.type === "error") {
+          admission.observe(event.error);
+        }
         output.push(event);
       }
     } catch (error) {
@@ -74,8 +86,10 @@ export function stream<TApi extends Api>(
   context: Context,
   options?: ProviderStreamOptions,
 ): AssistantMessageEventStreamContract {
-  return deferUntilTransportRuntimeHost(model, () =>
-    resolveRuntime(model).stream(model, context, options),
+  return deferUntilTransportRuntimeHost(
+    model,
+    (admittedOptions) => resolveRuntime(model).stream(model, context, admittedOptions),
+    options ?? {},
   );
 }
 
@@ -86,9 +100,15 @@ export async function complete<TApi extends Api>(
   assertCurrent?: () => void,
 ): Promise<AssistantMessage> {
   await ensureTransportRuntimeHost();
+  const admission = createProviderRateLimitRequest(model, options ?? {});
+  const transportContext = getModelTransportContext();
+  await admission.wait(transportContext?.onRateLimitWait, transportContext?.priority);
   assertCurrent?.();
+  assertProviderAuthAuthority(model);
   options?.signal?.throwIfAborted();
-  return await resolveRuntime(model).complete(model, context, options);
+  const result = await resolveRuntime(model).complete(model, context, admission.options);
+  admission.observe(result);
+  return result;
 }
 
 export function streamSimple<TApi extends Api>(
@@ -96,8 +116,10 @@ export function streamSimple<TApi extends Api>(
   context: Context,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStreamContract {
-  return deferUntilTransportRuntimeHost(model, () =>
-    resolveRuntime(model).streamSimple(model, context, options),
+  return deferUntilTransportRuntimeHost(
+    model,
+    (admittedOptions) => resolveRuntime(model).streamSimple(model, context, admittedOptions),
+    options ?? {},
   );
 }
 
@@ -108,8 +130,14 @@ export async function completeSimple<TApi extends Api>(
   assertCurrent?: () => void,
 ): Promise<AssistantMessage> {
   await ensureTransportRuntimeHost();
+  const admission = createProviderRateLimitRequest(model, options ?? {});
+  const transportContext = getModelTransportContext();
+  await admission.wait(transportContext?.onRateLimitWait, transportContext?.priority);
   // Runtime setup can outlive its caller. Admit only a current request to the provider.
   assertCurrent?.();
+  assertProviderAuthAuthority(model);
   options?.signal?.throwIfAborted();
-  return await resolveRuntime(model).completeSimple(model, context, options);
+  const result = await resolveRuntime(model).completeSimple(model, context, admission.options);
+  admission.observe(result);
+  return result;
 }

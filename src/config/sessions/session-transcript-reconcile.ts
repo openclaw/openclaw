@@ -10,6 +10,7 @@ import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.j
 import { isPathInside } from "../../infra/path-guards.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
 import {
@@ -326,6 +327,7 @@ async function reconcilePreparedTranscriptIndexesPass(
                 publication,
               );
               worker.postMessage({ accepted: active !== undefined, type: "continue" }, []);
+              recordWorkerMessage("admission", "to_worker");
               return;
             }
             if (!active || active.plan.sessionId !== message.sessionId) {
@@ -351,6 +353,7 @@ async function reconcilePreparedTranscriptIndexesPass(
                 },
                 [],
               );
+              recordWorkerMessage("admission", "to_worker");
               return;
             }
             await appendPreparedProjectionChunk(
@@ -362,6 +365,7 @@ async function reconcilePreparedTranscriptIndexesPass(
               publication,
             );
             worker.postMessage({ accepted: true, type: "continue" }, []);
+            recordWorkerMessage("admission", "to_worker");
           } catch (error) {
             settle(() => reject(toStringifiedError(error)));
           }
@@ -553,25 +557,13 @@ export async function waitForSessionTranscriptProjection(
   }
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = prepareReconcileParams(toDatabaseOptions(resolved));
-  return waitForPreparedSessionTranscriptProjection(
-    resolved.sessionId,
-    databaseOptions,
-    abortSignal,
-  );
-}
-
-async function waitForPreparedSessionTranscriptProjection(
-  sessionId: string,
-  databaseOptions: PreparedReconcileParams,
-  abortSignal?: AbortSignal,
-): Promise<void> {
   const key = resolveOpenClawAgentSqlitePath(databaseOptions);
   let running = runningReconciles.get(key);
   if (!running) {
     return;
   }
   const needsReconcile = () =>
-    readSessionTranscriptProjectionStatus(databaseOptions, sessionId, abortSignal);
+    readSessionTranscriptProjectionStatus(databaseOptions, resolved.sessionId, abortSignal);
   try {
     while (running) {
       abortSignal?.throwIfAborted();

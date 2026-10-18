@@ -38,6 +38,20 @@ function makeAssistant(
   };
 }
 
+it("keeps host-sanitized repetition history through provider replay", () => {
+  const message = {
+    ...makeAssistant(
+      [
+        { type: "text", text: "Earlier answer stays intact." },
+        { type: "text", text: "[Repetitive output stopped]" },
+      ],
+      "error",
+    ),
+    errorCode: "openclaw_repetitive_output",
+  };
+  expect(transformMessages([message], model)).toEqual([message]);
+});
+
 describe.each(["aborted"] as const)(
   "%s assistant replay at the provider boundary",
   (stopReason) => {

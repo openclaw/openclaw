@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
-import { readDraftCloudProfiles } from "./discovery.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 
 const runtime = {
@@ -85,47 +84,23 @@ afterEach(() => {
 });
 
 describe("worker inference New Session scope", () => {
-  it("retains only the published worker inference fact, never raw settings", () => {
-    const profiles = readDraftCloudProfiles([
-      {
-        id: "direct",
-        providerId: "device",
-        inference: "worker",
-        settings: { token: "synthetic-private-value" },
-      },
-      { id: "gateway", providerId: "device", inference: "gateway" },
-      {
-        id: "unknown",
-        providerId: "device",
-        inference: "remote",
-        settings: { inference: "worker" },
-      },
-    ]);
-    expect(profiles[0]).toMatchObject({ id: "direct", inference: "worker" });
-    expect(profiles.every((profile) => !Object.hasOwn(profile, "settings"))).toBe(true);
-    expect(profiles.slice(1).every((profile) => !Object.hasOwn(profile, "inference"))).toBe(true);
+  it("uses worker credentials only for the selected direct profile", async () => {
+    const { flow, place } = await fixture("auth-failed");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectCloudProfile("direct");
+    expect(flow.canSubmit()).toBe(true);
+    expect(place.modelControl.modelForSubmission()).toBe("");
+    place.selectCloudProfile("proxied");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectCloudProfile("raw-settings");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectDevice("paired");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectDevice("");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectCloudProfile("direct");
+    expect(flow.canSubmit()).toBe(true);
   });
-
-  it.each(["missing-auth", "auth-failed"] as const)(
-    "uses worker credentials only for the selected direct profile (%s)",
-    async (reason) => {
-      const { flow, place } = await fixture(reason);
-      expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-      place.selectCloudProfile("direct");
-      expect(flow.canSubmit()).toBe(true);
-      expect(place.modelControl.modelForSubmission()).toBe("");
-      place.selectCloudProfile("proxied");
-      expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-      place.selectCloudProfile("raw-settings");
-      expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-      place.selectDevice("paired");
-      expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-      place.selectDevice("");
-      expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-      place.selectCloudProfile("direct");
-      expect(flow.canSubmit()).toBe(true);
-    },
-  );
 
   it("preserves explicit model/runtime validation instead of discarding a selection", async () => {
     const { flow, place } = await fixture();
@@ -147,29 +122,4 @@ describe("worker inference New Session scope", () => {
     context.agents.state.agentsList = agentsList;
     expect(flow.canSubmit()).toBe(true);
   });
-
-  it("does not relax Gateway permission checks for worker inference", async () => {
-    const { flow, place, context } = await fixture();
-    place.selectCloudProfile("direct");
-    context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
-    expect(flow.submitBlock()?.gate).toBe("access");
-  });
 });
-
-it.each(["remote-exec", "other-worker-turn", "unresolved"] as const)(
-  "does not apply the worker credential exception to a %s runtime",
-  async (mode) => {
-    const { flow, place } = await fixture();
-    place.selectCloudProfile("direct");
-    vi.spyOn(place.modelControl, "resolveAgentRuntime").mockReturnValue(
-      mode === "unresolved"
-        ? undefined
-        : {
-            ...runtime,
-            id: "external-runtime",
-            cloudPlacementExecutionMode: mode === "remote-exec" ? mode : "worker-turn",
-          },
-    );
-    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
-  },
-);

@@ -82,7 +82,7 @@ must declare their own development dependencies rather than rely on hoisting.
 ## Before You PR
 
 - Use **Node 24.16+ LTS** or **Node 26.1+** for source checkouts. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md) if your local version is too old.
-- Run focused Vitest 5 tests on Node 24.16+ or Node 26.1+, matching the packaged runtime floor.
+- Local Vitest 5 tests, `pnpm dev`, and daily CI default to the automatically cached, pinned OpenClaw Bun fork. Full Release Validation runs both Node and Bun. Use `OPENCLAW_VITEST_RUNTIME=node pnpm test <file>` (or `pnpm dev`) to force Node locally, or set `test_runtime_policy=node` on a manual CI dispatch. Named Node-only contracts, direct-entrypoint lanes, and unsupported platforms retain Node. See [local test runtimes](https://docs.openclaw.ai/reference/test/local#core-commands) and [CI runtime selection](https://docs.openclaw.ai/ci/pipeline#test-runtime-selection).
 - Test locally with your OpenClaw instance
 - An explicit maintainer repair-and-land request covers internal database scheduling, admission, and lifecycle decisions. The implementer owns the design and its verification. Get separate design acceptance when changing public contracts, schemas, durability, retention, or permissions; see the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
@@ -98,7 +98,7 @@ must declare their own development dependencies rather than rely on hoisting.
   - `pnpm test:extension --list` to see valid extension ids
   - If you changed shared plugin or channel surfaces, run `pnpm test:contracts`
   - For targeted shared-surface work, use `pnpm test:contracts:channels` or `pnpm test:contracts:plugins`
-  - These commands also cover the shared seam/smoke files that the default unit lane skips
+  - These commands also cover the shared integration/smoke files that the default unit lane skips
   - For broader runtime changes, select focused tests that cover the touched contracts; PR CI runs the wider lanes (`pnpm test:extensions`, `pnpm test:channels`, or `pnpm test`) before landing
 - If you touched bundled-plugin boundaries in shared code, run the matching inventories:
   - `node --import tsx scripts/check-src-extension-import-boundary.mts --json` for `src/**`
@@ -109,7 +109,7 @@ must declare their own development dependencies rather than rely on hoisting.
 - Do not submit refactor-only PRs unless a maintainer explicitly requested that refactor for an active fix or deliverable.
 - Do not submit test or CI-config fixes for failures already red on `main` CI. If a failure is already visible in the [main branch CI runs](https://github.com/openclaw/openclaw/actions), it's a known issue the Maintainer team is tracking, and a PR that only addresses those failures will be closed automatically. If you spot a _new_ regression not yet shown in main CI, report it as an issue first.
 - Do not submit test-only PRs that just try to make known `main` CI failures pass. Test changes are acceptable when they are required to validate a new fix or cover new behavior in the same PR.
-- Ensure CI checks pass
+- Check that CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
@@ -282,4 +282,4 @@ For issues that don't fit a specific repo, or if you're unsure, email **security
 7. **Environment**
 8. **Remediation Advice**
 
-Reports without reproduction steps, demonstrated impact, and remediation advice will be deprioritized. Given the volume of AI-generated scanner findings, we must ensure we're receiving vetted reports from researchers who understand the issues.
+Reports without reproduction steps, demonstrated impact, and remediation advice will be deprioritized. Given the volume of AI-generated scanner findings, we need reports that researchers have checked and understand.

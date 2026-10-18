@@ -440,7 +440,9 @@ describe("session pull request snapshot store", () => {
     await flushSync();
     expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
     expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
-    expect(removeEventListener).toHaveBeenCalledWith("visibilitychange", visibilityListener);
+    expect(removeEventListener.mock.calls).toContainEqual(
+      expect.arrayContaining(["visibilitychange", visibilityListener]),
+    );
   });
 
   it("does not retry a failed subscribe after the store becomes idle", async () => {

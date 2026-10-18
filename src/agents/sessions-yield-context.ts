@@ -1,4 +1,3 @@
-/** Builds the hidden session context shared by yielding agent runtimes. */
 export function buildSessionsYieldContextMessage(message: string) {
   return {
     customType: "openclaw.sessions_yield",

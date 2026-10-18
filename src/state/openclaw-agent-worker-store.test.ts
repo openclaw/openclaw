@@ -25,12 +25,13 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   retainAgentDatabase,
 } from "./openclaw-agent-db-lifecycle.js";
 import {
-  captureAgentDatabaseCloseFence,
+  isAgentDatabaseClosing,
   registerOpenClawAgentDatabaseAsyncResource,
   revokeAgentDatabaseResources,
 } from "./openclaw-agent-db-resources.js";
@@ -102,7 +103,7 @@ beforeEach(() => {
   options = { agentId: "main", path: path.join(root, "agent.sqlite") };
 });
 async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
-  const { db } = openOpenClawAgentDatabase(options);
+  const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(options).db);
   db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
   const execution =
     sourceMode === "captured" ? captureOpenClawAgentDatabaseExecution(options) : undefined;
@@ -120,6 +121,13 @@ async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   workers.add(worker);
   return { db, worker };
 }
+
+it("leaves agent worker checkpoints to maintenance instead of foreground commits", async () => {
+  const { worker } = await setup();
+  expect(
+    await worker.execute({ type: "inspect", input: "wal_autocheckpoint" }, () => undefined),
+  ).toBe(0);
+});
 
 it("retains an idle agent executor for thirty minutes and renews the window after reborrowing", async () => {
   const { db, worker } = await setup();
@@ -387,7 +395,7 @@ it("records a clean sibling receipt while an admitted worker publication still o
       expect(readLeases(heldPath)).toHaveLength(2);
       expect(readSqliteDatabaseCleanClose(heldPath)).toBe(false);
       expect(closed).toBe(false);
-      expect(captureAgentDatabaseCloseFence(healthy)).toBeDefined();
+      expect(isAgentDatabaseClosing(healthy)).toBe(true);
       const later = { agentId: "late", path: path.join(root, "late.sqlite") };
       expect(() => openOpenClawAgentDatabase(later)).toThrow("resources are closing");
       await expect(withOpenClawAgentDatabaseAsync(later, (database) => database)).rejects.toThrow(
@@ -417,7 +425,7 @@ it("records a clean sibling receipt while an admitted worker publication still o
       expect(db.isOpen).toBe(false);
       expect(readLeases(heldPath)).toEqual([]);
       expect(readSqliteDatabaseCleanClose(heldPath)).toBe(true);
-      expect(captureAgentDatabaseCloseFence(healthy)).toBeUndefined();
+      expect(isAgentDatabaseClosing(healthy)).toBe(false);
       expect(openOpenClawAgentDatabase(later).db.isOpen).toBe(true);
     } finally {
       release.resolve();

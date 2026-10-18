@@ -1,10 +1,11 @@
 import { isEchoedSettledTurnFinalizationAssistant } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
-import type {
-  AgentHarnessV2,
-  AgentHarnessSettledTurnFinalizationResult,
+import {
+  prepareAgentRunTerminalReply,
+  projectAgentHarnessTranscriptMessageForDisplay,
+  type AgentHarnessV2,
+  type AgentHarnessSettledTurnFinalizationResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
-import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import { resolveCodexBoundedTurnIsolation } from "./bounded-turn-isolation.js";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
@@ -104,16 +105,19 @@ export async function runCodexSettledTurnFinalization(
   assertCodexPassiveTurnItems(bounded.items, attempt.prompt, "settled-turn finalization", {
     allowManagedHookPrompts: bounded.managedHooksEnabled,
   });
-  const text = bounded.text.trim();
-  const assistant = createAttributedCodexAssistantMessage(attribution, text, {
-    tokenUsage: bounded.usage,
-    aborted: false,
-    promptError: null,
+  const text = bounded.text;
+  const preparedTerminalReply = prepareAgentRunTerminalReply({ rawText: text });
+  const assistant = projectAgentHarnessTranscriptMessageForDisplay({
+    hidden: attempt.privateCompletion === true || attempt.trigger === "memory",
+    inputProvenance: attempt.inputProvenance,
+    message: createAttributedCodexAssistantMessage(attribution, text, {
+      tokenUsage: bounded.usage,
+      aborted: false,
+      promptError: null,
+    }),
   });
-  // The host distinguishes authored silence from missing output. Preserve the
-  // sentinel for its optional/required policy without mirroring a non-answer.
-  if (!text || isSilentReplyText(text)) {
-    return { assistant, ...(bounded.usage ? { usage: bounded.usage } : {}) };
+  if (preparedTerminalReply.terminalReply.disposition !== "visible") {
+    return { assistant, preparedTerminalReply, ...(bounded.usage ? { usage: bounded.usage } : {}) };
   }
   // A tool-free reply that only restates the prompt this run injected is
   // transport noise. Refuse it here, before the mirror writes it, so the
@@ -121,7 +125,7 @@ export async function runCodexSettledTurnFinalization(
   // has to reuse; core classifies the unowned result as unanswered and
   // re-enters recovery.
   if (isEchoedSettledTurnFinalizationAssistant(assistant, attempt.prompt)) {
-    return { assistant, ...(bounded.usage ? { usage: bounded.usage } : {}) };
+    return { assistant, preparedTerminalReply, ...(bounded.usage ? { usage: bounded.usage } : {}) };
   }
 
   const mirrorIdentity = `settled-finalizer:${attempt.runId}`;
@@ -160,6 +164,7 @@ export async function runCodexSettledTurnFinalization(
     typeof persistedIdempotencyKey === "string" ? persistedIdempotencyKey.trim() : "";
   return {
     assistant: persistedMessage,
+    preparedTerminalReply,
     assistantTranscriptOwned: true,
     ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
     ...(bounded.usage ? { usage: bounded.usage } : {}),

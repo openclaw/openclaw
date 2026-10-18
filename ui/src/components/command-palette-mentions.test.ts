@@ -10,7 +10,7 @@ import { createApplicationGateway } from "../test-helpers/application-context.ts
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { mountPalette } from "./command-palette.test-support.ts";
-import "./command-palette.ts";
+import "./command-palette.tsx";
 
 const people: UsersMentionableResult = {
   users: [

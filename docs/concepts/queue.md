@@ -142,6 +142,11 @@ webchat `chat.send` arriving while another turn is active), Gateway keeps a
 content runs or is dropped. The identity follows content folded into an
 overflow summary.
 
+Once compatible inputs are admitted as one collected turn, the latest cancelable
+input owns client cancellation. Canceling an older input no longer stops the
+combined turn. Original operator access still governs execution: revoking that
+access cancels the collected turn and blocks further effects.
+
 - `chat.abort` with a specific `runId` cancels that turn while it is still
   queued, if the requester is authorized (same ownership rules as active runs).
 - `chat.abort` for a session without `runId` cancels **authorized queued turns
@@ -151,6 +156,9 @@ overflow summary.
   from promoting work into a half-stopped session.
 - Clearing the entire session queue without per-requester checks is not the
   stop path for multi-owner sessions.
+- A new prompt accepted after Stop keeps its own cancellation and queue custody.
+  If the stopped turn is still settling preparation, the new prompt waits for
+  that owner to finish before running; it does not inherit the earlier Stop.
 - Queued waits are not projected as active agent runs for `sessions.list` and
   do not own active-run timeout semantics; only the active phase does.
 - A queued request that expires or is cancelled before execution settles only
@@ -196,6 +204,21 @@ attempt is abandoned before agent-turn adoption. Abandonment releases that
 attempt's inbound and queue dedupe entries before ingress retries it. Messages
 already adopted or consumed keep duplicate suppression, so transport redelivery
 does not repeat their effects.
+
+Queued channel input is adopted only after the session owner accepts durable
+input and recovery custody. Preparation failures before acceptance keep ingress retryable;
+failures after acceptance produce a terminal error reply without replaying the
+input. Entering the session lane alone does not complete ingress.
+Repeated preparation errors stop renewing the waiting heartbeat, allowing the
+existing ingress watchdog to apply its retry and dead-letter policy. Normal
+capacity waits keep their heartbeat.
+
+Transient session admission conflicts follow the same ingress retry policy as
+other retryable failures: by default, a message becomes eligible for dead-lettering
+only after both eight failed attempts and 24 hours, with capped retry backoff. The
+oldest pending message keeps its place ahead of later messages in the same lane.
+A terminal restart-recovery tombstone still fails immediately so an authorized
+reset can proceed.
 
 ## Lanes and scope
 

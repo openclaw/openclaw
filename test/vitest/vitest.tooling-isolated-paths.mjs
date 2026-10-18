@@ -4,6 +4,7 @@ export const toolingIsolatedTestFiles = [
   "src/cli/update-cli/update-command-legacy-finalize.test.ts",
   // Sibling threads can fork and retain this fixture's listener sockets until exec.
   "test/helpers/openclaw-test-instance.acquisition.test.ts",
+  "test/ollama-linklocal.transport.integration.test.ts",
   "test/plugins/bundled-provider-auth-literal-parity.test.ts",
   "test/plugins/bundled-provider-auth-literal-parity.2.test.ts",
   "test/plugins/bundled-provider-auth-literal-parity.3.test.ts",

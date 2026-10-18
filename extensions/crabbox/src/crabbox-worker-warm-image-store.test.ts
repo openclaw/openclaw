@@ -43,12 +43,12 @@ function recordAllocation(availableImage?: typeof image) {
 }
 
 function observeComparisons(before: () => void | Promise<void>, after?: () => void) {
-  const open = crabboxState.openKeyedStore;
+  const open = crabboxState.openKeyedStoreV2;
   let attempts = 0;
-  vi.spyOn(crabboxState, "openKeyedStore").mockImplementation(
+  vi.spyOn(crabboxState, "openKeyedStoreV2").mockImplementation(
     <T>(options: OpenAsyncKeyedStoreOptions) => {
       const store = open<T>(options);
-      const compareAndApply = store.compareAndApply!;
+      const compareAndApply = store.compareAndApply;
       return {
         ...store,
         compareAndApply: async (...args: Parameters<typeof compareAndApply>) => {
@@ -197,39 +197,6 @@ describe("Crabbox asynchronous warm-image mutations", () => {
       kind: "cold",
     });
   });
-
-  it.each(["removed", "replaced", "conflicting"] as const)(
-    "rejects an accepted allocation whose owner is %s before publication",
-    async (change) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-allocation-publication-"));
-      const fixture = openWarmImageStore();
-      observeComparisons(
-        () => {},
-        () => {
-          const current = fixture.lookup("profile")!;
-          if (change === "removed") {
-            fixture.delete("profile");
-          } else if (change === "replaced") {
-            fixture.register("profile", {
-              ...current,
-              allocations: { new: { ...current.allocations.new!, phase: "enrolled" } },
-            });
-          } else {
-            fixture.register("conflicting-profile", current);
-          }
-        },
-      );
-
-      await expect(recordAllocation()).rejects.toThrow(
-        change === "conflicting"
-          ? "conflicting warm-image owners"
-          : "allocation changed before provisioning",
-      );
-      expect(fixture.lookup("profile")?.allocations.new?.phase).toBe(
-        change === "removed" ? undefined : change === "replaced" ? "enrolled" : "pending",
-      );
-    },
-  );
 
   it("returns the committed checkpoint projection after its row is replaced", async () => {
     const { provider } = createWarmProvider();

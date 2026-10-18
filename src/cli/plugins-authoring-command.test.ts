@@ -12,14 +12,16 @@ import { defaultRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import {
-  buildToolPluginManifest,
-  buildToolPluginPackageManifest,
   loadToolPlugin,
   runPluginsBuildCommand,
   runPluginsInitCommand,
   runPluginsValidateCommand,
-  validateToolPluginProject,
 } from "./plugins-authoring-command.js";
+import {
+  buildToolPluginManifest,
+  buildToolPluginPackageManifest,
+  validateToolPluginProject,
+} from "./plugins-authoring-metadata.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -197,6 +199,99 @@ describe("plugin authoring commands", () => {
     });
   });
 
+  it("builds and installs selected entries without changing sibling runtime pairs", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-entry-pairs-");
+    const sourceEntry = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-entry-pairs",
+      pluginId: "entry-pairs",
+      toolName: "entry_pairs_echo",
+    });
+    const packagePath = path.join(tmpDir, "package.json");
+    const runtimeEntries = ["./dist/a/index.js", "./dist/b/other.js"];
+    for (const entry of runtimeEntries) {
+      fs.mkdirSync(path.dirname(path.join(tmpDir, entry)), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, entry), fs.readFileSync(sourceEntry));
+    }
+    const packageManifest = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    packageManifest.openclaw = {
+      extensions: ["./src/a/index.ts", "./src/b/index.ts"],
+      runtimeExtensions: runtimeEntries,
+    };
+    fs.writeFileSync(packagePath, JSON.stringify(packageManifest));
+    const { installPluginFromPath } = await import("../plugins/install-package.js");
+
+    await runPluginsBuildCommand({ root: tmpDir, entry: runtimeEntries[0] });
+
+    const generated = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    const installed = await installPluginFromPath({
+      path: tmpDir,
+      extensionsDir: tempDirs.make("openclaw-plugin-entry-install-"),
+    });
+    expect(installed.ok, installed.ok ? undefined : installed.error).toBe(true);
+    expect(installed).toMatchObject({ pluginId: "entry-pairs" });
+    expect(generated.openclaw).toEqual({
+      extensions: ["./dist/a/index.js", "./src/b/index.ts"],
+      runtimeExtensions: runtimeEntries,
+    });
+    if (!installed.ok) {
+      throw new Error(installed.error);
+    }
+    expect(
+      JSON.parse(fs.readFileSync(path.join(installed.targetDir, "package.json"), "utf8")),
+    ).toEqual(generated);
+  });
+
+  it.each<{
+    extensions: string[];
+    entry: string;
+    expected: string[];
+    runtimeExtensions?: string[];
+  }>([
+    {
+      extensions: ["./dist/a/index.js", "./dist/b/index.js"],
+      entry: "./src/a/index.ts",
+      expected: ["./src/a/index.ts", "./dist/b/index.js"],
+    },
+    {
+      extensions: ["./src/a/index.ts", "./src/b/index.ts"],
+      entry: "./dist/b/index.js",
+      expected: ["./src/a/index.ts", "./dist/b/index.js"],
+    },
+    {
+      extensions: ["./src/a/index.js", "./dist/a/index.js"],
+      entry: "./src/a/index.ts",
+      expected: ["./src/a/index.js", "./src/a/index.ts"],
+    },
+    {
+      extensions: ["./dist/src/index.mjs", "./src/other.ts"],
+      entry: "./src/index.mts",
+      expected: ["./src/index.mts", "./src/other.ts"],
+    },
+    {
+      extensions: ["./dist/a/index.js", "./src/b/index.ts"],
+      runtimeExtensions: ["./dist/a/index.js", "./dist/b/other.js"],
+      entry: "./src/a/index.ts",
+      expected: ["./src/a/index.ts", "./src/b/index.ts"],
+    },
+    {
+      extensions: ["./src/a/index.ts", "./src/renamed.ts"],
+      runtimeExtensions: ["./dist/unrelated.js", "./dist/a/index.js"],
+      entry: "./dist/a/index.js",
+      expected: ["./src/a/index.ts", "./dist/a/index.js"],
+    },
+  ])(
+    "replaces only the full-path source/runtime counterpart for $entry",
+    ({ extensions, entry, expected, runtimeExtensions }) => {
+      expect(
+        buildToolPluginPackageManifest({
+          packageManifest: { openclaw: { extensions, runtimeExtensions } },
+          entry,
+        }),
+      ).toEqual({ openclaw: { extensions: expected, runtimeExtensions } });
+    },
+  );
+
   it("emits a stable JSON validation result without human output", async () => {
     const tmpDir = tempDirs.make("openclaw-plugin-valid-json-");
     const entryPath = writeSourceToolPluginProject({
@@ -222,6 +317,91 @@ describe("plugin authoring commands", () => {
       log.mockRestore();
       error.mockRestore();
     }
+  });
+
+  it("reports and retires a preceding host browser declaration through explicit authoring", async () => {
+    const rootDir = tempDirs.make("openclaw-plugin-browser-authoring-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir: rootDir,
+      packageName: "openclaw-plugin-browser-authoring",
+      pluginId: "browser-authoring",
+      toolName: "browser_authoring_echo",
+    });
+    const packagePath = path.join(rootDir, "package.json");
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    packageJson.openclaw.controlUi = "./browser.ts";
+    fs.writeFileSync(packagePath, JSON.stringify(packageJson));
+    fs.writeFileSync(path.join(rootDir, "browser.ts"), 'export const label = "current";');
+    fs.mkdirSync(path.join(rootDir, "node_modules"));
+    fs.symlinkSync(
+      path.resolve("node_modules/esbuild"),
+      path.join(rootDir, "node_modules/esbuild"),
+      "dir",
+    );
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        channels: ["custom"],
+        controlUi: {
+          entry: "dist/control-ui/authored/index.js",
+          activation: "settings-only",
+          settingsViews: [{ section: "channels", panel: "detail", channelId: "custom" }],
+        },
+      }),
+    );
+    await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
+    await runPluginsBuildCommand({ root: rootDir, entry: entryPath, check: true });
+    const generatedPath = path.join(rootDir, "dist/openclaw.plugin.json");
+    fs.writeFileSync(
+      generatedPath,
+      JSON.stringify({ controlUi: { entry: "dist/control-ui/stale/index.js" } }),
+    );
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new Error(`runtime exit ${code}`);
+    });
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        runPluginsBuildCommand({ root: rootDir, entry: entryPath, check: true }),
+      ).rejects.toThrow("runtime exit 1");
+      expect(fs.existsSync(generatedPath)).toBe(true);
+      await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
+      expect(fs.existsSync(generatedPath)).toBe(false);
+      const authoredPath = path.join(rootDir, "openclaw.plugin.json");
+      const authoredBeforeFailure = fs.readFileSync(authoredPath, "utf8");
+      const previousEntry = JSON.parse(authoredBeforeFailure).controlUi.entry;
+      const previousAssets = fs.readFileSync(path.join(rootDir, previousEntry));
+      fs.mkdirSync(generatedPath);
+      fs.writeFileSync(path.join(generatedPath, "unowned.txt"), "preserve");
+      fs.writeFileSync(path.join(rootDir, "browser.ts"), 'export const label = "next";');
+      await expect(runPluginsBuildCommand({ root: rootDir, entry: entryPath })).rejects.toThrow();
+      expect(fs.readFileSync(authoredPath, "utf8")).toBe(authoredBeforeFailure);
+      expect(fs.readFileSync(path.join(rootDir, previousEntry))).toEqual(previousAssets);
+      expect(fs.readFileSync(path.join(generatedPath, "unowned.txt"), "utf8")).toBe("preserve");
+    } finally {
+      exit.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it("preserves shared output when authoring a backend without browser source", async () => {
+    const rootDir = tempDirs.make("openclaw-plugin-backend-authoring-");
+    const outside = tempDirs.make("openclaw-plugin-shared-output-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir: rootDir,
+      packageName: "openclaw-plugin-backend-authoring",
+      pluginId: "backend-authoring",
+      toolName: "backend_authoring_echo",
+    });
+    const outsideManifest = path.join(outside, "openclaw.plugin.json");
+    fs.writeFileSync(outsideManifest, '{"id":"other-project"}');
+    fs.symlinkSync(
+      outside,
+      path.join(rootDir, "dist"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
+    expect(fs.readFileSync(outsideManifest, "utf8")).toBe('{"id":"other-project"}');
   });
 
   it("keeps validation errors on stderr and sanitizes JSON paths", async () => {

@@ -1,9 +1,18 @@
-import { isSilentReplyText } from "../../auto-reply/tokens.js";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { resolveRawAssistantAnswerText } from "../../shared/assistant-answer-text.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
+import {
+  prepareAgentRunTerminalReply,
+  sanitizeAgentRunTerminalReply,
+} from "../agent-run-terminal-reply.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import { resolveFinalAssistantVisibleText } from "../embedded-agent-runner/run/helpers.js";
+import { extractAssistantVisibleText } from "../embedded-agent-utils.js";
 import { isRecoveryInstructionEcho } from "../recovery-nudge-text.js";
-import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
+import {
+  EmptySettledTurnFinalizationError,
+  type PreparedSettledTurnFinalizationResult,
+} from "./settled-turn-finalization-outcome.js";
 import type {
   AgentHarnessAttemptResult,
   AgentHarnessSettledTurnFinalizationResult,
@@ -11,6 +20,7 @@ import type {
 
 const ALLOWED_SETTLED_FINALIZATION_RESULT_KEYS = new Set([
   "assistant",
+  "preparedTerminalReply",
   "usage",
   "assistantTranscriptOwned",
   "assistantTranscriptIdempotencyKey",
@@ -49,7 +59,7 @@ export function isEchoedSettledTurnFinalizationAssistant(
 export function assertSettledTurnFinalizationResult(
   result: AgentHarnessSettledTurnFinalizationResult,
   instruction?: string,
-): AgentHarnessSettledTurnFinalizationResult {
+): PreparedSettledTurnFinalizationResult {
   const unknownKey = Object.keys(result).find(
     (key) => !ALLOWED_SETTLED_FINALIZATION_RESULT_KEYS.has(key),
   );
@@ -73,28 +83,35 @@ export function assertSettledTurnFinalizationResult(
   ) {
     throw new Error("Settled-turn finalization returned an invalid assistant message index");
   }
-  resolveSettledTurnFinalizationText(result, instruction);
-  return result;
-}
-
-export function resolveSettledTurnFinalizationText(
-  result: AgentHarnessSettledTurnFinalizationResult,
-  instruction?: string,
-): string {
-  const text = resolveFinalAssistantVisibleText(result.assistant);
-  if (!text || isSilentReplyText(text)) {
-    throw new EmptySettledTurnFinalizationError(result);
+  const preparedTerminalReply =
+    result.preparedTerminalReply ??
+    prepareAgentRunTerminalReply({
+      rawText: resolveRawAssistantAnswerText(result.assistant),
+    });
+  if (
+    !result.preparedTerminalReply &&
+    preparedTerminalReply.terminalReply.disposition !== "silent"
+  ) {
+    const rawText = preparedTerminalReply.text;
+    preparedTerminalReply.text = parseReplyDirectives(
+      extractAssistantVisibleText(result.assistant, (_text, final) => (final ? rawText : "")),
+    ).text;
+    preparedTerminalReply.terminalReply = sanitizeAgentRunTerminalReply(preparedTerminalReply.text);
   }
-  if (isRecoveryInstructionEcho(text, instruction)) {
+  const preparedResult = { ...result, preparedTerminalReply };
+  if (preparedTerminalReply.terminalReply.disposition !== "visible") {
+    throw new EmptySettledTurnFinalizationError(preparedResult);
+  }
+  if (isRecoveryInstructionEcho(preparedTerminalReply.text, instruction)) {
     // The finalizer restated the recovery nudge the runner injected instead of
     // answering the run, so the turn is unanswered and re-enters the existing
     // bounded tool-free recovery rather than publishing the restatement.
     log.warn(
       "settled-turn finalization echoed the recovery instruction — refusing it as an answer",
     );
-    throw new EmptySettledTurnFinalizationError(result);
+    throw new EmptySettledTurnFinalizationError(preparedResult);
   }
-  return text;
+  return preparedResult;
 }
 
 /**
@@ -155,6 +172,7 @@ export function projectSettledTurnFinalizationAttemptResult(
   return assertSettledTurnFinalizationResult(
     {
       assistant,
+      preparedTerminalReply: result.preparedTerminalReply,
       ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
       ...(result.assistantTranscriptOwned
         ? {

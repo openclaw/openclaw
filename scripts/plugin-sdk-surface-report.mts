@@ -231,7 +231,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the shared state-owner boundary for plugin CLIs.
       // +1: owner-approved service-bound remote Control UI ingress.
       // +2: shared database-engine host and worker adapters.
-      155,
+      // +1: maintainer-requested context-engine-transcript-runtime watermark subpath (2026-10-08).
+      156,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -272,7 +273,22 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved async auth-snapshot publication with retained sync compatibility.
       // +1: approved lexical database-engine admission scope for workboard boot/migrations.
       // +1: async auth-provider preparation for Codex and voice model-session patches.
-      3759,
+      // +1: isHostNoticePayload for agent-to-agent reply filtering.
+      // +1: approved jsonPathValue on the experimental database-engine worker entrypoint.
+      // +11: approved experimental engine-owned search capabilities on existing entrypoints.
+      // +14: versioned Decision data contracts, lossless codecs, validation, and typed errors.
+      // +4: Decision execution/context types; completes Peter Steinberger's
+      // approved +18 exports / +6 callables scope (2026-09-26, #157148 and #157225).
+      // +1: approved boot-selected family lookup on the database-engine runtime.
+      // +1: shared auth-patch application replaces manual plugin config merging.
+      // +6: packaged Settings placement, snapshot, components, context, view, and
+      // DoctorMemoryStatusPayload for the plugin-owned Memory overview.
+      // +2: MemorySearchResponse and AgentsWorkspaceGetResult type-only contracts
+      // for the plugin-owned indexed Memory search presentation.
+      // +5: maintainer-requested context-engine transcript watermark reader, its types, and fence error.
+      // +3: ControlUiChannelSettingsSnapshot, ControlUiChannelSettingsContext, and
+      // ControlUiChannelSettingsView for plugin-owned channel Settings presentations.
+      3808,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -306,7 +322,14 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved async auth-snapshot publication with retained sync compatibility.
       // +1: the same lexical database-engine admission scope.
       // +1: the same prepareAuthProfileProvider operation on model-session-runtime.
-      2194,
+      // +1: the same host-notice classifier on reply-payload.
+      // +1: the same approved database-engine JSON path helper.
+      // +1: the same engine-owned search admission helper.
+      // +6: four lossless Decision codecs and two bounded V2 validators.
+      // +1: the same boot-selected family lookup.
+      // +1: the same shared auth-patch application.
+      // +1: maintainer-requested context-engine transcript watermark reader.
+      2206,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

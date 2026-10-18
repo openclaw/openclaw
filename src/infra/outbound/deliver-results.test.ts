@@ -54,4 +54,48 @@ describe("delivery result reconciliation", () => {
 
     expect(results).toEqual([first, aggregate]);
   });
+
+  it("retains immutable placement across reconciliation, aliases and payload reset", async () => {
+    const nested = { roomId: "reported-room", threadId: "reported-thread" };
+    const progress = { channel: "matrix", messageId: "m", raw: [nested] };
+    const final: OutboundDeliveryResult = {
+      channel: "matrix",
+      messageId: "m",
+      meta: { hookOwner: true },
+    };
+    const results: OutboundDeliveryResult[] = [];
+    const onDeliveryResult = vi.fn(() => {
+      nested.roomId = "observer-mutation";
+    });
+    const recorder = createDeliveryResultRecorder({ results, onDeliveryResult });
+    await recorder.reportIdentifiedDeliveryResult(progress);
+    const first = recorder.getReportedPlacement();
+    nested.threadId = "provider-mutation";
+    await recorder.recordIdentifiedDeliveryResult(final);
+    expect(results).toEqual([final]);
+    expect(results[0]).toBe(final);
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(first).toEqual({
+      channels: ["matrix"],
+      targets: ["reported-room"],
+      threads: ["reported-thread"],
+      invalid: false,
+    });
+    expect(recorder.getReportedPlacement()).toEqual(first);
+    expect(Object.isFrozen(first.channels)).toBe(true);
+    expect(Object.isFrozen(first.targets)).toBe(true);
+    recorder.resetPayloadResults();
+    await recorder.reportIdentifiedDeliveryResult({
+      channel: "matrix",
+      messageId: "m",
+      target: { kind: "room", id: "next-room" },
+    });
+    expect(recorder.getReportedPlacement()).toEqual({
+      channels: ["matrix"],
+      targets: ["next-room"],
+      threads: [],
+      invalid: false,
+    });
+    expect(results).toHaveLength(2);
+  });
 });

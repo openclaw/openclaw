@@ -104,11 +104,14 @@ describe("compaction handlers", () => {
     });
   });
 
-  it("bounds unknown failure diagnostics while preserving live usage", async () => {
+  it("keeps failure details in client events, not logs, while preserving live usage", async () => {
     const messages = [assistant(1_000)];
     const before = usage(messages);
     const ctx = createCompactionContext(messages);
-    const reason = `Provider unavailable: ${"provider detail ".repeat(100)}`;
+    const onAgentEvent = vi.fn();
+    ctx.params.onAgentEvent = onAgentEvent;
+    const privateMarker = "private_compaction_payload";
+    const reason = `Provider unavailable: ${privateMarker.repeat(100)}`;
     await handleCompactionEnd(ctx, {
       type: "compaction_end",
       reason: "overflow",
@@ -121,11 +124,13 @@ describe("compaction handlers", () => {
         reason: "overflow",
         outcome: "failed",
         reasonClass: "unknown",
-        outcomeReason: reason,
-        reasonDetail: expect.stringMatching(/^.{100}$/),
-        consoleMessage: expect.not.stringContaining("provider detail provider detail"),
       }),
     );
+    expect(JSON.stringify(vi.mocked(ctx.log.warn).mock.calls)).not.toContain(privateMarker);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "compaction",
+      data: { phase: "end", completed: false, willRetry: false, outcome: "failed", reason },
+    });
     expect(usage(messages)).toEqual(before);
   });
 

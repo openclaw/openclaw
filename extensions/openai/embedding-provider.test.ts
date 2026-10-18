@@ -202,7 +202,7 @@ describe("OpenAI embedding provider HTTP contract", () => {
           });
         } else if (additional === "codex") {
           await expect(result).resolves.toMatchObject({
-            client: { headers: { Authorization: "Bearer fixture-codex-access" } },
+            client: { resolveRequestHeaders: expect.any(Function) },
           });
         } else if (server && additional === "token") {
           const { provider } = await result;
@@ -225,6 +225,57 @@ describe("OpenAI embedding provider HTTP contract", () => {
       }
     },
   );
+
+  it("uses the newly stored OAuth bearer on the next embedding request after re-login", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedding-relogin-"));
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("OPENAI_OAUTH_TOKEN", "");
+    const publishBearer = async (access: string) => {
+      await expect(
+        updateAuthProfileStoreWithLock({
+          agentDir,
+          saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+          updater(store) {
+            store.profiles["openai:embedding"] = {
+              type: "oauth",
+              provider: "openai",
+              access,
+              refresh: "fixture-refresh",
+              expires: Date.now() + 3_600_000,
+            };
+            return true;
+          },
+        }),
+      ).resolves.not.toBeNull();
+    };
+    try {
+      const server = await startEmbeddingServer();
+      await publishBearer("fixture-before-login");
+      const { provider, client } = await createOpenAiEmbeddingProvider(
+        createOptions({
+          agentDir,
+          config: {
+            auth: { order: { openai: ["openai:embedding"] } },
+            models: { providers: { openai: { baseUrl: server.baseUrl, models: [] } } },
+          },
+          remote: { apiKey: undefined },
+        }),
+      );
+      await expect(provider.embed("first")).resolves.toEqual([5, 1]);
+      await publishBearer("fixture-after-login");
+      await expect(provider.embedBatch(["second"])).resolves.toEqual([[6, 1]]);
+      expect(server.requests.map((request) => request.authorization)).toEqual([
+        "Bearer fixture-before-login",
+        "Bearer fixture-after-login",
+      ]);
+      expect(client.headers).not.toHaveProperty("Authorization");
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      await closeOpenClawAgentDatabasesAsync();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+    }
+  });
 
   it.each([
     {

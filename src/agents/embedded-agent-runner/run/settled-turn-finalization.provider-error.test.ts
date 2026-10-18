@@ -41,7 +41,22 @@ describe("prepared provider errors after settled tools", () => {
   ])(
     "does not mistake the generated provider error for a required answer after $name",
     ({ assistantTexts }) => {
-      const request = prepareRequest(createSettledProviderFailureAttempt({ assistantTexts }));
+      const base = createSettledProviderFailureAttempt();
+      const request = prepareRequest(
+        createSettledProviderFailureAttempt({
+          assistantTexts,
+          messagesSnapshot: [
+            base.messagesSnapshot[0]!,
+            ...assistantTexts.map((text) => ({
+              ...base.lastAssistant!,
+              stopReason: "stop" as const,
+              content: [{ type: "text" as const, text }],
+            })),
+            ...base.messagesSnapshot.slice(1),
+          ],
+        }),
+      );
+      request.runParams.terminalReplyExpectation = "result-required";
       expect(request.payloadsWithToolMedia).toEqual([
         expect.objectContaining({
           isError: true,
@@ -95,6 +110,9 @@ describe("prepared provider errors after settled tools", () => {
     "preserves $name instead of finalizing",
     ({ change }) => {
       const request = prepareRequest(createSettledProviderFailureAttempt(change));
+      if (change.sourceReplyDelivered) {
+        request.replyDeliveryState = "delivered";
+      }
       expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
     },
   );
@@ -144,14 +162,16 @@ describe("prepared provider errors after settled tools", () => {
     },
   );
 
-  it("preserves a cron tool-authored silent outcome after discounting the error", () => {
+  it("requires a completed final after a cron tool result containing NO_REPLY", () => {
     const attempt = createSettledProviderFailureAttempt();
     const result = attempt.messagesSnapshot.find((message) => message.role === "toolResult");
     if (!result || result.role !== "toolResult") {
       throw new Error("Missing settled tool result");
     }
     result.content = [{ type: "text", text: "NO_REPLY" }];
-    expect(resolveSettledTurnFinalizationRequest(prepareRequest(attempt, "cron"))).toBeNull();
+    expect(resolveSettledTurnFinalizationRequest(prepareRequest(attempt, "cron"))).toContain(
+      "Do not repeat completed tool calls",
+    );
   });
 
   it("preserves an unmarked error alongside the generated provider error", () => {

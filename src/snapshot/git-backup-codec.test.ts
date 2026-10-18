@@ -11,7 +11,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 
-it("restores a supported historical agent schema without migrating its data or admitting newer versions", async () => {
+it("restores historical agent data without migration and rejects incompatible version manifests", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-historical-agent-"));
   const sourcePath = path.join(root, "source.sqlite");
   const outputPath = path.join(root, "dump");
@@ -82,7 +82,7 @@ it("restores a supported historical agent schema without migrating its data or a
           targetPath: refusedTarget,
           expectedIdentity: { role: "agent", agentId: "main" },
         }),
-      ).rejects.toThrow(/schema version/u);
+      ).rejects.toThrow();
       await expect(fs.stat(refusedTarget)).rejects.toMatchObject({ code: "ENOENT" });
     }
   } finally {

@@ -5,6 +5,7 @@ import * as sessionMeta from "../../acp/runtime/session-meta.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import * as entryReadRuntime from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createOpenClawTestState,
@@ -25,125 +26,142 @@ afterEach(async () => {
 });
 
 it.each([
-  "read-recovery",
-  "lifecycle-change",
-  "parent-change",
-  "replacement-parent",
-  "owner-error",
-] as const)("keeps explicit-owner ACP metadata current across gather: %s", async (scenario) => {
-  state = await createOpenClawTestState({ label: "dispatch-owner-metadata" });
-  const cfg: OpenClawConfig = {
-    agents: {
-      ownership: "explicit",
-      entries: { main: {}, work: {} },
-      defaults: { workspace: state.workspaceDir },
+  ["read-recovery", {}, true],
+  ["lifecycle-change", { lifecycleRevision: "after-gather" }, false],
+  ["parent-change", { spawnedBy: undefined }, false],
+  ["parent-added", { parentSessionKey: "agent:work:parent" }, true],
+  [
+    "replacement-parent",
+    {
+      sessionId: "replacement-child",
+      lifecycleRevision: "after-gather",
+      spawnedBy: "agent:work:new-parent",
     },
-    plugins: { enabled: false },
-    session: { scope: "global" },
-  };
-  await state.writeConfig(cfg);
-  const scope = {
-    agentId: "work",
-    sessionKey: "global",
-    storePath: resolveSessionStorePathCore(undefined, { agentId: "work" }),
-  };
-  const entry = {
-    sessionId: "child",
-    lifecycleRevision: "before-gather",
-    updatedAt: 1,
-    spawnedBy: "agent:work:parent",
-  };
-  replaceSessionEntrySync(scope, entry);
-  const meta = {
-    backend: "acpx",
-    agent: "synthetic",
-    runtimeSessionName: "canonical-child",
-    mode: "persistent",
-    state: "idle",
-    lastActivityAt: 1,
-  } as const;
-  sessionMeta.writeAcpSessionMetaForMigration({
-    sessionKey: buildAcpDatabaseSessionKey("global", "work"),
-    lifecycleRevision: entry.lifecycleRevision,
-    meta,
-  });
-  if (scenario === "read-recovery") {
-    vi.spyOn(entryReadRuntime, "readSessionEntryReadOnlyInWorker").mockRejectedValueOnce(
-      new Error("synthetic initial read failure"),
-    );
-  }
-  const loadRuntimePlugins = runtimeLoaders.loadRuntimePlugins;
-  vi.spyOn(runtimeLoaders, "loadRuntimePlugins").mockImplementationOnce(async () => {
-    await Promise.resolve();
-    if (scenario === "lifecycle-change") {
-      replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "after-gather" });
-    }
-    if (scenario === "replacement-parent") {
-      replaceSessionEntrySync(scope, {
-        ...entry,
-        sessionId: "replacement-child",
-        lifecycleRevision: "after-gather",
-        spawnedBy: "agent:work:new-parent",
-      });
+    true,
+  ],
+  ["metadata-created", {}, true],
+  ["metadata-cleared", {}, false],
+  ["owner-error", {}, false],
+] as const)(
+  "keeps explicit-owner ACP metadata current across gather: %s",
+  async (scenario, patch, suppressed) => {
+    state = await createOpenClawTestState({ label: "dispatch-owner-metadata" });
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, work: {} },
+        defaults: { workspace: state.workspaceDir },
+      },
+      plugins: { enabled: false },
+      session: { scope: "global" },
+    };
+    await state.writeConfig(cfg);
+    const scope = {
+      agentId: "work",
+      sessionKey: "global",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "work" }),
+    };
+    const entry = {
+      sessionId: "child",
+      lifecycleRevision: "before-gather",
+      updatedAt: 1,
+      spawnedBy: scenario === "parent-added" ? undefined : "agent:work:parent",
+    } satisfies SessionEntry;
+    replaceSessionEntrySync(scope, entry);
+    const replace = (update: Partial<SessionEntry>) =>
+      replaceSessionEntrySync(scope, { ...entry, ...update });
+    const meta = {
+      backend: "acpx",
+      agent: "synthetic",
+      runtimeSessionName: "canonical-child",
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: 1,
+    } as const;
+    const writeMeta = (
+      lifecycleRevision = entry.lifecycleRevision,
+      runtimeSessionName: string = meta.runtimeSessionName,
+    ) =>
       sessionMeta.writeAcpSessionMetaForMigration({
         sessionKey: buildAcpDatabaseSessionKey("global", "work"),
-        lifecycleRevision: "after-gather",
-        meta: { ...meta, runtimeSessionName: "replacement-child" },
+        lifecycleRevision,
+        meta: { ...meta, runtimeSessionName },
       });
+    if (scenario !== "metadata-created") {
+      writeMeta();
     }
-    if (scenario === "owner-error") {
-      cfg.session = { ...cfg.session, store: scope.storePath };
-      cfg.agents!.defaults = { ...cfg.agents!.defaults, sessionStore: { agentId: "main" } };
+    if (scenario === "read-recovery") {
+      vi.spyOn(entryReadRuntime, "readSessionEntryReadOnlyInWorker").mockRejectedValueOnce(
+        new Error("synthetic initial read failure"),
+      );
     }
-    if (scenario === "parent-change") {
-      replaceSessionEntrySync(scope, { ...entry, spawnedBy: undefined });
-    }
-    return await loadRuntimePlugins();
-  });
-  using resources = new DisposableStack();
-  const dispatcher = createReplyDispatcher({ deliver: async () => undefined });
-  try {
-    const gathered = await gatherDispatchRequest(
-      {
-        cfg,
-        ctx: {
-          AgentId: "work",
-          SessionKey: "global",
-          Body: "hello",
-          Provider: "webchat",
-          Surface: "webchat",
-          ChatType: "direct",
-          CommandAuthorized: false,
+    const loadRuntimePlugins = runtimeLoaders.loadRuntimePlugins;
+    vi.spyOn(runtimeLoaders, "loadRuntimePlugins").mockImplementationOnce(async () => {
+      await Promise.resolve();
+      if (Object.keys(patch).length) {
+        replace(patch);
+      }
+      if (scenario === "replacement-parent") {
+        writeMeta("after-gather", "replacement-child");
+      }
+      if (scenario === "owner-error") {
+        cfg.session = { ...cfg.session, store: scope.storePath };
+        cfg.agents!.defaults = { ...cfg.agents!.defaults, sessionStore: { agentId: "main" } };
+      }
+      if (scenario === "metadata-created" || scenario === "metadata-cleared") {
+        await sessionMeta.upsertAcpSessionMeta({
+          cfg,
+          agentId: scope.agentId,
+          sessionKey: scope.sessionKey,
+          skipMaintenance: true,
+          mutate: () => (scenario === "metadata-created" ? meta : null),
+        });
+      }
+      return await loadRuntimePlugins();
+    });
+    using resources = new DisposableStack();
+    const dispatcher = createReplyDispatcher({ deliver: async () => undefined });
+    try {
+      const gathered = await gatherDispatchRequest(
+        {
+          cfg,
+          ctx: {
+            AgentId: "work",
+            SessionKey: "global",
+            Body: "hello",
+            Provider: "webchat",
+            Surface: "webchat",
+            ChatType: "direct",
+            CommandAuthorized: false,
+          },
+          dispatcher,
         },
-        dispatcher,
-      },
-      undefined,
-      false,
-      undefined,
-      (dispose) => resources.defer(dispose),
-    );
-    expect(gathered.status).toBe("ready");
-    if (gathered.status !== "ready") {
-      throw new Error("dispatch gather did not prepare the turn");
+        undefined,
+        false,
+        undefined,
+        (dispose) => resources.defer(dispose),
+      );
+      expect(gathered.status).toBe("ready");
+      if (gathered.status !== "ready") {
+        throw new Error("dispatch gather did not prepare the turn");
+      }
+      const captured = gathered.state.sessionStoreEntry.entry;
+      expect([captured?.acp, captured?.lifecycleRevision]).toEqual([
+        undefined,
+        scenario === "read-recovery" ? undefined : "before-gather",
+      ]);
+      if (scenario === "owner-error") {
+        await expect(prepareDispatchDelivery(gathered.state)).rejects.toThrow("fixed-store");
+        return;
+      }
+      const prepared = await prepareDispatchDelivery(gathered.state);
+      expect(prepared.suppressAcpChildUserDelivery).toBe(suppressed);
+    } finally {
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
     }
-    // Canonical ACP metadata is deliberately absent from the captured session row.
-    expect(gathered.state.sessionStoreEntry.entry?.acp).toBeUndefined();
-    expect(gathered.state.sessionStoreEntry.entry?.lifecycleRevision).toBe(
-      scenario === "read-recovery" ? undefined : "before-gather",
-    );
-    if (scenario === "owner-error") {
-      await expect(prepareDispatchDelivery(gathered.state)).rejects.toThrow("fixed-store");
-      return;
-    }
-    const prepared = await prepareDispatchDelivery(gathered.state);
-    expect(prepared.suppressAcpChildUserDelivery).toBe(
-      scenario === "read-recovery" || scenario === "replacement-parent",
-    );
-  } finally {
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-  }
-});
+  },
+);
 
 it("reads the command target in a worker and preserves missing-target lookup facts", async () => {
   state = await createOpenClawTestState({ label: "dispatch-entry-worker" });
@@ -153,37 +171,26 @@ it("reads the command target in a worker and preserves missing-target lookup fac
   await state.writeConfig(cfg);
   const sourceKey = "agent:main:source";
   const targetKey = "agent:work:target";
-  replaceSessionEntrySync(
-    { agentId: "main", sessionKey: sourceKey },
-    { sessionId: "source", updatedAt: 1 },
-  );
-  replaceSessionEntrySync(
-    { agentId: "work", sessionKey: targetKey },
-    { sessionId: "target", updatedAt: 1 },
-  );
-  const ctx = buildTestCtx({
-    SessionKey: sourceKey,
-    CommandTargetSessionKey: targetKey,
-    CommandSource: "native",
-  });
+  for (const [agentId, sessionKey, sessionId] of [
+    ["main", sourceKey, "source"],
+    ["work", targetKey, "target"],
+  ] as const) {
+    replaceSessionEntrySync({ agentId, sessionKey }, { sessionId, updatedAt: 1 });
+  }
+  const ctx = buildTestCtx({ SessionKey: sourceKey, CommandSource: "native" });
   const sql = observeHostDataSql();
   try {
-    expect(await resolveSessionStoreLookup(ctx, cfg)).toMatchObject({
-      agentId: "work",
-      sessionKey: targetKey,
-      entry: { sessionId: "target" },
-    });
-    expect(
-      await resolveSessionStoreLookup(
-        { ...ctx, CommandTargetSessionKey: "agent:work:missing" },
-        cfg,
-      ),
-    ).toMatchObject({
-      agentId: "work",
-      sessionKey: "agent:work:missing",
-      entry: undefined,
-      store: undefined,
-    });
+    for (const sessionKey of [targetKey, "agent:work:missing"]) {
+      expect(
+        await resolveSessionStoreLookup({ ...ctx, CommandTargetSessionKey: sessionKey }, cfg),
+      ).toMatchObject({
+        agentId: "work",
+        sessionKey,
+        ...(sessionKey === targetKey
+          ? { entry: { sessionId: "target" } }
+          : { entry: undefined, store: undefined }),
+      });
+    }
     expect(
       sql.queries.filter((query) => /\bsession_(?:nodes|windows|participants)\b/.test(query)),
     ).toEqual([]);

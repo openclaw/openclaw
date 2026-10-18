@@ -10,7 +10,7 @@ import {
 } from "./delivery-result.js";
 import {
   hasFinalChannelTurnDispatch,
-  hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch,
+  hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
 } from "./dispatch-result.js";
 
@@ -218,6 +218,7 @@ describe("channel turn dispatch results", () => {
       hasVisibleChannelTurnDispatch({
         queuedFinal: false,
         counts: { tool: 1, block: 0, final: 0 },
+        settledReceipt: { anyVisibleDelivered: false, counts: {} },
       }),
     ).toBe(false);
     expect(

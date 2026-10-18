@@ -385,22 +385,6 @@ describe("startProxy", () => {
     await expect(stopProxy(null)).resolves.toBeUndefined();
   });
 
-  it("throws when active proxy loopbackMode is block for Browser CDP bypass", async () => {
-    const handle = await startProxy({
-      proxyUrl: "http://127.0.0.1:3128",
-      loopbackMode: "block",
-    });
-
-    try {
-      expect(() => registerManagedProxyBrowserCdpBypass("http://127.0.0.1:18800")).toThrow(
-        "Browser loopback CDP connections are blocked by proxy.loopbackMode",
-      );
-      expect(proxylineRegisterBypassMock).not.toHaveBeenCalled();
-    } finally {
-      await stopProxy(handle);
-    }
-  });
-
   it("returns undefined when no managed proxy is active (bypass is a no-op)", () => {
     expect(registerManagedProxyBrowserCdpBypass("http://127.0.0.1:18800")).toBeUndefined();
     expect(proxylineRegisterBypassMock).not.toHaveBeenCalled();

@@ -31,8 +31,8 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
@@ -181,7 +181,8 @@ async function appendPreparedSessionTranscriptTurn(
       }
       return !append.workerPreparation || (!append.predicate && !repeated);
     });
-  const inputActor = !nativeReservation && (await getSessionInputActor(resolved));
+  const inputActor =
+    !nativeReservation && (await getSessionInputActor(resolved, options.resolveRuntimeTarget));
   if (
     !nativeReservation &&
     independentPreparation &&

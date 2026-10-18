@@ -54,7 +54,7 @@ export function isSelfChatMode(
   selfE164: string | null | undefined,
   allowFrom?: Array<string | number> | null,
 ): boolean {
-  if (!selfE164 || !Array.isArray(allowFrom) || allowFrom.length === 0) {
+  if (!selfE164 || !allowFrom?.length) {
     return false;
   }
   const normalizedSelf = normalizeE164(selfE164);

@@ -376,6 +376,7 @@ it.for(["global", "unknown"] as const)(
         archived: "all" as const,
         limit: 10,
       };
+      await listSessions({ client, context, request });
       await withinTest(backfilled, signal);
       for (const agentId of ["ops", "research"]) {
         expect(

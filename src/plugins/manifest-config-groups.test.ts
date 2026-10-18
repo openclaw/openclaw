@@ -28,11 +28,11 @@ const groups = [
   { id: "general", title: "General", order: 10, properties: ["enabled"] },
 ];
 
-function loadMetadata(configGroups: unknown) {
+function loadMetadata(configGroups: unknown, uiHints?: unknown) {
   const rootDir = makeTrackedTempDir("openclaw-config-groups", roots);
   fs.writeFileSync(
     path.join(rootDir, "openclaw.plugin.json"),
-    JSON.stringify({ id: "grouped-plugin", configSchema, configGroups }),
+    JSON.stringify({ id: "grouped-plugin", configSchema, configGroups, uiHints }),
   );
   const registry = loadPluginManifestRegistryCore({
     installRecords: {},
@@ -55,6 +55,16 @@ afterEach(() => {
 });
 
 describe("authored plugin config groups", () => {
+  it.each([true, false, "yes"])("normalizes and publishes multiline hint %j", (multiline) => {
+    const response = buildConfigSchemaCore({
+      plugins: loadMetadata(groups, { "storage.path": { multiline } }),
+    });
+    const lookup = lookupConfigSchema(response, `${configPath}.storage.path`);
+    expect(lookup?.hint?.multiline).toBe(typeof multiline === "boolean" ? multiline : undefined);
+    expect(Value.Check(ConfigSchemaResponseSchema, response)).toBe(true);
+    expect(Value.Check(ConfigSchemaLookupResultSchema, lookup)).toBe(true);
+  });
+
   it("carries groups through discovery into schema and lookup without hiding ungrouped fields", () => {
     const response = buildConfigSchemaCore({ plugins: loadMetadata(groups) });
     const lookup = lookupConfigSchema(response, configPath);

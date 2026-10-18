@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
+  readCommandProcessFailure,
 } from "../process/exec-result.js";
 import type { SpawnResult } from "../process/exec.js";
 import { normalizeGitPathForFilesystem, type GitCommandOptions } from "./git-exec.js";
@@ -267,6 +268,9 @@ export async function withGitRepositoryRepair<T extends FetchResult>(params: {
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;
+    }
+    if (readCommandProcessFailure(error)?.cleanup === "uncertain") {
+      throw new CommandProcessCleanupError({ cause: error });
     }
     assertCurrent();
     log.warn(

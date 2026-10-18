@@ -1,9 +1,9 @@
 import { expect, it } from "vitest";
-import { readSqliteDataVersion } from "../../infra/sqlite-schema-facts.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { prepareSessionGenerationFacts } from "./session-delivery-generation.js";
@@ -41,7 +41,7 @@ it.each([
           toolOverrides: original.toolOverrides,
         });
 
-        const version = readSqliteDataVersion(database.db);
+        const version = database.db.prepare("PRAGMA data_version").get()?.data_version;
         const write = database.db.prepare(
           "UPDATE session_nodes SET current_session_id = ?, entry_json = ? WHERE session_key = ?",
         );
@@ -52,7 +52,7 @@ it.each([
           ),
           scope.sessionKey,
         );
-        expect(readSqliteDataVersion(database.db)).toBe(version);
+        expect(database.db.prepare("PRAGMA data_version").get()?.data_version).toBe(version);
         expect(generation.assertCurrent).toThrow(
           expect.objectContaining({ code: `SESSION_DELIVERY_GENERATION_${code}` }),
         );
@@ -127,7 +127,7 @@ it("refuses reentrant delivery during raw execution and unfinished RETURNING cur
     replaceSessionEntrySync(scope, original);
     const generation = await prepareSessionGenerationFacts({ ...scope, ...original });
     let callbacks = 0;
-    database.db.function("assert_delivery_fenced", () => {
+    requireNativeSqliteDatabase(database.db).function("assert_delivery_fenced", () => {
       callbacks += 1;
       expect(generation.assertCurrent).toThrow(
         expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),

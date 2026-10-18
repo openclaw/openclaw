@@ -640,21 +640,12 @@ export async function createBundleMcpToolRuntime(params: {
   excludeServerNames?: ReadonlySet<string>;
   reservedToolNames?: Iterable<string>;
   safeServerNamesByServer?: ReadonlyMap<string, string>;
-  createRuntime?: (params: {
-    sessionId: string;
-    workspaceDir: string;
-    agentDir?: string;
-    cfg?: OpenClawConfig;
-    excludeServerNames?: ReadonlySet<string>;
-    safeServerNamesByServer?: ReadonlyMap<string, string>;
-  }) => SessionMcpRuntime;
 }): Promise<BundleMcpToolRuntime> {
   const signal = getSessionMcpRequestSignal();
   signal?.throwIfAborted();
-  const createRuntime =
-    params.createRuntime ?? (await import("./agent-bundle-mcp-runtime.js")).createSessionMcpRuntime;
+  const { createSessionMcpRuntime } = await import("./agent-bundle-mcp-runtime.js");
   signal?.throwIfAborted();
-  const runtime = createRuntime({
+  const runtime = createSessionMcpRuntime({
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,

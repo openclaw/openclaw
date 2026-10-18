@@ -5,6 +5,7 @@ import { sha256File } from "../infra/directory-durability.js";
 import { sameFileMutationFingerprint } from "../infra/file-descriptor.js";
 import { root } from "../infra/fs-safe.js";
 import { parseSnapshotManifest } from "./manifest.js";
+import { assertNoSqliteSidecarsSync } from "./restore-paths.js";
 import { SNAPSHOT_MANIFEST_FILENAME, type SnapshotManifest } from "./snapshot-provider.js";
 
 const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$/);
@@ -50,7 +51,7 @@ export type SnapshotExportEnvelope =
   | { engine: "sqlite"; manifest: SnapshotManifest }
   | { engine: "postgres"; manifest: PostgresExportEnvelope };
 
-function parsePostgresEnvelope(value: unknown, expectedId: string): PostgresExportEnvelope {
+export function parsePostgresEnvelope(value: unknown, expectedId: string): PostgresExportEnvelope {
   const manifest = postgresEnvelope.parse(value);
   if (manifest.snapshotId !== expectedId) {
     throw new Error("Export manifest id does not match its directory");
@@ -104,6 +105,10 @@ export async function verifyPostgresExportEnvelope(
   }
   const files = await root(directory);
   for (const name of ["database.sqlite", "anchor.sqlite"] as const) {
+    assertNoSqliteSidecarsSync(
+      path.join(directory, name),
+      "PostgreSQL export has unexpected SQLite sidecar",
+    );
     const opened = await files.open(name, { hardlinks: "reject", symlinks: "reject" });
     try {
       const before = await opened.handle.stat({ bigint: true });

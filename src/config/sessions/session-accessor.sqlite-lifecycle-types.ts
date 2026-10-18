@@ -1,8 +1,5 @@
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
-import type {
-  DatabaseFileIdentity,
-  DatabasePathIdentity,
-} from "../../infra/sqlite-worker-identity.js";
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -201,8 +198,10 @@ export type SessionEntryMaintenanceInput = {
   activeSessionKeys?: readonly string[];
   archiveDirectory: string;
   forceMaintenance?: boolean;
+  /** Automatic cap work yields between operations; inline cleanup remains exhaustive. */
+  maxCapEntries?: number;
   maintenance: ResolvedSessionMaintenanceConfig;
-  preservation: SessionMaintenancePreservationSnapshot | null;
+  preservation: SessionMaintenancePreservationSnapshot;
   storePath: string;
 };
 
@@ -222,7 +221,6 @@ export type SessionMaintenanceMetadataCommand =
       kind: "maintenance-age";
       ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
       maintenance: ResolvedSessionMaintenanceConfig;
-      readOnly?: { input: SessionEntryMaintenanceInput };
     }
   | {
       kind: "maintenance-plan";
@@ -237,24 +235,13 @@ export type SessionMaintenanceMetadataResult =
       nextAt: number | undefined;
       ageFact?: SessionEntryMaintenanceAgeFact;
     }
-  | { kind: "maintenance-preservation-required" }
   | { kind: "maintenance-plan-stale" }
   | {
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;
       nextAt: number | undefined;
       ageFact?: SessionEntryMaintenanceAgeFact;
-      readOnlyInput?: SessionEntryMaintenanceInput;
     };
-
-export type SessionMaintenanceReadCommand = Exclude<
-  SessionMaintenanceMetadataCommand,
-  { kind: "maintenance-statistics" }
-> & { expectedIdentity: DatabasePathIdentity };
-
-export type SessionMaintenanceReadResult =
-  | { kind: "maintenance-write-required" }
-  | Exclude<SessionMaintenanceMetadataResult, { kind: "maintenance-statistics" }>;
 
 export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {
@@ -265,10 +252,6 @@ export type SqliteSessionReclamationPlan =
       agentId: string;
       kind: "lifecycle-projection-commit";
       input: ProjectedLifecycleCommitInput;
-    })
-  | (SessionReclamationPlanBase & {
-      kind: "deletion-plan";
-      planning: SessionDeletionPlanningOperation;
     })
   | (SessionReclamationPlanBase & {
       kind: "archive-publish-prepare";
@@ -319,7 +302,6 @@ export type SqliteArchiveReclamationPlan = Exclude<
 export type SqliteSessionReclamationResult =
   | { kind: "lifecycle-projection-plan"; value: ProjectedLifecycleMutation }
   | { kind: "lifecycle-projection-commit"; value: ProjectedLifecycleCommitResult }
-  | { kind: "deletion-plan"; value: SessionDeletionPlanningResult }
   | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }
   | { kind: "archive-publish-record"; value: true }
   | { kind: "maintenance-pages"; value: SqliteWalReclamationResult }
@@ -332,7 +314,10 @@ export type SqliteSessionReclamationResult =
         committedEntryIndices: number[];
       };
     }
-  | { kind: "entry"; value: DeleteSessionEntryLifecycleResult }
+  | {
+      kind: "entry";
+      value: DeleteSessionEntryLifecycleResult & { transcriptInventoryUnchanged?: true };
+    }
   | {
       kind: "lifecycle-artifacts";
       value: {
@@ -366,6 +351,8 @@ type SessionEntryMaintenanceCounts = {
   capped: number;
 };
 export type SessionEntryMaintenancePlan = SessionEntryMaintenanceCounts & {
+  /** An exhaustive over-cap scan found only durable protection, without runtime/recent guards. */
+  durableNoCandidates?: true;
   /** Exact rows written by planning; parent publication must not rescan the store. */
   archivedEntries: Array<{ sessionKey: string; sessionId?: string }>;
   entryRemovals: SessionEntryRemovalPlan[];

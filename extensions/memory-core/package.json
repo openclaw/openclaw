@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/memory-core",
-  "version": "2026.10.3",
+  "version": "2026.10.4",
   "private": true,
   "description": "OpenClaw core memory search plugin",
   "type": "module",
@@ -10,17 +10,22 @@
     "./worker-api.js": "./worker-api.ts"
   },
   "dependencies": {
-    "@openclaw/fs-safe": "0.26.3",
+    "@openclaw/fs-safe": "0.26.7",
+    "@solidjs/web": "2.0.0-rc.14",
+    "solid-js": "2.0.0-rc.14",
     "json5": "2.2.3",
+    "kysely": "0.29.6",
     "p-limit": "7.3.3",
-    "typebox": "1.3.35"
+    "typebox": "1.3.36"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
+    "@solidjs/compiler": "2.0.0-rc.14",
+    "esbuild": "0.28.2",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.10.3"
+    "openclaw": ">=2026.10.4"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -28,6 +33,12 @@
     }
   },
   "openclaw": {
+    "controlUi": "./browser/index.tsx",
+    "assetScripts": {
+      "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/memory-core",
+      "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/memory-core --copy",
+      "buildOutputs": ["dist/openclaw.plugin.json"]
+    },
     "build": {
       "workerEntries": [
         "./src/memory/manager-search.worker.ts",

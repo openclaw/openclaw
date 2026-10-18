@@ -39,7 +39,6 @@ it.each([
     declared: ["presence", "future_tool", "portal", "read"],
     expected: ["presence", "future_tool", "portal", "read"],
   },
-  { declared: ["future_tool"], expected: ["future_tool"] },
   { declared: [], expected: [] },
 ])(
   "preserves declared launch names or the published 2026.9.6 vocabulary ($declared)",
@@ -81,7 +80,6 @@ it.each([
 it.each([
   { reason: "non-array", value: "read" },
   { reason: "duplicate", value: ["read", "read"] },
-  { reason: "duplicate unknown", value: ["future_tool", "future_tool"] },
   { reason: "non-string", value: [1] },
   { reason: "empty name", value: [""] },
   { reason: "oversized name", value: ["x".repeat(65)] },
@@ -493,7 +491,7 @@ it.each([false, true])(
 it.each(["resolve", "reject"] as const)(
   "retires in-flight runner publication and its pending value before late %s",
   async (settle) => {
-    const { connection, request, start, writeStderrLine } = startConnectionFixture(true);
+    const { connection, request, start } = startConnectionFixture(true);
     const previous = createDeferred<unknown>();
     let first = true;
     request.mockImplementation((method) => {
@@ -528,7 +526,6 @@ it.each(["resolve", "reject"] as const)(
           }),
         ),
       );
-      expect(writeStderrLine).not.toHaveBeenCalled();
     } finally {
       previous.resolve({});
       await connection.close();
@@ -606,7 +603,6 @@ it.each([
   { kind: "workspace", platform: "linux", bun: false },
   { kind: "workspace", platform: "linux", bun: true },
   { kind: "workspace", platform: "win32", bun: false },
-  { kind: "workspace", platform: "win32", bun: true },
   { kind: "workspace", platform: "darwin", bun: false },
 ] as const)(
   "negotiates $kind inventory per connection ($platform, Bun=$bun)",

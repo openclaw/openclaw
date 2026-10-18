@@ -8,10 +8,18 @@ import { safeParseJson } from "@openclaw/normalization-core";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
+import { assertEngineStoreExecutionAllowed } from "../../infra/database-engine/admission-scope.js";
+import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../../infra/node-sqlite.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import { agentDatabaseLifecycle } from "../../state/openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   assertExistingAgentSchemaOwner,
   readExistingAgentSchemaMeta,
@@ -30,6 +38,15 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
+import {
+  prepareAuthProfileAuthorizationWrite,
+  readAuthProfileAuthorizationLifetimes,
+} from "./authorization-lifetime.js";
+import {
+  fenceAuthProfileAuthorizationWrite,
+  publishAuthProfileAuthorization,
+} from "./authorization-observation.js";
+import { AUTH_STORE_VERSION } from "./constants.js";
 import { withAuthProfileCredentialOwner } from "./credential-write-custody.js";
 import {
   getPreparedSharedAuthStoreOwnership,
@@ -181,7 +198,14 @@ function resolveAuthProfileDatabaseKind(
 /** Validate selected-agent ownership without requiring a current session schema. */
 export function assertAuthProfileStoreAgentOwner(agentDir: string, agentId: string): void {
   const pathname = resolveAuthProfileDatabasePath(agentDir);
-  const acquired = acquireAuthProfileReadDatabase(pathname);
+  if (getDatabaseEngineInput("agent")) {
+    const opened = openOpenClawAgentDatabaseReadOnly({ agentId, path: pathname });
+    if (opened.found) {
+      opened.database.close();
+    }
+    return;
+  }
+  const acquired = acquireAuthProfileReadDatabase(pathname, openSqliteReadOnlyDatabase);
   if (acquired.status === "missing") {
     return;
   }
@@ -193,6 +217,33 @@ export function assertAuthProfileStoreAgentOwner(agentDir: string, agentId: stri
     normalizeAgentId(agentId),
     pathname,
   );
+}
+
+function readSelectedAgentAuthDatabase<T>(
+  target: { path: string; env?: NodeJS.ProcessEnv },
+  read: (db: EngineConnection) => T,
+): { value: T } | undefined {
+  assertEngineStoreExecutionAllowed();
+  if (isMissingDatabasePath(target.path)) {
+    return undefined;
+  }
+  const anchor = openNodeSqliteDatabase(resolveExistingSqliteFileUri(target.path));
+  let database: EngineConnection = anchor;
+  try {
+    database = openAgentEngineStore(anchor, undefined, target.path, true, (connection, error) => {
+      database = connection;
+      throw error;
+    });
+    return { value: read(database) };
+  } finally {
+    try {
+      database.close();
+    } finally {
+      if (database !== anchor && anchor.isOpen) {
+        anchor.close();
+      }
+    }
+  }
 }
 
 export function inspectAuthProfileJsonCellReadOnly(
@@ -213,7 +264,22 @@ export function inspectAuthProfileJsonCellReadOnly(
         : { status: "unreadable" };
     }
   }
-  return inspectAgentAuthProfileJsonCellReadOnly(databaseTarget.path, target);
+  if (getDatabaseEngineInput("agent")) {
+    try {
+      return (
+        readSelectedAgentAuthDatabase(databaseTarget, (db) =>
+          inspectAuthProfileJsonCell(db, target, "agent"),
+        )?.value ?? { status: "missing", reason: "database" }
+      );
+    } catch {
+      return { status: "unreadable" };
+    }
+  }
+  return inspectAgentAuthProfileJsonCellReadOnly(
+    databaseTarget.path,
+    target,
+    openSqliteReadOnlyDatabase,
+  );
 }
 
 /** Doctor retains opaque rotation-state bytes while repairing independently readable credentials. */
@@ -226,7 +292,16 @@ export function readAuthProfileStateJsonTextReadOnly(
       { path: target.path, ...(target.env ? { env: target.env } : {}) },
     );
   }
-  const acquired = acquireAuthProfileReadDatabase(target.path);
+  if (getDatabaseEngineInput("agent")) {
+    const result = readSelectedAgentAuthDatabase(target, (db) =>
+      readAuthProfileJsonCellText(db, "state", "agent"),
+    );
+    if (!result) {
+      throw new Error("Auth profile rotation-state source is unavailable; retry Doctor.");
+    }
+    return result.value;
+  }
+  const acquired = acquireAuthProfileReadDatabase(target.path, openSqliteReadOnlyDatabase);
   if (acquired.status !== "readable") {
     throw new Error("Auth profile rotation-state source is unavailable; retry Doctor.");
   }
@@ -364,10 +439,65 @@ function mutateAuthProfileCell(
   deleteRow = false,
 ): void {
   const kind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const write = (owner: AuthProfileDatabase) =>
-    deleteRow
-      ? deleteAuthProfileJsonCell(owner.db, target, kind)
-      : writeAuthProfileJsonCell(owner.db, target, kind, payload);
+  const write = (owner: AuthProfileDatabase) => {
+    let next = payload;
+    let remove = deleteRow;
+    if (target === "store") {
+      const previous = inspectAuthProfileJsonCell(owner.db, target, kind);
+      if (previous.status === "unreadable") {
+        throw new Error("Auth profile credential store is unreadable");
+      }
+      const raw = previous.status === "readable" ? previous.raw : undefined;
+      if (remove && Object.keys(readAuthProfileAuthorizationLifetimes(raw)).length) {
+        // Preserve enrolled selection tombstones through credential removal.
+        next = { version: AUTH_STORE_VERSION, profiles: {} };
+        remove = false;
+      }
+      if (!remove) {
+        next = prepareAuthProfileAuthorizationWrite(raw, next);
+      }
+    }
+    let settleAuthorization: ReturnType<typeof fenceAuthProfileAuthorizationWrite> | undefined;
+    const fenceAuthorization = () => {
+      settleAuthorization ??= fenceAuthProfileAuthorizationWrite(owner.path);
+    };
+    // Autocommit has no later prepareCommit phase; fence before its native effect.
+    if (target === "store" && !owner.db.isTransaction) {
+      fenceAuthorization();
+    }
+    try {
+      if (remove) {
+        deleteAuthProfileJsonCell(owner.db, target, kind);
+      } else {
+        writeAuthProfileJsonCell(owner.db, target, kind, next);
+      }
+      if (target === "store") {
+        const publish = () => {
+          publishAuthProfileAuthorization(owner.path, remove ? undefined : next);
+          settleAuthorization?.(true);
+        };
+        // The supplied connection retains its outer transaction/savepoint owner. Unknown
+        // settlement must invalidate facts even when post-commit notifications are discarded.
+        if (
+          !stageSqliteTransactionState(owner.db, {
+            stage() {},
+            prepareCommit: fenceAuthorization,
+            commit: publish,
+            rollback: () => settleAuthorization?.(true),
+            invalidate() {
+              fenceAuthorization();
+              settleAuthorization?.(false);
+            },
+          })
+        ) {
+          publish();
+        }
+      }
+    } catch (error) {
+      settleAuthorization?.(false);
+      throw error;
+    }
+  };
   if (database) {
     write(database);
   } else {
@@ -512,6 +642,7 @@ export function runAuthProfileWriteTransaction<T>(
           ...(existing
             ? {
                 repairAdmission: {
+                  integrityTables: ["auth_profile_store", "auth_profile_state"],
                   expectedIdentity: existing.identity,
                   assertCurrent: existing.assertCurrent,
                 },

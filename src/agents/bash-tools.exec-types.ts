@@ -1,9 +1,4 @@
 import type { NodePermissionRequest } from "../../packages/gateway-protocol/src/node-permissions.js";
-/**
- * Shared type contracts for bash exec tools.
- * Defines defaults, approval follow-up payloads, elevated policy defaults, and
- * tool result details consumed across exec hosts and process controls.
- */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type {
@@ -19,13 +14,13 @@ import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
+import type { ToolApprovalReview } from "../shared/tool-approval-reviews.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
 import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
 
-/** Failure categories used to explain exec process exits. */
 type ExecProcessFailureKind =
   | "shell-command-not-found"
   | "shell-not-executable"
@@ -63,7 +58,6 @@ export type ExecProcessOutcome =
       reason: string;
     };
 
-/** Runtime defaults passed into exec/process tool factories. */
 export type ExecToolDefaults = {
   hasCronTool?: boolean;
   host?: ExecTarget;
@@ -88,10 +82,14 @@ export type ExecToolDefaults = {
   preparedRunEnvironment?: PreparedGitHubToolEnvironment;
   /** An explicit snapshot, including an empty one, replaces local store access. */
   preparedStoreEnvironment?: Readonly<SecretStoreExecEnvironment>;
+  /** Host-prepared routing hint; remote workers have no Gateway session database. */
+  preparedSubagentExecution?: boolean;
   autoReviewer?: ExecAutoReviewer;
   /** Reads current attempt context only when a command needs review. */
   reviewTranscript?: () => ExecAutoReviewTranscript | undefined;
   agentId?: string;
+  /** Credential owner when execution borrows another agent's tool policy. */
+  executionAgentId?: string;
   backgroundMs?: number;
   cleanupMs?: number;
   timeoutSec?: number;
@@ -215,13 +213,7 @@ export type ExecElevatedDefaults = {
 };
 
 /** One model-backed approval review recorded on an exec tool call. */
-export type ExecToolApprovalReview = {
-  id: string;
-  label: string;
-  status: "in_progress" | "approved" | "denied" | "timed_out" | "aborted";
-  riskLevel?: string;
-  rationale?: string;
-};
+export type ExecToolApprovalReview = Omit<ToolApprovalReview, "userAuthorization">;
 
 /** Structured details returned by exec tool calls. */
 export type ExecToolDetails = {

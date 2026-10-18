@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
+import type * as AttemptExecutionHelpers from "../agents/command/attempt-execution.helpers.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { persistAcpTurnTranscript } from "../agents/command/transcript-persistence.js";
 import { getTranscriptMessageRole } from "../agents/embedded-agent-runner/message-visibility.js";
@@ -93,28 +94,9 @@ vi.mock("../agents/command/attempt-execution.runtime.js", async () => {
     await vi.importActual<typeof import("../agents/command/acp-lifecycle.js")>(
       "../agents/command/acp-lifecycle.js",
     );
-  const createAcpVisibleTextAccumulator = () => {
-    let text = "";
-    let silent = false;
-    return {
-      consume(chunk: string) {
-        if (!chunk || chunk === "NO_REPLY") {
-          silent ||= chunk === "NO_REPLY";
-          return null;
-        }
-        text += chunk;
-        return { text, delta: chunk };
-      },
-      finalize: () => text.trim(),
-      finalizeRaw: () => text,
-      finalizeReplySnapshot: () =>
-        text
-          ? { disposition: "visible" as const, text }
-          : silent
-            ? { disposition: "silent" as const }
-            : { disposition: "empty" as const },
-    };
-  };
+  const { createAcpVisibleTextAccumulator } = await vi.importActual<typeof AttemptExecutionHelpers>(
+    "../agents/command/attempt-execution.helpers.js",
+  );
 
   return {
     createAcpToolLifecycleTracker: () => ({
@@ -434,7 +416,7 @@ describe("agentCommand ACP runtime routing", () => {
             finalText: "  ACP reply\n",
           },
         );
-        expect(result?.payloads).toEqual([{ text: "ACP reply", mediaUrl: null }]);
+        expect(result?.payloads).toEqual([{ text: "  ACP reply", mediaUrl: null }]);
         expect(result?.meta.aborted).toBe(
           scenario.status === "cancelled" || ("abort" in scenario && scenario.abort !== "delivery"),
         );
@@ -501,13 +483,43 @@ describe("agentCommand ACP runtime routing", () => {
     });
   });
 
-  it("keeps no-reply ACP turns silent", async () => {
-    await withAcpSessionEnv(async () => {
-      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents(["NO_REPLY"]);
+  it.each(["", "NO_REPLY", " \tNO_REPLY\n"])(
+    "fails result-required ACP completion without delivering %j",
+    async (text) => {
+      await withAcpSessionEnv(async () => {
+        await expect(runAcpTurnWithAssistantEvents([text])).rejects.toMatchObject({
+          code: "ACP_TURN_FAILED",
+          message: expect.stringContaining("empty response"),
+        });
+        expect(deliverAgentCommandResult).not.toHaveBeenCalled();
+        expect(attemptExecutionMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+          expect.objectContaining({
+            terminalReply: { disposition: text ? "silent" : "empty" },
+          }),
+        );
+        expect(attemptExecutionMocks.persistAcpTurnTranscript).toHaveBeenCalledWith(
+          expect.objectContaining({ finalText: text }),
+        );
+      });
+    },
+  );
 
-      expect(assistantEvents.every((event) => !event.text)).toBe(true);
-      expect(logLines.join("\n")).not.toContain("NO_REPLY");
-      expect(logLines).toStrictEqual([]);
+  it.each([
+    "NO_REPLY.",
+    '"NO_REPLY"',
+    '{"action":"NO_REPLY"}',
+    "I will not reply.",
+    "NO_REPLY\nNO_REPLY",
+  ])("delivers ordinary ACP output %j", async (text) => {
+    await withAcpSessionEnv(async () => {
+      const { logLines } = await runAcpTurnWithAssistantEvents([text]);
+      const expected = text.startsWith("NO_REPLY\n") ? text.slice(9) : text;
+      expect(logLines).toContain(expected);
+      expect(attemptExecutionMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          terminalReply: { disposition: "visible", text: expected },
+        }),
+      );
     });
   });
 

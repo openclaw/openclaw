@@ -1,9 +1,10 @@
 import type { Command } from "commander";
-import { getRuntimeConfigSnapshot, readConfigFileSnapshot } from "../config/config.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
+import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLoadSession,
@@ -13,7 +14,7 @@ import {
 } from "./cli-registry-loader.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
-import { createPluginRuntimeLoaderLogger } from "./runtime/load-context.js";
+import { pluginRuntimeLoaderLogger as logger } from "./runtime/load-context.js";
 
 type PluginCliRegistrationMode = "eager" | "lazy" | "metadata";
 
@@ -24,8 +25,6 @@ type RegisterPluginCliOptions = {
   session?: PluginCliLoadSession;
 };
 
-const logger = createPluginRuntimeLoaderLogger();
-
 export async function registerPluginCliCommandsFromValidatedConfig(
   program: Command,
   env?: NodeJS.ProcessEnv,
@@ -35,12 +34,17 @@ export async function registerPluginCliCommandsFromValidatedConfig(
   const session = options?.session ?? createPluginCliLoadSession(getPluginCache());
   try {
     const snapshot = await session.readConfig(() =>
-      readConfigFileSnapshot({ skipPluginValidation: options?.skipPluginValidation }),
+      readConfigFileSnapshot({
+        observe: false,
+        skipPluginValidation: options?.skipPluginValidation,
+      }),
     );
     if (!snapshot.valid) {
       throw createInvalidConfigError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
     }
-    const cfg = getRuntimeConfigSnapshot() ?? snapshot.runtimeConfig;
+    const cfg = await loadPinnedRuntimeConfigAsync(async () => ({
+      config: snapshot.runtimeConfig,
+    }));
     const mode = options?.mode ?? "eager";
     const primary = options?.primary ?? undefined;
     const entries = await loadPluginCliRegistrationEntriesWithDefaults(

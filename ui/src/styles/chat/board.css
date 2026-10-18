@@ -23,7 +23,7 @@
 }
 
 /* Scroll owner for the board face. Widget/tab menus stay usable because
-   wa-popup renders them in the top layer, so this overflow cannot clip them.
+   native popovers render them in the top layer, so this overflow cannot clip them.
    Inline padding lives on .board-view below: macOS overlay scrollbars render
    inside the scroll container's padding and would float away from the edge. */
 .board-session-surface__board > openclaw-board-view {

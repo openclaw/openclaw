@@ -21,10 +21,7 @@ import type {
   PendingRequesterSettleWakeCommit,
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
-import {
-  buildSafeLifecycleErrorMeta,
-  maskLifecycleIdentifier,
-} from "./subagent-registry-lifecycle-log.js";
+import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -85,7 +82,6 @@ const completeRequesterSettleWakeBatch = async (
       );
     }),
     rearmGeneration,
-    stateContext,
     pending,
   );
   return true;
@@ -95,19 +91,15 @@ function releaseRequesterSettleWakeBatch(
   context: SubagentLifecycleWakeContext,
   observedEntries: readonly SubagentRunRecord[],
   rearmGeneration: number | undefined,
-  stateContext: OpenClawStateWorkerContext,
   settling?: PendingRequesterSettleWakeCommit,
 ): void {
   const params = context.options;
   const entries = observedEntries.map((entry) => currentSubagentRunOrObserved(params.runs, entry));
-  const requesterSessionKeys = new Set(entries.map((entry) => entry.requesterSessionKey));
   revokeRequesterCronAuthorityBatch(entries, rearmGeneration);
-  const retiredEntries: SubagentRunRecord[] = [];
   for (const entry of entries) {
     const { runId } = entry;
     if (!params.runs.has(runId)) {
       subagentRuns.confirmRetirement(entry);
-      retiredEntries.push(entry);
     }
   }
   for (const entry of entries) {
@@ -128,19 +120,14 @@ function releaseRequesterSettleWakeBatch(
         context.pendingRequesterSettleWakeCommits.delete(getSubagentRunRuntimeKey(entry));
       }
       retireSubagentGatewayBinding(entry);
+      context.waitingRequesterSettleWakeRuns.delete(getSubagentRunRuntimeKey(entry));
       params.resumedRuns.delete(getSubagentRunRuntimeKey(entry));
       params.clearPendingLifecycleError(runId);
     }
   }
-  for (const [runId, entry] of params.runs) {
-    if (entry.requesterSettleWake && requesterSessionKeys.has(entry.requesterSessionKey)) {
-      scheduleRequesterSettleWake(context, runId, entry, stateContext);
-    }
-  }
-  for (const entry of retiredEntries) {
-    if (!params.runs.has(entry.runId)) {
-      context.resumeAncestorCleanup(entry);
-    }
+  // Every member shares the requester; notify its siblings and ancestors once.
+  if (entries[0]) {
+    context.resumeAncestorCleanup(entries[0]);
   }
 }
 
@@ -175,7 +162,7 @@ export async function cancelRequesterSettleWake(
             "Subagent completion changed during cancellation; retry.",
           );
         }
-        const next = structuredClone(current);
+        const next = { ...current };
         next.suppressCompletionDelivery = true;
         next.requesterSettleWake = undefined;
         return { value: next, postimages: new Map([[next.runId, next]]) };
@@ -197,12 +184,7 @@ export async function cancelRequesterSettleWake(
               rearmGeneration: wake.rearmGeneration,
             });
           }
-          releaseRequesterSettleWakeBatch(
-            context,
-            [published],
-            wake.rearmGeneration,
-            workerContext,
-          );
+          releaseRequesterSettleWakeBatch(context, [published], wake.rearmGeneration);
         },
       },
     );
@@ -270,7 +252,12 @@ function scheduleRequesterSettleWakeRetry(
   stateContext: OpenClawStateWorkerContext,
 ): void {
   const pending = getPendingWakeCommit(context, entry);
-  const nextAttemptAt = pending?.nextAttemptAt ?? entry.requesterSettleWake?.nextAttemptAt;
+  const deliveryDeadline = entry.requesterSettleWake?.nextAttemptAt;
+  const nextAttemptAt =
+    pending?.nextAttemptAt ??
+    (deliveryDeadline !== undefined && deliveryDeadline > Date.now()
+      ? deliveryDeadline
+      : context.waitingRequesterSettleWakeRuns.get(getSubagentRunRuntimeKey(entry))?.deadline);
   if (nextAttemptAt === undefined || nextAttemptAt <= Date.now()) {
     return;
   }
@@ -284,6 +271,7 @@ function scheduleRequesterSettleWakeRetry(
         return;
       }
       context.scheduledRequesterSettleWakeTimers.delete(runId);
+      context.waitingRequesterSettleWakeRuns.delete(getSubagentRunRuntimeKey(entry));
       if (hasRetainedWake(context, entry)) {
         scheduleRequesterSettleWake(context, runId, entry, stateContext);
       }
@@ -305,6 +293,7 @@ export function scheduleRequesterSettleWake(
   runId: string,
   observedEntry: SubagentRunRecord,
   originalContext?: OpenClawStateWorkerContext,
+  descendantsChanged = false,
 ): void {
   const params = context.options;
   const publishedAtAdmission = params.runs.get(runId);
@@ -318,6 +307,22 @@ export function scheduleRequesterSettleWake(
   }
   const pendingAtAdmission = getPendingWakeCommit(context, entry);
   const admittedWake = entry.requesterSettleWake;
+  const waiting = context.waitingRequesterSettleWakeRuns.get(runtimeKey);
+  if (waiting) {
+    if (descendantsChanged || waiting.rearmGeneration !== admittedWake?.rearmGeneration) {
+      context.waitingRequesterSettleWakeRuns.delete(runtimeKey);
+      const timer = context.scheduledRequesterSettleWakeTimers.get(runId);
+      if (timer && isSameSubagentRunOwner(timer.entry, entry)) {
+        clearTimeout(timer.timer);
+        context.scheduledRequesterSettleWakeTimers.delete(runId);
+      }
+    } else if (!pendingAtAdmission) {
+      return;
+    }
+  }
+  if (descendantsChanged && context.scheduledRequesterSettleWakeRuns.has(runtimeKey)) {
+    context.pendingRequesterSettleWakeRearms.add(runtimeKey);
+  }
   const requesterSessionKey = entry.requesterSessionKey?.trim();
   if (
     (!admittedWake && !pendingAtAdmission) ||
@@ -414,6 +419,17 @@ export function scheduleRequesterSettleWake(
               requesterOrigin: entry.requesterOrigin,
               settledEntry: entry,
               isSourceCurrent,
+              onDescendantsPending: (waitDeadline) => {
+                if (
+                  isSourceCurrent() &&
+                  entry.requesterSettleWake?.rearmGeneration === admittedWake?.rearmGeneration
+                ) {
+                  context.waitingRequesterSettleWakeRuns.set(runtimeKey, {
+                    rearmGeneration: entry.requesterSettleWake?.rearmGeneration,
+                    deadline: waitDeadline,
+                  });
+                }
+              },
               transitionBatch: async (batch, state, onPublished) => {
                 const isCurrent = () =>
                   isSourceCurrent() &&
@@ -517,8 +533,8 @@ export function scheduleRequesterSettleWake(
             ) {
               params.warn("requester settle wake failed", {
                 error: safeError,
-                runId: maskLifecycleIdentifier(runId, "run"),
-                requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
+                runId,
+                requesterSessionKey,
               });
             }
             const current = params.runs.get(runId);
@@ -570,7 +586,7 @@ export function scheduleRequesterSettleWake(
             } catch (settleError) {
               params.warn("failed to persist requester settle wake rejection", {
                 error: buildSafeLifecycleErrorMeta(settleError),
-                runId: maskLifecycleIdentifier(runId, "run"),
+                runId,
               });
             }
           }
@@ -581,7 +597,7 @@ export function scheduleRequesterSettleWake(
         if (!isGatewayRestartDrainError(error)) {
           params.warn("requester settle wake admission failed", {
             error: buildSafeLifecycleErrorMeta(error),
-            runId: maskLifecycleIdentifier(runId, "run"),
+            runId,
           });
         }
       })
@@ -591,6 +607,7 @@ export function scheduleRequesterSettleWake(
         const wasRearmedWhileRunning = context.pendingRequesterSettleWakeRearms.delete(runtimeKey);
         if (hasRetainedWake(context, entry)) {
           if (wasRearmedWhileRunning) {
+            context.waitingRequesterSettleWakeRuns.delete(runtimeKey);
             scheduleRequesterSettleWake(context, runId, entry, stateContext);
           } else {
             scheduleRequesterSettleWakeRetry(context, runId, entry, stateContext);

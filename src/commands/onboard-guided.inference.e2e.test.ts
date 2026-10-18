@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import { listKnownProviderEnvApiKeyNames } from "../agents/model-auth-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import type { GuidedOnboardingDeps } from "./onboard-guided.js";
+import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 
 vi.mock("./onboard-interactive-runner.js", async (importActual) => {
   const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
@@ -50,7 +50,7 @@ describe("guided onboarding inference composition", () => {
         await fs.rm(root, { recursive: true, force: true });
       });
 
-      for (const key of listKnownProviderEnvApiKeyNames()) {
+      for (const key of listKnownProviderAuthEnvVarNamesCore()) {
         deleteTestEnvValue(key);
       }
       setTestEnvValue("HOME", root);
@@ -123,6 +123,7 @@ describe("guided onboarding inference composition", () => {
         commitResult: vi.fn(async () => undefined),
       }));
       const launchHatchTui = vi.fn(async () => undefined);
+      const observeHandoff = vi.fn();
       const runSystemAgentChat = vi.fn(async () => undefined);
       const runtime = {
         log: vi.fn(),
@@ -136,7 +137,11 @@ describe("guided onboarding inference composition", () => {
       configModule.clearConfigCache();
       const setupInference = await import("../system-agent/setup-inference.js");
       const onboardInference = await import("./onboard-inference.js");
-      const { runGuidedOnboarding } = await import("./onboard-guided.js");
+      const detectBackends = onboardInference.detectInferenceBackends;
+      const providerChoices = await import("../plugins/provider-auth-choices.js");
+      const { runGuidedOnboardingWithFixtures: runGuidedOnboarding } =
+        await import("./onboard-guided-runtime.test-support.js");
+      const { applySystemAgentSetup } = await import("../system-agent/setup-apply.js");
       let activePrompter = prompter;
       let interruptAfterProvision = team;
       const deps: GuidedOnboardingDeps = {
@@ -147,9 +152,13 @@ describe("guided onboarding inference composition", () => {
             found: false,
             error: "not found",
           });
-          const result = await setupInference.detectSetupInference({
-            detectInferenceBackends: async (options) =>
-              await onboardInference.detectInferenceBackends({
+          const choices = vi
+            .spyOn(providerChoices, "resolveManifestProviderAuthChoices")
+            .mockReturnValue([]);
+          const backends = vi
+            .spyOn(onboardInference, "detectInferenceBackends")
+            .mockImplementation(async (options) =>
+              detectBackends({
                 config: options?.config,
                 env: process.env,
                 platform: "linux",
@@ -159,9 +168,13 @@ describe("guided onboarding inference composition", () => {
                   readGeminiCliCredentials: () => null,
                 },
               }),
-            resolveManifestProviderAuthChoices: () => [],
-          });
-          return result;
+            );
+          try {
+            return await setupInference.detectSetupInference();
+          } finally {
+            backends.mockRestore();
+            choices.mockRestore();
+          }
         },
         activate: async (params) => {
           const result = await setupInference.activateSetupInference(params);
@@ -180,13 +193,13 @@ describe("guided onboarding inference composition", () => {
               throw new Error("fixture interruption after member creation");
             });
           }
-          const { applySystemAgentSetup } = await import("../system-agent/setup-apply.js");
           const result = await applySystemAgentSetup({ ...params, surface: "gateway" }, hooks);
           return interruptAfterProvision ? { ...result, workspaceReady: false } : result;
         },
         runSetupMemoryImportStep,
         runAppRecommendations,
         launchHatchTui,
+        observeHandoff,
         runSystemAgentChat,
       };
       const run = () =>
@@ -271,8 +284,17 @@ describe("guided onboarding inference composition", () => {
           workspaceDir: team ? path.join(workspace, "coordinator") : workspace,
         }),
       );
+      expect(observeHandoff).toHaveBeenCalledWith(
+        expect.objectContaining({
+          next: "hatch",
+          workspace: team ? path.join(workspace, "coordinator") : workspace,
+        }),
+      );
       expect(launchHatchTui).toHaveBeenCalledWith(
-        team ? path.join(workspace, "coordinator") : workspace,
+        expect.objectContaining({
+          deliver: false,
+          ...(team ? { session: "agent:coordinator:main" } : { local: true }),
+        }),
       );
       if (team) {
         expect(Object.keys(persisted.sourceConfig.agents?.entries ?? {})).toEqual([

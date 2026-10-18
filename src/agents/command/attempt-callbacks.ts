@@ -37,10 +37,18 @@ export function createAgentAttemptLifecycleCallbacks(
   state: AgentAttemptLifecycleState,
   onRuntimeTurnStarted?: () => void | Promise<void>,
 ): {
+  onAttemptStart: () => void;
+  onAttemptTerminalReplaced: () => void;
   onUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void | Promise<void>;
 } {
   return {
+    onAttemptStart: () => resetAgentAttemptLifecycle(state),
+    onAttemptTerminalReplaced: () => {
+      if (!state.lifecycleEnded) {
+        resetAgentAttemptLifecycle(state);
+      }
+    },
     onUserMessagePersisted: () => {
       state.currentTurnUserMessagePersisted = true;
     },

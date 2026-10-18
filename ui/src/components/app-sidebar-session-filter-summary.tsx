@@ -6,9 +6,9 @@ import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import "./sidebar-collapse-toggle.tsx";
-import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
+import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 
 type SessionFilterHost = Pick<SessionListHost, "sessionsStatusFilter">;
 

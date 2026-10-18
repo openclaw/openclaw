@@ -9,6 +9,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
 import {
+  isSessionTitlePending,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkContext,
@@ -188,6 +189,7 @@ export function buildSidebarSessionNavigationState(input: {
       agentId: resolveUiSessionRowAgentId(row, defaultAgentId),
       sessionId: row.sessionId,
       displayName: row.displayName,
+      titlePending: isSessionTitlePending(row.key, row),
       incognito: row.incognito === true || isIncognitoSessionKey(row.key),
       createdActor: row.createdActor,
       owner: row.owner,
@@ -204,6 +206,9 @@ export function buildSidebarSessionNavigationState(input: {
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
       hasActiveRun: row.archived !== true && isSessionRunActive(row),
+      isRunVisuallyActive:
+        row.archived !== true &&
+        (context ? context.sessions.isRunVisuallyActive(row) : isSessionRunActive(row)),
       gatewayHasActiveRun: row.hasActiveRun,
       hasActiveSubagentRun: row.hasActiveSubagentRun,
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,
@@ -367,41 +372,50 @@ export function buildReconciledSidebarZone(input: {
   return live;
 }
 
-type SidebarSessionSelection = {
-  selectedKeys: ReadonlySet<string>;
-  anchor: string | null;
-};
-
-export function toggleSidebarSessionSelection(
-  selectedKeys: ReadonlySet<string>,
-  key: string,
-): SidebarSessionSelection {
-  const next = new Set(selectedKeys);
-  if (next.has(key)) {
-    next.delete(key);
-  } else {
-    next.add(key);
-  }
-  return { selectedKeys: next, anchor: next.has(key) ? key : null };
-}
-
-export function extendSidebarSessionSelection(input: {
-  rows: readonly SidebarRecentSession[];
-  anchor: string | null;
-  key: string;
-}): SidebarSessionSelection {
-  const anchor =
-    input.anchor ?? input.rows.find((row) => row.visuallyActive || row.active)?.key ?? input.key;
-  const anchorIndex = input.rows.findIndex((row) => row.key === anchor);
-  const targetIndex = input.rows.findIndex((row) => row.key === input.key);
-  if (anchorIndex === -1 || targetIndex === -1) {
-    return { selectedKeys: new Set([input.key]), anchor: input.key };
-  }
-  const [start, end] =
-    anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+/** Menus read selection synchronously; the sidebar projection owns publication and parking. */
+export function createSidebarSessionSelection(
+  readRows: () => readonly SidebarRecentSession[],
+  publish: () => void,
+) {
+  let selectedKeys: ReadonlySet<string> = new Set();
+  let anchor: string | null = null;
   return {
-    selectedKeys: new Set(input.rows.slice(start, end + 1).map((row) => row.key)),
-    anchor,
+    get selectedKeys() {
+      return selectedKeys;
+    },
+    toggle(key: string) {
+      const next = new Set(selectedKeys);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      selectedKeys = next;
+      anchor = next.has(key) ? key : null;
+      publish();
+    },
+    extend(key: string) {
+      const rows = readRows();
+      anchor ??= rows.find((row) => row.visuallyActive || row.active)?.key ?? key;
+      const anchorIndex = rows.findIndex((row) => row.key === anchor);
+      const targetIndex = rows.findIndex((row) => row.key === key);
+      if (anchorIndex === -1 || targetIndex === -1) {
+        selectedKeys = new Set([key]);
+        anchor = key;
+      } else {
+        const [start, end] =
+          anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+        selectedKeys = new Set(rows.slice(start, end + 1).map((row) => row.key));
+      }
+      publish();
+    },
+    clear(this: void) {
+      anchor = null;
+      if (selectedKeys.size > 0) {
+        selectedKeys = new Set();
+        publish();
+      }
+    },
   };
 }
 

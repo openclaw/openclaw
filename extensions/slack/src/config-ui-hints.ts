@@ -44,7 +44,7 @@ export const slackChannelConfigUiHints = {
     implicitMentions: true,
     streaming: {
       "": 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress" (default). Legacy boolean/streamMode keys are auto-mapped.',
-      mode: 'Canonical Slack preview mode: "off" | "partial" | "block" | "progress" (default). Default progress outside reply threads uses only a temporary typing reaction. Any explicit streaming.progress setting opts top-level turns into a preview, except nativeTaskCards: true, which only affects threads.',
+      mode: 'Slack preview mode: "off" | "partial" | "block" | "progress" (default). Default progress outside reply threads uses only a temporary typing reaction. Any explicit streaming.progress setting opts top-level turns into a preview, except nativeTaskCards: true, which only affects threads.',
       chunkMode: 'Chunking mode for outbound Slack text delivery: "length" (default) or "newline".',
       "block.enabled":
         'Enable chunked block-style Slack preview delivery when channels.slack.streaming.mode="block".',

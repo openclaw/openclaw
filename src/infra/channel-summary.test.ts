@@ -1,7 +1,13 @@
 // Covers channel account summary rendering.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { buildChannelSummary } from "./channel-summary.js";
+
+vi.mock("../channels/plugins/read-only.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/read-only.js")>()),
+  listReadOnlyChannelPluginsForConfigAsync: vi.fn(),
+}));
 
 const isFixtureAccountConfigured = (account: unknown) =>
   Boolean((account as { configured?: boolean }).configured);
@@ -151,16 +157,17 @@ describe("buildChannelSummary", () => {
     const plugin = makeFallbackSummaryPlugin({ enabled: true, configured: true });
     plugin.config.inspectAccount = () => ({ accountId: "default", enabled: true });
 
-    await expect(buildChannelSummary({}, { plugins: [plugin] })).resolves.toEqual([
+    vi.mocked(listReadOnlyChannelPluginsForConfigAsync).mockResolvedValueOnce([plugin]);
+    await expect(buildChannelSummary({})).resolves.toEqual([
       "Fallback: configuration status unavailable",
     ]);
   });
 
   it("preserves Slack HTTP signing-secret unavailable state from source config", async () => {
+    vi.mocked(listReadOnlyChannelPluginsForConfigAsync).mockResolvedValueOnce([
+      makeSlackHttpSummaryPlugin(),
+    ]);
     const lines = await buildChannelSummary({ marker: "resolved", channels: {} } as never, {
-      colorize: false,
-      includeAllowFrom: false,
-      plugins: [makeSlackHttpSummaryPlugin()],
       sourceConfig: { marker: "source", channels: {} } as never,
     });
 
@@ -171,18 +178,17 @@ describe("buildChannelSummary", () => {
   });
 
   it("includes linked summary metadata and truncates allow-from details", async () => {
+    vi.mocked(listReadOnlyChannelPluginsForConfigAsync).mockResolvedValueOnce([
+      makeTelegramSummaryPlugin({
+        enabled: true,
+        configured: true,
+        linked: true,
+        authAgeMs: 300_000,
+        allowFrom: ["+12133734253", "bot-token", "ignored"],
+      }),
+    ]);
     const lines = await buildChannelSummary({ channels: {} } as never, {
-      colorize: false,
       includeAllowFrom: true,
-      plugins: [
-        makeTelegramSummaryPlugin({
-          enabled: true,
-          configured: true,
-          linked: true,
-          authAgeMs: 300_000,
-          allowFrom: ["+12133734253", "bot-token", "ignored"],
-        }),
-      ],
     });
 
     expect(lines).toContain("Telegram: linked +15551234567 auth 5m ago");
@@ -192,44 +198,37 @@ describe("buildChannelSummary", () => {
   });
 
   it("shows not-linked status when linked metadata is explicitly false", async () => {
-    const lines = await buildChannelSummary({ channels: {} } as never, {
-      colorize: false,
-      includeAllowFrom: false,
-      plugins: [
-        makeTelegramSummaryPlugin({
-          enabled: true,
-          configured: true,
-          linked: false,
-        }),
-      ],
-    });
+    vi.mocked(listReadOnlyChannelPluginsForConfigAsync).mockResolvedValueOnce([
+      makeTelegramSummaryPlugin({
+        enabled: true,
+        configured: true,
+        linked: false,
+      }),
+    ]);
+    const lines = await buildChannelSummary({ channels: {} } as never);
 
     expect(lines).toContain("Telegram: not linked +15551234567");
     expect(lines).toContain("  - primary (Main Bot) (dm:mutuals, token:env)");
   });
 
   it("prefers plugin statusState when provided", async () => {
-    const lines = await buildChannelSummary({ channels: {} } as never, {
-      colorize: false,
-      includeAllowFrom: false,
-      plugins: [
-        makeTelegramSummaryPlugin({
-          enabled: true,
-          configured: true,
-          statusState: "unstable",
-        }),
-      ],
-    });
+    vi.mocked(listReadOnlyChannelPluginsForConfigAsync).mockResolvedValueOnce([
+      makeTelegramSummaryPlugin({
+        enabled: true,
+        configured: true,
+        statusState: "unstable",
+      }),
+    ]);
+    const lines = await buildChannelSummary({ channels: {} } as never);
 
     expect(lines).toContain("Telegram: auth stabilizing +15551234567");
   });
 
   it("renders non-slack account detail fields for configured accounts", async () => {
-    const lines = await buildChannelSummary({ channels: {} } as never, {
-      colorize: false,
-      includeAllowFrom: false,
-      plugins: [makeSignalSummaryPlugin({ enabled: false, configured: true })],
-    });
+    vi.mocked(listReadOnlyChannelPluginsForConfigAsync).mockResolvedValueOnce([
+      makeSignalSummaryPlugin({ enabled: false, configured: true }),
+    ]);
+    const lines = await buildChannelSummary({ channels: {} } as never);
 
     expect(lines).toEqual([
       "Signal: disabled",
@@ -238,34 +237,28 @@ describe("buildChannelSummary", () => {
   });
 
   it("uses the channel label and default account id when no accounts exist", async () => {
-    const lines = await buildChannelSummary({ channels: {} } as never, {
-      colorize: false,
-      includeAllowFrom: false,
-      plugins: [
-        makeFallbackSummaryPlugin({
-          enabled: true,
-          configured: true,
-          accountIds: [],
-          defaultAccountId: "fallback-account",
-        }),
-      ],
-    });
+    vi.mocked(listReadOnlyChannelPluginsForConfigAsync).mockResolvedValueOnce([
+      makeFallbackSummaryPlugin({
+        enabled: true,
+        configured: true,
+        accountIds: [],
+        defaultAccountId: "fallback-account",
+      }),
+    ]);
+    const lines = await buildChannelSummary({ channels: {} } as never);
 
     expect(lines).toEqual(["Fallback: configured", "  - fallback-account"]);
   });
 
   it("shows not-configured status when enabled accounts exist without configured ones", async () => {
-    const lines = await buildChannelSummary({ channels: {} } as never, {
-      colorize: false,
-      includeAllowFrom: false,
-      plugins: [
-        makeFallbackSummaryPlugin({
-          enabled: true,
-          configured: false,
-          accountIds: ["fallback-account"],
-        }),
-      ],
-    });
+    vi.mocked(listReadOnlyChannelPluginsForConfigAsync).mockResolvedValueOnce([
+      makeFallbackSummaryPlugin({
+        enabled: true,
+        configured: false,
+        accountIds: ["fallback-account"],
+      }),
+    ]);
+    const lines = await buildChannelSummary({ channels: {} } as never);
 
     expect(lines).toEqual(["Fallback: not configured"]);
   });

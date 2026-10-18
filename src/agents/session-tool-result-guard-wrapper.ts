@@ -63,6 +63,7 @@ type GuardedSessionManager = SessionManager &
         recorder: UserTurnTranscriptRecorder | undefined;
         replayKey: string | undefined;
       },
+      hidden: boolean,
     ) => void;
   };
 
@@ -75,7 +76,7 @@ function publishPersistedUserEnvelope(
     return;
   }
   // Publish once, before model transforms. Replay must use the same envelope;
-  // runtime content and non-enumerable media/steering facts remain prepared.
+  // runtime content and symbol-carried media/steering facts remain prepared.
   const content = runtime.content;
   const imageFactIndexes = readPersistedImageBlockFactIndexes(runtime);
   for (const key of Object.keys(runtime)) {
@@ -104,6 +105,7 @@ export function guardSessionManager(
     config?: OpenClawConfig;
     contextWindowTokens?: number;
     inputProvenance?: InputProvenance;
+    privateCompletion?: true;
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
@@ -141,6 +143,7 @@ export function guardSessionManager(
     opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
   let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
   let inputProvenance = opts?.inputProvenance;
+  let hidden = opts?.privateCompletion === true || opts?.trigger === "memory";
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
   let preparedUserTurnTranscriptRecorder = opts?.preparedUserTurnTranscriptRecorder;
   let preparedUserReplayKey =
@@ -161,6 +164,7 @@ export function guardSessionManager(
         recorder: preparedUserTurnTranscriptRecorder,
         replayKey: preparedUserReplayKey,
       },
+      hidden,
     );
     guardedSessionManager.setEchoedAssistantInstruction?.(opts?.suppressEchoedAssistantPersistence);
     return guardedSessionManager;
@@ -231,7 +235,7 @@ export function guardSessionManager(
       changed = true;
     }
     const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
-      hidden: opts?.trigger === "memory",
+      hidden,
       inputProvenance,
       message,
     });
@@ -390,6 +394,7 @@ export function guardSessionManager(
     provenance,
     suppressUserPersistence,
     preparedUserTurn,
+    hideMessages,
   ) => {
     transcriptRunId = runId;
     guard.setTranscriptRunId(runId, errors);
@@ -397,6 +402,8 @@ export function guardSessionManager(
     prepareAssistantTranscriptMessage = prepare;
     skipBeforeMessageWriteHooks = skipHooks;
     inputProvenance = provenance;
+    // Managers outlive individual runs; neither private nor public visibility may carry over.
+    hidden = hideMessages;
     pendingPreparedUserTurnMessage = preparedUserTurn.message;
     preparedUserTurnTranscriptRecorder = preparedUserTurn.recorder;
     preparedUserReplayKey = preparedUserTurn.replayKey;

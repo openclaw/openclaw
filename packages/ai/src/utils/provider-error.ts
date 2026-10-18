@@ -6,12 +6,21 @@ import { projectDiagnosticValue, redactDiagnosticText } from "./credential-redac
 
 const MAX_ERROR_BODY_LENGTH = 4000;
 
+/** Diagnostics accept provider classification labels, not arbitrary error prose or objects. */
+export function readTransportDiagnosticLabel(value: unknown): string | number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  return typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,128}$/.test(value) ? value : undefined;
+}
+
 export type ProviderErrorProjection = {
   stopReason: "aborted" | "error";
   errorMessage: string;
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  retryAfterMs?: number | null;
 };
 
 export type ProviderErrorRedactor = (value: unknown) => unknown;
@@ -124,6 +133,9 @@ export function projectProviderError(
   signal?: AbortSignal,
 ): ProviderErrorProjection {
   try {
+    // Diagnostic projection intentionally discards non-display response headers.
+    // Capture only the safe timing scalar before that lossy boundary.
+    const retryAfterSeconds = parseRetryAfterErrorSeconds(error);
     const localSnapshot = projectDiagnosticValue(error);
     let snapshot = localSnapshot;
     try {
@@ -132,8 +144,14 @@ export function projectProviderError(
       // Package projection is independently safe when embedding-host strengthening fails.
     }
     const projection = buildProjection(snapshot, signal);
-    const retryAfterSeconds = parseRetryAfterErrorSeconds(localSnapshot);
     if (retryAfterSeconds !== undefined) {
+      const retryAfterMs = Math.ceil(retryAfterSeconds * 1000);
+      if (Number.isSafeInteger(retryAfterMs)) {
+        projection.retryAfterMs = retryAfterMs;
+      } else {
+        // JSON cannot carry Infinity; null preserves the non-retryable timing floor.
+        projection.retryAfterMs = null;
+      }
       const suffix = `; Retry-After: ${retryAfterSeconds} seconds`;
       projection.errorMessage = `${truncateUtf16Safe(projection.errorMessage, 4096 - suffix.length)}${suffix}`;
     }

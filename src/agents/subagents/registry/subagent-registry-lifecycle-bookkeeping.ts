@@ -12,10 +12,7 @@ import type {
   CleanupBookkeepingParams,
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
-import {
-  buildSafeLifecycleErrorMeta,
-  maskLifecycleIdentifier,
-} from "./subagent-registry-lifecycle-log.js";
+import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
@@ -65,14 +62,18 @@ export async function completeCleanupBookkeeping(
     const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
       // Admission can outlive the caller's async scope. Own the tail's lifetime
       // and recheck row ownership after waiting; surviving tails still block snapshots.
-      void runWithGatewayDetachedWorkContinuation(async () => {
+      const cleanup = async () => {
         if (
           !(await context.shouldSuppressSessionEffects(entry)) &&
           postBookkeepingEffectsAllowed()
         ) {
           await run();
         }
-      }, "subagents:lifecycle-cleanup").catch((error: unknown) => {
+      };
+      void runWithGatewayDetachedWorkContinuation(
+        () => context.runBackgroundWork(entry, cleanup),
+        "subagents:lifecycle-cleanup",
+      ).catch((error: unknown) => {
         defaultRuntime.log(
           `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
         );
@@ -94,8 +95,8 @@ export async function completeCleanupBookkeeping(
             params.warn("failed to retire subagent bundle MCP runtime", {
               error: buildSafeLifecycleErrorMeta(error),
               sessionId,
-              runId: maskLifecycleIdentifier(cleanupParams.runId, "run"),
-              childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
+              runId: cleanupParams.runId,
+              childSessionKey: entry.childSessionKey,
             });
           },
         }),
@@ -187,9 +188,9 @@ export async function completeCleanupBookkeeping(
   // A replacement row or newer child generation still fences these effects.
   scheduleCleanupTails({ allowRetiredRow: retireAfterSettle, isDeleteCleanup });
   assertPublishedOwner();
-  context.resumeAncestorCleanup(entry);
   if (!entry.collect && !cleanupParams.skipRequesterSettleWake) {
     assertPublishedOwner();
-    scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
+    scheduleRequesterSettleWake(context, entry.runId, entry, stateContext, true);
   }
+  context.resumeAncestorCleanup(entry);
 }

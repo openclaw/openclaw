@@ -85,12 +85,19 @@ export function shouldDisableCodexToolSearchForModel(modelId: string | undefined
 export function resolveCodexDynamicToolsLoadingForRuntime(
   config: Pick<CodexPluginConfig, "codexDynamicToolsLoading">,
   modelId: string | undefined,
-  options: { connectionClass?: CodexAppServerConnectionClass } = {},
+  options: {
+    connectionClass?: CodexAppServerConnectionClass;
+    nativeToolSurfaceEnabled?: boolean;
+  } = {},
   env: CodexDynamicToolProfileEnv = process.env,
 ): CodexDynamicToolsLoading {
+  // Without native JavaScript discovery, model metadata may also omit tool_search.
+  // Publish callable schemas rather than leaving allowed tools unreachable.
   const loading = resolveCodexDynamicToolsLoading(config, env);
   return loading === "searchable" &&
-    (shouldDisableCodexToolSearchForModel(modelId) || options.connectionClass === "remote")
+    (options.nativeToolSurfaceEnabled === false ||
+      shouldDisableCodexToolSearchForModel(modelId) ||
+      options.connectionClass === "remote")
     ? "direct"
     : loading;
 }

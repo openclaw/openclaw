@@ -36,11 +36,8 @@ import {
   normalizeFallbackFailureReason,
   reportUpdateStepCompletion,
 } from "../../infra/update-runner-command.js";
-import {
-  readBranchName,
-  readGitTargetSchemaVersions,
-  selectChannelTag,
-} from "../../infra/update-runner-git-target.js";
+import { readGitTargetSchemaVersions } from "../../infra/update-runner-git-schema.js";
+import { readBranchName, selectChannelTag } from "../../infra/update-runner-git-target.js";
 import { updateGitCheckout } from "../../infra/update-runner-git.js";
 import type {
   CommandRunner as UpdateRunnerCommandRunner,
@@ -369,6 +366,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
 
 export async function updateGitInstall(params: {
   root: string;
+  fullIntegrityCheck?: boolean;
   restart?: boolean;
   sourceRuntimePrepared?: boolean;
   switchToGit: boolean;
@@ -399,7 +397,6 @@ export async function updateGitInstall(params: {
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const pkgOwnership = createSystemPackageOwnershipInspection(effectiveTimeout);
   await pkgOwnership.assertUnowned(updateRoot);
-  const installEnv = await createGlobalInstallEnv();
   const installTarget = params.switchToGit
     ? await resolveGlobalInstallTarget({
         manager: await resolveGlobalManager({
@@ -414,6 +411,7 @@ export async function updateGitInstall(params: {
         pkgOwnership,
       })
     : null;
+  const installEnv = await createGlobalInstallEnv(undefined, installTarget ?? {});
   const npmLifecycleGate = installTarget
     ? resolveNpmLifecyclePolicyGate(installTarget)
     : { policy: null, error: null };

@@ -11,6 +11,7 @@ import { createFixtureLifetime } from "./helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.js";
 import { loadVitestPerformanceConfig } from "./vitest/vitest.performance-config.ts";
+import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 import { createUiIsolatedVitestConfig } from "./vitest/vitest.ui-isolated.config.ts";
 import { uiNodeDrivenBrowserTestFiles, uiTimingTestFiles } from "./vitest/vitest.ui-paths.mjs";
@@ -71,7 +72,7 @@ describe("ui package vitest config", () => {
       const output = path.join(root, "report.json");
       const selectionsPath = path.join(root, "selections.json");
       const selections = Object.fromEntries(
-        (["bun-compatible", "dual"] as const).map((policy) => [
+        (["bun-all", "dual-all"] as const).map((policy) => [
           policy,
           resolveCiTestRuntimeSelections({ configs: ["ui/vitest.config.ts"] }, policy),
         ]),
@@ -189,12 +190,23 @@ describe("ui package vitest config", () => {
           .flatMap((row) => row.original)
           .toSorted(),
       ).toEqual(report.discovered);
+      const nodeRequired = new Set([
+        "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
+        "ui/src/pages/chat/chat-pane-retention.test.ts",
+        "ui/src/pages/chat/chat-thread-retention.test.ts",
+        "ui/src/pages/chat/session-snapshot-store.test.ts",
+        "ui/src/pages/usage/usage-page-retention.test.ts",
+      ]);
       for (const row of report.rows) {
-        const compatible = row.selected["bun-compatible"]!;
-        expect(compatible).toEqual([{ runtime: "bun", files: row.original }]);
-        expect(row.selected.dual).toEqual([
+        const nodeFiles = row.original.filter((file) => nodeRequired.has(file));
+        const bunFiles = row.original.filter((file) => !nodeRequired.has(file));
+        expect(row.selected["bun-all"]).toEqual([
+          { runtime: "node", files: nodeFiles },
+          { runtime: "bun", files: bunFiles },
+        ]);
+        expect(row.selected["dual-all"]).toEqual([
           { runtime: "node", files: row.original },
-          { runtime: "bun", files: row.original },
+          { runtime: "bun", files: bunFiles },
         ]);
       }
     }));
@@ -251,8 +263,9 @@ export default {
   test: {
     root: ${JSON.stringify(root)},
     include: ["*.test.ts"],
-    setupFiles: [${JSON.stringify(path.join(process.cwd(), "ui/src/test-helpers/lit-warnings.setup.ts"))}],
+    setupFiles: [${JSON.stringify(path.join(process.cwd(), "ui/src/test-helpers/dom.setup.ts"))}],
     environment: "jsdom", isolate: false, pool: "threads", maxWorkers: 1,
+    execArgv: ${JSON.stringify(sharedVitestConfig.test.execArgv)},
     sequence: { sequencer: class extends BaseSequencer {
       sort(files) { return files.toSorted((a, b) => a.moduleId.localeCompare(b.moduleId)); }
     } },
@@ -322,7 +335,7 @@ export default {
           name: "chromium",
           root: uiRoot,
           viteRoot: uiRoot,
-          setupFiles: [path.join(uiRoot, "src/test-helpers/lit-warnings.setup.ts")],
+          setupFiles: [path.join(uiRoot, "src/test-helpers/dom.setup.ts")],
         },
       ]);
       expect(standalone?.files).toContain(
@@ -334,7 +347,7 @@ export default {
           name: "chromium",
           root: topLevelRoot,
           viteRoot: topLevelRoot,
-          setupFiles: [path.join(topLevelRoot, "src/test-helpers/lit-warnings.setup.ts")],
+          setupFiles: [path.join(topLevelRoot, "src/test-helpers/dom.setup.ts")],
         },
       ]);
       expect(testOption?.projects).toEqual([
@@ -342,7 +355,7 @@ export default {
           name: "chromium",
           root: testRoot,
           viteRoot: testRoot,
-          setupFiles: [path.join(testRoot, "src/test-helpers/lit-warnings.setup.ts")],
+          setupFiles: [path.join(testRoot, "src/test-helpers/dom.setup.ts")],
         },
       ]);
     }));
