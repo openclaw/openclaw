@@ -33,14 +33,7 @@ export const BUNDLE_HASH = "a".repeat(64);
 export const PWD_COMMAND = { transportRetry: "idempotent", argv: ["pwd"] } as const;
 
 export function success(stdout = "", stderr = ""): SpawnResult {
-  return {
-    stdout,
-    stderr,
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
+  return { stdout, stderr, code: 0, signal: null, killed: false, termination: "exit" };
 }
 
 export function rsyncReceiverNonce(argv: readonly string[]): string | undefined {
@@ -338,14 +331,8 @@ export function startTestTunnel(
   ssh: WorkerSshEndpoint = SSH,
   sharedHost = false,
 ) {
-  return manager.start({
-    environmentId,
-    ownerEpoch,
-    bundleHash: BUNDLE_HASH,
-    ssh,
-    sharedHost,
-    resolveIdentity,
-  });
+  const request = { environmentId, ownerEpoch, ssh, sharedHost, resolveIdentity };
+  return manager.start({ ...request, bundleHash: BUNDLE_HASH });
 }
 
 export async function startConnectedTunnel(
@@ -358,12 +345,7 @@ export async function startConnectedTunnel(
   } = {},
 ) {
   const manager = createWorkerTunnelManager({ runner: fake.runner });
-  const handle = await startTestTunnel(
-    manager,
-    environmentId,
-    ownerEpoch,
-    options.ssh,
-    options.sharedHost,
-  );
+  const { ssh, sharedHost } = options;
+  const handle = await startTestTunnel(manager, environmentId, ownerEpoch, ssh, sharedHost);
   return { manager, handle };
 }
