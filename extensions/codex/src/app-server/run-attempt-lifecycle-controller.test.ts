@@ -269,6 +269,7 @@ describe("Codex terminal dynamic-tool release", () => {
               params: { timeoutMs: 60_000 },
               options: {},
               attemptStartedAt: Date.now(),
+              attemptStartedAtMonotonicMs: performance.now(),
               runAbortController: new AbortController(),
               fastModeAutoProgressState: {},
             },
