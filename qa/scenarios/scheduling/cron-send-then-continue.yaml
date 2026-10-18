@@ -51,6 +51,9 @@ flow:
             - ref: env
             - 60000
         - call: reset
+        - set: modeTraces
+          value:
+            expr: "[]"
         - forEach:
             items:
               expr: "config.deliveryModes"
@@ -157,4 +160,7 @@ flow:
                   expr: "deliveries.length === 1 && deliveries[0].text.trim() === config.sentMarker"
                   message:
                     expr: "`${deliveryMode}: expected exactly the one sent marker on qa-channel, got ${JSON.stringify(deliveries.map((message) => message.text))}`"
-      detailsExpr: "`modes=${config.deliveryModes.join(',')} marker=${String(markerContents ?? '').trim()}`"
+              - set: modeTraces
+                value:
+                  expr: "[...modeTraces, `${deliveryMode}: ${scenarioRequests.map((request) => request.plannedToolName ?? 'final').join(' -> ')}; channel=${JSON.stringify(deliveries.map((message) => message.text))}`]"
+      detailsExpr: "modeTraces.join(' | ')"
