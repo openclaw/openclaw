@@ -20,7 +20,11 @@ import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
-import { resolveTelegramThreadSpec, type TelegramThreadSpec } from "./bot/helpers.js";
+import {
+  resolveTelegramBotHasTopicsEnabled,
+  resolveTelegramThreadSpec,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 import {
   resolveTelegramConversationRoute,
   resolveTelegramTargetSession,
@@ -213,13 +217,16 @@ export function createTelegramEventBindings({
 
         // Reaction updates omit every topic field. Scoped reactions require the bounded cache.
         let recoveredThreadSpec: TelegramThreadSpec | undefined;
+        let recoveredTopicMessage = false;
         const requiredScope = isDirectMessagesChat
           ? "direct-messages"
           : isForum
             ? "forum"
             : undefined;
         if (requiredScope) {
-          recoveredThreadSpec = await resolveCachedMessageThreadSpec({ chatId, messageId });
+          const recovered = await resolveCachedMessageThreadSpec({ chatId, messageId });
+          recoveredThreadSpec = recovered?.threadSpec;
+          recoveredTopicMessage = recovered?.isTopicMessage === true;
           if (
             recoveredThreadSpec?.scope !== requiredScope ||
             recoveredThreadSpec.id === undefined
@@ -232,7 +239,9 @@ export function createTelegramEventBindings({
             return;
           }
         } else if (isPrivateChat) {
-          const cachedThreadSpec = await resolveCachedMessageThreadSpec({ chatId, messageId });
+          const recovered = await resolveCachedMessageThreadSpec({ chatId, messageId });
+          const cachedThreadSpec = recovered?.threadSpec;
+          recoveredTopicMessage = recovered?.isTopicMessage === true;
           recoveredThreadSpec =
             cachedThreadSpec?.scope === "dm" && cachedThreadSpec.id !== undefined
               ? cachedThreadSpec
@@ -289,7 +298,8 @@ export function createTelegramEventBindings({
             isGroup,
             senderId,
             dmThreadId: recoveredDmThreadId,
-            botHasTopicsEnabled: true,
+            botHasTopicsEnabled:
+              recoveredTopicMessage || resolveTelegramBotHasTopicsEnabled(ctx.me),
           });
           route = {
             ...route,

@@ -299,7 +299,10 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     async (scope) => {
       const isDirectMessages = scope === "direct-messages";
       const agentId = isDirectMessages ? "direct-topic-agent" : "topicbot";
-      resolveCachedMessageThreadSpec.mockResolvedValue({ scope, id: FORUM_TOPIC_ID });
+      resolveCachedMessageThreadSpec.mockResolvedValue({
+        threadSpec: { scope, id: FORUM_TOPIC_ID },
+        isTopicMessage: false,
+      });
       await registerHandler(
         buildTelegramConfig({
           topics: { [String(FORUM_TOPIC_ID)]: { enabled: true, agentId } },
@@ -313,7 +316,10 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
   );
 
   it("applies the recovered topic's disabled config instead of the General topic's", async () => {
-    resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "forum", id: FORUM_TOPIC_ID });
+    resolveCachedMessageThreadSpec.mockResolvedValue({
+      threadSpec: { scope: "forum", id: FORUM_TOPIC_ID },
+      isTopicMessage: false,
+    });
     await registerHandler(
       buildTelegramConfig({
         topics: { "1": { enabled: true }, [String(FORUM_TOPIC_ID)]: { enabled: false } },
@@ -325,7 +331,13 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
   it.each([
     { scope: "forum", recovered: undefined },
     { scope: "direct-messages", recovered: undefined },
-    { scope: "direct-messages", recovered: { scope: "forum", id: FORUM_TOPIC_ID } },
+    {
+      scope: "direct-messages",
+      recovered: {
+        threadSpec: { scope: "forum", id: FORUM_TOPIC_ID },
+        isTopicMessage: false,
+      },
+    },
   ] as const)(
     "drops unresolved $scope topic ($recovered), never guessing General",
     async ({ scope, recovered }) => {
@@ -348,7 +360,10 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
   );
 
   it("routes a cached private-chat topic reaction to its DM topic session", async () => {
-    resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "dm", id: FORUM_TOPIC_ID });
+    resolveCachedMessageThreadSpec.mockResolvedValue({
+      threadSpec: { scope: "dm", id: FORUM_TOPIC_ID },
+      isTopicMessage: true,
+    });
     enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
     await registerHandler(buildPrivateTopicConfig({ requireTopic: true }))(
       privateReaction({ user: { id: 5678, first_name: "Bob" } }),
@@ -367,6 +382,25 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
       }),
     ]);
     expect(peekSystemEventEntries("agent:topicbot:telegram:direct:5678")).toEqual([]);
+  });
+
+  it("keeps metadata-only private threads on the base DM session", async () => {
+    resolveCachedMessageThreadSpec.mockResolvedValue({
+      threadSpec: { scope: "dm", id: FORUM_TOPIC_ID },
+      isTopicMessage: false,
+    });
+    enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
+    await registerHandler(buildPrivateTopicConfig({ requireTopic: true }))(
+      privateReaction({ user: { id: 5678, first_name: "Bob" } }),
+    );
+
+    expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
+    expect(enqueueRoutedSystemEvent.mock.calls[0]?.[1]?.sessionKey).toBe(
+      "agent:topicbot:telegram:direct:5678",
+    );
+    expect(peekSystemEventEntries("agent:topicbot:telegram:direct:5678:thread:5678:77")).toEqual(
+      [],
+    );
   });
 
   it.each([false, true])(

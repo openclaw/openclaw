@@ -314,13 +314,16 @@ export function createTelegramMessageContextRuntime({
   const resolveCachedMessageThreadSpec = async (params: {
     chatId: number | string;
     messageId: number | string;
-  }): Promise<TelegramThreadSpec | undefined> => {
+  }): Promise<{ threadSpec: TelegramThreadSpec; isTopicMessage: boolean } | undefined> => {
     const node = await messageCache.get({
       accountId,
       chatId: params.chatId,
       messageId: String(params.messageId),
     });
-    return resolveProviderObservedTelegramThreadSpec(node);
+    const threadSpec = resolveProviderObservedTelegramThreadSpec(node);
+    return threadSpec
+      ? { threadSpec, isTopicMessage: node?.sourceMessage?.is_topic_message === true }
+      : undefined;
   };
 
   const buildReplyChainForMessage = (msg: Message) =>
