@@ -10,12 +10,11 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
+import { projectPresentation } from "../../lib/reactive/presentation.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
@@ -318,21 +317,11 @@ function ChatContent(input: { props: ChatProps }) {
         line,
       }),
   });
-  const presentation = createMemo(() =>
-    projectSource([input.props.presented ?? true, input.props.transcriptVisible ?? true], {
-      read: (bindings) =>
-        bindings.map((binding) => (typeof binding === "object" ? binding.isPresented() : binding)),
-      subscribe: (bindings, notify) => {
-        const owners = new Set(
-          bindings.flatMap((binding) => (typeof binding === "object" ? [binding.owner] : [])),
-        );
-        const stops = [...owners].map((owner) => listen(owner, PRESENTATION_CHANGED_EVENT, notify));
-        return () => stops.forEach((stop) => stop());
-      },
-      equality: "revision",
-    }),
+  const presentation = createMemo(() => projectPresentation(input.props.presented ?? true));
+  const transcriptVisibility = createMemo(() =>
+    projectPresentation(input.props.transcriptVisible ?? true),
   );
-  const presented = () => presentation().read()[0] ?? true;
+  const presented = () => presentation().read();
   const paneId = createMemo(() => input.props.paneId);
   const questions = createMemo(() =>
     projectSource(getTranscriptState(paneId()), {
@@ -343,7 +332,7 @@ function ChatContent(input: { props: ChatProps }) {
   );
   const questionRevision = createParkedProjection(
     () => questions().read(),
-    () => presentation().read()[1] ?? true,
+    () => transcriptVisibility().read(),
     paneId,
   );
   const frame = createMemo(() => {
