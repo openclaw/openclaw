@@ -190,7 +190,9 @@ it("loads CUA Driver artifact health when the plugin is enabled", () => {
     dirName: "cua-computer",
     artifactBasename: "api.js",
   });
-  expect(mocks.registerCuaDriverDoctorChecks).toHaveBeenCalledOnce();
+  expect(mocks.registerCuaDriverDoctorChecks).toHaveBeenCalledExactlyOnceWith({
+    registerHealthCheck: expect.any(Function),
+  });
 });
 
 it("loads configured worker-provider health through its bundled manifest owner", () => {
@@ -210,7 +212,12 @@ it("loads configured worker-provider health through its bundled manifest owner",
     dirName: "crabbox",
     artifactCandidates: ["doctor-health-api.js"],
   });
-  expect(mocks.registerWorkerProviderDoctorChecks).toHaveBeenCalledOnce();
+  expect(mocks.registerWorkerProviderDoctorChecks).toHaveBeenCalledExactlyOnceWith({
+    getHealthCheck: expect.any(Function),
+    registerHealthCheck: expect.any(Function),
+    inspectSetupSecrets: expect.any(Function),
+    listPluginStateEntries: expect.any(Function),
+  });
 });
 
 const codexConfig: OpenClawConfig = {

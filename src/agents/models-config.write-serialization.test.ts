@@ -418,7 +418,8 @@ it("invalidates the ready cache after external writes", async ({ home: _home }) 
 it("serializes concurrent models.json writes", async ({ home: _home }) => {
   const configs = ["Proxy A", "Proxy B with longer name"].map((name) => {
     const cfg = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
-    expectDefined(cfg.models?.providers?.["custom-proxy"]?.models[0]).name = name;
+    expectDefined(cfg.models?.providers?.["custom-proxy"]?.models[0], "custom-proxy model").name =
+      name;
     return cfg;
   });
 

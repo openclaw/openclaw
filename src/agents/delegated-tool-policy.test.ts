@@ -203,7 +203,7 @@ describe("deny-only native tool delegation", () => {
     ["ancestor", config(), ancestor({ inheritedToolAllow: ["read", "sessions_spawn"] })],
   ] satisfies Array<[string, OpenClawConfig, Parameters<typeof profile>[1]?]>)(
     "keeps restrictive %s allow ceilings conservative",
-    (_kind, cfg, extra = {}) => {
+    (_kind, cfg, extra?: Parameters<typeof profile>[1]) => {
       expect(prepareFloor(profile(cfg, extra))).toBeUndefined();
     },
   );
