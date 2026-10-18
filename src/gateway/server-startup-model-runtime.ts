@@ -69,23 +69,18 @@ export async function hydrateConfiguredExternalCliAuth(params: {
 export async function publishConfiguredModelRuntimeSnapshots(params: {
   cfg: OpenClawConfig;
   getConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
-  isCurrent?: () => boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
   startupTrace?: GatewayStartupTrace;
 }): Promise<void> {
   const { refreshPreparedModelRuntimeSnapshots } =
     await import("../agents/prepared-model-runtime.js");
-  if (params.isCurrent?.() === false) {
-    return;
-  }
   await refreshPreparedModelRuntimeSnapshots(params.getConfig ?? params.cfg, {
     gatewayLifecycle: true,
     startup: true,
     joinSupersedingPublication: true,
     catalogMode: "static",
     allowGatewaySubagentBinding: true,
-    ...(params.isCurrent ? { isPublicationCurrent: params.isCurrent } : {}),
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
       : {}),

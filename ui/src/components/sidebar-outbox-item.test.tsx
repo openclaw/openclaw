@@ -73,7 +73,7 @@ it.each([
         dispose() {},
       },
     };
-    render(() => renderSidebarOutboxItem({ entry, context, onNavigate: navigate }), container);
+    render(() => renderSidebarOutboxItem({ entry, onNavigate: navigate }, context), container);
     const link = container.querySelector<HTMLAnchorElement>("a")!;
     expect(link.textContent).toBe("Review");
     expect(link.getAttribute("aria-label")).toBe("Review in chat");

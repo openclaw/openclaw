@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, createEffect, createSignal, untrack } from "solid-js";
+import { For, createEffect, createSignal } from "solid-js";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
 import {
   LearnMoreLink,
@@ -32,8 +32,7 @@ import {
 
 export function LabsPage() {
   const context = useApplication();
-  // The mounted projection is seeded once; source replacement is bound below.
-  const config = projectRuntimeConfig(untrack(() => context.runtimeConfig));
+  const config = projectRuntimeConfig(context.runtimeConfig);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let pending: { featureId: string; value: boolean | string } | null = null;
   let saveError: string | null = null;

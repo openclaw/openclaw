@@ -9,7 +9,7 @@ vi.mock("./icon-loader.ts", () => ({
   fetchCatalogIconBlobUrl: (...args: unknown[]) => fetchIcon(...args),
 }));
 
-const { PluginIconController } = await import("./plugin-icon-controller.ts");
+const { PluginIconOwner } = await import("./plugin-icon-owner.ts");
 
 const entry = {
   id: "ch_dGVzdA",
@@ -32,7 +32,7 @@ function createController(
   onUrlsChange: (urls: Record<string, string>) => void,
   onLoadingChange?: () => void,
 ) {
-  return new PluginIconController({
+  return new PluginIconOwner({
     kind: "catalog",
     getFetchContext: () => ({ gatewayUrl: "ws://localhost", resourceBasePath: "", auth: {} }),
     isConnected: () => true,

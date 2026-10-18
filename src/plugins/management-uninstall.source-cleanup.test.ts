@@ -2,7 +2,7 @@ import fs from "node:fs";
 import fsAsync from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { transformConfigFileWithRetry } from "../config/mutate.js";
@@ -35,20 +35,15 @@ afterEach(() => {
 });
 
 async function expectConfigSourceLocked(pathname: string) {
-  const contended = await acquireFileLock(pathname, {
+  const lock = await acquireFileLock(pathname, {
     retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
     stale: 30_000,
-  }).then(
-    async (lock) => {
-      await lock.release();
-      return false;
-    },
-    (error: unknown) => {
-      expect(error).toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
-      return true;
-    },
-  );
-  expect.soft(contended).toBe(true);
+  }).catch((error: unknown) => {
+    expect(error).toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
+    return undefined;
+  });
+  await lock?.release();
+  expect.soft(lock).toBeUndefined();
 }
 
 async function createUninstallSourceFixture(
@@ -160,12 +155,7 @@ it.each(["root", "shared include"] as const)(
     });
     void pending.catch(() => {});
     try {
-      await Promise.race([
-        entered.promise,
-        pending.then(() => {
-          throw new Error("uninstall finished before drain");
-        }),
-      ]);
+      await awaitGateBeforeSettlement(entered.promise, pending, "uninstall finished before drain");
       await fixture.addLoadPath(alias);
     } finally {
       release.resolve();
@@ -221,12 +211,11 @@ it.each(["root", "shared include"] as const)(
     void pending.catch(() => {});
     let writer: Promise<void> | undefined;
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        pending.then(() => {
-          throw new Error("uninstall finished before deletion");
-        }),
-      ]);
+        pending,
+        "uninstall finished before deletion",
+      );
       const sources = [
         fixture.configPath,
         ...(source === "shared include" ? [fixture.includePath] : []),
@@ -291,12 +280,11 @@ it("locks an aliased root config's target while deleting a retired plugin source
   );
   void pending.catch(() => {});
   try {
-    await Promise.race([
+    await awaitGateBeforeSettlement(
       entered.promise,
-      pending.then(() => {
-        throw new Error("source cleanup finished before deletion");
-      }),
-    ]);
+      pending,
+      "source cleanup finished before deletion",
+    );
     await expectConfigSourceLocked(canonicalConfigPath);
   } finally {
     release.resolve();

@@ -110,10 +110,11 @@ it("keeps timestamp-mismatched keys without strengthening Doctor validation", ()
 });
 
 it.each([false, true])(
-  "reloads metadata after a commit during required validation (pending rewrite: %s)",
+  "discards metadata straddling a sibling commit before caching participants (pending rewrite: %s)",
   (certifiedReopen) => {
     const entry = { sessionId: "cold-key", updatedAt: 1, label: "before" };
     const scope = createScope(entry);
+    recordSessionParticipant(scope, { identity: { type: "profile", id: "before" }, promptedAt: 1 });
     const pending = open(scope);
     if (certifiedReopen) {
       pending.db.exec(
@@ -144,13 +145,17 @@ it.each([false, true])(
         markCanonicalSessionValidationPending({ agentId: scope.agentId, db: writer }, [
           scope.sessionKey,
         ]);
+        writer.prepare("UPDATE session_participants SET actor_id = 'after'").run();
         writer.exec("COMMIT");
       }
       return value;
     });
-    expect(list(scope)[0]?.entry.label).toBe("after");
-    expect(committed).toBe(true);
-    expect(list(scope)[0]?.entry.label).toBe("after");
+    const first = list(scope)[0]?.entry;
+    expect(first).toMatchObject({
+      label: "after",
+      participants: [{ identity: { type: "profile", id: "after" } }],
+    });
+    expect(list(scope)[0]?.entry).toEqual(first);
   },
 );
 

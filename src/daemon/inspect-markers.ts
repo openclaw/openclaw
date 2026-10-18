@@ -30,9 +30,7 @@ export type Marker = (typeof EXTRA_MARKERS)[number];
 
 type SystemdExecution = { path: string; programArguments: readonly string[] };
 
-export function classifyGatewayCommand(
-  programArguments: string[],
-): "run" | "maintenance" | "unknown" {
+function classifyGatewayCommand(programArguments: string[]): "run" | "maintenance" | "unknown" {
   let args =
     resolveCarrierCommandArgv(programArguments, 0, { includeExec: true }) ?? programArguments;
   if (POSIX_SHELL_WRAPPERS.has(path.posix.basename(args[0] ?? "").toLowerCase())) {

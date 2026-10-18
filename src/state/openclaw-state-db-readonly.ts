@@ -84,6 +84,9 @@ const stateSnapshotReads = resolveGlobalSingleton(
       RetainedReadScope & {
         readSource(): StateReadSnapshotSource | undefined;
         prepareSource?: () => Promise<void>;
+        forkSource: Awaited<
+          ReturnType<typeof prepareOpenClawStateReadSnapshotSource>
+        >["forkSource"];
         env: NodeJS.ProcessEnv;
         callerSignal?: AbortSignal;
       }
@@ -124,6 +127,21 @@ export async function getActiveOpenClawStateDatabaseReadSnapshotAsync(
     resolveStateReadCallerSignal()?.throwIfAborted();
     return getActiveOpenClawStateDatabaseReadSnapshot(options);
   });
+}
+
+/** Fork only bytes already owned by this matching report, retaining it until the child settles. */
+export async function forkActiveOpenClawStateDatabaseReadSnapshot(
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const pathname = resolveReadOnlyPath(options);
+  const current = stateSnapshotReads.getStore();
+  if (current?.path !== pathname) {
+    return undefined;
+  }
+  assertRetainedReadScopeAdmission(pathname, [current]);
+  const signal = resolveStateReadCallerSignal();
+  signal?.throwIfAborted();
+  return current.work.track(() => current.forkSource(signal));
 }
 
 /** Use a SQLite snapshot or the PostgreSQL read owner without redirecting live writers. */
@@ -170,6 +188,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
       {
         readSource: source.readSource,
         prepareSource: source.prepareSource,
+        forkSource: source.forkSource,
         env,
         callerSignal,
       },
