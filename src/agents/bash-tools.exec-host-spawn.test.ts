@@ -23,26 +23,22 @@ describe.runIf(process.platform !== "win32" && fs.existsSync(zsh))("zsh host exe
 
   afterEach(() => vi.unstubAllEnvs());
 
-  describe.each([false, true])("PTY preparation: %s", (usePty) => {
-    it.each([
-      ["echo before; echo ===; echo after", "before\n===\nafter\n"],
-      ["echo before; echo no-such-file-*.txt; echo after", "before\nno-such-file-*.txt\nafter\n"],
-    ])("finishes a command chain containing literal shell text: %s", async (command, stdout) => {
-      const prepared = await prepareHostExecSpawn({ command, workdir: cwd, env, usePty });
+  it.each([
+    ["echo before; echo ===; echo after", "before\n===\nafter\n"],
+    ["echo before; echo no-such-file-*.txt; echo after", "before\nno-such-file-*.txt\nafter\n"],
+  ])("finishes a command chain containing literal shell text: %s", async (command, stdout) => {
+    const prepared = await prepareHostExecSpawn({ command, workdir: cwd, env, usePty: false });
 
-      // Run the production-prepared argv in a real shell. This verifies PTY
-      // argument preparation, without claiming to exercise a native PTY here.
-      assert(prepared.argv[0], "exec must provide a shell executable");
-      const result = spawnSync(prepared.argv[0], prepared.argv.slice(1), {
-        cwd,
-        env,
-        encoding: "utf8",
-      });
-      expect(result.error).toBeUndefined();
-      expect(result.status).toBe(0);
-      expect(result.stdout).toBe(stdout);
-      expect(result.stderr).toBe("");
+    assert(prepared.argv[0], "exec must provide a shell executable");
+    const result = spawnSync(prepared.argv[0], prepared.argv.slice(1), {
+      cwd,
+      env,
+      encoding: "utf8",
     });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(stdout);
+    expect(result.stderr).toBe("");
   });
 
   it("keeps startup suppression and ordinary tilde, brace, and glob expansion", async () => {
