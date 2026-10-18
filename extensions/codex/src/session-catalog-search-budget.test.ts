@@ -3,17 +3,17 @@ import {
   createCodexManagedThreadStore,
   type StoredCodexManagedThread,
 } from "./app-server/managed-thread-store.js";
-import { nativeCatalogFixture } from "./session-catalog-resident.test-support.js";
+import {
+  catalogFactory,
+  catalogProvider,
+  nativeCatalogFixture,
+} from "./session-catalog-resident.test-support.js";
 import {
   commandRpcMocks,
   config,
   createCodexSessionCatalogControl,
-  createCodexSessionCatalogControlFactory,
   createCodexTestBindingStore,
-  createGatewayApi,
-  createRuntime,
   pinnedConnectionMocks,
-  registerCodexSessionCatalog,
 } from "./session-catalog.test-helpers.js";
 
 async function fixture(count: number, matching: Set<number>) {
@@ -32,22 +32,17 @@ async function fixture(count: number, matching: Set<number>) {
       return true;
     },
   });
-  const control = createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({ supervision: { enabled: true } }),
+  const control = catalogFactory({
     getRuntimeConfig: () => config,
     managedThreads,
     now: () => 1_000,
   });
   const home = (await control.homesForAgent("main"))[0]!;
-  const { runtime } = createRuntime();
-  const { api, getProvider } = createGatewayApi(runtime, config);
-  registerCodexSessionCatalog({
-    api,
-    bindingStore: Object.assign(createCodexTestBindingStore(), { managedThreads }),
-    control: { ...control, homesForAgent: async () => [home] },
-    getRuntimeConfig: () => config,
-  });
-  const provider = getProvider()!;
+  const provider = catalogProvider(
+    { ...control, homesForAgent: async () => [home] },
+    undefined,
+    Object.assign(createCodexTestBindingStore(), { managedThreads }),
+  );
   await control.forRequest("main", home).initialize();
   commandRpcMocks.codexControlRequest.mockClear();
   return {

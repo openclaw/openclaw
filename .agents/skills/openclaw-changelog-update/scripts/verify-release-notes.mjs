@@ -1899,10 +1899,17 @@ export function validateReleaseProvenanceOverrides(
   nodes,
   mainCommit,
   isMainAncestor = gitIsAncestor,
+  resolveNodes = (numbers) => resolveReferences(numbers).nodes,
 ) {
+  // Shipped-ref subtraction removes already-released PRs from the release
+  // inventory, but markers naming them still need the same main validation.
+  const missing = [...new Set([...provenanceOverrides.values()].flat())].filter(
+    (number) => !nodes.has(number),
+  );
+  const markerNodes = missing.length > 0 ? resolveNodes(missing) : new Map();
   for (const [commit, pullRequests] of provenanceOverrides) {
     for (const number of pullRequests) {
-      const node = nodes.get(number);
+      const node = nodes.get(number) ?? markerNodes.get(number);
       // Markers may name current-main forward-ports, but never release-only or unmerged PRs.
       if (
         node?.__typename !== "PullRequest" ||

@@ -27,6 +27,10 @@ it("publishes affected session identities for registration, moves, models, and r
   expect(changed.mock.calls).toEqual([[{ ...before, scope: "runtime" }]]);
   changed.mockClear();
 
+  registerAgentRunContext("moving", { ...before, sessionId: "admitted-session" });
+  expect(changed.mock.calls).toEqual([[{ ...before, scope: "runtime" }]]);
+  changed.mockClear();
+
   registerAgentRunContext("moving", after);
   expect(changed.mock.calls).toEqual(
     expect.arrayContaining([[{ ...before, scope: "runtime" }], [{ ...after, scope: "runtime" }]]),
@@ -58,9 +62,26 @@ it("invalidates the run projection on lifecycle rotation and orphan cleanup", ()
   changed.mockClear();
   expect(sweepStaleRunContexts(1)).toBe(1);
   expect(changed.mock.calls).toEqual([[{ all: true, scope: "agent-runs" }]]);
+});
+
+it("retains both session identities when an ID-only run moves, then releases only its current identity", () => {
+  const changed = vi.fn();
+  onTestFinished(sessionChanges.subscribe(changed));
+  const before = { agentId: "worker", sessionId: "before" };
+  const after = { agentId: "worker", sessionId: "after" };
+  const notification = (runtimeSession: typeof before) => ({
+    all: true,
+    scope: "agent-runs",
+    runtimeSession,
+  });
+  registerAgentRunContext("session-id-only", before);
+  expect(changed.mock.calls).toEqual([[notification(before)]]);
   changed.mockClear();
-  registerAgentRunContext("session-id-only", { agentId: "worker", sessionId: "shared-id" });
-  expect(changed.mock.calls).toEqual([[{ all: true, scope: "agent-runs" }]]);
+  registerAgentRunContext("session-id-only", after);
+  expect(changed.mock.calls).toEqual([[notification(before)], [notification(after)]]);
+  changed.mockClear();
+  clearAgentRunContext("session-id-only");
+  expect(changed.mock.calls).toEqual([[notification(after)]]);
 });
 
 it("retains model request numbering across run metadata updates and resets fresh registrations", () => {

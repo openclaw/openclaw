@@ -1,10 +1,7 @@
-// Goal tool tests cover goal accounting projection and correct session-store
-// routing for global and scoped sessions.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntry,
@@ -14,33 +11,43 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCreateGoalTool, createGetGoalTool, createUpdateGoalTool } from "./goal-tools.js";
 
-async function createStoreConfig(): Promise<{ config: OpenClawConfig; template: string }> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-goal-tools-"));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function createStoreConfig(runSessionKey = "global", entry: Partial<SessionEntry> = {}) {
+  const dir = tempDirs.make("openclaw-goal-tools-");
   const template = path.join(dir, "{agentId}", "sessions.json");
+  const config: OpenClawConfig = { session: { store: template } };
+  const storePath = resolveSessionStorePathCore(template, {
+    agentId: runSessionKey === "global" ? "research" : "ops",
+  });
+  await upsertAccessorSessionEntry(
+    { storePath, sessionKey: runSessionKey },
+    { sessionId: "sess-global", updatedAt: 1, ...entry },
+  );
   return {
-    config: { session: { store: template } } as OpenClawConfig,
-    template,
+    options: { agentSessionKey: "global", runSessionKey, sessionAgentId: "research", config },
+    readGoal: (agentId?: string) =>
+      loadSessionEntry({
+        storePath: agentId ? resolveSessionStorePathCore(template, { agentId }) : storePath,
+        sessionKey: runSessionKey,
+      })?.goal,
   };
 }
 
-// Goal tools read/write through the SQLite-backed accessor, so test fixtures
-// must seed and assert through the same boundary.
-function getSessionEntry(params: {
-  storePath: string;
-  sessionKey: string;
-}): SessionEntry | undefined {
-  return loadSessionEntry(params);
-}
-
-async function upsertSessionEntry(params: {
-  storePath: string;
-  sessionKey: string;
-  entry: SessionEntry;
-}): Promise<void> {
-  await upsertAccessorSessionEntry(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
-    params.entry,
-  );
+function makeGoal(overrides: Partial<NonNullable<SessionEntry["goal"]>>) {
+  return {
+    schemaVersion: 1 as const,
+    id: "goal-1",
+    objective: "ship",
+    status: "active" as const,
+    createdAt: 1,
+    updatedAt: 1,
+    tokenStart: 0,
+    tokenStartFresh: true,
+    tokensUsed: 0,
+    continuationTurns: 0,
+    ...overrides,
+  };
 }
 
 describe("goal tools", () => {
@@ -52,98 +59,47 @@ describe("goal tools", () => {
   });
 
   it("keeps get_goal read-only when accounting changes are projected", async () => {
-    // Budget-limited status can be derived for display without mutating the
-    // stored active goal record.
-    const { config, template } = await createStoreConfig();
-    const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
-    await upsertSessionEntry({
-      storePath,
-      sessionKey: "global",
-      entry: {
-        sessionId: "sess-global",
-        updatedAt: 1,
-        totalTokens: 125,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "ship",
-          status: "active",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 100,
-          tokenStartFresh: true,
-          tokensUsed: 0,
-          tokenBudget: 20,
-          continuationTurns: 0,
-        },
-      },
+    const { options, readGoal } = await createStoreConfig("global", {
+      totalTokens: 125,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      goal: makeGoal({ tokenStart: 100, tokenBudget: 20 }),
     });
-    const tool = createGetGoalTool({
-      agentSessionKey: "global",
-      runSessionKey: "global",
-      sessionAgentId: "research",
-      config,
-    });
+    const tool = createGetGoalTool(options);
 
     const result = await tool.execute("call-1", {});
 
-    expect((result.details as { goal?: { status?: string } }).goal?.status).toBe("budget_limited");
-    expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal?.status).toBe("active");
+    expect(result.details).toMatchObject({ goal: { status: "budget_limited" } });
+    expect(readGoal()?.status).toBe("active");
   });
 
-  it.each([100])("creates a scoped goal with token_budget=%s", async (budget) => {
-    const { config, template } = await createStoreConfig();
-    const tool = createCreateGoalTool({
-      agentSessionKey: "global",
-      runSessionKey: "global",
-      sessionAgentId: "research",
-      config,
-    });
-
-    const researchStorePath = resolveSessionStorePathCore(template, { agentId: "research" });
-    await upsertSessionEntry({
-      storePath: researchStorePath,
-      sessionKey: "global",
-      entry: { sessionId: "sess-global", updatedAt: 1 },
-    });
-    const args = {
-      objective: "ship global work",
-      ...(budget !== undefined ? { token_budget: budget } : {}),
-    };
-    expect(Value.Check(tool.parameters, args)).toBe(true);
-    await tool.execute("call-1", args);
-
-    const mainStorePath = resolveSessionStorePathCore(template, { agentId: "main" });
-    expect(
-      getSessionEntry({ storePath: researchStorePath, sessionKey: "global" })?.goal?.objective,
-    ).toBe("ship global work");
-    expect(
-      getSessionEntry({ storePath: researchStorePath, sessionKey: "global" })?.goal?.tokenBudget,
-    ).toBe(budget ?? undefined);
-    expect(
-      getSessionEntry({ storePath: mainStorePath, sessionKey: "global" })?.goal,
-    ).toBeUndefined();
-  });
+  it.each([
+    { sessionKey: "global", budget: 100, otherAgent: "main" },
+    { sessionKey: "agent:ops:main", budget: undefined, otherAgent: "research" },
+  ])(
+    "creates a goal in the owning store for $sessionKey",
+    async ({ sessionKey, budget, otherAgent }) => {
+      const { options, readGoal } = await createStoreConfig(sessionKey);
+      const tool = createCreateGoalTool(options);
+      const args = {
+        objective: "ship work",
+        ...(budget === undefined ? {} : { token_budget: budget }),
+      };
+      expect(Value.Check(tool.parameters, args)).toBe(true);
+      await tool.execute("call-1", args);
+      expect(readGoal()).toMatchObject({
+        objective: "ship work",
+        ...(budget === undefined ? {} : { tokenBudget: budget }),
+      });
+      expect(readGoal(otherAgent)).toBeUndefined();
+    },
+  );
 
   it.each(["42.9", 0])(
     "rejects invalid token budgets before creating a goal: %s",
     async (tokenBudget) => {
-      const { config, template } = await createStoreConfig();
-      const tool = createCreateGoalTool({
-        agentSessionKey: "global",
-        runSessionKey: "global",
-        sessionAgentId: "research",
-        config,
-      });
-
-      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
-      await upsertSessionEntry({
-        storePath,
-        sessionKey: "global",
-        entry: { sessionId: "sess-global", updatedAt: 1 },
-      });
+      const { options, readGoal } = await createStoreConfig();
+      const tool = createCreateGoalTool(options);
       await expect(
         tool.execute("call-invalid-budget", {
           objective: "ship global work",
@@ -151,67 +107,16 @@ describe("goal tools", () => {
         }),
       ).rejects.toThrow("token_budget must be a positive integer");
 
-      expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal).toBeUndefined();
+      expect(readGoal()).toBeUndefined();
     },
   );
 
-  it("prefers scoped run session keys over the fallback session agent", async () => {
-    const { config, template } = await createStoreConfig();
-    const tool = createCreateGoalTool({
-      agentSessionKey: "global",
-      runSessionKey: "agent:ops:main",
-      sessionAgentId: "research",
-      config,
-    });
-
-    const opsStorePath = resolveSessionStorePathCore(template, { agentId: "ops" });
-    await upsertSessionEntry({
-      storePath: opsStorePath,
-      sessionKey: "agent:ops:main",
-      entry: { sessionId: "sess-ops", updatedAt: 1 },
-    });
-    await tool.execute("call-1", { objective: "ship ops work" });
-
-    const researchStorePath = resolveSessionStorePathCore(template, { agentId: "research" });
-    expect(
-      getSessionEntry({ storePath: opsStorePath, sessionKey: "agent:ops:main" })?.goal?.objective,
-    ).toBe("ship ops work");
-    expect(
-      getSessionEntry({ storePath: researchStorePath, sessionKey: "agent:ops:main" })?.goal,
-    ).toBeUndefined();
-  });
-
   it("returns actionable guidance when goal is already complete", async () => {
-    const { config, template } = await createStoreConfig();
-    const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
-    const options = {
-      agentSessionKey: "global",
-      runSessionKey: "global",
-      sessionAgentId: "research",
-      config,
-    };
-    await upsertSessionEntry({
-      storePath,
-      sessionKey: "global",
-      entry: {
-        sessionId: "sess-global",
-        updatedAt: 1,
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "ship",
-          status: "complete",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokenStartFresh: true,
-          tokensUsed: 10,
-          continuationTurns: 0,
-        },
-      },
+    const { options, readGoal } = await createStoreConfig("global", {
+      goal: makeGoal({ status: "complete", tokensUsed: 10 }),
     });
     const tool = createUpdateGoalTool(options);
-    const originalGoal = getSessionEntry({ storePath, sessionKey: "global" })?.goal;
+    const originalGoal = readGoal();
 
     const result = await tool.execute("call-already-complete", { status: "blocked" });
 
@@ -220,7 +125,7 @@ describe("goal tools", () => {
       error: "goal is already complete",
       nextAction: expect.stringContaining("Do not retry update_goal"),
     });
-    expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal).toEqual(originalGoal);
+    expect(readGoal()).toEqual(originalGoal);
 
     const repeated = await tool.execute("call-complete-again", { status: "complete" });
     expect(repeated.details).toMatchObject({
@@ -231,11 +136,11 @@ describe("goal tools", () => {
   });
 
   it("keeps missing-session failures on the generic error path", async () => {
-    const { config } = await createStoreConfig();
+    const dir = tempDirs.make("openclaw-goal-tools-missing-");
     const tool = createUpdateGoalTool({
       agentSessionKey: "global",
       sessionAgentId: "research",
-      config,
+      config: { session: { store: path.join(dir, "{agentId}", "sessions.json") } },
     });
 
     await expect(tool.execute("call-missing-session", { status: "blocked" })).rejects.toThrow(

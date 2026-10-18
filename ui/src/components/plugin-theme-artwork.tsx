@@ -12,7 +12,7 @@ export function PluginThemeArtwork(props: { url: string; class?: string; fallbac
     }
   });
   return (
-    <Loading fallback={props.fallback}>
+    <Loading on={props.url} fallback={props.fallback}>
       <Show when={source()} fallback={props.fallback}>
         {(src) => <img class={props.class} alt="" src={src()} />}
       </Show>

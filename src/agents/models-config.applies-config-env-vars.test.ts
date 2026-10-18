@@ -23,8 +23,12 @@ vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => Object.create(null) as Record<string, string>,
   resolveProviderIdForAuth: (providerId: string) => providerId.trim().toLowerCase(),
 }));
+// mock-isolation: Model-config planning uses supplied catalog and environment policies without external credential discovery.
 vi.mock("../plugins/provider-external-auth-core.js", () => ({
-  createProviderExternalAuthResolver: () => ({ resolveExternalAuthProfilesWithPlugins: () => [] }),
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: () => [],
+    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
+  }),
 }));
 vi.mock("../plugins/provider-runtime.js", () => ({
   normalizeProviderConfigWithPlugin: providerRuntimeMocks.normalizeProviderConfigWithPlugin,

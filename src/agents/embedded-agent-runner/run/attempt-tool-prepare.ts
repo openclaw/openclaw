@@ -11,13 +11,15 @@ import { resolveStagedInputMediaPaths } from "../../../media/staged-inputs.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import {
   createOpenClawCodingToolsInternalAsync,
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
-import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
@@ -85,6 +87,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
+  const pluginExecutionAuthority = readAdmittedRunOperatorAuthority(attempt.admittedRunContext);
+  const pluginExecutionSkillsSnapshot = attempt.skillsSnapshot;
   const workspaceReadiness = captureAgentWorkspaceReadiness(attempt.sessionKey);
   const captureBaseline = attempt.awaitSessionDiffBaseline;
   const assertBaselineSource = captureBaseline
@@ -183,7 +187,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   // Compaction summaries omit screenshot image blocks. Frames are bound to this
   // generation so retained tool-result text cannot authorize stale coordinates.
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
-  const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
+  const skillInstructionDeliveryCache = new Map<string, Promise<boolean>>();
   const toolSearchCatalogRef = toolSurfaceRuntime.toolSearchCatalogRef;
   const nestedToolActivityState = createAttemptNestedToolActivityState();
   const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
@@ -307,8 +311,15 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     let constructedToolsRaw: Awaited<ReturnType<typeof createOpenClawCodingToolsInternalAsync>> =
       [];
     if (shouldConstructTools) {
+      const assertActive = resolveAdmittedRunActiveAssertion(
+        attempt.admittedRunContext,
+        abortSignal,
+      );
       const codingToolOptions: OpenClawCodingToolsOptions = {
         awaitSessionDiffBaseline,
+        pluginExecutionAuthority,
+        pluginExecutionSkillsSnapshot,
+        assertInvocationCurrent: assertActive,
         agentId: params.setup.sessionAgentId,
         ...buildConversationContext(),
         exec: {
@@ -400,10 +411,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
           : undefined,
         onYield: params.onYield,
       };
-      const assertActive = resolveAdmittedRunActiveAssertion(
-        attempt.admittedRunContext,
-        abortSignal,
-      );
       const allTools = await createOpenClawCodingToolsInternalAsync(
         codingToolOptions,
         params.skillReadResources,
@@ -539,7 +546,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   } catch (error) {
     try {
       await runOwnedAgentCleanup({
-        ...attempt,
+        runId: attempt.runId,
+        sessionId: attempt.sessionId,
+        oneShotCliRun: attempt.oneShotCliRun,
         step: "embedded-tool-preparation",
         cleanup: () => releaseTools("error"),
         log,

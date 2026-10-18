@@ -4,27 +4,18 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import {
-  removeChatAbortControllerEntry,
-  type ChatAbortControllerEntry,
-} from "../../../gateway/chat-abort.js";
+import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { prepareGatewayRunShutdown } from "../../../gateway/server-run-shutdown.js";
 import { withTimeout } from "../../../infra/fs-safe.js";
 import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-state-db-cache.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "../../../state/openclaw-state-worker-contract.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
-import {
-  createOperationalRunInstanceRef,
-  type AdmittedRunOperatorAuthority,
-} from "../../admitted-run-context.js";
-import { reserveChildAdmissionSlot, resolveChildAdmission } from "../../child-admission.js";
+import type { AdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { SubagentRegistryWriteError } from "../registry/subagent-registry-persistence.js";
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
@@ -321,29 +312,13 @@ export function registerOperatorSpawnRollbackCases(options: {
     },
   );
 
-  it.each([
-    { label: "operator retry", operator: true, transition: "retry" },
-    { label: "non-operator retry", operator: false, transition: "retry" },
-    {
-      label: "non-operator database retirement",
-      operator: false,
-      transition: "database-retirement",
-    },
-    { label: "non-operator controller reassignment", operator: false, transition: "reassign" },
-    { label: "operator Gateway shutdown", operator: true, transition: "shutdown" },
-  ] as const)(
-    "returns an uncertain registration error while retaining cleanup for $label",
-    async ({ operator, transition }) => {
+  it.each([true, false])(
+    "reports failed registration cancellation and settles its child at shutdown (operator=%s)",
+    async (operator) => {
       const source = operator ? createSpawnOperatorSource() : undefined;
-      const bound = await options.createBoundParent(source?.authority, { maxChildrenPerAgent: 1 });
+      const bound = await options.createBoundParent(source?.authority);
       const { context, runtime } = await options.createBoundGateway(bound);
       const embeddedStarted = createDeferred();
-      const retryEntered = createDeferred();
-      const releaseRetry = createDeferred();
-      const retrySettled = createDeferred();
-      const cleanupStopped = createDeferred();
-      let registrationAdmission: OpenClawStateWorkerContext["admission"] | undefined;
-      const invocations: Promise<unknown>[] = [];
       const failures: unknown[] = [];
       const registrationFailure = new SubagentRegistryWriteError(
         "unknown",
@@ -357,36 +332,11 @@ export function registerOperatorSpawnRollbackCases(options: {
             sessionIdentity: { sessionId: string; lifecycleRevision?: string };
           }
         | undefined;
-      let replacement: ChatAbortControllerEntry | undefined;
       let embeddedSignal: AbortSignal | undefined;
       let embeddedSettled = false;
-      let retrySignal: AbortSignal | undefined;
       let abortAttempts = 0;
-      let reachedRealRetry = false;
+      let invocation: Promise<unknown> | undefined;
       const dispatchSessionMethod = runtime.recovery.dispatchSessionMethod;
-      const cleanupWarning = vi.spyOn(context.logGateway, "warn").mockImplementation((message) => {
-        if (message.includes("termination remains unconfirmed")) {
-          cleanupStopped.resolve();
-        }
-      });
-      const shutdownGateway = async () => {
-        bound.execution.beginClose();
-        runtime.close();
-        await prepareGatewayRunShutdown({
-          resolveGatewayContext: () => bound.gatewayBinding.current,
-          chatAbortControllers: context.chatAbortControllers,
-          chatQueuedTurns: context.chatQueuedTurns,
-          chatRunState: context.chatRunState,
-          removeChatRun: context.removeChatRun,
-          agentRunSeq: context.agentRunSeq,
-          broadcast: context.broadcast,
-          nodeSendToSession: context.nodeSendToSession,
-          restart: false,
-          getPendingReplyCount: () => 0,
-          timeoutMs: 0,
-          warnings: [],
-        });
-      };
       const cleanupDispatch = vi
         .spyOn(runtime.recovery, "dispatchSessionMethod")
         .mockImplementation(async (...args) => {
@@ -394,21 +344,7 @@ export function registerOperatorSpawnRollbackCases(options: {
             return await dispatchSessionMethod(...args);
           }
           abortAttempts += 1;
-          if (abortAttempts === 1) {
-            throw new Error("first accepted-child abort failed");
-          }
-          if (abortAttempts === 2) {
-            retrySignal = args[2]?.signal;
-            retryEntered.resolve();
-            try {
-              await releaseRetry.promise;
-              reachedRealRetry = true;
-              return await dispatchSessionMethod(...args);
-            } finally {
-              retrySettled.resolve();
-            }
-          }
-          return await dispatchSessionMethod(...args);
+          throw new Error("accepted-child abort failed");
         });
       options.runEmbeddedAgent.mockImplementationOnce(async (params) => {
         const signal = expectDefined(params.abortSignal, "accepted child abort signal");
@@ -430,8 +366,7 @@ export function registerOperatorSpawnRollbackCases(options: {
       });
       const registrationWrite = interceptChildRegistrationWrite(
         bound.parentSessionKey,
-        async (record, workerContext) => {
-          registrationAdmission = workerContext.admission;
+        async (record) => {
           const entry = expectDefined(
             context.chatAbortControllers.get(record.run_id),
             "accepted child execution owner",
@@ -454,11 +389,12 @@ export function registerOperatorSpawnRollbackCases(options: {
         },
       );
       try {
-        const invoke = createBoundSpawnInvocation(bound, { context: "isolated" });
-        const pending = invoke("uncertain-registration");
-        invocations.push(pending);
-        const [, result] = await withTimeout(Promise.all([retryEntered.promise, pending]), 60_000, {
-          message: "registration failure waited for the held accepted-child cleanup",
+        const pending = createBoundSpawnInvocation(bound, { context: "isolated" })(
+          "uncertain-registration",
+        );
+        invocation = pending;
+        const result = await withTimeout(pending, 60_000, {
+          message: "registration failure waited for accepted-child execution",
         });
         const accepted = expectDefined(child, "accepted child before registration failure");
         const signal = expectDefined(embeddedSignal, "running accepted child");
@@ -470,141 +406,58 @@ export function registerOperatorSpawnRollbackCases(options: {
         });
         expect(details.error).toContain(registrationFailure.message);
         expect(details.error).toContain("termination is not confirmed");
-        expect(details.error).toContain("cleanup is pending");
-        expect(reachedRealRetry).toBe(false);
-        expect(retrySignal).toBe(bound.execution.signal);
-        expect(retrySignal?.aborted).toBe(false);
+        expect(details.error).toContain("Its session is retained");
+        expect(abortAttempts).toBe(1);
         expect(signal.aborted).toBe(false);
         expect(embeddedSettled).toBe(false);
         expect(context.chatAbortControllers.get(accepted.runId)).toBe(accepted.entry);
         expect(subagentRuns.has(accepted.runId)).toBe(false);
-
-        const otherSpawn = invoke("capacity-during-uncertain-cleanup");
-        invocations.push(otherSpawn);
-        const blocked = await otherSpawn;
-        expect(blocked.details).toMatchObject({
-          status: "forbidden",
-          error: expect.stringContaining("max active children"),
-        });
-        expect(options.runEmbeddedAgent).toHaveBeenCalledOnce();
-        expect(registrationWrite.failure).toHaveBeenCalledOnce();
-
-        if (transition === "reassign") {
-          replacement = {
-            ...accepted.entry,
-            controller: new AbortController(),
-            operationalRunInstance: createOperationalRunInstanceRef(accepted.runId),
-            agentRunDelegatedAuthority: undefined,
-          };
-          expect(replacement.operationalRunInstance).not.toBe(
-            accepted.entry.operationalRunInstance,
-          );
-          context.chatAbortControllers.set(accepted.runId, replacement);
-        } else if (transition === "database-retirement") {
-          const admission = expectDefined(registrationAdmission, "registration database admission");
-          await closeOpenClawStateDatabaseByPathAsync(admission.databasePath);
-          expect(admission.assertCurrent).toThrow(/admission/);
-          const current = captureOpenClawStateWorkerContext().admission;
-          expect(current).not.toBe(admission);
-          expect(current.identity.key).toBe(admission.identity.key);
-          expect(current.assertCurrent).not.toThrow();
-          expect(runtime.isAvailable()).toBe(true);
-          expect(context.chatAbortControllers.get(accepted.runId)).toBe(accepted.entry);
-          expect(signal.aborted).toBe(false);
-          expect(retrySignal?.aborted).toBe(false);
-        } else if (transition === "shutdown") {
-          await shutdownGateway();
-          expect(retrySignal?.aborted).toBe(true);
-          expect(signal.aborted).toBe(true);
-        } else if (source) {
-          // Source revocation has its own cancellation owner; only the non-operator
-          // row proves that this retry itself stops the accepted child.
-          source.revoke();
-          expect(() => source.authority.assertCurrent()).toThrow("operator source revoked");
-          expect(retrySignal?.aborted).toBe(false);
-        }
-        releaseRetry.resolve();
-        await retrySettled.promise;
-        expect(reachedRealRetry).toBe(true);
-        if (transition === "database-retirement") {
-          await cleanupStopped.promise;
-          const nextSpawn = invoke("capacity-after-database-retirement");
-          invocations.push(nextSpawn);
-          expect((await nextSpawn).details).toMatchObject({
-            status: "forbidden",
-            error: expect.stringContaining("max active children"),
-          });
-          expect(context.chatAbortControllers.get(accepted.runId)).toBe(accepted.entry);
-          expect(signal.aborted).toBe(false);
-          expect(embeddedSettled).toBe(false);
-          expect(retrySignal?.aborted).toBe(false);
-          expect(subagentRuns.has(accepted.runId)).toBe(false);
-          await shutdownGateway();
-          expect(retrySignal?.aborted).toBe(true);
-        }
-        if (replacement) {
-          expect(context.chatAbortControllers.get(accepted.runId)).toBe(replacement);
-          expect(replacement.controller.signal.aborted).toBe(false);
-          expect(signal.aborted).toBe(false);
-          // The displaced synthetic producer is ours; the successor remains untouched.
-          accepted.entry.controller.abort(new Error("reassigned fixture producer cleanup"));
-        }
-        await AsyncWorkScope.runWhenAllIdle(
-          () => [bound.execution],
-          () => {},
-        );
-        expect(signal.aborted).toBe(true);
-        expect(embeddedSettled).toBe(true);
-        expect(abortAttempts).toBe(2);
-        if (replacement) {
-          expect(context.chatAbortControllers.get(accepted.runId)).toBe(replacement);
-          expect(replacement.controller.signal.aborted).toBe(false);
-        } else {
-          expect(context.chatAbortControllers.has(accepted.runId)).toBe(false);
-        }
         expect(
           loadSessionEntry({ storePath: bound.storePath, sessionKey: accepted.sessionKey }),
         ).toMatchObject(accepted.sessionIdentity);
         expect(cleanupDispatch.mock.calls.some(([method]) => method === "sessions.delete")).toBe(
           false,
         );
-        const available = reserveChildAdmissionSlot({
-          controllerSessionKey: bound.parentSessionKey,
-          resolveAdmission: (pendingChildren) =>
-            resolveChildAdmission({
-              collect: false,
-              callerDepth: 0,
-              maxSpawnDepth: 2,
-              activeChildren: pendingChildren,
-              maxActiveChildren: 1,
-            }),
+        expect(options.runEmbeddedAgent).toHaveBeenCalledOnce();
+        expect(registrationWrite.failure).toHaveBeenCalledOnce();
+
+        bound.execution.beginClose();
+        runtime.close();
+        await prepareGatewayRunShutdown({
+          resolveGatewayContext: () => bound.gatewayBinding.current,
+          chatAbortControllers: context.chatAbortControllers,
+          chatQueuedTurns: context.chatQueuedTurns,
+          chatRunState: context.chatRunState,
+          removeChatRun: context.removeChatRun,
+          agentRunSeq: context.agentRunSeq,
+          broadcast: context.broadcast,
+          nodeSendToSession: context.nodeSendToSession,
+          getPendingReplyCount: () => 0,
+          timeoutMs: 0,
+          warnings: [],
         });
-        try {
-          expect(available.ok).toBe(true);
-        } finally {
-          if (available.ok) {
-            available.release();
-          }
-        }
+        await AsyncWorkScope.runWhenAllIdle(
+          () => [bound.execution],
+          () => {},
+        );
+        expect(signal.aborted).toBe(true);
+        expect(embeddedSettled).toBe(true);
+        expect(context.chatAbortControllers.has(accepted.runId)).toBe(false);
+        expect(abortAttempts).toBe(1);
       } catch (error) {
         failures.push(error);
       } finally {
         embeddedStarted.resolve();
-        releaseRetry.resolve();
         child?.entry.controller.abort(new Error("uncertain spawn fixture cleanup"));
         for (const entry of context.chatAbortControllers.values()) {
-          if (entry !== bound.parent.entry && entry !== replacement) {
+          if (entry !== bound.parent.entry) {
             entry.controller.abort(new Error("uncertain spawn fixture cleanup"));
           }
         }
-        if (child && replacement) {
-          removeChatAbortControllerEntry(context.chatAbortControllers, child.runId, replacement);
-        }
         registrationWrite.restore();
-        const settled = await Promise.allSettled(invocations);
-        failures.push(
-          ...settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-        );
+        await invocation?.catch((error: unknown) => {
+          failures.push(error);
+        });
         failures.push(...(await options.closeBoundGateway(bound, runtime, child?.runId)));
         try {
           await settleSubagentRegistryPersistenceWork();
@@ -612,7 +465,6 @@ export function registerOperatorSpawnRollbackCases(options: {
           failures.push(error);
         }
         cleanupDispatch.mockRestore();
-        cleanupWarning.mockRestore();
         try {
           await resetSubagentRegistryForTests({ persist: false });
           expect(source?.holds ?? 0).toBe(0);

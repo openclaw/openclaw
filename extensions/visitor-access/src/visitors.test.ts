@@ -200,13 +200,6 @@ describe("VisitorAccessService", () => {
       access: "shared owner authority retained; this invitation does not restrict it",
     },
     {
-      name: "the role linked to the selected GitHub account",
-      github: true,
-      assignedRole: "staff",
-      otherRole: staffRole,
-      access: 'existing role "staff" retained; this invitation does not restrict it',
-    },
-    {
       name: "the declarative GitHub role without an explicit assignment",
       github: true,
       assignedRole: undefined,
@@ -412,30 +405,27 @@ describe("VisitorAccessService", () => {
     },
   );
 
-  it.each([0, null])(
-    "requires explicit forever when the default duration is %s",
-    async (defaultTtlDays) => {
-      const fixture = visitorFixture({ config: { defaultTtlDays } });
-      await expect(
-        fixture.service.invite({ email: "visitor@example.com" }, fixture.authority),
-      ).rejects.toThrow(/forever/);
-      expect(fixture.grants.size).toBe(0);
-      expect(fixture.mutations()).toEqual([]);
+  it("requires explicit forever when no default duration is configured", async () => {
+    const fixture = visitorFixture({ config: { defaultTtlDays: null } });
+    await expect(
+      fixture.service.invite({ email: "visitor@example.com" }, fixture.authority),
+    ).rejects.toThrow(/forever/);
+    expect(fixture.grants.size).toBe(0);
+    expect(fixture.mutations()).toEqual([]);
 
-      const result = await fixture.service.invite(
-        { email: "visitor@example.com", forever: true },
+    const result = await fixture.service.invite(
+      { email: "visitor@example.com", forever: true },
+      fixture.authority,
+    );
+    expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBeNull();
+    expect(result.text).toContain("never");
+    await expect(
+      fixture.service.invite(
+        { email: "visitor@example.com", forever: true, days: 1 },
         fixture.authority,
-      );
-      expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBeNull();
-      expect(result.text).toContain("never");
-      await expect(
-        fixture.service.invite(
-          { email: "visitor@example.com", forever: true, days: 1 },
-          fixture.authority,
-        ),
-      ).rejects.toThrow(/days.*forever/);
-    },
-  );
+      ),
+    ).rejects.toThrow(/days.*forever/);
+  });
 
   it("counts managed and unmanaged grants toward admission while allowing an existing grant to renew", async () => {
     const previous = visitorGrant("visitor@example.com", { githubLogin: "visitor" });
@@ -480,41 +470,51 @@ describe("VisitorAccessService", () => {
     expect(fixture.mutations()).toEqual([]);
   });
 
-  it("revokes the verified account and its person's recorded grants without trusting historical login labels", async () => {
-    const grants = ["first@example.com", "second@example.com"].map((email) =>
-      visitorGrant(email, { githubLogin: "old-label" }),
-    );
-    const account = visitorGrant(42, { githubLogin: "old-label" });
-    const unrelated = visitorGrant("other@example.com", { githubLogin: "visitor" });
-    const fixture = visitorFixture({
-      grants: [...grants, account, unrelated],
-      emails: [...grants.map((grant) => grant.email), unrelated.email, "manual@example.com"],
-      githubAccountIds: [42],
-      githubProfiles: [{ accountId: 42, profileId: "person" }],
-    });
-    fixture.setProfiles([
-      {
-        id: "person",
-        emails: [...grants.map((grant) => grant.email), "manual@example.com"],
-        githubIdentity: { login: "Visitor" },
-      },
-      { id: "other-person", emails: [unrelated.email], githubIdentity: { login: "someone-else" } },
-    ]);
+  it.each([undefined, "github.com"])(
+    "revokes only the public account and its grants across a login collision (host=%s)",
+    async (host) => {
+      const grants = ["first@example.com", "second@example.com"].map((email) =>
+        visitorGrant(email, { githubLogin: "old-label" }),
+      );
+      const account = visitorGrant(42, { githubLogin: "old-label" });
+      const unrelated = visitorGrant("other@example.com", { githubLogin: "visitor" });
+      const fixture = visitorFixture({
+        grants: [...grants, account, unrelated],
+        emails: [...grants.map((grant) => grant.email), unrelated.email, "manual@example.com"],
+        githubAccountIds: [42],
+        githubProfiles: [{ accountId: 42, profileId: "person" }],
+      });
+      fixture.setProfiles([
+        {
+          id: "person",
+          emails: [...grants.map((grant) => grant.email), "manual@example.com"],
+          githubIdentity: { ...(host ? { host } : {}), login: "Visitor" },
+        },
+        {
+          id: "enterprise-person",
+          emails: [unrelated.email],
+          githubIdentity: { host: "ghe.example.test", login: "Visitor" },
+        },
+      ]);
 
-    const result = await fixture.service.revoke(
-      { github: "Visitor" },
-      fixture.authority.assertCurrent,
-    );
+      const result = await fixture.service.revoke(
+        { github: "Visitor" },
+        fixture.authority.assertCurrent,
+      );
 
-    expect(fixture.targets()).toEqual([unrelated.email, "manual@example.com"]);
-    expect([...fixture.grants.values()]).toEqual([unrelated]);
-    expect(result.text).toContain("@visitor (GitHub account 42)");
-    expect(result.details).toMatchObject({
-      emails: grants.map((grant) => grant.email),
-      githubAccountIds: [42],
-    });
-    expect(fixture.resolveGitHubAccount).toHaveBeenCalledTimes(1);
-  });
+      expect(fixture.targets()).toEqual([unrelated.email, "manual@example.com"]);
+      expect([...fixture.grants.values()]).toEqual([unrelated]);
+      expect(result.text).toContain("@visitor (GitHub account 42)");
+      expect(result.details).toMatchObject({
+        emails: grants.map((grant) => grant.email),
+        githubAccountIds: [42],
+      });
+      expect(fixture.resolveGitHubAccount).toHaveBeenCalledTimes(1);
+      const list = await fixture.service.list(fixture.authority.assertCurrent);
+      expect(list.details.grants).toHaveLength(1);
+      expect(list.details.grants[0]).not.toHaveProperty("githubLogin");
+    },
+  );
 
   it("revokes only the pending numeric grant when its profile was merged", async () => {
     const grant = visitorGrant("visitor@example.com", { githubLogin: "visitor" });

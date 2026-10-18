@@ -8,6 +8,7 @@ import {
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
+import { closeChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
@@ -82,7 +83,7 @@ suite.define(() => {
             .locator(".chat-main__conversation-frame > openclaw-chat-details")
             .count(),
         ).toBe(0);
-        await detailsDialog.getByRole("button", { name: "Close details", exact: true }).click();
+        await closeChatDetails(activePane);
         await detailsDialog.waitFor({ state: "hidden" });
 
         const prompt = "Review the backend in a subagent.";

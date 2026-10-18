@@ -1,5 +1,8 @@
 // Provider auth helpers define auth methods, credential resolution, and setup status contracts.
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { applyProviderAuthConfigPatchWithNormalization } from "../plugins/provider-auth-choice-helpers.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import { normalizeGithubCopilotDomain } from "./github-copilot-domain.js";
 
 export { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
@@ -12,6 +15,15 @@ export type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/
 
 export { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 export { normalizeGithubCopilotDomain, resolveAuthProfileOrder };
+
+/** Apply an auth result with the host's header-deletion and model-map merge semantics. */
+export function applyProviderAuthConfigPatch(
+  config: OpenClawConfig,
+  patch: ProviderAuthResult["configPatch"],
+  options?: Pick<ProviderAuthResult, "replaceDefaultModels">,
+): OpenClawConfig {
+  return applyProviderAuthConfigPatchWithNormalization(config, patch, options);
+}
 export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 export {
   ensureAuthProfileStore,

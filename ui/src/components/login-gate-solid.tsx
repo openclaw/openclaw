@@ -12,7 +12,9 @@ import "../lib/toast-host.ts";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import {
   type LoginFailureFeedback,
@@ -20,9 +22,9 @@ import {
   type LoginFailureStep,
   resolveLoginFailureFeedback,
 } from "./login-gate-feedback.ts";
-import { CopyButton } from "./solid/copy-button.tsx";
+import { ConnectCommand } from "./solid/connect-command.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
-import "./theme-brand-icon.ts";
+import "./theme-brand-icon.tsx";
 import "./tooltip.ts";
 
 registerEnglishCatalog(registerLoginEnglish);
@@ -50,38 +52,6 @@ const STATUS_ICONS: Record<LoginFailureFeedback["tone"], IconName> = {
   warn: "clock",
   danger: "shieldAlert",
 };
-
-function ConnectCommand(props: { command: string; variant?: "hero" }) {
-  const copyCommand = (event: { currentTarget: HTMLElement }) => {
-    event.currentTarget.querySelector<HTMLButtonElement>(".chat-copy-btn")?.click();
-  };
-  return (
-    <openclaw-tooltip prop:content={t("connection.help.copyCommand")}>
-      <div
-        class={["login-gate__command", { "login-gate__command--hero": props.variant === "hero" }]}
-        role="button"
-        tabindex={0}
-        aria-label={t("connection.help.copyCommandAria", { command: props.command })}
-        onClick={(event) => {
-          if (!(event.target instanceof Element && event.target.closest(".chat-copy-btn"))) {
-            copyCommand(event);
-          }
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            copyCommand(event);
-          }
-        }}
-      >
-        <code translate="no">{props.command}</code>
-        {props.command && (
-          <CopyButton text={props.command} idleLabel={t("connection.help.copyCommand")} />
-        )}
-      </div>
-    </openclaw-tooltip>
-  );
-}
 
 function FailureStep(props: { step: LoginFailureStep }) {
   const segments = createMemo(() => {
@@ -407,6 +377,7 @@ function LoginGateContent(props: {
   host.style.display = "contents";
   const [refreshState, setRefreshState] = createSignal<RefreshState>("idle");
   const [now, setNow] = createSignal(Date.now());
+  const polling = useVisiblePoll(1_000, () => setNow(Date.now()));
   let refreshAttempt: { props: LoginGateProps } | undefined;
   const cancelRefresh = () => {
     refreshAttempt = undefined;
@@ -447,35 +418,17 @@ function LoginGateContent(props: {
       props.model.lastErrorCode === "GATEWAY_BUSY" &&
       (props.model.reconnectAt ?? 0) > now(),
     (running) => {
-      if (!running) {
-        return undefined;
-      }
-      let timer: ReturnType<typeof setInterval> | undefined;
-      const update = () => {
-        if (timer !== undefined) {
-          clearInterval(timer);
-        }
-        timer = undefined;
-        if (document.visibilityState !== "hidden") {
+      if (running) {
+        if (polling.start() && document.visibilityState !== "hidden") {
           setNow(Date.now());
-          timer = setInterval(() => setNow(Date.now()), 1000);
         }
-      };
-      update();
-      document.addEventListener("visibilitychange", update);
-      return () => {
-        if (timer !== undefined) {
-          clearInterval(timer);
-        }
-        document.removeEventListener("visibilitychange", update);
-      };
+      } else {
+        polling.stop();
+      }
     },
   );
-  host.addEventListener("login-gate-disconnect", cancelRefresh);
-  onCleanup(() => {
-    cancelRefresh();
-    host.removeEventListener("login-gate-disconnect", cancelRefresh);
-  });
+  onCleanup(cancelRefresh);
+  onCleanup(listen(host, "login-gate-disconnect", cancelRefresh));
   const refreshPage = async () => {
     const current = host.props;
     if (

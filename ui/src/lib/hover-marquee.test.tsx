@@ -3,7 +3,7 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import type { MarqueeOptions } from "./hover-marquee-controller.ts";
+import type { MarqueeOptions } from "./hover-marquee.ts";
 import { HoverMarquee } from "./solid/hover-marquee.tsx";
 
 function measurementClock() {

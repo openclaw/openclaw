@@ -165,6 +165,7 @@ describe("Testbox spending admission", () => {
   it.each([
     ["ci-check-testbox.yml", "check", "check"],
     ["ci-check-focused-testbox.yml", "check", "check-focused"],
+    ["ci-android-focused-testbox.yml", "check", "check-focused"],
     ["ci-check-routine-testbox.yml", "check", "check-routine"],
     ["ci-check-high-memory-testbox.yml", "check", "check-memory"],
     ["ci-check-arm-testbox.yml", "check-arm", "arm"],
@@ -182,7 +183,7 @@ describe("Testbox spending admission", () => {
     expect(job.if).toContain("needs.admission.result == 'success'");
     expect(job["runs-on"]).toContain("needs.admission.outputs.runner");
     expect(job.concurrency.group).toContain("needs.admission.outputs.group");
-    expect(job.concurrency.queue).toBeUndefined();
+    expect(job.concurrency.queue).toBe("max");
     expect(job.concurrency["cancel-in-progress"]).toBe(false);
     const names = job.steps.map((step: { name: string }) => step.name);
     expect(names.indexOf("Reject expired Testbox admission")).toBeGreaterThan(

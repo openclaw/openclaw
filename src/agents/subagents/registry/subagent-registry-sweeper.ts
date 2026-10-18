@@ -14,9 +14,9 @@ import {
   reconcileRetiredSubagentCancellation,
 } from "../completion/subagent-completion-admission.store.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
-import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { retryDeferredSubagentCompletionSource } from "./subagent-registry-gateway-owner.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleController,
@@ -48,17 +48,16 @@ import {
   reconcileProvisionalSubagentKill,
 } from "./subagent-registry-sweep-kill.js";
 import { orderSubagentSweepEntries } from "./subagent-registry-sweep-order.js";
+import {
+  settleStaleActiveSubagentRun,
+  settleUnreachableYieldedSubagentRun,
+} from "./subagent-registry-sweep-settle.js";
 import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
-import {
-  loadSubagentSessionEntry,
-  resolveCompletionFromSessionEntry,
-  resolveSubagentRunOrphanReason,
-} from "./subagent-session-reconciliation.js";
 export { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 
 const SESSION_RUN_TTL_MS = 5 * 60_000;
@@ -248,6 +247,10 @@ export function createSubagentRegistrySweeper(params: {
         );
       }
       for (const [runId, snapshot] of runEntries) {
+        const deferredSource = retryDeferredSubagentCompletionSource(snapshot);
+        if (deferredSource) {
+          await deferredSource;
+        }
         readScope.assertCurrent();
         const selected = runs.get(runId);
         if (!selected || !isSameSubagentRunOwner(selected, snapshot)) {
@@ -284,6 +287,17 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         entry = reconciled;
+        // A yielded run no continuation can reach settles instead of parking forever.
+        if (
+          await settleUnreachableYieldedSubagentRun({
+            runId,
+            entry,
+            readScope,
+            complete: params.completeSubagentRunWithRecovery,
+          })
+        ) {
+          continue;
+        }
         // Yield freezes the parent's wake before its children finish. Keep
         // terminal delivery priority while unfinished children reach recovery.
         if (
@@ -335,65 +349,13 @@ export function createSubagentRegistrySweeper(params: {
           const notStale = entry.execution.status === "queued" || getAgentRunContext(runId);
           const activeAgeMs = now - (entry.execution.startedAt ?? entry.createdAt);
           if (!notStale && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
-            const assertActiveReadCurrent = () => {
-              readScope.assertRunCurrent(entry);
-              if (
-                typeof entry.execution.endedAt === "number" ||
-                entry.execution.status === "queued" ||
-                entry.killIntent ||
-                entry.killReconciliation ||
-                getAgentRunContext(runId)
-              ) {
-                throw readScope.retiredRead;
-              }
-            };
-            let observation;
-            try {
-              assertActiveReadCurrent();
-              const classification = resolveSubagentRunOrphanReason({ entry });
-              observation =
-                typeof classification === "object" && classification !== null
-                  ? await classification.read(assertActiveReadCurrent)
-                  : {
-                      orphanReason: classification,
-                      sessionEntry: await loadSubagentSessionEntry({
-                        childSessionKey: entry.childSessionKey,
-                        childAgentId: entry.childAgentId,
-                        assertCurrent: assertActiveReadCurrent,
-                      }),
-                    };
-              assertActiveReadCurrent();
-            } catch (error) {
-              if (error === readScope.retiredRead) {
-                continue;
-              }
-              throw error;
-            }
-            const { orphanReason, sessionEntry } = observation;
-            const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
-              notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
+            await settleStaleActiveSubagentRun({
+              runId,
+              entry,
+              now,
+              readScope,
+              complete: params.completeSubagentRunWithRecovery,
             });
-            await params.completeSubagentRunWithRecovery(
-              {
-                runId,
-                expectedEntry: entry,
-                recoveryCurrent: readScope.completionCurrent,
-                ...(completion ?? {
-                  endedAt: now,
-                  outcome: {
-                    status: "error" as const,
-                    error: orphanReason
-                      ? `subagent run orphaned: ${orphanReason}`
-                      : "subagent run lost active execution context",
-                  },
-                  reason: SUBAGENT_ENDED_REASON_ERROR,
-                }),
-                sendFarewell: true,
-                accountId: entry.requesterOrigin?.accountId,
-                triggerCleanup: true,
-              },
-              completion ? "sweeper-session-completion" : "sweeper-lost-context",
-            );
             continue;
           }
           // Retention starts after completion; a live run must never fall

@@ -196,7 +196,7 @@ it("Doctor recovers list roster ownership and the legacy default after runtime r
   });
 });
 
-it("refuses retired cron files before repairing their custom locator or recovering config", async () => {
+it("keeps a custom cron locator until state repair can preserve its retired data", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
     const stateDir = path.join(home, ".openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -210,9 +210,7 @@ it("refuses retired cron files before repairing their custom locator or recoveri
     await fs.writeFile(`${configPath}.bak`, backup);
     await fs.writeFile(storePath, retired);
 
-    await expect(runDoctorConfigPreflight(repairOptions)).rejects.toThrow(
-      /Upgrade through OpenClaw 2026\.9\.7/,
-    );
+    await expect(runDoctorConfigPreflight(repairOptions)).rejects.toThrow(/openclaw doctor --fix/);
 
     expect(await fs.readFile(configPath, "utf8")).toBe(original);
     expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);

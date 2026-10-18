@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as globals from "../globals.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 const getCurrentPluginConversationBinding = vi.hoisted(() => vi.fn(async () => null));
 vi.mock("./conversation-binding.js", () => ({
@@ -93,6 +94,34 @@ afterEach(() => {
 });
 
 describe("plugin command runtime", () => {
+  it("reports handler failures without logging private command content", async () => {
+    const registry = createEmptyPluginRegistry();
+    const failure = new Error("private-plugin-command-payload");
+    failure.stack = "Error: private-plugin-command-stack";
+    registerCommand(registry, {
+      pluginId: "demo",
+      name: "demo",
+      handler: async () => {
+        throw failure;
+      },
+    });
+    setActivePluginRegistry(registry);
+    const dispatch = requirePluginDispatch(
+      createPluginCommandRuntime().listNativeCandidates("telegram")[0]!,
+    );
+    const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+    try {
+      await expect(dispatch.execute(executionContext)).resolves.toEqual({
+        text: "⚠️ Command failed. Please try again later.",
+      });
+      expect(log).toHaveBeenCalledWith("Plugin command /demo execution failed (plugin=demo)");
+      expect(JSON.stringify(log.mock.calls)).not.toMatch(/private-plugin-command-(payload|stack)/);
+      expect(getPluginCommandExecutionCount(registry)).toBe(0);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("keeps failed command diagnostics scoped, authorized, redacted, and bounded", async () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push({

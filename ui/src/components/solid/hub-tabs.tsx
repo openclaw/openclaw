@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, onSettled, untrack } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { reclaimHubTabFocus, rememberHubTabFocus } from "../hub-tabs-focus.ts";
 import { Tabs } from "./tabs.tsx";
 import "../../styles/hub-tabs.css";
@@ -34,7 +34,7 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       panelId: props.panelId,
       disabled: tab.disabled,
       testId: tab.testId,
-      className: `hub-tab ${props.carapace ? "oc-segmented-item" : ""}`,
+      className: ["hub-tab", { "oc-segmented-item": props.carapace }],
       label: (
         <>
           {tab.label}
@@ -48,12 +48,11 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
   );
   let tablist: HTMLDivElement | undefined;
   onSettled(() => {
-    const initial = untrack(() => ({ id: props.id, active: props.active }));
     const selected = [...(tablist?.querySelectorAll<HTMLElement>("[role=tab]") ?? [])].find(
-      (tab) => tab.dataset.tabValue === initial.active,
+      (tab) => tab.dataset.tabValue === props.active,
     );
-    if (initial.active !== null) {
-      reclaimHubTabFocus(initial.id, initial.active, selected);
+    if (props.active !== null) {
+      reclaimHubTabFocus(props.id, props.active, selected);
     }
   });
   return (

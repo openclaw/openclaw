@@ -55,7 +55,7 @@ export function createLineBot(opts: LineBotOptions) {
   // the attachment to an unavailable notice without naming the setting.
   const configuredMediaMaxMb = account.config.mediaMaxMb;
   const effectiveMediaMaxMb =
-    typeof configuredMediaMaxMb === "number" && configuredMediaMaxMb > 0
+    configuredMediaMaxMb !== undefined && configuredMediaMaxMb > 0
       ? configuredMediaMaxMb
       : DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = effectiveMediaMaxMb * 1024 * 1024;
@@ -66,7 +66,7 @@ export function createLineBot(opts: LineBotOptions) {
     runtime,
     deliver: async (events, _destination, control) => {
       const cfg = resolveTurnConfig();
-      await handleLineWebhookEvents([...events], {
+      await handleLineWebhookEvents(events, {
         cfg,
         account,
         runtime,

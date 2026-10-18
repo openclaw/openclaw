@@ -12,17 +12,19 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../../agents/admitted-run-context.js";
 import {
+  prepareAgentRunTerminalReply,
+  sanitizeAgentRunTerminalReply,
+} from "../../agents/agent-run-terminal-reply.js";
+import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
 } from "../../agents/agent-runtime-id.js";
 import { isHeartbeatLifecycleRunKind } from "../../agents/bootstrap-mode.js";
-import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { bindActiveOperatorTurnAuthority } from "../../agents/cron-creator-authority-context.js";
 import {
   buildUsageAgentMetaFields,
   resolveFinalAssistantRawText,
-  resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "../../agents/embedded-agent-runner/run/helpers.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
@@ -30,6 +32,7 @@ import {
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
 } from "../../agents/embedded-agent-runner/usage-accumulator.js";
+import { extractAssistantVisibleText } from "../../agents/embedded-agent-utils.js";
 import { recordModelFallbackStop } from "../../agents/failover-error.js";
 import {
   finalizeHarnessContextEngineTurn,
@@ -45,6 +48,7 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-authority.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import {
   runWithoutOwnedSessionTranscriptWrites,
@@ -429,7 +433,16 @@ export async function finalizeWorkerTurnResult(
       },
     });
   }
-  const text = collectTextContentBlocks(terminal.message.content).join("");
+  const rawText = resolveFinalAssistantRawText(terminal.message);
+  const preparedReply = prepareAgentRunTerminalReply({ rawText });
+  const renderedText = extractAssistantVisibleText(terminal.message, (_text, final) =>
+    final ? preparedReply.text : "",
+  );
+  const parsedReply = parseReplyDirectives(renderedText);
+  const { text } = parsedReply;
+  if (preparedReply.terminalReply.disposition === "visible") {
+    preparedReply.terminalReply = sanitizeAgentRunTerminalReply(text);
+  }
   const baseIndex = completed.getBranch().findIndex((entry) => entry.id === params.baseLeafId);
   const workerMessages = completed
     .getBranch()
@@ -443,7 +456,16 @@ export async function finalizeWorkerTurnResult(
   if (workerFailure && finishing?.replayInvalid) {
     recordModelFallbackStop(workerFailure);
   }
-  const reply = workerFailure ? { text } : await params.prepareReplyMedia({ text });
+  const reply = workerFailure
+    ? { text }
+    : await params.prepareReplyMedia({
+        text,
+        ...(parsedReply.mediaUrls?.length ? { mediaUrls: parsedReply.mediaUrls } : {}),
+        ...(parsedReply.audioAsVoice ? { audioAsVoice: true } : {}),
+        ...(parsedReply.replyToId ? { replyToId: parsedReply.replyToId } : {}),
+        ...(parsedReply.replyToCurrent ? { replyToCurrent: true } : {}),
+        ...(parsedReply.replyToTag ? { replyToTag: true } : {}),
+      });
   const aborted = params.signal.aborted;
   const finalizeContext = async () => {
     const finalizationManager = turn.onContextEngineTurnCandidate
@@ -551,8 +573,9 @@ export async function finalizeWorkerTurnResult(
         ...usageMeta,
       },
       stopReason: terminal.message.stopReason,
-      finalAssistantVisibleText: resolveFinalAssistantVisibleText(terminal.message),
-      finalAssistantRawText: resolveFinalAssistantRawText(terminal.message),
+      finalAssistantVisibleText: rawText === undefined ? undefined : text,
+      finalAssistantRawText: rawText,
+      terminalReply: preparedReply.terminalReply,
     },
   };
   assertResultCurrent();

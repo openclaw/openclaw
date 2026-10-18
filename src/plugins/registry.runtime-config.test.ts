@@ -8,6 +8,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -677,6 +681,32 @@ describe("plugin registry runtime config scope", () => {
     });
 
     expect(acquireScope).toMatchObject({ pluginId: "memory-provider" });
+  });
+
+  it("keeps scoped LLM acquisition lazy and rejects retained calls after retirement", async () => {
+    const resolveRuntime = vi
+      .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
+      .mockImplementation(() => {
+        throw new Error("scoped LLM acquisition must not load the broad runtime");
+      });
+    const runtime = createLazyPluginRuntime({ pluginSdkResolution: "src" });
+    const { builder, api } = registered("local-service-owner", {}, runtime);
+    const target = { providerId: "fixture", baseUrl: "https://provider.example.invalid" };
+    setRuntimeConfigSnapshot({
+      models: { providers: { fixture: { baseUrl: target.baseUrl, models: [] } } },
+    });
+    try {
+      markPluginRegistryActive(builder.registry);
+      const { acquireLocalService } = api.runtime.llm;
+      await expect(acquireLocalService(target)).resolves.toBeUndefined();
+      markPluginRegistryRetired(builder.registry);
+      clearRuntimeConfigSnapshot();
+      expect(() => acquireLocalService(target)).toThrow("runtime is no longer active");
+      expect(resolveRuntime).not.toHaveBeenCalled();
+    } finally {
+      markPluginRegistryRetired(builder.registry);
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("runs lazy node helpers with the owning plugin scope", async () => {

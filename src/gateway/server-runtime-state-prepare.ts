@@ -5,6 +5,8 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
+import { readDevicePairingNodeSnapshot } from "../infra/device-pairing-store-readonly.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -124,6 +126,12 @@ export async function prepareGatewayKernelState(params: {
     getPluginRegistry: () => pluginRuntime.registry,
     hostDesktopService,
   });
+  await startupTrace.measure("device-identity", () =>
+    loadOrCreateProcessDeviceIdentityAsync().catch(() => {
+      // Chat fingerprints are optional; admission owns the bounded unavailability warning.
+    }),
+  );
+  await startupTrace.measure("device-pairing", () => readDevicePairingNodeSnapshot());
   const workerEnvironmentRuntime = workerEnvironmentStartup
     ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
         const workerModule = await import("./server-worker-environment-startup.js");

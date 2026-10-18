@@ -36,9 +36,6 @@ CREATE TABLE IF NOT EXISTS skill_usage (
   last_agent_id TEXT
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_skill_usage_key
-  ON skill_usage(skill_key, skill_file);
-
 -- Profile-owned skill library: additive, absent until first publication/import.
 CREATE TABLE IF NOT EXISTS skill_library_entries (
   skill_id TEXT NOT NULL PRIMARY KEY,
@@ -295,7 +292,7 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
   pruned_max_sequence INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (session_key, agent_id)
-) STRICT;
+) STRICT, WITHOUT ROWID;
 
 -- Notifiable watcher identity is the bare session key, matching the process-local
 -- system-event queue it feeds. Provenance distinguishes explicit immediate-wake
@@ -354,7 +351,7 @@ CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
   WHERE expires_at IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_state_leases_owner
-  ON state_leases(owner, updated_at DESC);
+  ON state_leases(owner);
 
 CREATE TABLE IF NOT EXISTS exec_approvals_config (
   config_key TEXT NOT NULL PRIMARY KEY,
@@ -1216,9 +1213,6 @@ CREATE TABLE IF NOT EXISTS acp_replay_events (
   FOREIGN KEY (session_id) REFERENCES acp_replay_sessions(session_id) ON DELETE CASCADE
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_acp_replay_events_session_seq
-  ON acp_replay_events(session_id, seq);
-
 CREATE TABLE IF NOT EXISTS agent_databases (
   agent_id TEXT NOT NULL,
   path TEXT NOT NULL,
@@ -1625,19 +1619,12 @@ CREATE TABLE IF NOT EXISTS task_runs (
   detail_json TEXT
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_task_runs_run_id ON task_runs(run_id);
-CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
-CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_status ON task_runs(runtime, status);
-CREATE INDEX IF NOT EXISTS idx_task_runs_cleanup_after ON task_runs(cleanup_after);
-CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_at);
-CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);
-CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);
-CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);
-CREATE INDEX IF NOT EXISTS idx_task_runs_requester_session_key ON task_runs(requester_session_key);
-CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_source_ended
-  ON task_runs(runtime, source_id, ended_at, created_at, task_id);
-CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_ended
-  ON task_runs(runtime, ended_at, created_at, task_id);
+CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_run
+  ON task_runs(runtime, run_id, source_id, created_at, task_id);
+CREATE INDEX IF NOT EXISTS idx_task_runs_cron_runtime_order
+  ON task_runs(runtime, created_at, task_id) WHERE runtime = 'cron';
+CREATE INDEX IF NOT EXISTS idx_task_runs_cron_source_order
+  ON task_runs(source_id, created_at, task_id) WHERE runtime = 'cron';
 
 CREATE TABLE IF NOT EXISTS subagent_runs (
   run_id TEXT NOT NULL PRIMARY KEY,
@@ -1731,6 +1718,7 @@ CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);
 -- Durable meeting-capture sessions are gateway-global rather than agent-session
 -- transcripts. JSON/JSONL files are doctor import inputs or explicit CLI exports.
 CREATE TABLE IF NOT EXISTS meeting_transcript_sessions (
+  started_at_ms INTEGER,
   session_id TEXT NOT NULL,
   started_at TEXT NOT NULL,
   selector TEXT NOT NULL UNIQUE,
@@ -1758,6 +1746,9 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_started
   ON meeting_transcript_sessions(started_at DESC, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_chronology
+  ON meeting_transcript_sessions(started_at_ms DESC, session_id ASC, started_at ASC);
 
 CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_id
   ON meeting_transcript_sessions(session_id, started_at DESC);
@@ -2145,6 +2136,7 @@ CREATE TABLE IF NOT EXISTS github_repository_publication_requests (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   reported_at_ms INTEGER,
+  draft INTEGER,
   CHECK ((identity_source = 'personal' AND owner_profile_id IS NOT NULL AND connection_generation IS NOT NULL)
     OR (identity_source <> 'personal' AND owner_profile_id IS NULL AND connection_generation IS NULL)),
   CHECK ((checkpoint_ref IS NULL AND checkpoint_digest IS NULL) OR (checkpoint_ref IS NOT NULL AND checkpoint_digest IS NOT NULL)),
@@ -2456,6 +2448,7 @@ CREATE TABLE IF NOT EXISTS github_publication_requests (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   reported_at_ms INTEGER,
+  draft INTEGER,
   UNIQUE (session_id, idempotency_key),
   CHECK (
     (claim_id IS NULL AND run_id IS NULL AND environment_id IS NULL
@@ -2528,6 +2521,7 @@ CREATE TABLE IF NOT EXISTS github_personal_publication_requests (
   created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
   updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
   reported_at_ms INTEGER,
+  draft INTEGER,
   UNIQUE (owner_profile_id, session_id, idempotency_key),
   CHECK ((status = 'publishing' AND gateway_instance_id IS NOT NULL AND execution_id IS NOT NULL) OR status <> 'publishing'),
   CHECK ((last_effect IS NULL AND effect_state IS NULL) OR (last_effect IS NOT NULL AND effect_state IS NOT NULL)),
@@ -2717,6 +2711,8 @@ CREATE TABLE IF NOT EXISTS user_profile_identities (
   subject TEXT NOT NULL,
   profile_id TEXT NOT NULL,
   canonical_login TEXT,
+  -- Host-scoped verified credit evidence; current profile bindings govern attribution.
+  verified_email_json TEXT,
   created_at INTEGER NOT NULL,
   authorization_id TEXT,
   authorization_basis_json TEXT,

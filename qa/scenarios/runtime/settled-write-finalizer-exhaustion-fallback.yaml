@@ -24,7 +24,7 @@ scenario:
     config:
       requiredProviderMode: mock-openai
       promptSnippet: Empty response after write exhaustion QA check
-      settledToolRetryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      settledToolRetryNeedle: "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:"
       expectedFallback: "The tool run finished, but no final summary was produced. I did not repeat any completed actions."
       unexpectedSuccessMarker: WRITE-EXHAUSTED-OK
 

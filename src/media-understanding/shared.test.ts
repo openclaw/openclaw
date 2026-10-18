@@ -32,6 +32,7 @@ vi.mock("../infra/net/proxy-env.js", async () => {
   };
 });
 
+import { postJsonResponse } from "./provider-json-post.js";
 import {
   createProviderOperationDeadline,
   fetchProviderDownloadResponse,
@@ -45,6 +46,51 @@ import {
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "./shared.js";
+
+describe("JSON submission response ownership", () => {
+  it.each([
+    {
+      body: '{"id":"job-1"}',
+      status: 200,
+      objectResponse: true,
+      error: undefined,
+      expected: { id: "job-1" },
+    },
+    {
+      body: '["job-1"]',
+      status: 200,
+      objectResponse: false,
+      error: undefined,
+      expected: ["job-1"],
+    },
+    { body: "[]", status: 200, objectResponse: true, error: "response: malformed JSON response" },
+    { body: "{", status: 200, objectResponse: false, error: "response: malformed JSON response" },
+    { body: '{"error":"bad request"}', status: 400, objectResponse: false, error: "submission" },
+  ])("releases the response for $body ($status, object=$objectResponse)", async (testCase) => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(testCase.body, { status: testCase.status }),
+      release,
+    });
+    const params = {
+      url: "https://provider.example/jobs",
+      headers: new Headers({ "Content-Type": "application/json" }),
+      body: { prompt: "Synthetic submission" },
+      fetchFn: fetch,
+      errorLabel: "submission",
+      responseLabel: "response",
+    };
+    const result = testCase.objectResponse
+      ? postJsonResponse({ ...params, objectResponse: true })
+      : postJsonResponse<unknown>(params);
+    if (testCase.error) {
+      await expect(result).rejects.toThrow(testCase.error);
+    } else {
+      await expect(result).resolves.toEqual(testCase.expected);
+    }
+    expect(release).toHaveBeenCalledExactlyOnceWith();
+  });
+});
 
 beforeEach(() => {
   shouldUseEnvHttpProxyForUrlMock.mockReturnValue(false);

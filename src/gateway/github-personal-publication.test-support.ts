@@ -1,15 +1,14 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, expect, onTestFinished, vi } from "vitest";
-import { stringify as stringifyYaml } from "yaml";
-import { resolveManagedGitHubProfileDir } from "../agents/github-tool-identity.js";
+import {
+  resolveManagedGitHubProfileDir,
+  writeManagedGitHubProfileFiles,
+} from "../agents/github-tool-identity.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { prepareUserGitHubConnection } from "../state/user-github-connections.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
@@ -32,6 +31,8 @@ const mocks = githubPublicationTestMocks();
 export const personalPublicationAccount = { accountId: 101, login: "personal-alice" };
 const account = personalPublicationAccount;
 const profileId = "ghp_22222222222222222222222222222222";
+type PersonalFixture = Awaited<ReturnType<typeof createPersonalPublicationFixture>>;
+type PersonalClient = { client: GatewayClient; context: GatewayRequestContext };
 const profileCatalogs = new Set<Awaited<ReturnType<typeof prepareUserProfileCatalog>>>();
 afterEach(() => {
   for (const catalog of profileCatalogs) {
@@ -48,7 +49,7 @@ export async function preparePersonalPublicationProfileCatalog() {
 }
 
 export async function preparePersonalPublicationFixtureV2(
-  fixture: { client: GatewayClient; context: GatewayRequestContext },
+  fixture: PersonalClient,
   signal?: AbortSignal,
 ) {
   const owner = fixture.client.authenticatedUserProfile!.profileId;
@@ -61,26 +62,16 @@ export async function preparePersonalPublicationFixtureV2(
   };
   const prepared = await preparePersonalGitHubSessionActionV2(
     { ...fixture, signal },
-    {
-      sessionKey: SESSION_KEY,
-    },
+    { sessionKey: SESSION_KEY },
   );
   onTestFinished(prepared.release);
   return prepared.action;
 }
 
-export async function preparePersonalPublicationFixtureAction(
-  fixture: Parameters<typeof preparePersonalPublicationFixtureV2>[0],
-  signal?: AbortSignal,
-): Promise<PersonalGitHubSessionActionV2> {
-  return await preparePersonalPublicationFixtureV2(fixture, signal);
-}
+export const preparePersonalPublicationFixtureAction = preparePersonalPublicationFixtureV2;
 
 export function readPersonalPublicationFixtureStatus(
-  fixture: Pick<
-    Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
-    "coordinator" | "action"
-  >,
+  fixture: Pick<PersonalFixture, "coordinator" | "action">,
   requestId: string,
 ) {
   return fixture.coordinator.personalStatusAsync(
@@ -96,19 +87,30 @@ export function readPersonalPublicationFixtureStatus(
   );
 }
 
+export function personalPublicationRequest(
+  { generation }: { generation: string },
+  idempotencyKey: string,
+) {
+  return {
+    sessionKey: SESSION_KEY,
+    idempotencyKey,
+    selection: { source: "personal" as const, generation, account },
+  };
+}
+
 export async function expectPersonalPublicationReplay(
   {
     generation,
     coordinator,
     action,
-  }: Pick<Awaited<ReturnType<typeof createPersonalPublicationFixture>>, "coordinator"> & {
+  }: Pick<PersonalFixture, "coordinator"> & {
     generation: string;
     action: PersonalGitHubSessionActionV2;
   },
   capture: (requestId: string) => unknown,
 ) {
-  const selection = { source: "personal" as const, generation, account };
-  const request = { sessionKey: SESSION_KEY, idempotencyKey: "personal-replay", selection };
+  const request = personalPublicationRequest({ generation }, "personal-replay");
+  const { selection } = request;
   const publish = (input: Parameters<typeof coordinator.requestPersonalForSessionV2>[0]) =>
     coordinator.requestPersonalForSessionV2(input, action);
   const published = await publish(request);
@@ -161,21 +163,7 @@ export async function createPersonalPublicationFixture() {
     () => {},
   );
   const dir = resolveManagedGitHubProfileDir({ scope: "personal", agentId: "", profileId });
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(
-    path.join(dir, "hosts.yml"),
-    stringifyYaml({
-      "github.com": {
-        user: account.login,
-        oauth_token: personalToken,
-        users: { [account.login]: { oauth_token: personalToken } },
-      },
-    }),
-    { mode: 0o600 },
-  );
-  await fs.writeFile(path.join(dir, "config.yml"), stringifyYaml({ version: "1" }), {
-    mode: 0o600,
-  });
+  await writeManagedGitHubProfileFiles(dir, { login: account.login, token: personalToken });
   const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
     if (
       url !== "https://api.github.com/user" ||
@@ -197,7 +185,7 @@ export async function createPersonalPublicationFixture() {
     return await fallback(argv, options);
   });
   const client: GatewayClient = {
-    connId: "direct-human",
+    connId: `direct-human-${generation}`,
     authenticatedUserProfile: {
       profileId: owner,
       displayName: null,
@@ -238,14 +226,7 @@ export async function createPersonalPublicationFixture() {
 }
 
 export async function callPersonalPublicationRpc(
-  {
-    client,
-    context,
-    coordinator,
-  }: Pick<
-    Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
-    "client" | "context" | "coordinator"
-  >,
+  { client, context, coordinator }: Pick<PersonalFixture, "client" | "context" | "coordinator">,
   method: string,
   params: Record<string, unknown> = { sessionKey: SESSION_KEY },
 ) {
@@ -259,13 +240,7 @@ export async function callPersonalPublicationRpc(
         ...context,
         githubPublicationService: coordinator,
         githubOAuthService: {
-          personal: {
-            ...personal,
-            status: async (statusAction: Parameters<typeof personalGitHubStatus>[0]) => {
-              await prepareUserGitHubConnection(statusAction.owner);
-              return personalGitHubStatus(statusAction);
-            },
-          },
+          personal: { ...personal, status: personalGitHubStatus },
         } as GatewayRequestContext["githubOAuthService"],
       },
       respond,
@@ -277,9 +252,7 @@ export async function callPersonalPublicationRpc(
   }
 }
 
-export async function restartPersonalPublicationFixture(
-  fixture: Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
-) {
+export async function restartPersonalPublicationFixture(fixture: PersonalFixture) {
   const previous = fixture.placements;
   resetGatewayWorkAdmission();
   await closeOpenClawAgentDatabasesAsync();

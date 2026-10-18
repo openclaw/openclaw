@@ -80,6 +80,42 @@ function toolBlock(id: string, name: string) {
   return { type: "toolCall" as const, id, name, arguments: {} };
 }
 describe("commentary preambles", () => {
+  it.each(["anthropic-messages", "openai-responses"] as const)(
+    "coalesces %s commentary and preserves its complete boundary text",
+    async (api) => {
+      const onAgentEvent = vi.fn();
+      const { emit, subscription } = commentaryHarness({ onAgentEvent });
+      const message = (text: string): TestAssistant => ({
+        role: "assistant",
+        api,
+        phase: "commentary",
+        content: [textBlock(text, "commentary-paced", "commentary")],
+      });
+      const progress = () =>
+        onAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.stream === "item")
+          .map((event) => event.data.progressText);
+      emit({ type: "message_start", message: message("") });
+      let text = "";
+      for (const delta of ["Checking", " the", " café 🦞."]) {
+        text += delta;
+        const partial = message(text);
+        update(emit, partial, { type: "text_delta", contentIndex: 0, delta, partial });
+      }
+      await subscription.waitForPendingEvents();
+      expect(progress()).toEqual(["Checking"]);
+      update(emit, message(text), {
+        type: "text_end",
+        contentIndex: 0,
+        content: text,
+        partial: message(text),
+      });
+      await subscription.waitForPendingEvents();
+      expect(progress().at(-1)).toBe("Checking the café 🦞.");
+    },
+  );
+
   it.each(["anthropic-messages", "openai-completions"] as const)(
     "preserves unphased %s narration inline across a tool call",
     async (api) => {

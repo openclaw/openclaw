@@ -25,6 +25,7 @@ type PlacementSessionRetirementDeps = {
   ) => Promise<unknown>;
   createSessionEvidenceResolver: (
     placements: readonly WorkerSessionPlacementRecord[],
+    signal?: AbortSignal,
   ) => Promise<PlacementSessionEvidenceResolver>;
   reportChanges: (operation: () => Promise<void>) => Promise<void>;
   warn: (message: string) => void;
@@ -117,13 +118,16 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
   const reconcilePlacement = async (
     placement: WorkerSessionPlacementRecord,
     resolveSessionEvidence: PlacementSessionEvidenceResolver,
+    signal?: AbortSignal,
   ): Promise<boolean> => {
     const evidence = await resolveSessionEvidence(placement);
+    signal?.throwIfAborted();
     if (evidence !== "absent") {
       return evidence === "current";
     }
 
     let current = await deps.placements.getAsync(placement.sessionId);
+    signal?.throwIfAborted();
     if (!current) {
       return true;
     }
@@ -135,6 +139,7 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
       return false;
     }
 
+    signal?.throwIfAborted();
     const environmentId = current.environmentId;
     if (!environmentId) {
       return false;
@@ -164,7 +169,10 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     }
   };
 
-  const reconcile = async (): Promise<void> => {
+  const reconcile = async (signal?: AbortSignal): Promise<void> => {
+    if (signal?.aborted) {
+      return;
+    }
     const readAll = fullScanPending;
     const sessionIds = [...pending];
     // Drain before yielding so receipts arriving during this pass remain queued.
@@ -181,13 +189,18 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
         return;
       }
       await deps.reportChanges(async () => {
-        const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements);
+        signal?.throwIfAborted();
+        const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements, signal);
         for (const placement of placements) {
+          signal?.throwIfAborted();
           try {
-            if (!(await reconcilePlacement(placement, resolveSessionEvidence))) {
+            if (!(await reconcilePlacement(placement, resolveSessionEvidence, signal))) {
               markPending(placement.sessionId);
             }
           } catch (error) {
+            if (signal?.aborted && error === signal.reason) {
+              throw error;
+            }
             markPending(placement.sessionId);
             deps.warn(
               `Worker placement session evidence check failed for ${placement.sessionId}: ${String(error)}`,
@@ -198,6 +211,9 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     } catch (error) {
       fullScanPending ||= readAll;
       sessionIds.forEach(markPending);
+      if (signal?.aborted && error === signal.reason) {
+        return;
+      }
       throw error;
     }
   };

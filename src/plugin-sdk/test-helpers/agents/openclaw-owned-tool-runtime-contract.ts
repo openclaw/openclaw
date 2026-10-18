@@ -147,19 +147,6 @@ export function textToolResult(
   };
 }
 
-export function mediaToolResult(
-  text: string,
-  mediaUrl: string,
-  audioAsVoice = false,
-): AgentToolResult<unknown> {
-  return textToolResult(text, {
-    media: {
-      mediaUrl,
-      ...(audioAsVoice ? { audioAsVoice } : {}),
-    },
-  });
-}
-
 export function createTerminalPresentationContractTool(params: {
   name: string;
   result: AgentToolResult<unknown>;

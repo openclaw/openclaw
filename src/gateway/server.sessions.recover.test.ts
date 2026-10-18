@@ -36,7 +36,7 @@ import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetInWorker,
 } from "./session-utils.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { agentCommandMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   seedSessionTranscript,
@@ -994,10 +994,14 @@ test("sessions.recover rejects continuation launch after runtime authority close
     payload: {
       continuation: {
         status: "rejected",
-        error: { message: "agent runtime authority is no longer active" },
+        error: {
+          code: "INVALID_REQUEST",
+          message: "agent runtime authority is no longer active",
+        },
       },
     },
   });
+  expect(agentCommandMock).not.toHaveBeenCalled();
   expect(
     loadSessionEntry({
       agentId: "main",

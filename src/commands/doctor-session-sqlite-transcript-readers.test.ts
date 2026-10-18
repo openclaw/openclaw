@@ -1,5 +1,5 @@
-import { zstdCompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
+import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 
@@ -10,23 +10,34 @@ describe("read-only SQLite transcript readers", () => {
       database.exec(`
         CREATE TABLE transcript_events (
           session_id TEXT, seq INTEGER, created_at INTEGER, event_json TEXT,
-          event_zstd BLOB, event_utf8_bytes INTEGER
+          event_zstd BLOB, event_utf8_bytes INTEGER, navigation_json TEXT
         );
         CREATE TABLE session_windows (session_id TEXT, session_key TEXT);
         INSERT INTO session_windows VALUES ('compressed', 'agent:main:compressed');
       `);
       const originals = [
-        ' { "type": "message", "id": "first", "message": {"role":"user","content":"🦞"} } ',
-        '{"type":"message","id":"second","message":{"role":"assistant","content":"kept"}}',
+        ` { "type": "message", "id": "first", "message": {"role":"user","content":"${"🦞".repeat(500)}"} } `,
+        `{"type":"message","id":"second","message":{"role":"assistant","content":"${"kept".repeat(500)}"}}`,
+        `{"type":"message","id":"tool","message":{"role":"toolResult","content":"${"tool output".repeat(200)}"}}`,
       ];
-      const insert = database.prepare("INSERT INTO transcript_events VALUES (?, ?, ?, NULL, ?, ?)");
+      const insert = database.prepare(
+        "INSERT INTO transcript_events VALUES (?, ?, ?, NULL, ?, ?, ?)",
+      );
       for (const [seq, eventJson] of originals.entries()) {
-        const bytes = Buffer.from(eventJson, "utf8");
-        insert.run("compressed", seq, 20 + seq, zstdCompressSync(bytes), bytes.byteLength);
+        const payload = prepareTranscriptPayload(database, eventJson, undefined, "UTF-8");
+        expect(payload.event_zstd).toBeInstanceOf(Uint8Array);
+        insert.run(
+          "compressed",
+          seq,
+          20 + seq,
+          payload.event_zstd,
+          payload.event_utf8_bytes,
+          payload.navigation_json,
+        );
       }
       const reader = new ReadOnlySqliteTranscriptReader(database);
       expect(
-        reader.repairSnapshot(
+        reader.labelRepairSnapshot(
           "compressed",
           () => true,
           () => true,
@@ -39,6 +50,18 @@ describe("read-only SQLite transcript readers", () => {
         ok: true,
         sessionKey: "agent:main:compressed",
         rows: originals.map((eventJson, seq) => ({ eventJson, seq, createdAt: 20 + seq })),
+      });
+      database
+        .prepare("UPDATE transcript_events SET event_zstd = ? WHERE session_id = ? AND seq = 2")
+        .run(new Uint8Array([0]), "compressed");
+      expect(
+        reader.labelRepairSnapshot(
+          "compressed",
+          () => true,
+          () => true,
+        ),
+      ).toMatchObject({
+        ok: false,
       });
     } finally {
       database.close();
@@ -108,7 +131,7 @@ describe("read-only SQLite transcript readers", () => {
       const read = (sessionId: string) =>
         header
           ? reader.headerlessSnapshot(sessionId, () => true)
-          : reader.repairSnapshot(
+          : reader.labelRepairSnapshot(
               sessionId,
               () => true,
               () => true,

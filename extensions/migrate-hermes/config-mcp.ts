@@ -1,3 +1,4 @@
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
@@ -8,7 +9,7 @@ import {
   normalizeOptionalString,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { mcpValueHasEnvReferences, resolveMcpEnvReferences } from "./config-env.js";
+import { resolveMcpEnvReferences } from "./config-env.js";
 import { sanitizeName } from "./helpers.js";
 
 const MCP_RESOURCE_UTILITY_TOOLS = ["resources_list", "resources_read"] as const;
@@ -22,7 +23,7 @@ function readToolFilterList(value: unknown): string[] | undefined {
   if (typeof value === "string") {
     return value.trim() ? [value.trim()] : [];
   }
-  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
+  if (!isStringArray(value)) {
     return undefined;
   }
   return [...new Set(value.map((entry) => entry.trim()).filter(Boolean))];
@@ -90,13 +91,12 @@ export function planHermesMcpServer(params: {
     if (sourceValue === undefined) {
       continue;
     }
-    const requiresConsent =
-      key === "env" || key === "headers" || mcpValueHasEnvReferences(sourceValue);
+    const resolved = resolveMcpEnvReferences(sourceValue, env);
+    const requiresConsent = key === "env" || key === "headers" || resolved.referenced;
     sensitive ||= requiresConsent;
     if (requiresConsent && !includeSecrets) {
       continue;
     }
-    const resolved = resolveMcpEnvReferences(sourceValue, env);
     unresolved ||= resolved.unresolved;
     if (!resolved.unresolved) {
       resolvedFields[key] = resolved.value;

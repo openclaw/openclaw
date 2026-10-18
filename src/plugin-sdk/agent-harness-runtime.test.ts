@@ -22,6 +22,7 @@ import {
   type AgentHarnessV2,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptParamsV2,
+  type HarnessContextEngine,
 } from "./agent-harness-runtime.js";
 
 describe("classifyAgentHarnessTerminalOutcome", () => {
@@ -36,7 +37,7 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
     });
   }
 
-  it("does not classify deliberate silent replies such as NO_REPLY", () => {
+  it("accepts prepared literal NO_REPLY text as visible output", () => {
     expect(classify({ assistantTexts: ["NO_REPLY"] })).toBeUndefined();
   });
 
@@ -61,6 +62,12 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
 });
 
 describe("agent harness runtime SDK facade", () => {
+  it("exposes optional compaction progress without requiring it from legacy engines", () => {
+    type CompactParams = Parameters<HarnessContextEngine["compact"]>[0];
+    expectTypeOf<CompactParams["onProgress"]>().toEqualTypeOf<(() => void) | undefined>();
+    expectTypeOf<Omit<CompactParams, "onProgress">>().toMatchTypeOf<CompactParams>();
+  });
+
   it("exposes structured input through one frozen named runtime surface", () => {
     expect(Object.isFrozen(agentHarnessStructuredInput)).toBe(true);
     expect(Object.keys(agentHarnessStructuredInput).toSorted()).toEqual([
@@ -87,6 +94,18 @@ describe("agent harness runtime SDK facade", () => {
 
     expectTypeOf(legacyHarness).toMatchTypeOf<AgentHarness>();
     expectTypeOf<AgentHarnessV2>().toMatchTypeOf<AgentHarness>();
+    expectTypeOf<
+      Omit<AgentHarnessAttemptParamsV2, "onSettledTurn">
+    >().toMatchTypeOf<AgentHarnessAttemptParamsV2>();
+    expectTypeOf<Omit<AgentHarnessAttemptParams, "hostCapabilities">>().toMatchTypeOf<
+      Parameters<NonNullable<AgentHarness["finalizeSettledTurn"]>>[0]["attempt"]
+    >();
+    expectTypeOf<Omit<AgentHarnessAttemptParamsV2, "hostCapabilities">>().toMatchTypeOf<
+      Parameters<NonNullable<AgentHarnessV2["finalizeSettledTurn"]>>[0]["attempt"]
+    >();
+    expectTypeOf<
+      Parameters<NonNullable<AgentHarnessAttemptParamsV2["onSettledTurn"]>>[0]
+    >().not.toHaveProperty("contextEngineTerminalAnchor");
     expectTypeOf<
       Omit<AgentHarnessSideQuestionParams, "hostCapabilities">
     >().toMatchTypeOf<AgentHarnessSideQuestionParams>();

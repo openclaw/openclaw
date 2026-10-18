@@ -68,6 +68,11 @@ const compactEvents = (index: number) => [
   },
   terminal,
 ];
+const outputEvents = (item: Record<string, unknown>) => [
+  { type: "response.output_item.added", output_index: 0, item },
+  { type: "response.output_item.done", output_index: 0, item },
+  terminal,
+];
 const toolEvents = () => {
   const item = {
     type: "function_call",
@@ -77,11 +82,7 @@ const toolEvents = () => {
     arguments: "{}",
     status: "completed",
   };
-  return [
-    { type: "response.output_item.added", output_index: 0, item },
-    { type: "response.output_item.done", output_index: 0, item },
-    terminal,
-  ];
+  return outputEvents(item);
 };
 const textEvents = () => {
   const item = {
@@ -91,11 +92,7 @@ const textEvents = () => {
     status: "completed",
     content: [{ type: "output_text", text: "done", annotations: [] }],
   };
-  return [
-    { type: "response.output_item.added", output_index: 0, item },
-    { type: "response.output_item.done", output_index: 0, item },
-    terminal,
-  ];
+  return outputEvents(item);
 };
 type Body = {
   input: Array<Record<string, unknown>>;
@@ -135,6 +132,34 @@ afterEach(() => {
   configureAiTransportHost(initialHost);
   vi.unstubAllGlobals();
 });
+
+const highUsageCompletion = {
+  ...terminal,
+  response: {
+    ...terminal.response,
+    usage: { ...terminal.response.usage, input_tokens: 465_668, total_tokens: 465_674 },
+  },
+};
+function requestAt(index: number) {
+  const request = requests[index];
+  if (!request) {
+    throw new Error(`Missing request ${index}`);
+  }
+  return request;
+}
+const persistedMessages = (manager: SessionManager) => manager.buildSessionContext().messages;
+const hasReplay = (manager: SessionManager) =>
+  persistedMessages(manager).some(
+    (message) => message.role === "assistant" && message.providerReplay,
+  );
+async function largeWindowFixture() {
+  const manager = SessionManager.inMemory();
+  manager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
+  manager.appendMessage(
+    createAssistant(model, [{ type: "text", text: "settled history" }], "stop", 465_674),
+  );
+  return fixture(manager, false, { contextTokenBudget: 500_000, contextWindow: 500_000 });
+}
 
 async function fixture(
   sessionManager = SessionManager.inMemory(),
@@ -311,10 +336,10 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
           ).length,
       ),
     ).toEqual([0, 0, 1, 1, 1, 2]);
-    const [firstCompact, firstNormal, secondCompact, secondNormal] = requests;
-    if (!firstCompact || !firstNormal || !secondCompact || !secondNormal) {
-      throw new Error("Expected compaction and continuation at both boundaries");
-    }
+    const firstCompact = requestAt(0),
+      firstNormal = requestAt(1);
+    const secondCompact = requestAt(2),
+      secondNormal = requestAt(3);
     expect(firstCompact.hook_marker).toBe("normal-hook");
     expect(firstCompact.tools).toEqual(firstNormal.tools);
     expect(firstCompact.instructions).toBe(firstNormal.instructions);
@@ -347,10 +372,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     requests = [];
     await reopened.submit("after restart");
     expect(requests).toHaveLength(1);
-    const resumed = requests[0];
-    if (!resumed) {
-      throw new Error("Missing resumed request");
-    }
+    const resumed = requestAt(0);
     expect(
       resumed.input.some(
         (item) => item.type === "compaction" && item.encrypted_content === "opaque2",
@@ -365,15 +387,8 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
   });
 
   it("compacts a settled 90% window before a large tool result reaches the next boundary", async () => {
-    const manager = SessionManager.inMemory();
-    manager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
-    manager.appendMessage(
-      createAssistant(model, [{ type: "text", text: "settled history" }], "stop", 465_674),
-    );
-    const f = await fixture(manager, false, {
-      contextTokenBudget: 500_000,
-      contextWindow: 500_000,
-    });
+    const f = await largeWindowFixture();
+    const manager = f.sessionManager;
     f.execute.mockResolvedValue({
       content: [{ type: "text", text: "large tool output. ".repeat(16_000) }],
       details: {},
@@ -390,13 +405,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       }
       const events = toolEvents();
       if (!compacted) {
-        events[events.length - 1] = {
-          ...terminal,
-          response: {
-            ...terminal.response,
-            usage: { ...terminal.response.usage, input_tokens: 465_668, total_tokens: 465_674 },
-          },
-        };
+        events[events.length - 1] = highUsageCompletion;
       }
       return events;
     };
@@ -408,10 +417,9 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       "compaction",
       "function_call_output",
     ]);
-    const [compaction, firstNormal, afterTool] = requests;
-    if (!compaction || !firstNormal || !afterTool) {
-      throw new Error("Expected early compaction followed by one settled tool round");
-    }
+    const compaction = requestAt(0),
+      firstNormal = requestAt(1),
+      afterTool = requestAt(2);
     expect(JSON.stringify(compaction)).toContain("current request");
     expect(realUserText(firstNormal)).toEqual(["remember copper", "current request"]);
     expect(afterTool.input.filter((item) => item.type === "function_call_output")).toHaveLength(1);
@@ -424,10 +432,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     requests = [];
     await reopened.submit("after restart");
     expect(requests).toHaveLength(1);
-    const resumed = requests[0];
-    if (!resumed) {
-      throw new Error("Missing resumed request");
-    }
+    const resumed = requestAt(0);
     expect(resumed.input.filter((item) => item.type === "function_call_output")).toHaveLength(1);
     expect(resumed.input.filter((item) => item.type === "compaction")).toHaveLength(1);
     expect(reopened.execute).not.toHaveBeenCalled();
@@ -489,23 +494,9 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
   });
 
   it("continues normal requests after a soft V2 failure without retrying or client compaction", async () => {
-    const manager = SessionManager.inMemory();
-    manager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
-    manager.appendMessage(
-      createAssistant(model, [{ type: "text", text: "settled history" }], "stop", 465_674),
-    );
-    const f = await fixture(manager, false, {
-      contextTokenBudget: 500_000,
-      contextWindow: 500_000,
-    });
+    const f = await largeWindowFixture();
+    const manager = f.sessionManager;
     const warn = vi.spyOn(log, "warn");
-    const highUsageCompletion = {
-      ...terminal,
-      response: {
-        ...terminal.response,
-        usage: { ...terminal.response.usage, input_tokens: 465_668, total_tokens: 465_674 },
-      },
-    };
     respond = (body) =>
       body.input.at(-1)?.type === "compaction_trigger"
         ? [terminal]
@@ -521,11 +512,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     ]);
     expect(f.onFallback).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
-    expect(
-      manager
-        .buildSessionContext()
-        .messages.some((message) => message.role === "assistant" && message.providerReplay),
-    ).toBe(false);
+    expect(hasReplay(manager)).toBe(false);
   });
 
   it("prices a matching measured prefix once before deciding to compact", async () => {
@@ -691,11 +678,9 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     const content = "PRIVATE_VALUE API_TOKEN = computeToken()";
     const messages: Context["messages"] = [
       { role: "user", content, timestamp: 1 },
-      ...f.sessionManager
-        .buildSessionContext()
-        .messages.filter(
-          (message) => message.role === "assistant" || message.role === "toolResult",
-        ),
+      ...persistedMessages(f.sessionManager).filter(
+        (message) => message.role === "assistant" || message.role === "toolResult",
+      ),
     ];
     await expect(
       boundary(f.session.agent.streamFn, model, { messages }, {}),
@@ -731,11 +716,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       ),
     ).rejects.toBe(failure);
     expect(f.onFallback).not.toHaveBeenCalled();
-    expect(
-      f.sessionManager
-        .buildSessionContext()
-        .messages.some((message) => message.role === "assistant" && message.providerReplay),
-    ).toBe(true);
+    expect(hasReplay(f.sessionManager)).toBe(true);
     const controller = new AbortController();
     controller.abort(new Error("cancelled"));
     await expect(
@@ -756,17 +737,11 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     };
     await f.submit();
     expect(f.onFallback).toHaveBeenCalledOnce();
+    expect(hasReplay(f.sessionManager)).toBe(false);
     expect(
-      f.sessionManager
-        .buildSessionContext()
-        .messages.some((message) => message.role === "assistant" && message.providerReplay),
-    ).toBe(false);
-    expect(
-      f.sessionManager
-        .buildSessionContext()
-        .messages.some(
-          (message) => message.role === "user" && message.content === "newly admitted input",
-        ),
+      persistedMessages(f.sessionManager).some(
+        (message) => message.role === "user" && message.content === "newly admitted input",
+      ),
     ).toBe(true);
   });
 

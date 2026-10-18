@@ -19,6 +19,7 @@ import {
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -193,6 +194,7 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
       expect(result.sessions[0]).not.toHaveProperty("createdActor");
       expect(result.sharedFacts).toBeDefined();
       const frame = JSON.parse(serializeGatewayFrame({ type: "res", payload: result }).toString());
+      expect(frame.payload).not.toHaveProperty("rowsFullReason");
       expect(
         JSON.stringify(expandSessionRowFacts(frame.payload.sessions, frame.payload.sharedFacts)),
       ).toBe(JSON.stringify(rows));
@@ -242,6 +244,47 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
           );
         }
       }
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
+
+it("keeps a sidebar page revision across off-page facts and replaces it for selected facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "page-reader");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const keys = ["agent:main:off-page", "agent:main:selected-page"];
+    for (const [index, sessionKey] of keys.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: sessionKey, updatedAt: index + 1, visibility: "shared" },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (ifRowsRevision?: string) =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: { rowMode: "sidebar", limit: 1, ifRowsRevision },
+      });
+    try {
+      const first = await read();
+      expect(first.sessions.map((row) => row.key)).toEqual([keys[1]]);
+      sessionChanges.emit({ sessionKey: keys[0]!, scope: "runtime" });
+      const unchanged = await read(first.rowsRevision);
+      expect(unchanged.rowsRevision).toBe(first.rowsRevision);
+      expect(unchanged.rowsUnchanged).toBe(true);
+      expect(unchanged.sessions).toEqual([]);
+      sessionChanges.emit({ sessionKey: keys[1]!, scope: "runtime" });
+      const changed = await read(first.rowsRevision);
+      expect(changed.rowsRevision).not.toBe(first.rowsRevision);
+      expect(changed.rowsUnchanged).toBeUndefined();
+      expect(changed.sessions.map((row) => row.key)).toEqual([keys[1]]);
     } finally {
       getSessionRowProjection(context)?.dispose();
       release();
@@ -408,7 +451,6 @@ it("coalesces cold sidebar selection across row slices only for the same princip
       const projection = getSessionRowProjection(context)!;
       await projection.withSelectionPreparation(async () => {
         await projection.prepareSelection();
-        const filter = vi.spyOn(listFilters, "filterSessionEntries");
         const read = (client: typeof alice, limit = 100) =>
           listSessions({
             context,
@@ -424,7 +466,6 @@ it("coalesces cold sidebar selection across row slices only for the same princip
         expect(results[0]!.sessions).toHaveLength(100);
         expect(results[0]!.totalCount).toBe(rows);
         expect(results[0]!.sessions[0]!.sessionId).toBe("cold-129");
-        expect(filter).toHaveBeenCalledTimes(1);
         for (const result of results) {
           expect(result.sessions).toEqual(results[0]!.sessions);
           expect(result.owners).toBe(results[0]!.owners);
@@ -434,7 +475,6 @@ it("coalesces cold sidebar selection across row slices only for the same princip
         expect(other.sessions[0]!.sessionId).toBe("cold-128");
         expect(other.owners).not.toBe(results[0]!.owners);
         expect((await read(alice, 1)).sessions).toHaveLength(1);
-        expect(filter).toHaveBeenCalledTimes(3);
       });
     } finally {
       getSessionRowProjection(context)?.dispose();

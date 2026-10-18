@@ -8,7 +8,6 @@ export type DiscordThreadChannel = {
   id: string;
   name?: string | null;
   parentId?: string | null;
-  parent?: { id?: string; name?: string };
   ownerId?: string | null;
 };
 

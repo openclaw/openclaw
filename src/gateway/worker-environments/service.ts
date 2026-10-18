@@ -6,6 +6,7 @@ import type { WorkerExecutionMode, WorkerProvider } from "../../plugins/types.js
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { measureGatewayCloseStep } from "../restart-trace.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 import { createWorkerEnvironmentBuildPreparation } from "./build-preparation.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
@@ -250,7 +251,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const schedulePreparedRefill = (environmentId?: string) =>
     void trackOperation(preparedPool.maintain(environmentId));
 
-  const turnRpc = createWorkerTurnRpc({
+  const { clear: clearTurnRpc, ...turnRpc } = createWorkerTurnRpc({
     ...options,
     store,
     prepareInstallation,
@@ -448,27 +449,33 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const stop = async () => {
     const failures: unknown[] = [];
+    const step = <T>(name: string, run: () => Promise<T> | T) =>
+      measureGatewayCloseStep(`shutdown.worker-environments.${name}`, run);
     beginClose();
-    await scope.stop();
+    await step("scope", () => scope.stop());
     // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
     // inference or tunnel teardown can invalidate its closure-bound placement authority.
-    await closeReconcileEnvironmentGuard();
-    await options
-      .closeComputers?.()
-      .catch(() => warn("Session computer cleanup failed during Gateway shutdown"));
+    await step("reconcile-guard", closeReconcileEnvironmentGuard);
+    await step("computers", () =>
+      options
+        .closeComputers?.()
+        .catch(() => warn("Session computer cleanup failed during Gateway shutdown")),
+    );
     try {
-      await inference.stop();
+      await step("inference", () => inference.stop());
     } catch (error) {
       failures.push(error);
     }
     credentialBroker.clear();
     options.liveEvents?.clear();
-    await options.stopNodeWorkerBundleTransfers?.();
+    await step("bundle-transfers", () => options.stopNodeWorkerBundleTransfers?.());
     try {
-      await joinWorkerTunnelStops([
-        environmentAccess.stopAllTunnels(),
-        options.nodePortalCarrier?.stopAll(),
-      ]);
+      await step("tunnels", () =>
+        joinWorkerTunnelStops([
+          environmentAccess.stopAllTunnels(),
+          options.nodePortalCarrier?.stopAll(),
+        ]),
+      );
     } catch (error) {
       if (error instanceof WorkerTunnelOwnerDisconnectedError) {
         // An unreachable machine cannot be stopped now; its durable attachment keeps the
@@ -479,14 +486,15 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
     } finally {
       // Tunnel failures cannot release shutdown before admitted owner-bound operations drain.
-      const reconciliation = reconcileInFlight;
-      if (reconciliation) {
-        await Promise.allSettled([reconciliation]);
-      }
-      while (activeOperations.size > 0) {
-        await Promise.allSettled(activeOperations);
-      }
-      const cancellations = await Promise.allSettled(inferenceCancellations);
+      await step("reconciliation", () => reconcileInFlight?.catch(() => {}));
+      await step("accepted-operations", async () => {
+        while (activeOperations.size > 0) {
+          await Promise.allSettled(activeOperations);
+        }
+      });
+      const cancellations = await step("inference-cancellations", () =>
+        Promise.allSettled(inferenceCancellations),
+      );
       for (const outcome of cancellations) {
         if (outcome.status === "rejected" && !failures.includes(outcome.reason)) {
           failures.push(outcome.reason);
@@ -494,10 +502,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       inferenceCancellations.clear();
       credentialBroker.clear();
-      turnRpc.clear();
+      clearTurnRpc();
       options.liveEvents?.clear();
       try {
-        await options.closeNodeBootstrapArtifacts?.();
+        await step("bootstrap-artifacts", () => options.closeNodeBootstrapArtifacts?.());
       } catch (error) {
         failures.push(error);
       }
@@ -690,24 +698,15 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     observeDesktop: environmentAccess.observeDesktop,
     launchDesktopApp: environmentAccess.launchDesktopApp,
     reconcileDesktopPolicy: environmentAccess.reconcileDesktopPolicy,
-    admitWorker: turnRpc.admitWorker,
+    ...turnRpc,
     fenceWorkerTurnForRecovery: (claim: WorkerSessionTurnClaim) => {
       if (!options.placementStore) {
         throw serviceError("invalid_state", "Worker recovery requires its placement gate");
       }
       options.placementStore.fenceWorkerTurnForRecovery(claim);
     },
-    validateWorkerConnection: turnRpc.validateWorkerConnection,
-    commitTranscript: turnRpc.commitTranscript,
-    pushLiveEvent: turnRpc.pushLiveEvent,
-    getToolSurface: turnRpc.getToolSurface,
-    invokeGatewayTool: turnRpc.invokeGatewayTool,
-    cancelGatewayTool: turnRpc.cancelGatewayTool,
     createGatewayTools: options.createGatewayTools,
-    executeComputer: turnRpc.executeComputer,
     prepareComputer: options.prepareComputer,
-    startInference: turnRpc.startInference,
-    cancelInference: turnRpc.cancelInference,
     resolveSshIdentity: environmentAccess.resolveSshIdentity,
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,

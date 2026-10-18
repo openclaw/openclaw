@@ -10,6 +10,7 @@ import {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
+import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
@@ -21,8 +22,12 @@ import { readSessionRowLookup, type prepareSessionRowScopes } from "./session-ro
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { deriveSessionTitle, type SessionChildLink } from "./session-utils-core.js";
-import { resolveGatewaySessionDisplayName } from "./session-utils-display.js";
+import {
+  resolveGatewaySessionDisplayName,
+  resolveGatewaySessionKind,
+} from "./session-utils-display.js";
 import { materializeSessionRow, readSessionRowInputs } from "./session-utils-row.js";
+import { parseGroupKey } from "./session-utils-store.js";
 
 /** Bind live projection state to the same prepared or resident source-read boundary. */
 export function createSessionRowModelFactsReader(params: {
@@ -95,7 +100,7 @@ export function createSessionRowDescriptionReader(owner: {
       if (row && isIncognitoSessionKey(row.key)) {
         owner.materializePrivate(row, repositoryWorkspace);
       } else {
-        if (row && owner.dirty.has(records.identity(row))) {
+        if (row && (owner.dirty.has(records.identity(row)) || !row.materialized)) {
           // Keyed reads refresh only their owner; unrelated bulk work never gates a response.
           owner.refresh([records.identity(row)]);
           row = owner.lookup(query);
@@ -194,7 +199,7 @@ export function createSessionRowMaterializer(owner: {
     accept(
       ids: readonly string[],
       facts: ReadonlyMap<string, records.PreparedSessionRowDatabaseFacts>,
-      options: { archived?: boolean; materialize?: boolean } = {},
+      options: { materializeCold?: boolean; materialize?: boolean } = {},
     ) {
       if (!owner.isActive()) {
         return;
@@ -221,7 +226,11 @@ export function createSessionRowMaterializer(owner: {
             row.preparedRuntimeOwnership = databaseFacts.runtimeOwnership;
             row.runtimeOwnershipDependencies = databaseFacts.runtimeOwnershipDependencies;
           }
-          if (row && isColdArchivedSessionRow(row) && !options.archived) {
+          if (row && !row.materialized && !options.materializeCold) {
+            // Prepare selection facts for the roster, but enrich only requested rows.
+            if (!isColdArchivedSessionRow(row)) {
+              row.retainedDatabaseFacts = databaseFacts;
+            }
             owner.dirty.delete(id);
             owner.forgetBackfill(id);
           } else if (row) {
@@ -293,6 +302,7 @@ export function readResidentSessionRow(
         resolveGatewaySessionDisplayName(row.key, row.entry),
       ),
       lastMessagePreview: prepared?.titleFields?.lastMessagePreview ?? row.lastMessagePreview,
+      lastAssistantMessage: row.lastAssistantMessage,
     },
     skipTranscriptUsageFallback: true,
     includeSwarmChildren: true,
@@ -383,7 +393,6 @@ function readIncognitoSessionRow(params: {
       identity: current.version.epoch,
       assertCurrent() {
         assertSessionCurrent?.();
-        memory.binding?.actor.assertReadable();
         memory.authority.assertCurrent();
       },
     },
@@ -412,6 +421,58 @@ export function createSessionRowLookup(owner: {
 }) {
   return {
     readCapabilityEntry: createSessionRowCapabilityReader(owner),
+    findUrlCandidates(
+      selection: { shortId: string } | { key: string; slug?: string },
+      agentId?: string,
+    ) {
+      owner.assertCurrent();
+      const rows =
+        "shortId" in selection
+          ? owner.matching({ agentId, key: selection.shortId.toLowerCase().slice(0, 8) }, "url-id")
+          : [
+              ...owner.matching({ agentId, key: selection.key }),
+              ...(selection.slug
+                ? owner.matching({ agentId, key: selection.slug }, "url-slug")
+                : []),
+            ];
+      return rows.map((row) => ({
+        agentId: row.agentId,
+        key: row.key,
+        storePath: row.storeTarget.storePath,
+      }));
+    },
+    readPreview(query: records.Lookup) {
+      return owner.runInOwner(() => {
+        const state = owner.state();
+        if (state.disposed || state.topologyDirty) {
+          return undefined;
+        }
+        const row = owner.lookup(query);
+        if (!row) {
+          return null;
+        }
+        const entry = row.storedEntry;
+        // Committed display metadata stays readable while native/runtime facts are dirty.
+        // Unknown metadata and private actors retain exact preparation and its custody.
+        if (!entry || row.sharingEntry !== entry || row.unresolvedDatabaseFacts) {
+          return undefined;
+        }
+        const title = resolveGatewaySessionDisplayName(row.key, entry);
+        return {
+          entry,
+          sessionKey: row.key,
+          agentId: row.agentId,
+          title,
+          derivedTitle: deriveSessionTitle(entry, undefined, title),
+          kind: resolveGatewaySessionKind(row.key, entry),
+          channel:
+            projectSessionDeliveryFields(entry.delivery).channel ?? parseGroupKey(row.key)?.channel,
+          updatedAt: entry.updatedAt,
+          lastMessagePreview: row.lastMessagePreview,
+          archived: entry.archivedAt !== undefined,
+        };
+      });
+    },
     async readLookup(selection: Parameters<typeof readSessionRowLookup>[0], agentId?: string) {
       const selected = owner.state();
       const queries = await owner.runInOwner(() =>

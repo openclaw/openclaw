@@ -1,12 +1,12 @@
 import { dynamic } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show, untrack } from "solid-js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import "../../components/agent-row-chip.tsx";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import "../../components/ip-location.ts";
+import "../../components/ip-location.tsx";
 import "../../components/viewer-facepile.ts";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -20,6 +20,7 @@ import {
   presenceViewerLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
+import { projectAgents, projectAgentIdentity } from "../../lib/reactive/domain-capabilities.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
@@ -121,9 +122,21 @@ function SessionLinkView(props: {
       : null,
   );
   const SessionLink = dynamic(() => (target() ? "a" : "div"));
+  // The mounted route owns this application context; only its stores publish updates.
+  const context = untrack(() => props.context);
+  const agents = projectAgents(context.agents);
+  const agentIdentity = projectAgentIdentity({
+    identities: context.agentIdentity,
+    get agentId() {
+      return props.row.agentId;
+    },
+  });
+  const owner = createMemo(() =>
+    sessionActivityOwner(props.row, agents.read().agentsList, agentIdentity.read()),
+  );
   const ownerName = createMemo(() => {
     getLocale();
-    return presenceViewerLabel(sessionActivityOwner(props.row));
+    return presenceViewerLabel(owner());
   });
   const activityAt = () => sessionActivityTimestamp(props.row);
   const relativeTime = createMemo(() => {
@@ -170,7 +183,7 @@ function SessionLinkView(props: {
           ) : undefined}
           <openclaw-viewer-avatar
             prop:identity={props.row.owner?.actor.identity ?? props.row.createdActor?.identity}
-            prop:user={sessionActivityOwner(props.row)}
+            prop:user={owner()}
             prop:markAsViewer={false}
             variant="footer"
           />
@@ -198,7 +211,7 @@ function SessionLinkView(props: {
             ) : undefined}
             {showAgent() ? (
               <span class="activity-feed__session-scope">
-                <openclaw-agent-row-chip prop:agentId={agentId()} />
+                <AgentRowChip agentId={agentId()} />
               </span>
             ) : undefined}
             {scope() ? <span class="activity-feed__session-scope">{scope()}</span> : undefined}

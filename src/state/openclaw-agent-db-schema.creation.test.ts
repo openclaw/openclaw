@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
+import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -25,7 +29,16 @@ describe("fresh agent schema admission", () => {
     canonical.exec(OPENCLAW_AGENT_SCHEMA_SQL);
     const exec = vi.spyOn(database, "exec");
     try {
-      ensureOpenClawAgentSchema(database, "fresh", ":memory:");
+      const admissionReads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      try {
+        ensureOpenClawAgentSchema(database, "fresh", ":memory:");
+        // One initial version read and one capture of the installed schema suffice.
+        expect(
+          admissionReads.queries.filter((sql) => /^PRAGMA user_version$/iu.test(sql)).length,
+        ).toBeLessThanOrEqual(2);
+      } finally {
+        admissionReads.restore();
+      }
       expect(exec.mock.calls.filter(([sql]) => sql === OPENCLAW_AGENT_SCHEMA_SQL)).toHaveLength(1);
       expect(hashSqliteSchema(database)).toBe(hashSqliteSchema(canonical));
       expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
@@ -58,6 +71,7 @@ describe("fresh agent schema admission", () => {
 
   it("does not retain creation facts after the containing transaction rolls back", () => {
     using database = openNodeSqliteDatabase(":memory:");
+    admitSqliteSchema(database);
     expect(() =>
       runSqliteImmediateTransactionSync(database, () => {
         ensureOpenClawAgentSchema(database, "fresh", ":memory:");
@@ -65,11 +79,14 @@ describe("fresh agent schema admission", () => {
       }),
     ).toThrow("cancel creation");
     expect(database.prepare("SELECT name FROM sqlite_schema").all()).toEqual([]);
+    expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(0);
+    expect(getAdmittedSqliteSchemaFacts(database)?.tables.size).toBe(0);
     expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
       /Session metadata unavailable \(table-missing:/u,
     );
 
     ensureOpenClawAgentSchema(database, "fresh", ":memory:");
+    expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
     expect(() => assertCanonicalSessionValidationSchema(database)).not.toThrow();
   });
 });

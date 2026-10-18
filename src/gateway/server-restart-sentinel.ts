@@ -52,7 +52,7 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { deliverQueuedGeneratedMediaAgentTurn } from "./server-restart-sentinel-agent-delivery.js";
+import { deliverQueuedGeneratedMediaCompletion } from "./server-restart-sentinel-agent-delivery.js";
 import {
   buildQueuedRestartContinuation,
   isRestartContinuationBusyPayload,
@@ -104,7 +104,7 @@ export async function deliverQueuedSessionDelivery(params: {
   params.queueContext.admission.assertCurrent();
   const queuedEntry = resolveCorrelatedSubagentDelivery(params.entry);
   if (queuedEntry.kind === "agentTurn" && queuedEntry.requesterBinding) {
-    await deliverQueuedGeneratedMediaAgentTurn({
+    await deliverQueuedGeneratedMediaCompletion({
       ...params,
       ...queuedEntry.requesterBinding,
       entry: queuedEntry,
@@ -152,8 +152,9 @@ export async function deliverQueuedSessionDelivery(params: {
   }
 
   if (
-    await deliverQueuedGeneratedMediaAgentTurn({
+    await deliverQueuedGeneratedMediaCompletion({
       entry: queuedEntry,
+      deps: params.deps,
       runtimeContextFragments: queuedEntry.runtimeContextFragments,
       canonicalKey,
       agentId,

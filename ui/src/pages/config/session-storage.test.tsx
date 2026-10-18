@@ -150,8 +150,8 @@ it("does not publish an old Gateway's completed run after a new connection", asy
   ).toBe(false);
 });
 
-it("keeps a days draft through inventory refresh and retires it on connection replacement", async () => {
-  const { page, runtimeConfig, request, respond, publish } = await mount();
+it("keeps a days draft and inventory through reconnect and retires them on client replacement", async () => {
+  const { page, runtimeConfig, request, respond, publish, client } = await mount();
   const input = page.querySelector<HTMLInputElement>('input[type="number"]')!;
   input.value = "14";
   input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -163,6 +163,23 @@ it("keeps a days draft through inventory refresh and retires it on connection re
   expect(input.value).toBe("14");
   expect(runtimeConfig.state.configFormDirty).toBe(false);
 
+  publish(false, client, null);
+  flush();
+  expect(input.value).toBe("14");
+  expect(page.textContent).toContain("42 uncompressed");
+  expect(input.disabled).toBe(true);
+  const reconnect = createDeferred<SessionsStorageStatusResult>();
+  request.mockImplementation((method) =>
+    method === "sessions.storage.status" ? reconnect.promise : respond(method),
+  );
+  publish(true, client);
+  flush();
+  expect(input.value).toBe("14");
+  expect(page.textContent).toContain("42 uncompressed");
+  reconnect.resolve(inventory(21));
+  await waitForSolid(() => expect(page.textContent).toContain("21 uncompressed"));
+  expect(input.value).toBe("14");
+
   input.value = "";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
@@ -173,6 +190,19 @@ it("keeps a days draft through inventory refresh and retires it on connection re
   publish(true, { request: currentRequest } as unknown as GatewayBrowserClient);
   await waitForSolid(() => expect(page.textContent).toContain("7 uncompressed"));
   expect(input.value).toBe("30");
+});
+
+it("retires the days draft and inventory when a fresh hello removes access", async () => {
+  const { page, context, client, publish } = await mount();
+  const input = page.querySelector<HTMLInputElement>('input[type="number"]')!;
+  input.value = "14";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  const hello = context.gateway.snapshot.hello!;
+  publish(true, client, { ...hello, auth: { ...hello.auth, scopes: [] } });
+  flush();
+  expect(input.value).toBe("30");
+  expect(input.disabled).toBe(true);
+  expect(page.textContent).not.toContain("7 uncompressed");
 });
 
 async function startBackgroundRun() {
@@ -231,6 +261,25 @@ it("tracks an accepted job until completion and stops polling while idle", async
   expect(reads()).toBe(finishedReads);
 });
 
+it("observes a followed run completing while the same client reconnects", async () => {
+  const { page, client, publish, setStatus } = await startBackgroundRun();
+  publish(false, client, null);
+  flush();
+  expect(page.textContent).toContain("Background batch started.");
+  setStatus(async () => ({
+    ...inventory(5),
+    maintenance: {
+      ...inventory(5).maintenance,
+      lastCompletedAt: 200,
+      archivedTranscripts: 2,
+    },
+  }));
+  publish(true, client);
+  await waitForSolid(() =>
+    expect(page.textContent).toContain("Batch completed. 2 transcripts archived."),
+  );
+});
+
 it("stops polling after a status failure and resumes only after an explicit refresh", async () => {
   const { page, request, running, setStatus } = await startBackgroundRun();
   setStatus(async () => {
@@ -276,7 +325,9 @@ it.each(["detach", "disconnect", "replace"])("retires background polling on %s",
   const previousCalls = request.mock.calls.length;
   await vi.advanceTimersByTimeAsync(10_000);
   expect(request.mock.calls).toHaveLength(previousCalls);
-  if (change !== "detach") {
+  if (change === "replace") {
     expect(page.textContent).not.toContain("Background batch started.");
+  } else if (change === "disconnect") {
+    expect(page.textContent).toContain("Background batch started.");
   }
 });

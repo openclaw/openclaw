@@ -126,7 +126,7 @@ function linkDependencies(baseRoot: string): void {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const [baseRef, ...extra] = process.argv.slice(2);
   if (!baseRef || extra.length > 0 || !/^[0-9a-f]{40}$/u.test(baseRef)) {
     throw new Error("Usage: pnpm ui:check-performance:base <full-base-commit-sha>");
@@ -196,7 +196,7 @@ function main(): void {
         continue;
       }
       const source = fs.readFileSync(path.join(baseAssets, entry.name));
-      for (const variant of createControlUiPrecompressedAssetVariants(
+      for (const variant of await createControlUiPrecompressedAssetVariants(
         `assets/${entry.name}`,
         source,
       )) {
@@ -217,7 +217,7 @@ function main(): void {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   console.error("[control-ui-performance-base] FAILED (exit 1)");

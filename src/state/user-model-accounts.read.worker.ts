@@ -3,12 +3,14 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import {
   listUserProfileAuthLinksInDatabase,
+  readPersonalAuthProfileAuthorizationInDatabase,
   readPersonalCatalogProfilesInDatabase,
   readUserModelAccountSummaryInDatabase,
   readUserModelAccountSelectionInDatabase,
 } from "./user-model-accounts.js";
 
 type UserModelAccountReadType =
+  | "userModelAccounts.authorization"
   | "userModelAccounts.links"
   | "userModelAccounts.catalog"
   | "userModelAccounts.summary"
@@ -18,6 +20,14 @@ export function readUserModelAccountCommand(
   db: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: UserModelAccountReadType }>,
 ) {
+  if (command.type === "userModelAccounts.authorization") {
+    return {
+      type: command.type,
+      authorization: runSqliteDeferredTransactionSync(db, () =>
+        readPersonalAuthProfileAuthorizationInDatabase(db, command.authProfileId),
+      ),
+    };
+  }
   if (command.type === "userModelAccounts.selection") {
     return {
       type: command.type,

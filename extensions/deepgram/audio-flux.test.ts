@@ -247,8 +247,27 @@ describe("Deepgram Flux audio", () => {
     },
   );
 
+  it("returns an empty transcript when the flushed stream has no turns", async () => {
+    mockDecodedPcm(Buffer.alloc(10, 1));
+    const server = await createFluxServer({ onCloseStream: (socket) => socket.close() });
+
+    await expect(transcribeAudio(fluxRequest(server.baseUrl))).resolves.toMatchObject({
+      text: "",
+    });
+  });
+
   it.each([
     { name: "non-object server JSON", payload: "[]", error: "malformed JSON response" },
+    {
+      name: "a turn without transcript text",
+      payload: JSON.stringify({ type: "TurnInfo", event: "EndOfTurn" }),
+      error: "missing transcript",
+    },
+    {
+      name: "a turn with a non-string transcript",
+      payload: JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", transcript: 42 }),
+      error: "missing transcript",
+    },
     {
       name: "retained transcript growth above the provider limit",
       payload: JSON.stringify({

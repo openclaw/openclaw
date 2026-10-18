@@ -2,7 +2,6 @@
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
-import { emptyLegacyContent, solidContent } from "../../../lit/solid-content.tsx";
 import { createControlUiPluginHost } from "../../../plugins/control-ui-host.ts";
 import "../../../components/resizable-divider.ts";
 import {
@@ -13,6 +12,7 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { createPageState } from "../chat-state-page.ts";
+import { createChatProps } from "../chat-view.test-helpers.ts";
 import {
   activatePanel,
   openSlot,
@@ -50,15 +50,11 @@ async function createRegion(
   const region = document.createElement("openclaw-chat-sidebar-region");
   region.panelIdPrefix = `sidebar-region-fixture-${regions.length}`;
   region.layout = layout;
-  const content: Partial<Record<SidebarPanelDefinition["slot"], ReturnType<typeof solidContent>>> =
-    {
-      detail: solidContent(() => element('<div data-panel="detail">Detail panel</div>'), {}),
-      terminal: solidContent(() => element('<div data-panel="terminal">Terminal panel</div>'), {}),
-      workspace: solidContent(
-        () => element('<div data-panel="workspace">Workspace panel</div>'),
-        {},
-      ),
-    };
+  const content: Partial<Record<SidebarPanelDefinition["slot"], HTMLElement>> = {
+    detail: element('<div data-panel="detail">Detail panel</div>'),
+    terminal: element('<div data-panel="terminal">Terminal panel</div>'),
+    workspace: element('<div data-panel="workspace">Workspace panel</div>'),
+  };
   region.panelDefinitions =
     definitions ??
     sidebarPanelDefinitions().map((definition) =>
@@ -103,6 +99,61 @@ afterEach(() => {
 });
 
 describe("chat sidebar region", () => {
+  it("builds unopened panel options only when the operator opens the type menu", async () => {
+    const readIcon = vi.fn(() => "terminal" as const);
+    const definitions = sidebarPanelDefinitions().map((definition) =>
+      Object.defineProperty(
+        Object.assign({}, definition, { available: definition.slot === "terminal" }),
+        "icon",
+        { get: () => (definition.slot === "terminal" ? readIcon() : definition.icon) },
+      ),
+    );
+    const region = await createRegion(openSlot({ columns: [] }, "detail"), definitions);
+    expect(readIcon).not.toHaveBeenCalled();
+    region.panelDefinitions = definitions.map((definition) =>
+      Object.defineProperty(Object.assign({}, definition, { label: "Updated terminal" }), "icon", {
+        get: () => (definition.slot === "terminal" ? readIcon() : definition.icon),
+      }),
+    );
+    readIcon.mockClear();
+    await region.updateComplete;
+    expect(readIcon).not.toHaveBeenCalled();
+    root(region).querySelector<HTMLButtonElement>(".side-panel-type-menu__trigger")!.click();
+    await waitForSolid(() =>
+      expect(root(region).querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
+    );
+    expect(readIcon).toHaveBeenCalled();
+    expect(root(region).querySelector(".side-panel-type-menu__item")?.textContent).toContain(
+      "Updated terminal",
+    );
+  });
+
+  it("preserves header focus when an already locked side panel refreshes", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const region = await createRegion();
+    const header = element('<div class="sidebar-region__header"><button>Actions</button></div>');
+    root(region).prepend(header);
+    const actions = header.querySelector("button")!;
+    actions.focus();
+    region.sideFocusOrigin = () => actions;
+    region.sideFocusLocked = true;
+    await region.updateComplete;
+    vi.advanceTimersToNextFrame();
+    expect(document.activeElement).toBe(
+      root(region).querySelector('.tabstrip-tab[aria-selected="true"]'),
+    );
+
+    actions.focus();
+    region.sideFocusOrigin = undefined;
+    region.layout = { ...region.layout };
+    await region.updateComplete;
+    vi.advanceTimersToNextFrame();
+    expect(document.activeElement).toBe(actions);
+  });
+
   it("restores an expanded panel from its active tab with pointer or keyboard", async () => {
     const region = await createRegion({
       ...openSlot({ columns: [] }, "workspace"),
@@ -137,22 +188,43 @@ describe("chat sidebar region", () => {
     Object.assign(region, {
       conversationTab: {
         label: "Research assistant",
-        icon: element("<span data-agent-avatar>\ud83e\udd89</span>"),
+        avatar: { id: "research-assistant", textAvatar: "🦉" },
       },
     });
     await region.updateComplete;
     expect(label()?.textContent).toBe("Research assistant");
+    const icon = root(region).querySelector(
+      '.tabstrip-tab[data-tab-value="conversation"] .identity-avatar--agent',
+    );
+    expect(icon).not.toBeNull();
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => mutations.push(...records));
+    observer.observe(icon!.closest(".tabstrip-tab__icon")!, { childList: true, subtree: true });
+    region.layout = { ...region.layout, columns: [...region.layout.columns] };
+    await region.updateComplete;
+    mutations.push(...observer.takeRecords());
+    observer.disconnect();
+    expect(mutations).toHaveLength(0);
     expect(
       root(region).querySelector(
-        '.tabstrip-tab[data-tab-value="conversation"] [data-agent-avatar]',
+        '.tabstrip-tab[data-tab-value="conversation"] .identity-avatar--agent',
       ),
-    ).not.toBeNull();
+    ).toBe(icon);
+    expect(
+      root(region)
+        .querySelector(
+          '.tabstrip-tab[data-tab-value="conversation"] .identity-avatar--agent .identity-avatar__text',
+        )
+        ?.getAttribute("data-avatar"),
+    ).toBe("🦉");
     expect(root(region).querySelector('button[aria-label="Close Chat"]')).not.toBeNull();
     expect(
       [...root(region).querySelectorAll(".tabstrip-tab__label")].map((tab) => tab.textContent),
     ).toContain("Files");
 
-    Object.assign(region, { conversationTab: { label: "", icon: null } });
+    Object.assign(region, {
+      conversationTab: { label: "", avatar: { id: "research-assistant", textAvatar: "🦉" } },
+    });
     await region.updateComplete;
     expect(label()?.textContent).toBe("Chat");
     expect(
@@ -164,12 +236,16 @@ describe("chat sidebar region", () => {
     Object.assign(region, {
       conversationTab: {
         label: "Planning assistant",
-        icon: element("<span data-agent-avatar>\ud83e\udd8a</span>"),
+        avatar: { id: "planning-assistant", textAvatar: "🦊" },
       },
     });
     await region.updateComplete;
     expect(label()?.textContent).toBe("Planning assistant");
-    expect(root(region).querySelector("[data-agent-avatar]")?.textContent).toBe("🦊");
+    expect(
+      root(region)
+        .querySelector(".identity-avatar--agent .identity-avatar__text")
+        ?.getAttribute("data-avatar"),
+    ).toBe("🦊");
     region.conversationTab = undefined;
     await region.updateComplete;
     expect(label()?.textContent).toBe("Chat");
@@ -359,7 +435,7 @@ describe("chat sidebar region", () => {
     const context = createInitializationContext();
     const state = createPageState(
       context,
-      { afterCommit: () => () => {}, invalidate: vi.fn() },
+      { afterCommit: () => () => {} },
       document.createElement("div"),
     );
     state.sessionKey = "agent:main:main";
@@ -423,9 +499,9 @@ describe("chat sidebar region", () => {
       desktopSource: null,
       desktopFocusHref: "",
       onDesktopFocusTargetChange: vi.fn(),
-      dashboard: emptyLegacyContent,
-      workspace: emptyLegacyContent,
-      renderDetail: vi.fn(),
+      dashboard: null,
+      workspace: undefined,
+      detail: { chat: createChatProps(), host: state },
       digest: null,
       activeRunId: null,
       pullRequests: [],
@@ -445,13 +521,17 @@ describe("chat sidebar region", () => {
       pluginPanels: [],
       isPluginPanelPresented: () => true,
     };
-    Object.assign(params, {
-      workspace: element('<div data-panel="workspace">Workspace panel</div>'),
-    });
-    const region = await createRegion(layout, sidebarPanelDefinitions(params));
+    const workspace = element('<div data-panel="workspace">Workspace panel</div>');
+    const definitions = () =>
+      sidebarPanelDefinitions(params).map((definition) =>
+        definition.slot === "workspace"
+          ? Object.assign(definition, { view: undefined, content: workspace })
+          : definition,
+      );
+    const region = await createRegion(layout, definitions());
     params.pluginPanels = [];
     const refresh = async () => {
-      region.panelDefinitions = sidebarPanelDefinitions(params);
+      region.panelDefinitions = definitions();
       await region.updateComplete;
     };
     await refresh();
@@ -588,7 +668,10 @@ describe("chat sidebar region", () => {
     );
     expect(
       Array.from(root(region).querySelectorAll(".side-panel-type-menu__item"), (item) =>
-        item.textContent?.replace(/\s+/gu, " ").trim(),
+        [".oc-menu-item__label", ".oc-menu-item__details"]
+          .map((selector) => item.querySelector(selector)?.textContent?.trim())
+          .filter(Boolean)
+          .join(" "),
       ),
     ).toEqual([
       "Terminal Ctrl+`",
@@ -696,7 +779,7 @@ describe("chat sidebar region", () => {
     region.panelDefinitions = region.panelDefinitions.map((definition) =>
       definition.slot === "dashboard"
         ? Object.assign({}, definition, {
-            content: solidContent(() => element('<input aria-label="Unsaved app input" />'), {}),
+            content: element('<input aria-label="Unsaved app input" />'),
           })
         : definition,
     );

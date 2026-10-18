@@ -120,7 +120,10 @@ it.each(["by-id", "count"] as const)(
             }),
           }),
           expect.any(Set),
-          { prepareSessionProjection: expect.any(Function) },
+          {
+            sessionEventSubscriptionKeys: [target.sessionKey],
+            prepareSessionProjection: expect.any(Function),
+          },
         );
         expect(progressedBeforeDelivery).toBe(true);
         sql.expectIdle();

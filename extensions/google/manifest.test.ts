@@ -134,8 +134,14 @@ describe("google manifest model catalog", () => {
       api: "google-generative-ai",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     });
-    expect(modelIds).toHaveLength(11);
+    expect(modelIds).toHaveLength(12);
     expect(modelIds[0]).toBe("gemini-4-argon");
+    expect(
+      modelIds.slice(
+        modelIds.indexOf("gemini-3.7-flash"),
+        modelIds.indexOf("gemini-3.7-flash") + 2,
+      ),
+    ).toEqual(["gemini-3.7-flash", "gemini-3.8-flash"]);
     expect(modelIds).not.toContain(undefined);
     expect(new Set(modelIds).size).toBe(modelIds.length);
   });

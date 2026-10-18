@@ -28,16 +28,12 @@ const spawnSync = vi.hoisted(() =>
       command: string,
       args?: readonly string[],
       options?: SpawnSyncOptions,
-    ) => {
-      pid: number;
-      output: (string | null)[];
-      stdout: string;
-      stderr: string;
-      status: number;
-      signal: null;
-    }
+    ) => ReturnType<typeof nativeResult>
   >(),
 );
+function nativeResult(stdout = "", status = 0) {
+  return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status, signal: null };
+}
 vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
   spawnSync,
@@ -74,22 +70,17 @@ async function withPreparedGatewayTask(
   await withWindowsEnv("openclaw-owner-publication-", async ({ env }) => {
     const scriptPath = resolveTaskScriptPath(env);
     await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-    await fs.writeFile(
-      scriptPath,
-      ["@echo off", INSTALLED_GATEWAY_COMMAND_LINE, ""].join("\r\n"),
-      "utf8",
-    );
+    await fs.writeFile(scriptPath, `@echo off\r\n${INSTALLED_GATEWAY_COMMAND_LINE}\r\n`, "utf8");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     await run({ env });
   });
 }
-function mockWindowsTaskkillSuccess() {
-  spawnSync.mockReturnValue({
-    pid: 0,
-    output: [null, "", ""],
-    stdout: "",
-    stderr: "",
-    status: 0,
-    signal: null,
+function busyGateway(commandLine: string) {
+  inspectPortUsageMock.mockResolvedValue({
+    port: 18789,
+    status: "busy",
+    listeners: [{ pid: 4242, command: "node.exe", commandLine }],
+    hints: [],
   });
 }
 function taskkillPids() {
@@ -114,8 +105,7 @@ it.each(["snapshot", "port-only"])(
   "preserves an unattributed foreground coordinator owner before publication (%s)",
   async (discovery) => {
     await withPreparedGatewayTask(async ({ env }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      mockWindowsTaskkillSuccess();
+      spawnSync.mockReturnValue(nativeResult());
       const foreground = acquireGatewayStateOwner({
         databasePath: resolveOpenClawStateSqlitePath(env),
       });
@@ -128,20 +118,8 @@ it.each(["snapshot", "port-only"])(
           discovery === "snapshot"
             ? JSON.stringify([{ ProcessId: 4242, CommandLine: foregroundCommand }])
             : "";
-        inspectPortUsageMock.mockResolvedValue({
-          port: 18789,
-          status: "busy",
-          listeners: [{ pid: 4242, command: "node.exe", commandLine: foregroundCommand }],
-          hints: [],
-        });
-        spawnSync.mockReturnValueOnce({
-          pid: 0,
-          output: [null, output, ""],
-          stdout: output,
-          stderr: "",
-          status: discovery === "snapshot" ? 0 : 1,
-          signal: null,
-        });
+        busyGateway(foregroundCommand);
+        spawnSync.mockReturnValueOnce(nativeResult(output, discovery === "snapshot" ? 0 : 1));
         expect(readGatewayOwnerLease({ env })).toBeUndefined();
 
         await expect(terminateScheduledTaskGatewayListeners(env)).rejects.toThrow(
@@ -160,77 +138,70 @@ it.each(["snapshot", "port-only"])(
   },
 );
 
-it.each(["snapshot", "per-pid"])(
-  "terminates an installed-argv-attributed older-release coordinator holder without a row (%s)",
+it.each(["snapshot", "per-pid", "overdue"])(
+  "terminates an attributed unpublished coordinator holder (%s)",
   async (discovery) => {
     await withPreparedGatewayTask(async ({ env }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      mockWindowsTaskkillSuccess();
+      spawnSync.mockReturnValue(nativeResult());
       const databasePath = resolveOpenClawStateSqlitePath(env);
-      const legacy = acquireGatewayStateOwner({ databasePath });
+      const overdue = discovery === "overdue";
       let forced = false;
-      readWindowsProcessStartTime.mockImplementation(() =>
-        forced ? null : Date.parse("2026-09-27T00:00:00.000Z"),
-      );
-      let firstSnapshot = true;
-      inspectPortUsageMock.mockResolvedValue({
-        port: 18789,
-        status: "busy",
-        listeners: [
-          { pid: 4242, command: "node.exe", commandLine: INSTALLED_GATEWAY_COMMAND_LINE },
-        ],
-        hints: [],
+      if (overdue) {
+        vi.spyOn(pidAlive, "isPidAlive").mockImplementation((pid) => pid === 4242 && !forced);
+        readWindowsProcessStartTime.mockReturnValue(100);
+        inspectPortUsageMock.mockResolvedValue({
+          port: 18789,
+          status: "free",
+          listeners: [],
+          hints: [],
+        });
+      } else {
+        busyGateway(INSTALLED_GATEWAY_COMMAND_LINE);
+      }
+      const custody = acquireGatewayStateOwner({
+        databasePath,
+        payload: overdue
+          ? {
+              pid: 4242,
+              startTime: 100,
+              ownerId: "stuck-startup",
+              role: "gateway",
+              createdAt: new Date(-300_001).toISOString(),
+              configPath: "fixture-config",
+            }
+          : undefined,
       });
+      if (!overdue) {
+        readWindowsProcessStartTime.mockImplementation(() =>
+          forced ? null : Date.parse("2026-09-27T00:00:00.000Z"),
+        );
+      }
+      let firstSnapshot = true;
       spawnSync.mockImplementation((command, args) => {
         const executable = command.toLowerCase();
         if (executable.endsWith("taskkill.exe")) {
           forced = args?.includes("/F") ?? false;
           if (forced) {
-            legacy.release();
+            custody.release();
           }
-          return {
-            pid: 0,
-            output: [null, "", ""],
-            stdout: "",
-            stderr: "",
-            status: 0,
-            signal: null,
-          };
+          return nativeResult();
         }
         if (executable.endsWith("tasklist.exe")) {
           const output = forced ? "No tasks" : '"node.exe","4242","Console","1","1 K"';
-          return {
-            pid: 0,
-            output: [null, output, ""],
-            stdout: output,
-            stderr: "",
-            status: 0,
-            signal: null,
-          };
+          return nativeResult(output);
         }
         if (firstSnapshot && discovery === "per-pid") {
           firstSnapshot = false;
-          return {
-            pid: 0,
-            output: [null, "", ""],
-            stdout: "",
-            stderr: "",
-            status: 1,
-            signal: null,
-          };
+          return nativeResult("", 1);
+        }
+        if (overdue) {
+          return nativeResult("[]");
         }
         const output = JSON.stringify([
           ...(!forced ? [{ ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }] : []),
           { ProcessId: 9999, CommandLine: "powershell.exe" },
         ]);
-        return {
-          pid: 0,
-          output: [null, output, ""],
-          stdout: output,
-          stderr: "",
-          status: 0,
-          signal: null,
-        };
+        return nativeResult(output);
       });
       try {
         await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
@@ -238,64 +209,8 @@ it.each(["snapshot", "per-pid"])(
         const successor = acquireGatewayStateOwner({ databasePath });
         successor.release();
       } finally {
-        legacy.release();
+        custody.release();
       }
     });
   },
 );
-
-it("stops the exact overdue state holder before lease publication without a listener or task argv", async () => {
-  await withPreparedGatewayTask(async ({ env }) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    let stopped = false;
-    vi.spyOn(pidAlive, "isPidAlive").mockImplementation((pid) => pid === 4242 && !stopped);
-    readWindowsProcessStartTime.mockReturnValue(100);
-    inspectPortUsageMock.mockResolvedValue({
-      port: 18789,
-      status: "free",
-      listeners: [],
-      hints: [],
-    });
-    const custody = acquireGatewayStateOwner({
-      databasePath: resolveOpenClawStateSqlitePath(env),
-      payload: {
-        pid: 4242,
-        startTime: 100,
-        ownerId: "stuck-startup",
-        role: "gateway",
-        createdAt: new Date(-300_001).toISOString(),
-        configPath: "fixture-config",
-      },
-    });
-    spawnSync.mockImplementation((command, args) => {
-      const executable = command.toLowerCase();
-      if (executable.endsWith("taskkill.exe") && args?.includes("/F")) {
-        stopped = true;
-        custody.release();
-      }
-      const output = executable.endsWith("tasklist.exe")
-        ? stopped
-          ? "No tasks"
-          : '"node.exe","4242","Console","1","1 K"'
-        : "[]";
-      return {
-        pid: 0,
-        output: [null, output, ""],
-        stdout: output,
-        stderr: "",
-        status: 0,
-        signal: null,
-      };
-    });
-    try {
-      await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
-      expect(taskkillPids()).toEqual([4242, 4242]);
-      const successor = acquireGatewayStateOwner({
-        databasePath: resolveOpenClawStateSqlitePath(env),
-      });
-      successor.release();
-    } finally {
-      custody.release();
-    }
-  });
-});

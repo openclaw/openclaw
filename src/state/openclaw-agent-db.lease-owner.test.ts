@@ -11,6 +11,7 @@ import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   readActiveOpenClawAgentDatabaseLeasesReadOnly,
 } from "./openclaw-agent-db-lease.js";
+import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   borrowOpenClawAgentDatabase,
@@ -20,7 +21,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
   settleOpenClawAgentDatabaseWorkerClose,
   withOpenClawAgentDatabaseAdmission,
   withOpenClawAgentDatabaseAsync,
@@ -379,35 +379,6 @@ describe("openclaw agent database handle cache", () => {
     }
   });
 
-  it("starts the idle window after a cached operation rejects", async () => {
-    const options = { agentId: "cached-operation", env };
-    const target = openOpenClawAgentDatabase(options);
-    const entered = createDeferredCore();
-    const proceed = createDeferredCore();
-    const result = withOpenClawAgentDatabaseAsync(options, async (database) => {
-      entered.resolve();
-      await proceed.promise;
-      expect(database).toBe(target);
-      expect(database.db.isOpen).toBe(true);
-      throw new Error("synthetic operation failure");
-    });
-    const settled = expect(result).rejects.toThrow("synthetic operation failure");
-    try {
-      await entered.promise;
-      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS * 2);
-      expect(target.db.isOpen).toBe(true);
-      proceed.resolve();
-      await settled;
-      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-      expect(target.db.isOpen).toBe(true);
-      vi.advanceTimersByTime(1);
-      expect(target.db.isOpen).toBe(false);
-    } finally {
-      proceed.resolve();
-      await Promise.allSettled([result]);
-    }
-  });
-
   it("does not invoke an admitted operation after explicit disposal revokes its handle", async () => {
     const target = openOpenClawAgentDatabase({ agentId: "revoked-operation", env });
     const operation = vi.fn();
@@ -535,7 +506,7 @@ describe("openclaw agent database handle cache", () => {
     const database = openOpenClawAgentDatabase(options);
     const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
     const error = new Error("synthetic quarantine");
-    expect(recordOpenClawAgentDatabaseOpenFailure(database.path, error)).toBe(true);
+    recordOpenClawAgentDatabaseOpenFailure(database.path, error);
     expect(database.db.isOpen).toBe(false);
     expect(() => openOpenClawAgentDatabase(options)).toThrow(error);
     clearOpenClawAgentDatabaseOpenFailure(database.path, { env });

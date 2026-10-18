@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
-import { withSandboxMediaTempHome } from "../../auto-reply/stage-sandbox-media.test-harness.js";
+import {
+  createSandboxWorkspacePreparation,
+  withSandboxMediaTempHome,
+} from "../../auto-reply/stage-sandbox-media.test-harness.js";
 import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
@@ -26,7 +29,12 @@ import { ManagedWorktreeService } from "./service.js";
 import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const sandbox = vi.hoisted(() => ({ ensureSandboxWorkspaceForSession: vi.fn() }));
-vi.mock("../sandbox.js", () => sandbox);
+// mock-isolation: Reconciliation uses the fixture checkout without provisioning a separate sandbox.
+vi.mock("../sandbox.js", () => ({
+  ...sandbox,
+  prepareSandboxWorkspaceForSession: async (...args: unknown[]) =>
+    createSandboxWorkspacePreparation(await sandbox.ensureSandboxWorkspaceForSession(...args)),
+}));
 
 afterEach(() => {
   resetConfigRuntimeState();

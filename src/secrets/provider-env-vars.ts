@@ -3,7 +3,10 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
+import {
+  prepareBundledDiscoveryMode,
+  readBundledDiscoveryModeMemoized,
+} from "../plugins/bundled-discovery-state.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createInstalledPluginEnabledPredicate } from "../plugins/installed-plugin-index.js";
@@ -13,12 +16,14 @@ import {
   isWorkspacePluginAllowedByConfig,
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
+import { registerPluginMetadataSnapshotReaders } from "../plugins/plugin-metadata-snapshot-readers.js";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../plugins/slots.js";
 import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -265,6 +270,44 @@ export function resolveProviderAuthLookupMaps(
   params?: ProviderEnvVarLookupParams,
 ): ProviderAuthLookupMaps {
   const snapshot = resolveProviderMetadataSnapshot(params);
+  // Frozen captured configs cannot change in place; process env reaches these maps only
+  // through the memoized bundled discovery mode, which keys the entry.
+  const config = params?.config;
+  const cacheable =
+    (params?.env === undefined || params.env === process.env) &&
+    (config === undefined || isDeeplyFrozenPlainData(config));
+  if (!cacheable) {
+    return computeProviderAuthLookupMaps(params, snapshot);
+  }
+  const key = `${params?.includeUntrustedWorkspacePlugins}:${readBundledDiscoveryModeMemoized()}`;
+  let byConfig = lookupMapsBySnapshot.get(snapshot);
+  if (!byConfig) {
+    byConfig = new WeakMap();
+    lookupMapsBySnapshot.set(snapshot, byConfig);
+  }
+  const configKey = config ?? lookupMapsBySnapshot;
+  let byKey = byConfig.get(configKey);
+  if (!byKey) {
+    byKey = new Map();
+    byConfig.set(configKey, byKey);
+  }
+  let maps = byKey.get(key);
+  if (!maps) {
+    maps = computeProviderAuthLookupMaps(params, snapshot);
+    byKey.set(key, maps);
+  }
+  return maps;
+}
+
+const lookupMapsBySnapshot = new WeakMap<
+  PluginMetadataSnapshot,
+  WeakMap<object, Map<string, ProviderAuthLookupMaps>>
+>();
+
+function computeProviderAuthLookupMaps(
+  params: ProviderEnvVarLookupParams | undefined,
+  snapshot: PluginMetadataSnapshot,
+): ProviderAuthLookupMaps {
   const lookupParams = {
     ...params,
     metadataSnapshot: snapshot,
@@ -393,3 +436,5 @@ export function omitEnvKeysCaseInsensitive(
   }
   return env;
 }
+
+registerPluginMetadataSnapshotReaders({ listKnownProviderAuthEnvVarNamesCore });

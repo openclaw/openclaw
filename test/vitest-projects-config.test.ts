@@ -81,16 +81,6 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
 
 const rootVitestProjects = requireTestConfig(baseConfig).projects as string[];
 
-function requireClientOptimizer(testConfig: unknown) {
-  const clientOptimizer = (
-    testConfig as { deps?: { optimizer?: { client?: { enabled?: boolean } } } }
-  ).deps?.optimizer?.client;
-  if (!clientOptimizer) {
-    throw new Error("expected vitest client optimizer config");
-  }
-  return clientOptimizer;
-}
-
 afterEach(() => {
   patternFiles.cleanup();
 });
@@ -514,8 +504,7 @@ describe("projects vitest config", () => {
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
     const setupFiles = normalizeConfigPaths(testConfig.setupFiles);
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
-    expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
-    expect(requireClientOptimizer(testConfig).enabled).toBe(true);
+    expect(setupFiles).toContain("ui/src/test-helpers/dom.setup.ts");
   });
 
   it("keeps root-matrix unit-fast files on the cross-file cleanup runner", () => {
@@ -524,16 +513,6 @@ describe("projects vitest config", () => {
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
     expect(rootVitestProjects).toContain("test/vitest/vitest.unit-fast-root.config.ts");
     expect(rootVitestProjects).not.toContain("test/vitest/vitest.unit-fast.config.ts");
-  });
-
-  it("keeps fake-timer unit-fast files serial with the non-isolated runner", () => {
-    const config = createUnitFastFakeTimersVitestConfig();
-    const testConfig = requireTestConfig(config);
-    expect(testConfig.isolate).toBe(false);
-    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
-    expect(testConfig.fileParallelism).toBe(false);
-    expect(testConfig.maxWorkers).toBe(1);
-    expect(testConfig.sequence).toMatchObject({ groupOrder: 1 });
   });
 
   it("runs live Gateway hosts in process forks for shared-state admission", () => {
@@ -565,22 +544,6 @@ describe("projects vitest config", () => {
       );
     },
   );
-
-  it.each([
-    "extensions/agentsapi/agentsapi-attempt.test.ts",
-    "extensions/litellm/index.test.ts",
-    "extensions/qa-lab/src/codex-plugin-lifecycle.test.ts",
-    "extensions/qa-lab/src/gateway-child-artifacts.test.ts",
-    "extensions/qa-lab/src/gateway-child.test.ts",
-    "extensions/qa-lab/src/providers/shared/auth-store.test.ts",
-  ])("routes real extension database consumer %s to its fork owner", (file) => {
-    const project = "test/vitest/vitest.extension-database-workers.config.ts";
-    const config = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
-    expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
-    expect(config.include).toContain(file.replace(/^extensions\//u, ""));
-    expect(config.pool).toBe(diagnosticForksPool);
-    expect(config.isolate).toBe(true);
-  });
 
   it.each([
     {

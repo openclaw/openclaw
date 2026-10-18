@@ -33,6 +33,7 @@ import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-ident
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { findRestartRecoveryUnsafeChatAdmissionHook } from "../../plugins/restart-recovery-hook-safety.js";
+import { CommandLane } from "../../process/lanes.js";
 import {
   isCronSessionKey,
   isIncognitoSessionKey,
@@ -187,6 +188,7 @@ export function resolveDurableChatClaim(params: {
       await retryRestartAbortedMainSessionRecovery({
         canonicalSessionKey: params.canonicalSessionKey,
         cfg: params.cfg,
+        lane: CommandLane.Main,
         expectedRecoveryRunId: entry.restartRecoveryDeliveryRunId,
         expectedRecoverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
         expectedSessionId: entry.sessionId,
@@ -222,7 +224,7 @@ export function resolveDurableChatClaim(params: {
   })();
 }
 
-function isRestartSafeChatSession(params: {
+export function isDirectChatGoalSession(params: {
   entry?: SessionEntry;
   acpMeta: SessionEntry["acp"] | null;
   requestedSessionId?: string;
@@ -236,7 +238,6 @@ function isRestartSafeChatSession(params: {
     entry.archivedAt === undefined &&
     entry.initializationPending !== true &&
     entry.pendingFinalDelivery === undefined &&
-    (entry.agentHarnessId === undefined || entry.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID) &&
     entry.pluginOwnerId === undefined &&
     entry.spawnedBy === undefined &&
     entry.subagentRole === undefined &&
@@ -339,7 +340,12 @@ export function resolveRestartSafeChatAdmission(params: {
   if (params.cfg.cloudWorkers?.requiredProfile || (placement && placement.state !== "local")) {
     return undefined;
   }
-  if (!request || !entry || !isRestartSafeChatSession({ ...params, entry })) {
+  if (
+    !request ||
+    !entry ||
+    !isDirectChatGoalSession({ ...params, entry }) ||
+    (entry.agentHarnessId !== undefined && entry.agentHarnessId !== OPENCLAW_AGENT_RUNTIME_ID)
+  ) {
     return undefined;
   }
   if (!params.initialSessionEntry) {

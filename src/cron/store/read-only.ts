@@ -19,6 +19,7 @@ import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
 } from "../../state/openclaw-state-db-cache.js";
+import { isStatePostgres } from "../../state/openclaw-state-db-engine.js";
 import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { cronStoreKey } from "./key.js";
@@ -26,6 +27,7 @@ import { restoreCronLoadError } from "./load-error.js";
 import type {
   CronReadOnlyRequest,
   CronReadOnlyResult,
+  CronRunHistoryCandidates,
   CronRunHistoryBinding,
   CronRunHistorySelector,
 } from "./read-only.types.js";
@@ -42,7 +44,7 @@ function emptyLoadedCronStore(): LoadedCronStore {
   };
 }
 
-/** Loads cron jobs from existing SQLite state without creating or migrating it. */
+/** Loads cron jobs from existing state without creating or migrating it. */
 export async function loadCronJobsStoreWithConfigJobsReadOnly(
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -74,7 +76,8 @@ async function readCronState({
     return { ok: true };
   }
   // Doctor's all-partition inventory must not create WAL/SHM files beside the source.
-  const preserveArtifacts = storeKey === undefined || isArtifactPreservingStateRead();
+  const preserveArtifacts =
+    !isStatePostgres() && (storeKey === undefined || isArtifactPreservingStateRead());
   const admission = captureOpenClawStateDatabaseReadAdmission(statePath);
   const identity = admission.identity;
   const canonicalPath = identity.canonicalPath;
@@ -180,6 +183,9 @@ async function readCronState({
             Buffer.byteLength(location) +
             Buffer.byteLength(storeKey ?? "") +
             Buffer.byteLength(history?.jobId ?? "") +
+            Buffer.byteLength(history?.query ?? "") +
+            Buffer.byteLength(JSON.stringify(history?.jobNameById ?? {})) +
+            (history?.taskIds?.reduce((bytes, id) => bytes + Buffer.byteLength(id), 0) ?? 0) +
             Buffer.byteLength(history?.transcript?.runId ?? "") +
             (history?.transcript?.runAtMs === undefined ? 0 : 8) +
             Buffer.byteLength(stagingRoot ?? "") +
@@ -211,16 +217,37 @@ async function readCronState({
   );
 }
 
-export async function readCronRunRecords(
+export async function readCronRunHistoryCandidates(
   storeKey: string,
   jobId?: string,
-): Promise<CronRunRecord[]> {
+  query?: string,
+  jobNameById?: Record<string, string>,
+): Promise<CronRunHistoryCandidates> {
   return (
     (
       await readCronState({
         storeKey: cronStoreKey(storeKey),
         env: process.env,
-        history: { jobId },
+        history: { jobId, query, jobNameById },
+      })
+    ).candidates ?? { records: [] }
+  );
+}
+
+export async function readCronRunHistoryRecords(
+  storeKey: string,
+  taskIds: string[],
+  view?: "full" | "summary",
+): Promise<CronRunRecord[]> {
+  if (taskIds.length === 0) {
+    return [];
+  }
+  return (
+    (
+      await readCronState({
+        storeKey: cronStoreKey(storeKey),
+        env: process.env,
+        history: { taskIds, view },
       })
     ).history ?? []
   );

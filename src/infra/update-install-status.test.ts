@@ -66,7 +66,7 @@ it.each(["root", "current", "release"] as const)(
     expect(prepared.installStatus.status.error).toBeUndefined();
     expect(prepared.readOnlySchedule).toEqual({ channel: "dev", autoEnabled: false });
     expect(mocks.git).not.toHaveBeenCalled();
-    expect(await fs.readdir(root)).toEqual(["current", "releases"]);
+    expect((await fs.readdir(root)).toSorted()).toEqual(["current", "releases"]);
     expect(await fs.readlink(path.join(root, "current"))).toBe(`releases/${sha}`);
   },
 );

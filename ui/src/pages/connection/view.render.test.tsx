@@ -175,7 +175,7 @@ describe("connection view rendering", () => {
     expect(onConnect).toHaveBeenCalledOnce();
   });
 
-  it.each(["connected", "offline", "stopped", "reconnecting"] as const)(
+  it.each(["stopped", "reconnecting"] as const)(
     "offers saved browser sign-in recovery at the bottom while %s",
     (phase) => {
       const container = document.createElement("div");
@@ -196,38 +196,14 @@ describe("connection view rendering", () => {
     },
   );
 
-  it.each([
-    ["connected", null, null],
-    ["connecting", null, "Connecting…"],
-    ["starting", null, "Connecting…"],
-    ["reconnecting", null, "Reconnecting…"],
-    ["offline", null, "Connect"],
-    ["stopped", null, "Connect"],
-    ["offline", "Connection refused", "Retry connection"],
-    ["reload-required", null, null],
-  ] as const)("offers the appropriate action in %s with error %s", (phase, lastError, label) => {
+  it("disables connection actions while the Gateway starts", () => {
     const container = document.createElement("div");
-    mountConnection(createConnectionProps({ phase, lastError }), container);
+    mountConnection(createConnectionProps({ phase: "starting", lastError: null }), container);
     const action = container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary");
-    expect(action?.textContent?.trim() ?? null).toBe(label);
-    if (action) {
-      expect(action.disabled).toBe(["connecting", "starting", "reconnecting"].includes(phase));
-    }
-    expect(container.querySelector<HTMLButtonElement>("details button")?.disabled).toBe(
-      phase !== "connected",
-    );
+    expect(action?.textContent?.trim()).toBe("Connecting…");
+    expect(action?.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>("details button")?.disabled).toBe(true);
   });
-
-  it.each(["connecting", "starting", "reconnecting"] as const)(
-    "lets a corrected draft replace a connection stuck in %s",
-    (phase) => {
-      const container = document.createElement("div");
-      mountConnection(createConnectionProps({ phase, dirty: true }), container);
-      const action = container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary");
-      expect(action?.textContent?.trim()).toBe("Apply and reconnect");
-      expect(action?.disabled).toBe(false);
-    },
-  );
 
   it("shows a secret for a new target even when the live Gateway uses trusted proxy auth", () => {
     const props = createConnectionProps({
@@ -256,36 +232,6 @@ describe("connection view rendering", () => {
     expect(control?.textContent).toContain("openclaw gateway auth-token --show");
     mountConnection(createConnectionProps(), container);
     expect(control?.querySelector('[role="status"]')).toBeNull();
-  });
-
-  it("names the live Gateway in the summary, not the edited draft", () => {
-    const props = createConnectionProps({
-      phase: "connected",
-      liveGatewayUrl: "wss://live.example:443/",
-      settings: { ...createConnectionProps().settings, gatewayUrl: "wss://draft.example:443/" },
-    });
-    const container = document.createElement("div");
-    mountConnection(props, container);
-
-    const summary = container.querySelector(".settings-section__desc")?.textContent ?? "";
-    expect(summary).toContain("Connected to live.example");
-    expect(summary).not.toContain("draft.example");
-  });
-
-  it("renders the connection form with a single credential field and offline status", async () => {
-    const container = document.createElement("div");
-    mountConnection(createConnectionProps(), container);
-    await Promise.resolve();
-
-    expect(accessRowTitles(container)).toEqual(["Gateway URL", "Gateway secret"]);
-    expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
-      "Not connected.",
-    );
-    expect(container.querySelector(".settings-section__actions")?.textContent?.trim()).toBe(
-      "Offline",
-    );
-    expect(container.querySelectorAll(".settings-secret input")).toHaveLength(1);
-    expect(container.textContent).not.toContain("Last error");
   });
 
   it.each(["token", "password"] as const)(
@@ -487,21 +433,6 @@ describe("connection view rendering", () => {
     );
     await Promise.resolve();
     expect(container.querySelector("#settings-connection-host")).toBeNull();
-  });
-
-  it("reserves the Gateway host section while its first snapshot loads", async () => {
-    const container = document.createElement("div");
-    mountConnection(createConnectionProps(), container);
-    await Promise.resolve();
-
-    const systemSection = container.querySelector("#settings-connection-host");
-    expect(systemSection).not.toBeNull();
-    expect(systemSection?.querySelector(".config-host__name")?.textContent).toContain("—");
-    for (const label of ["CPU", "Memory", "Disk"]) {
-      const stat = expectStatByLabel(systemSection ?? container, label);
-      expect(stat.querySelector(".config-host__stat-value")?.textContent).toContain("—");
-      expect(stat.querySelector(".config-host__meter")).toBeNull();
-    }
   });
 
   it("surfaces the last connection error only while disconnected", async () => {

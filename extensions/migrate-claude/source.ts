@@ -75,7 +75,7 @@ async function addArchivePath(
   candidate: string,
   relativePath: string,
 ): Promise<void> {
-  if ((await exists(candidate)) || (await isDirectory(candidate))) {
+  if (await exists(candidate)) {
     archivePaths.push({ id, path: candidate, relativePath });
   }
 }

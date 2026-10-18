@@ -10,7 +10,12 @@ import {
 import type { GatewayEvent, OpenClawEvent } from "./types.js";
 
 function fixture(client = createClientFixture()) {
-  const iterators: Array<AsyncIterator<OpenClawEvent> | AsyncIterator<GatewayEvent>> = [];
+  const iterators: Array<Pick<AsyncIterator<unknown>, "return">> = [];
+  const track = <T>(stream: AsyncIterable<T>) => {
+    const iterator = stream[Symbol.asyncIterator]();
+    iterators.push(iterator);
+    return iterator;
+  };
   onTestFinished(async () => {
     for (const iterator of iterators) {
       await iterator.return?.();
@@ -19,16 +24,13 @@ function fixture(client = createClientFixture()) {
   });
   return {
     ...client,
-    events: (runId = "run") => {
-      const iterator = client.oc.runEvents(runId)[Symbol.asyncIterator]();
-      iterators.push(iterator);
-      return iterator;
+    publish: async (seq: number, frames: GatewayEvent[]) => {
+      const observed = observeGatewaySequence(client.oc, seq);
+      frames.forEach((frame) => client.transport.emit(frame));
+      await observed;
     },
-    rawEvents: (seq: number) => {
-      const iterator = client.oc.rawEvents((event) => event.seq === seq)[Symbol.asyncIterator]();
-      iterators.push(iterator);
-      return iterator;
-    },
+    events: (runId = "run") => track(client.oc.runEvents(runId)),
+    rawEvents: (seq: number) => track(client.oc.rawEvents((event) => event.seq === seq)),
   };
 }
 
@@ -36,101 +38,83 @@ const chat = (seq: number, text: string | undefined, deltaText?: string, replace
   createChatEvent("run", "session", seq, "delta", text, seq, { deltaText, replace });
 const assistant = (seq: number, data: Record<string, unknown>) =>
   createAgentEvent("run", seq, seq, "assistant", data);
+type Expected = { type: OpenClawEvent["type"]; data?: Record<string, unknown>; raw?: number };
+const projected = (data: Record<string, unknown>): Expected => ({ type: "assistant.delta", data });
 
+async function readEvent(
+  pending: Promise<IteratorResult<OpenClawEvent>>,
+  expected: Expected,
+  raw?: GatewayEvent,
+) {
+  const next = await pending;
+  expect(next.done).toBe(false);
+  if (next.done) {
+    throw new Error("Expected projected output");
+  }
+  expect(next.value.type).toBe(expected.type);
+  if (expected.data !== undefined) {
+    expect(next.value.data).toEqual(expected.data);
+  }
+  if (raw !== undefined) {
+    expect(next.value.raw).toBe(raw);
+  }
+  return next.value;
+}
+
+function streamFrame(stream: string, run: number, seq: number, text?: string, delta = text) {
+  return stream === "chat"
+    ? createChatEvent(`run-${run}`, `session-${run}`, seq, "delta", text, seq, { deltaText: delta })
+    : createAgentEvent(`run-${run}`, seq, seq, "assistant", {
+        ...(text === undefined ? {} : { text }),
+        delta,
+      });
+}
+
+type Scenario = [name: string, frames: GatewayEvent[], expected: Expected[], live?: boolean];
 describe("SDK streaming projections", () => {
-  it("does not surface raw chat projections alongside canonical assistant events", async () => {
-    const { oc } = fixture(
-      createRunEventFixture("run", "session", [
+  it.each<Scenario>([
+    [
+      "canonical assistant suppression of chat projections",
+      [
         createAgentEvent("run", 1, 1, "lifecycle", { phase: "start" }),
         assistant(2, { delta: "hello" }),
         chat(3, "hello", "hello"),
         createAgentEvent("run", 4, 4, "lifecycle", { phase: "end" }),
         createChatEvent("run", "session", 5, "final", "hello", 5),
-      ]),
-    );
-    const run = await oc.runs.create({
-      input: "hello",
-      idempotencyKey: "run",
-      sessionKey: "session",
-    });
-    const seen: OpenClawEvent[] = [];
-    for await (const event of run.events()) {
-      seen.push(event);
-      if (event.type === "run.completed") {
-        break;
-      }
-    }
-    expect(seen.map((event) => event.type)).toEqual([
-      "run.started",
-      "assistant.delta",
-      "run.completed",
-    ]);
-    expect(seen.map((event) => event.raw?.event)).toEqual(["agent", "agent", "agent"]);
-  });
-
-  it.each<{
-    name: string;
-    live?: boolean;
-    frames: GatewayEvent[];
-    expected: Array<{ type: OpenClawEvent["type"]; data: Record<string, unknown> }>;
-  }>([
-    ...["reset", ""].map((replacement) => ({
-      name: `chat replacement ${JSON.stringify(replacement)}`,
-      frames: [
+      ],
+      [
+        { type: "run.started", raw: 0 },
+        { type: "assistant.delta", raw: 1 },
+        { type: "run.completed", raw: 3 },
+      ],
+    ],
+    ...["reset", ""].map((replacement): Scenario => [
+      `chat replacement ${JSON.stringify(replacement)}`,
+      [
         chat(1, "hello", "hello"),
         chat(2, undefined, " again"),
         chat(3, undefined, replacement, true),
         createChatEvent("run", "session", 4, "final", replacement, 4),
         { event: "custom.debug", seq: 5, payload: { runId: "run", ts: 5, data: { ok: true } } },
       ],
-      expected: [
-        { type: "assistant.delta" as const, data: { text: "hello", delta: "hello" } },
-        { type: "assistant.delta" as const, data: { text: "hello again", delta: " again" } },
-        {
-          type: "assistant.delta" as const,
-          data: { text: replacement, delta: replacement, replace: true },
-        },
+      [
+        projected({ text: "hello", delta: "hello" }),
+        projected({ text: "hello again", delta: " again" }),
+        projected({ text: replacement, delta: replacement, replace: true }),
         { type: "run.completed" as const, data: { phase: "end", outputText: replacement } },
       ],
-    })),
-    {
-      name: "chat reconnect and replacement snapshots",
-      frames: [
-        chat(1, "hello", "hello"),
-        chat(2, "hello again", "in"),
-        chat(3, "rewritten", "ten"),
+    ]),
+    [
+      "chat reconnect and replacement snapshots",
+      [chat(1, "hello", "hello"), chat(2, "hello again", "in"), chat(3, "rewritten", "ten")],
+      [
+        projected({ text: "hello", delta: "hello" }),
+        projected({ text: "hello again", delta: " again" }),
+        projected({ text: "rewritten", delta: "rewritten", replace: true }),
       ],
-      expected: [
-        { type: "assistant.delta", data: { text: "hello", delta: "hello" } },
-        { type: "assistant.delta", data: { text: "hello again", delta: " again" } },
-        { type: "assistant.delta", data: { text: "rewritten", delta: "rewritten", replace: true } },
-      ],
-    },
-    {
-      name: "assistant snapshots, replacements, and item boundaries",
-      live: true,
-      frames: [
-        { itemId: "a", text: "first", delta: "first" },
-        { itemId: "a", delta: " tail" },
-        { itemId: "b", text: "second", delta: "ond" },
-        { itemId: "b", delta: "", replace: true },
-        { itemId: "b", delta: "rewritten" },
-        { itemId: "c", delta: "orphan" },
-        { itemId: "b", delta: "also orphan" },
-        { itemId: "c", text: "complete", delta: "lete" },
-      ].map((data, index) => assistant(index + 1, data)),
-      expected: [
-        { itemId: "a", text: "first", delta: "first" },
-        { itemId: "a", text: "first tail", delta: " tail" },
-        { itemId: "b", text: "second", delta: "ond" },
-        { itemId: "b", text: "", delta: "", replace: true },
-        { itemId: "b", text: "rewritten", delta: "rewritten" },
-        { itemId: "c", delta: "orphan" },
-        { itemId: "b", delta: "also orphan" },
-        { itemId: "c", text: "complete", delta: "lete" },
-      ].map((data) => ({ type: "assistant.delta", data })),
-    },
-  ])("normalizes $name without changing wire frames", async ({ frames, expected, live }) => {
+    ],
+    assistantScenario(),
+  ])("normalizes %s without changing wire frames", async (_name, frames, expected, live) => {
     const original = structuredClone(frames);
     const { oc, transport, events } = fixture(
       live ? createClientFixture() : createRunEventFixture("run", "session", frames),
@@ -142,7 +126,7 @@ describe("SDK streaming projections", () => {
     }
     const iterator = events();
     for (const [index, value] of expected.entries()) {
-      const frame = frames[index];
+      const frame = frames[value.raw ?? index];
       if (!frame) {
         throw new Error(`Missing wire frame for expected event ${index}`);
       }
@@ -150,14 +134,7 @@ describe("SDK streaming projections", () => {
       if (live) {
         transport.emit(frame);
       }
-      const result = await next;
-      expect(result.done).toBe(false);
-      if (result.done) {
-        throw new Error("Expected projected output");
-      }
-      expect(result.value.type).toBe(value.type);
-      expect(result.value.data).toEqual(value.data);
-      expect(result.value.raw).toBe(frame);
+      await readEvent(next, value, frame);
     }
     expect(frames).toEqual(original);
   });
@@ -189,35 +166,29 @@ describe("SDK streaming projections", () => {
       const iterator = events(run.id);
       if (stream === "assistant") {
         for (let index = 251; index <= 500; index++) {
-          const next = await iterator.next();
-          expect(next.done).toBe(false);
-          if (next.done) {
-            throw new Error("Expected retained assistant replay");
-          }
-          expect(next.value.type).toBe("assistant.delta");
-          expect(next.value.data).toEqual({
-            itemId: "reply",
-            text: "token ".repeat(index + 1),
-            delta: "token ",
-          });
-          expect(next.value.raw).toBe(frames[index]);
-          expect(next.value.raw?.payload).not.toHaveProperty("data.text");
+          const next = await readEvent(
+            iterator.next(),
+            projected({
+              itemId: "reply",
+              text: "token ".repeat(index + 1),
+              delta: "token ",
+            }),
+            frames[index],
+          );
+          expect(next.raw?.payload).not.toHaveProperty("data.text");
         }
         expect((await rawEvents(1001).next()).value).toBe(frames[500]);
       } else {
-        const first = await iterator.next();
-        expect(first.done).toBe(false);
-        if (first.done) {
-          throw new Error("Expected retained chat replay");
-        }
-        expect(first.value.type).toBe("assistant.delta");
-        expect(first.value.data).toEqual({ text: "hello 1", delta: "hello 1" });
+        const first = await readEvent(
+          iterator.next(),
+          projected({ text: "hello 1", delta: "hello 1" }),
+        );
         const observedLive = observeGatewaySequence(oc, 502);
         text += " 501";
         transport.emit(chat(502, undefined, " 501"));
         await observedLive;
         await oc.close();
-        const seen = [first.value];
+        const seen = [first];
         for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
           seen.push(next.value);
         }
@@ -240,47 +211,31 @@ describe("SDK streaming projections", () => {
   ])(
     "protects active $stream baselines until the $terminal terminal",
     async ({ stream, terminal }) => {
-      const { oc, transport, events } = fixture();
+      const { oc, transport, events, publish } = fixture();
       await oc.connect();
-      const observedActive = observeGatewaySequence(oc, 101);
-      for (let seq = 1; seq <= 101; seq++) {
-        transport.emit(
-          stream === "chat"
-            ? createChatEvent(`run-${seq}`, `session-${seq}`, seq, "delta", "prefix", seq, {
-                deltaText: "prefix",
-              })
-            : createAgentEvent(`run-${seq}`, seq, seq, "assistant", {
-                text: "prefix",
-                delta: "prefix",
-              }),
-        );
-      }
-      await observedActive;
+      await publish(
+        101,
+        Array.from({ length: 101 }, (_, i) => streamFrame(stream, i + 1, i + 1, "prefix")),
+      );
       const iterator = events("run-1");
       await expect(iterator.next()).resolves.toMatchObject({
         value: { data: { text: "prefix", delta: "prefix" } },
       });
-      transport.emit(
-        stream === "chat"
-          ? createChatEvent("run-1", "session-1", 102, "delta", undefined, 102, {
-              deltaText: " suffix",
-            })
-          : createAgentEvent("run-1", 102, 102, "assistant", { delta: " suffix" }),
-      );
+      transport.emit(streamFrame(stream, 1, 102, undefined, " suffix"));
       await expect(iterator.next()).resolves.toMatchObject({
         value: { data: { text: "prefix suffix", delta: " suffix" } },
       });
       await iterator.return?.();
-      const observedTerminal = observeGatewaySequence(oc, 203);
-      for (let index = 1; index <= 101; index++) {
-        const seq = 102 + index;
-        transport.emit(
-          terminal === "chat"
+      await publish(
+        203,
+        Array.from({ length: 101 }, (_, i) => {
+          const index = i + 1,
+            seq = 102 + index;
+          return terminal === "chat"
             ? createChatEvent(`run-${index}`, `session-${index}`, seq, "final", "prefix", seq)
-            : createAgentEvent(`run-${index}`, seq, seq, "lifecycle", { phase: "end" }),
-        );
-      }
-      await observedTerminal;
+            : createAgentEvent(`run-${index}`, seq, seq, "lifecycle", { phase: "end" });
+        }),
+      );
       const first = events("run-1").next();
       transport.emit(createAgentEvent("run-1", 204, 204, "lifecycle", { phase: "start" }));
       await expect(first).resolves.toMatchObject({
@@ -305,16 +260,7 @@ describe("SDK streaming projections", () => {
           message: "hello",
           idempotencyKey: `run-${seq}`,
         });
-        transport.emit(
-          stream === "chat"
-            ? createChatEvent(`run-${seq}`, `session-${seq}`, seq, "delta", "unfinished", seq, {
-                deltaText: "unfinished",
-              })
-            : createAgentEvent(`run-${seq}`, seq, seq, "assistant", {
-                text: "unfinished",
-                delta: "unfinished",
-              }),
-        );
+        transport.emit(streamFrame(stream, seq, seq, "unfinished"));
       }
       await observedLast;
       const exhausted = oc.events()[Symbol.asyncIterator]().next();
@@ -327,3 +273,22 @@ describe("SDK streaming projections", () => {
     },
   );
 });
+
+function assistantScenario(): Scenario {
+  const steps: Array<[Record<string, unknown>, string | undefined]> = [
+    [{ itemId: "a", text: "first", delta: "first" }, "first"],
+    [{ itemId: "a", delta: " tail" }, "first tail"],
+    [{ itemId: "b", text: "second", delta: "ond" }, "second"],
+    [{ itemId: "b", delta: "", replace: true }, ""],
+    [{ itemId: "b", delta: "rewritten" }, "rewritten"],
+    [{ itemId: "c", delta: "orphan" }, undefined],
+    [{ itemId: "b", delta: "also orphan" }, undefined],
+    [{ itemId: "c", text: "complete", delta: "lete" }, "complete"],
+  ];
+  return [
+    "assistant snapshots, replacements, and item boundaries",
+    steps.map(([data], index) => assistant(index + 1, data)),
+    steps.map(([data, text]) => projected(text === undefined ? data : { ...data, text })),
+    true,
+  ];
+}

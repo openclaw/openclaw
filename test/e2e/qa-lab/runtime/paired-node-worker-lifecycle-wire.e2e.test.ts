@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   executeSqliteQueryTakeFirstSync,
@@ -26,6 +26,7 @@ import {
   connectWireClient,
   createPairedNodeWorkerHost,
   createPublishedWireWorkspace,
+  createWireWorkspaceSettlementWaiter,
   startPairedNodeWorkerGateway,
   type PairedNodeWorkerHost,
   type PublishedWireWorkspace,
@@ -292,30 +293,59 @@ function processIsAlive(pid: number): boolean {
 }
 
 describe("paired node worker lifecycle wire", () => {
+  const gatewayOwner = createQaGatewayChild();
+  const settlement = createWireWorkspaceSettlementWaiter();
+  let provider: Awaited<ReturnType<typeof startPairedNodeWorkerLifecycleProvider>>;
+  let gateway: WireGateway;
+  let operator: GatewayClient;
+
+  // Each case owns its node, workspace and sessions; Gateway startup is not under test.
+  beforeAll(async () => {
+    provider = await startPairedNodeWorkerLifecycleProvider([
+      HOLD_REVOKED,
+      HOLD_UNCONFIRMED,
+      HOLD_A,
+      HOLD_B,
+    ]);
+    gateway = await startPairedNodeWorkerGateway({
+      owner: gatewayOwner,
+      providerBaseUrl: provider.baseUrl,
+      useRepoCli: false,
+    });
+    operator = await connectWireClient({
+      gateway,
+      role: "operator",
+      identity: null,
+      onEvent: settlement.onEvent,
+    });
+    await operator.request("sessions.subscribe", {});
+  });
+
+  afterAll(async () => {
+    provider?.releaseAll();
+    const cleanup = await Promise.allSettled([
+      operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
+      stopQaGatewayFixture(gatewayOwner),
+      provider?.stop() ?? Promise.resolve(),
+    ]);
+    const failures = cleanup.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      throw new AggregateError(failures, "paired node lifecycle Gateway cleanup failed");
+    }
+  });
   it(
     "fences revoked and unconfirmed turns before real node successor I/O",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       const root = tempDirs.make("openclaw-paired-node-worker-turn-fence-");
-      const provider = await startPairedNodeWorkerLifecycleProvider([
-        HOLD_REVOKED,
-        HOLD_UNCONFIRMED,
-      ]);
       const published = await createPublishedWireWorkspace(root);
-      const gatewayOwner = createQaGatewayChild();
-      let gateway: WireGateway | undefined;
-      let operator: GatewayClient | undefined;
       let workerNode: PairedNodeWorkerHost | undefined;
       let testFailure: unknown;
       let cleanupFailures: unknown[];
       let releaseStopAcknowledgement: (() => void) | undefined;
       try {
-        gateway = await startPairedNodeWorkerGateway({
-          owner: gatewayOwner,
-          providerBaseUrl: provider.baseUrl,
-          useRepoCli: false,
-        });
-        operator = await connectWireClient({ gateway, role: "operator", identity: null });
         workerNode = await createPairedNodeWorkerHost({ gateway, operator, root });
         const nodeId = workerNode.identity.deviceId;
 
@@ -507,12 +537,10 @@ describe("paired node worker lifecycle wire", () => {
         testFailure = error;
       } finally {
         releaseStopAcknowledgement?.();
-        provider.releaseAll();
+        provider.release(HOLD_REVOKED);
+        provider.release(HOLD_UNCONFIRMED);
         const cleanup = await Promise.allSettled([
           workerNode?.stop() ?? Promise.resolve(),
-          operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
-          stopQaGatewayFixture(gatewayOwner),
-          provider.stop(),
           closeWireServer(published.server),
         ]);
         cleanupFailures = cleanup.flatMap((result) =>
@@ -532,23 +560,13 @@ describe("paired node worker lifecycle wire", () => {
   it(
     "keeps local control usable across bundle loss, disconnect, capacity, and role removal",
     { timeout: TEST_TIMEOUT_MS },
-    async () => {
+    async ({ signal }) => {
       const root = tempDirs.make("openclaw-paired-node-worker-lifecycle-");
-      const provider = await startPairedNodeWorkerLifecycleProvider([HOLD_A, HOLD_B]);
       const published = await createPublishedWireWorkspace(root);
-      const gatewayOwner = createQaGatewayChild();
-      let gateway: WireGateway | undefined;
-      let operator: GatewayClient | undefined;
       let workerNode: PairedNodeWorkerHost | undefined;
       let testFailure: { error: unknown } | undefined;
       let cleanupFailures: unknown[];
       try {
-        gateway = await startPairedNodeWorkerGateway({
-          owner: gatewayOwner,
-          providerBaseUrl: provider.baseUrl,
-          useRepoCli: false,
-        });
-        operator = await connectWireClient({ gateway, role: "operator", identity: null });
         workerNode = await createPairedNodeWorkerHost({
           gateway,
           operator,
@@ -584,6 +602,7 @@ describe("paired node worker lifecycle wire", () => {
 
         // Local and node-placed sessions share the Gateway without sharing failure state.
         await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-NODE-BASELINE" });
+        await settlement.wait(operator, retainedKey, signal);
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-BASELINE" });
 
         // Stop-and-continue moves reconcile the source before returning local, never pass through
@@ -631,6 +650,7 @@ describe("paired node worker lifecycle wire", () => {
         await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-MOVED-LOCAL" });
         await dispatchNodeSession({ gateway, key: retainedKey, nodeId });
         await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-MOVED-BACK" });
+        await settlement.wait(operator, retainedKey, signal);
 
         // Bundle maintenance reports only the public status/version projection and repairs loss.
         await expectPublicBundleStatus({
@@ -696,6 +716,7 @@ describe("paired node worker lifecycle wire", () => {
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AFTER-OFFLINE" });
         await workerNode.connect();
         await expectSuccessfulTurn({ operator, key: repairedKey, marker: "WIRE-OFFLINE-RETRY" });
+        await settlement.wait(operator, repairedKey, signal);
         await workerNode.waitForWorkersIdle();
 
         // Two nonterminal real worker children consume both physical slots. The third turn
@@ -751,13 +772,16 @@ describe("paired node worker lifecycle wire", () => {
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AT-CAPACITY" });
         provider.release(HOLD_A);
         await expect(waitForTurn(operator, holdARunId)).resolves.toMatchObject({ status: "ok" });
+        await settlement.wait(operator, holdAKey, signal);
         await expectSuccessfulTurn({
           operator,
           key: capacityKey,
           marker: "WIRE-CAPACITY-RETRY",
         });
+        await settlement.wait(operator, capacityKey, signal);
         provider.release(HOLD_B);
         await expect(waitForTurn(operator, holdBRunId)).resolves.toMatchObject({ status: "ok" });
+        await settlement.wait(operator, holdBKey, signal);
 
         // Revocation fences placement before responding but cannot prove remote extinction.
         // Keep the exact attachment pending cleanup rather than invent a terminal environment.
@@ -847,9 +871,6 @@ describe("paired node worker lifecycle wire", () => {
         provider.releaseAll();
         const cleanup = await Promise.allSettled([
           workerNode?.stop() ?? Promise.resolve(),
-          operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
-          stopQaGatewayFixture(gatewayOwner),
-          provider.stop(),
           closeWireServer(published.server),
         ]);
         cleanupFailures = cleanup.flatMap((result) =>

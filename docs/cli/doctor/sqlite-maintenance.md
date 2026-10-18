@@ -187,6 +187,16 @@ without recreating `sessions.json` or replaying session metadata. Hash-matching
 sources continue through import; changed or unverifiable sources remain protected
 and are listed by path. Preserve those files for inspection.
 
+When a retained primary JSONL is missing, Doctor import and recovery compare its
+recorded byte length and SHA-256 with the owning session's canonical SQLite JSONL
+prefix. An exact match settles that source with a warning in the existing receipt,
+preserving newer SQLite events and allowing later plugin repairs to finish. A verified
+archived original remains usable through the normal archive path. Row counts and
+trajectory archives alone do not prove the missing primary's contents. If the bytes
+cannot be proven (including when import normalization changed their representation),
+the source remains unresolved: preserve the receipt and restore the named primary
+from a verified backup before rerunning recovery.
+
 A session directory does not need a legacy `sessions.json` to recover its history.
 Doctor derives session ownership from verified transcript headers and SQLite. For
 a configured agent with a pending plugin migration, it records a source index in

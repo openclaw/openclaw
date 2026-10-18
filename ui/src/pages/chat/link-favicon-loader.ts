@@ -53,6 +53,7 @@ export function hydrateLinkFavicons(root: ParentNode, fetchFavicon?: LinkFavicon
   if (!fetchFavicon) {
     return;
   }
+  // Markdown owns these image nodes; this hydrator supplies their one-shot load/error state.
   for (const image of root.querySelectorAll<HTMLImageElement>(
     "img.markdown-link-favicon[data-link-favicon-host]",
   )) {

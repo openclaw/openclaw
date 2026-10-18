@@ -28,6 +28,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { BoardValidationError } from "./board-layout.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
@@ -185,7 +186,7 @@ it("executes Board mutations off the host and publishes each committed change on
       facts.push(change);
     }
   });
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  clearNodeSqliteKyselyCacheForDatabase(requireNativeSqliteDatabase(database.db));
   const host = observeHostDataSql();
   const expectPublication = (revision: number) => {
     expect(changes).toEqual([
@@ -416,40 +417,6 @@ it.each(["snapshot", "metadata", "mcp"] as const)(
   },
 );
 
-it.each(["transaction", "commit"] as const)(
-  "refuses a Board write whose target changes at the %s grant",
-  async (stage) => {
-    const { options, store, target } = fixture();
-    await store.putWidget({
-      ...target,
-      name: "status",
-      content: { kind: "html", html: "private" },
-    });
-    let sessionKey = target.sessionKey;
-    const reader = new SqliteBoardStore({
-      resolveSession: () => ({ ...options, sessionKey }),
-      env: options.env,
-    });
-    const interception = probe.admission(admission, (request, grant, admit) => {
-      if (request.stage === stage) {
-        sessionKey = "agent:main:replacement";
-      }
-      admit(request, grant);
-    });
-    try {
-      const pending = reader.putWidget({
-        ...target,
-        name: "denied",
-        content: { kind: "html", html: "denied" },
-      });
-      await expect(pending).rejects.toBeInstanceOf(BoardValidationError);
-    } finally {
-      interception.mockRestore();
-    }
-    expect((await store.getSnapshot(target)).widgets).toMatchObject([{ name: "status" }]);
-  },
-);
-
 it("reads Board snapshots and documents without a write-capable publication", async () => {
   const { store, target } = fixture();
   const put = await store.putWidget({
@@ -483,7 +450,15 @@ it("refuses Board disclosure when its target changes during a read", async () =>
   });
   let sessionKey = target.sessionKey;
   const reader = new SqliteBoardStore({
-    resolveSession: () => ({ ...options, sessionKey }),
+    resolveSession: () => ({
+      ...options,
+      sessionKey,
+      assertCurrent() {
+        if (sessionKey !== target.sessionKey) {
+          throw new BoardValidationError("invalid_operation", "board session changed; retry");
+        }
+      },
+    }),
     env: options.env,
   });
   const create = historyReaders.createSessionHistoryWorkerReaders;

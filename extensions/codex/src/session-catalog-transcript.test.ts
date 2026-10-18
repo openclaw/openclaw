@@ -10,6 +10,13 @@ import {
   readCodexSessionTranscript,
 } from "./session-catalog.test-helpers.js";
 
+const textItems = (...ids: string[]) => ids.map((id) => catalogThreadItem(id, { text: id }));
+const turnPage = (items: CodexThreadItem[], backwardsCursor?: string, nextCursor?: string) => ({
+  data: [{ id: "turn-1", items: [...items] }],
+  backwardsCursor,
+  nextCursor,
+});
+
 function nativeItemControl(source: CodexThreadItem[]) {
   const listItemPage = vi.fn<CodexSessionCatalogControl["listItemPage"]>(
     async ({ cursor, limit }) => {
@@ -33,10 +40,7 @@ function nativeItemControl(source: CodexThreadItem[]) {
     control: createEligibleControl({
       requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
       listItemPage,
-      listTurnPage: vi.fn(async () => ({
-        data: [{ id: "turn-1", items: [...source] }],
-        backwardsCursor: "native-turn:turn-1",
-      })),
+      listTurnPage: vi.fn(async () => turnPage(source, "native-turn:turn-1")),
     }),
   };
 }
@@ -105,24 +109,18 @@ describe("Codex catalog transcript", () => {
   });
 
   it("resumes within a legacy turn after an append, then advances to the next native turn", async () => {
-    const source = Array.from({ length: 7 }, (_, index) =>
-      catalogThreadItem(`item-${index}`, { text: `message ${index}` }),
-    );
+    const source = textItems(...Array.from({ length: 7 }, (_, index) => `item-${index}`));
     const listTurnPage = vi.fn<CodexSessionCatalogControl["listTurnPage"]>(async ({ cursor }) => {
       if (cursor === "older-turns") {
         return {
-          data: [{ id: "older", items: [catalogThreadItem("oldest", { text: "oldest" })] }],
+          data: [{ id: "older", items: textItems("oldest") }],
           backwardsCursor: "older-anchor",
         };
       }
       if (cursor && cursor !== "turn-anchor") {
         throw new Error("unexpected native turn cursor");
       }
-      return {
-        data: [{ id: "turn-1", items: [...source] }],
-        backwardsCursor: "turn-anchor",
-        nextCursor: "older-turns",
-      };
+      return turnPage(source, "turn-anchor", "older-turns");
     });
     const control = createEligibleControl({ listTurnPage });
 
@@ -141,39 +139,27 @@ describe("Codex catalog transcript", () => {
     expect(listTurnPage.mock.calls[1]?.[0].cursor).toBe("turn-anchor");
   });
 
-  it("reports a removed legacy item anchor instead of restarting its page", async () => {
-    const source = ["oldest", "middle", "newest"].map((id) => catalogThreadItem(id, { text: id }));
+  it.each([
+    {
+      kind: "removed item",
+      anchor: "turn-anchor",
+      error: "Codex transcript changed; refresh the session before loading older items",
+    },
+    {
+      kind: "absent turn",
+      anchor: undefined,
+      error: "Codex app-server did not provide a transcript continuation anchor",
+    },
+  ])("reports a $kind anchor instead of losing the remainder", async ({ anchor, error }) => {
+    const source = textItems("oldest", "middle", "newest");
     const control = createEligibleControl({
-      listTurnPage: vi.fn(async () => ({
-        data: [{ id: "turn-1", items: [...source] }],
-        backwardsCursor: "turn-anchor",
-      })),
+      listTurnPage: vi.fn(async () => turnPage(source, anchor)),
     });
-    const first = await readTranscript(control, 1);
-    source.pop();
-
-    await expect(readTranscript(control, 2, first.nextCursor)).rejects.toThrow(
-      "Codex transcript changed; refresh the session before loading older items",
-    );
-  });
-
-  it("reports an absent native turn anchor instead of dropping the remainder", async () => {
-    const control = createEligibleControl({
-      listTurnPage: vi.fn(async () => ({
-        data: [
-          {
-            id: "turn-1",
-            items: [
-              catalogThreadItem("oldest", { text: "oldest" }),
-              catalogThreadItem("newest", { text: "newest" }),
-            ],
-          },
-        ],
-      })),
-    });
-
-    await expect(readTranscript(control, 1)).rejects.toThrow(
-      "Codex app-server did not provide a transcript continuation anchor",
-    );
+    let cursor: string | undefined;
+    if (anchor) {
+      cursor = (await readTranscript(control, 1)).nextCursor;
+      source.pop();
+    }
+    await expect(readTranscript(control, anchor ? 2 : 1, cursor)).rejects.toThrow(error);
   });
 });

@@ -1,5 +1,4 @@
-// Child fixture: keep registration, finalization, JSON routing, and terminal writers real;
-// replace filesystem/plugin work and emit synthetic Doctor and fresh-triage diagnostics.
+// Keep CLI/output/lifecycle owners real; filesystem, plugins, and Doctor are synthetic.
 import fs from "node:fs/promises";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
@@ -11,7 +10,6 @@ import { finalizationFixtureClockUrl as fixtureClockUrl } from "./update-finaliz
 await import(fixtureClockUrl);
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
-// Keep real install discovery inside the fixture; only the completion case has a CLI binary.
 await fs.writeFile(
   path.join(root, "package.json"),
   JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
@@ -92,7 +90,7 @@ export async function doctorCommand() {
   console.log('Doctor console diagnostic');
   process.stderr.write('Doctor stderr diagnostic\\n');
   ${
-    scenario === "doctor-hang" || scenario === "doctor-progress"
+    doctorDeadline
       ? `
   console.log('STEP completed fixture-schema');
   console.error('STEP active fixture-validation');
@@ -160,53 +158,34 @@ const config = { update: { channel: 'dev' }, plugins: { enabled: false } };
 export const readConfigFileSnapshot = async () => ({ valid: true, config, sourceConfig: config, parsed: config });
 export const assertConfigWriteAllowedInCurrentMode = () => {};
 `;
-const stubs = new Map<string, string>([
-  // Synthetic services must not borrow the operator's shared lifecycle lock directory.
-  [
-    sourceUrl("../infra/tmp-openclaw-dir.ts"),
-    `export * from ${JSON.stringify(`${sourceUrl("../infra/tmp-openclaw-dir.ts")}?fixture-original`)};
-import { resolvePreferredOpenClawTmpDir as resolveOriginal } from ${JSON.stringify(`${sourceUrl("../infra/tmp-openclaw-dir.ts")}?fixture-original`)};
+const stubs = new Map<string, string>();
+const stub = (relative: string, source: string) => stubs.set(sourceUrl(relative), source);
+const original = (relative: string) => JSON.stringify(`${sourceUrl(relative)}?fixture-original`);
+function override(relative: string, source: string) {
+  return stub(relative, `export * from ${original(relative)};\n${source}`);
+}
+// Synthetic services must not borrow the operator's shared lifecycle lock directory.
+override(
+  "../infra/tmp-openclaw-dir.ts",
+  `
+import { resolvePreferredOpenClawTmpDir as resolveOriginal } from ${original("../infra/tmp-openclaw-dir.ts")};
 export const resolvePreferredOpenClawTmpDir = (options = {}) => resolveOriginal({
   ...options, preferredDir: ${JSON.stringify(path.join(root, "runtime"))},
   tmpdir: () => ${JSON.stringify(root)},
 });`,
-  ],
-  // Forward prepared locations, not currentModuleUrl as an import: builds may
-  // place that URL in a shared chunk. Workers still execute their real compiled code.
-  [
-    sourceUrl("../infra/runtime-process-entrypoints.ts"),
-    `export const runtimeProcessEntrypoints = ${runtimeProcessEntrypointsJson};
+);
+// Compiled import.meta.url may name a shared chunk; workers need explicit entrypoints.
+for (const [relative, source] of Object.entries({
+  "../infra/runtime-process-entrypoints.ts": `export const runtimeProcessEntrypoints = ${runtimeProcessEntrypointsJson};
 export const SQLITE_READONLY_CHILD_ARG = ${JSON.stringify(SQLITE_READONLY_CHILD_ARG)};`,
-  ],
-  [sourceUrl("../commands/doctor.ts"), doctorSource],
-  [sourceUrl("../config/config.ts"), snapshotSource],
-  [
-    sourceUrl("../plugins/installed-plugin-index-records.ts"),
+  "../commands/doctor.ts": doctorSource,
+  "../config/config.ts": snapshotSource,
+  "../plugins/installed-plugin-index-records.ts":
     "export const loadInstalledPluginIndexInstallRecords = async () => ({});",
-  ],
-  [
-    sourceUrl("../plugins/plugin-lifecycle-lease.ts"),
+  "../plugins/plugin-lifecycle-lease.ts":
     "export const withPluginLifecycleLease = async (_options, run) => await run();",
-  ],
-  [
-    sourceUrl("./update-cli/update-command-config-snapshot.ts"),
-    // Replace snapshot creation only; keep real readers available to Doctor imports.
-    `export * from ${JSON.stringify(`${sourceUrl("./update-cli/update-command-config-snapshot.ts")}?fixture-original`)};\n` +
-      (scenario === "phase-hang"
-        ? `import { spawnCommand } from ${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))};
-export const createUpdateConfigSnapshot = async () => {
-  const child = spawnCommand([process.execPath, '-e', ${JSON.stringify(blockedChildSource)}, '--', 'fixture-private-argument'], {stdin:'pipe', stdout:'ignore', stderr:'ignore'});
-  console.error('fixture configSnapshot entered');
-  await child;
-};`
-        : scenario === "borrowed-phase"
-          ? `import { advanceFinalizationFixtureClock } from ${JSON.stringify(fixtureClockUrl)};
-export const createUpdateConfigSnapshot = async () => { advanceFinalizationFixtureClock(1_200); };`
-          : "export const createUpdateConfigSnapshot = async () => {};"),
-  ],
-  [
-    sourceUrl("./update-cli/update-command-config.ts"),
-    `
+  "./update-cli/update-command-plugins.ts": `export const updatePluginsAfterCoreUpdate = async () => ({status: ${JSON.stringify(scenario?.endsWith("plugin-error") ? "error" : scenario?.endsWith("plugin-warning") ? "warning" : "ok")}, changed: false, warnings: [], sync: {changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: []}, npm: {changed: false, outcomes: []}, integrityDrifts: []});`,
+  "./update-cli/update-command-config.ts": `
 import { readConfigFileSnapshot } from ${JSON.stringify(sourceUrl("../config/config.ts"))};
 export const readUpdateConfigFileSnapshot = readConfigFileSnapshot;
 export const capturePreUpdateSourceConfig = ({sourceConfig, parsed}) => ({ sourceConfig, authoredConfig: parsed });
@@ -221,22 +200,32 @@ export const preparePostCorePluginConfig = async () => ({
   configWriteOptions: {},
   configChanged: false,
   restoredAuthoredChannels: undefined,
-});
-`,
-  ],
-  [
-    sourceUrl("./update-cli/update-command-plugins.ts"),
-    `export const updatePluginsAfterCoreUpdate = async () => ({status: ${JSON.stringify(scenario?.endsWith("plugin-error") ? "error" : scenario?.endsWith("plugin-warning") ? "warning" : "ok")}, changed: false, warnings: [], sync: {changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: []}, npm: {changed: false, outcomes: []}, integrityDrifts: []});`,
-  ],
-  [
-    sourceUrl("../daemon/gateway-entrypoint.ts"),
-    `export * from ${JSON.stringify(`${sourceUrl("../daemon/gateway-entrypoint.ts")}?fixture-original`)};\n` +
-      `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
-  ],
-]);
+});`,
+})) {
+  stub(relative, source);
+}
+// Replace snapshot creation only; keep real readers available to Doctor imports.
+override(
+  "./update-cli/update-command-config-snapshot.ts",
+  scenario === "phase-hang"
+    ? `import { spawnCommand } from ${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))};
+export const createUpdateConfigSnapshot = async () => {
+  const child = spawnCommand([process.execPath, '-e', ${JSON.stringify(blockedChildSource)}, '--', 'fixture-private-argument'], {stdin:'pipe', stdout:'ignore', stderr:'ignore'});
+  console.error('fixture configSnapshot entered');
+  await child;
+};`
+    : scenario === "borrowed-phase"
+      ? `import { advanceFinalizationFixtureClock } from ${JSON.stringify(fixtureClockUrl)};
+export const createUpdateConfigSnapshot = async () => { advanceFinalizationFixtureClock(1_200); };`
+      : "export const createUpdateConfigSnapshot = async () => {};",
+);
+override(
+  "../daemon/gateway-entrypoint.ts",
+  `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
+);
 const blockedPhase = repairDeadline
   ? "plugins"
-  : scenario === "doctor-hang" || scenario === "doctor-progress"
+  : doctorDeadline
     ? "doctor"
     : scenario === "phase-hang"
       ? "configSnapshot"
@@ -244,12 +233,11 @@ const blockedPhase = repairDeadline
         ? "completionCache"
         : undefined;
 if (blockedPhase || scenario === "borrowed-phase") {
-  const lifecycleUrl = sourceUrl("./update-cli/update-finalization-lifecycle.ts");
   // Keep real phase ownership; only the deliberately blocked phase gets a short budget.
-  stubs.set(
-    lifecycleUrl,
+  stub(
+    "./update-cli/update-finalization-lifecycle.ts",
     `import { once } from 'node:events';
-import { UpdateFinalizationLifecycle as RealLifecycle } from ${JSON.stringify(`${lifecycleUrl}?fixture-original`)};
+import { UpdateFinalizationLifecycle as RealLifecycle } from ${original("./update-cli/update-finalization-lifecycle.ts")};
 import { startFinalizationFixtureClock, restoreFinalizationFixtureClock } from ${JSON.stringify(fixtureClockUrl)};
 export class UpdateFinalizationLifecycle extends RealLifecycle {
   budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? 1_000 : super.budget(phase); }
@@ -281,11 +269,10 @@ export class UpdateFinalizationLifecycle extends RealLifecycle {
   );
 }
 if (doctorDeadline || scenario === "borrowed-phase") {
-  const outputUrl = sourceUrl("./update-cli/update-finalization-output.ts");
-  stubs.set(
-    outputUrl,
-    `export * from ${JSON.stringify(`${outputUrl}?fixture-original`)};
-import { captureUpdateFinalizationDoctorOutput as capture } from ${JSON.stringify(`${outputUrl}?fixture-original`)};
+  override(
+    "./update-cli/update-finalization-output.ts",
+    `
+import { captureUpdateFinalizationDoctorOutput as capture } from ${original("./update-cli/update-finalization-output.ts")};
 import { advanceFinalizationFixtureClock, restoreFinalizationFixtureClock } from ${JSON.stringify(fixtureClockUrl)};
 export function captureUpdateFinalizationDoctorOutput(phase) {
   const append = capture(phase);
@@ -307,8 +294,8 @@ export function captureUpdateFinalizationDoctorOutput(phase) {
   );
 }
 if (scenario === "human-recovery-plugin-error") {
-  stubs.set(
-    sourceUrl("./update-cli/update-command-report.ts"),
+  stub(
+    "./update-cli/update-command-report.ts",
     `
 import { mock } from 'node:test';
 export async function runInteractiveUpdateFailureAction({ runtime }) {
@@ -322,11 +309,10 @@ export async function runInteractiveUpdateFailureAction({ runtime }) {
 if (scenario === "doctor-error") {
   // Model a loaded runner's next port read without a real delay. Recovery must
   // exhaust this fixture's polling budget in the interval, before another read.
-  const portsUrl = sourceUrl("../infra/ports-inspect.ts");
-  stubs.set(
-    portsUrl,
-    `export * from ${JSON.stringify(`${portsUrl}?fixture-original`)};
-import { inspectPortUsage as inspectOriginal } from ${JSON.stringify(`${portsUrl}?fixture-original`)};
+  override(
+    "../infra/ports-inspect.ts",
+    `
+import { inspectPortUsage as inspectOriginal } from ${original("../infra/ports-inspect.ts")};
 import { elapsed, sleep } from ${JSON.stringify(recoveryClockUrl)};
 export async function inspectPortUsage(port, options) {
   const usage = await inspectOriginal(port, options);
@@ -337,16 +323,10 @@ export async function inspectPortUsage(port, options) {
   // The timeout-report case owns an uninspectable service, not the host's manager.
   // Admit that fixture identity while leaving recovery inspection, HTTP probes,
   // polling, and failure recording real; no service mutation is permitted.
-  const pathsUrl = sourceUrl("../config/paths.ts");
-  stubs.set(
-    pathsUrl,
-    `export * from ${JSON.stringify(`${pathsUrl}?fixture-original`)};
-export const isDefaultInstallIdentity = () => true;`,
-  );
-  const serviceUrl = sourceUrl("../daemon/service.ts");
-  stubs.set(
-    serviceUrl,
-    `export * from ${JSON.stringify(`${serviceUrl}?fixture-original`)};
+  override("../config/paths.ts", "export const isDefaultInstallIdentity = () => true;");
+  override(
+    "../daemon/service.ts",
+    `
 const refuseMutation = async () => { throw new Error('Output fixture cannot mutate a Gateway service'); };
 const service = {
   label: 'Fixture service', loadedText: 'loaded', notLoadedText: 'not loaded',

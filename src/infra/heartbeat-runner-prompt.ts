@@ -351,7 +351,7 @@ export function resolveHeartbeatRunPrompt(params: {
       .join("\n");
     const completionInstruction = params.useHeartbeatResponseTool
       ? `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
-      : `After completing all due tasks, reply ${SILENT_REPLY_TOKEN}.`;
+      : `After completing all due tasks, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
     basePrompt = `Run the following periodic tasks (only those due based on their intervals):
 
 ${taskList}

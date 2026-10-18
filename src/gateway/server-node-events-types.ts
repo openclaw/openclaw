@@ -1,4 +1,3 @@
-// Gateway node event types.
 // Defines the narrowed context and event envelope for node-originated handlers.
 import type { NodePairingGeneration } from "../infra/device-pairing.js";
 import type { NodeRegistry } from "./node-registry.js";

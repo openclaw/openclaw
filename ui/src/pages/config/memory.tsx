@@ -233,18 +233,11 @@ function EngineSection(props: MemoryViewProps) {
         <SettingsRow
           title={t("memoryPage.engine.rowTitle")}
           description={
-            available() ? (
-              <>
-                {" "}
-                {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
-              </>
-            ) : (
-              <>
-                {" "}
-                {t("memoryPage.engine.catalogUnavailable")}
-                {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
-              </>
-            )
+            <>
+              {" "}
+              {!available() && t("memoryPage.engine.catalogUnavailable")}
+              {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
+            </>
           }
           stacked={available()}
           control={

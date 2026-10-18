@@ -123,11 +123,20 @@ describe("sidebar layout", () => {
     }
   });
 
-  it("keeps a promoted main view visible when restoring a mobile split", () => {
+  it("presents Chat over a promoted page on mobile without changing the desktop split", () => {
     const split = ensureSidebarConversation(openSlot({ columns: [] }, "dashboard"));
     const promoted = promoteSidebarPanel(split, sidebarActivePanel(split)!.id);
     expect(sidebarMainPanel(promoted)?.slot).toBe("dashboard");
-    expect(presentNarrowSidebarLayout(promoted, { allPanels: true })).toBe(promoted);
+    const mobile = presentNarrowSidebarLayout(promoted, { allPanels: true });
+    expect(isSidebarSlotVisible(mobile, "conversation")).toBe(true);
+    expect(isSidebarSlotVisible(mobile, "dashboard")).toBe(false);
+    expect(presentNarrowSidebarLayout(promoted)).toBe(promoted);
+    expect(
+      isSidebarSlotVisible(
+        presentNarrowSidebarLayout(closeSlot(promoted, "conversation"), { allPanels: true }),
+        "dashboard",
+      ),
+    ).toBe(true);
     expect(isSidebarSlotVisible(promoted, "dashboard")).toBe(true);
     expect(isSidebarSlotVisible(promoted, "conversation")).toBe(true);
   });

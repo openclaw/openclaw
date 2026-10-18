@@ -4,7 +4,6 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
   assertSqliteSchemaContains,
-  collectSqliteSchemaIssues,
   createSqliteTableContractReader,
   readSqliteSchemaCookie,
   type SqliteTableContractReader,
@@ -26,15 +25,13 @@ import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
-import {
-  isOpenClawStateStartupRepairableSchemaIssue,
-  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
-} from "./openclaw-state-schema-compatibility.js";
+import { STATE_RUNTIME_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export function needsOpenClawStateDatabaseSchemaRepair(
   pathname: string,
   scope: "automatic" | "doctor" = "automatic",
+  integrityCheck: "quick" | "full" = "quick",
 ): boolean {
   let database: DatabaseSync | undefined;
   try {
@@ -50,7 +47,7 @@ export function needsOpenClawStateDatabaseSchemaRepair(
     if (!needsRepair) {
       assertCurrentStateRuntimeSchema(database, pathname);
       if (scope === "doctor") {
-        assertSqliteIntegrity(database, pathname);
+        assertSqliteIntegrity(database, pathname, { check: integrityCheck });
       }
     }
     return needsRepair;
@@ -107,18 +104,9 @@ export function isOpenClawStateSchemaFastPathEligible(
         if (typeof schemaVersion !== "number") {
           throw new Error(`Shared-state database ${pathname} schema version is unavailable.`);
         }
-        // Both policies see this read transaction; repair must collect fresh facts after it ends.
+        // Repair must collect fresh facts after this read transaction ends.
         const readTable = createSqliteTableContractReader(database);
         assertCurrentStateRuntimeSchema(database, pathname, readTable);
-        const startupRepairRequired = collectSqliteSchemaIssues(
-          database,
-          OPENCLAW_STATE_SCHEMA_SQL,
-          STATE_RUNTIME_SCHEMA_COMPATIBILITY,
-          readTable,
-        ).some(isOpenClawStateStartupRepairableSchemaIssue);
-        if (startupRepairRequired) {
-          return false;
-        }
         assertNoLegacyStateRuntimeRepair(database, pathname);
         publishIntegrity = assertOpenClawStateRuntimeIntegrity(
           database,

@@ -1,6 +1,5 @@
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
-  SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
@@ -9,7 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/speech";
 import {
   MAX_AUDIO_BYTES,
-  parseSpeechDirectiveNumberOverride,
+  createSpeechDirectiveParser,
   resolveSpeechProviderApiKey,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
@@ -69,8 +68,7 @@ function resolveReferenceId(raw: Record<string, unknown> | undefined): string | 
 
 function normalizeProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw =
-    asOptionalRecord(providers?.["fish-audio"]) ?? asOptionalRecord(rawConfig["fish-audio"]);
+  const raw = asOptionalRecord(providers?.["fish-audio"]);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -89,12 +87,12 @@ function normalizeProviderConfig(rawConfig: Record<string, unknown>) {
 
 function readProviderConfig(config: SpeechProviderConfig) {
   return normalizeProviderConfig({
-    "fish-audio": { ...config, apiKey: trimToUndefined(config.apiKey) },
+    providers: { "fish-audio": { ...config, apiKey: trimToUndefined(config.apiKey) } },
   });
 }
 
 function readOverrides(overrides: SpeechProviderOverrides | undefined): FishAudioOverrides {
-  const raw = asOptionalRecord(overrides) ?? {};
+  const raw = overrides ?? {};
   return {
     model: trimToUndefined(raw.model ?? raw.modelId)
       ? normalizeModel(raw.model ?? raw.modelId)
@@ -116,79 +114,75 @@ function resolveApiKey(configValue?: string): string | undefined {
   );
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
-  switch (ctx.key) {
-    case "voice":
-    case "voiceid":
-    case "voice_id":
-    case "referenceid":
-    case "reference_id":
-    case "fish_voice":
-    case "fishaudio_voice":
-      return ctx.policy.allowVoice
-        ? { handled: true, overrides: { ...ctx.currentOverrides, referenceId: ctx.value } }
-        : { handled: true };
-    case "model":
-    case "modelid":
-    case "model_id":
-    case "fish_model":
-    case "fishaudio_model":
-      if (!ctx.policy.allowModelId) {
-        return { handled: true };
-      }
-      try {
-        return {
-          handled: true,
-          overrides: { ...ctx.currentOverrides, model: normalizeModel(ctx.value) },
-        };
-      } catch (error) {
-        return { handled: true, warnings: [String(error)] };
-      }
-    case "speed":
-    case "fish_speed":
-    case "temperature":
-    case "fish_temperature":
-    case "top_p":
-    case "topp":
-    case "fish_top_p": {
-      const setting = ctx.key.replace(/^fish_/, "");
-      const overrideKey = setting === "top_p" || setting === "topp" ? "topP" : setting;
-      const label = overrideKey === "topP" ? "top_p" : overrideKey;
-      return parseSpeechDirectiveNumberOverride({
-        ctx,
-        overrideKey,
-        range: overrideKey === "speed" ? { min: 0.5, max: 2 } : { min: 0, max: 1 },
-        warning: (value) => `invalid Fish Audio ${label} "${value}"`,
-      });
-    }
-    case "latency":
-    case "fish_latency":
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      try {
-        return {
-          handled: true,
-          overrides: { ...ctx.currentOverrides, latency: normalizeLatency(ctx.value) },
-        };
-      } catch (error) {
-        return { handled: true, warnings: [String(error)] };
-      }
-    case "normalize":
-    case "fish_normalize": {
-      if (!ctx.policy.allowNormalization) {
-        return { handled: true };
-      }
-      const normalize = parseBooleanValue(ctx.value);
-      if (normalize !== undefined) {
-        return { handled: true, overrides: { ...ctx.currentOverrides, normalize } };
-      }
-      return { handled: true, warnings: [`invalid Fish Audio normalize "${ctx.value}"`] };
-    }
-    default:
-      return { handled: false };
-  }
-}
+const parseDirectiveToken = createSpeechDirectiveParser(
+  {
+    referenceId: [
+      "allowVoice",
+      [
+        "voice",
+        "voiceid",
+        "voice_id",
+        "referenceid",
+        "reference_id",
+        "fish_voice",
+        "fishaudio_voice",
+      ],
+    ],
+    model: [
+      "allowModelId",
+      ["model", "modelid", "model_id", "fish_model", "fishaudio_model"],
+      { value: (ctx) => normalizeModel(ctx.value) },
+    ],
+    speed: [
+      "allowVoiceSettings",
+      ["speed", "fish_speed"],
+      {
+        number: {
+          range: { min: 0.5, max: 2 },
+          warning: (value) => `invalid Fish Audio speed "${value}"`,
+        },
+      },
+    ],
+    temperature: [
+      "allowVoiceSettings",
+      ["temperature", "fish_temperature"],
+      {
+        number: {
+          range: { min: 0, max: 1 },
+          warning: (value) => `invalid Fish Audio temperature "${value}"`,
+        },
+      },
+    ],
+    topP: [
+      "allowVoiceSettings",
+      ["top_p", "topp", "fish_top_p"],
+      {
+        number: {
+          range: { min: 0, max: 1 },
+          warning: (value) => `invalid Fish Audio top_p "${value}"`,
+        },
+      },
+    ],
+    latency: [
+      "allowVoiceSettings",
+      ["latency", "fish_latency"],
+      { value: (ctx) => normalizeLatency(ctx.value) },
+    ],
+    normalize: [
+      "allowNormalization",
+      ["normalize", "fish_normalize"],
+      {
+        parse: (ctx) => {
+          const normalize = parseBooleanValue(ctx.value);
+          return normalize !== undefined
+            ? { handled: true, overrides: { normalize } }
+            : { handled: true, warnings: [`invalid Fish Audio normalize "${ctx.value}"`] };
+        },
+      },
+    ],
+  },
+  { formatErrorMessage: String },
+);
 
 function resolveFormat(target: SpeechSynthesisTarget): {
   format: FishAudioFormat;
@@ -235,6 +229,8 @@ async function resolveSynthesisRequest(
 }
 
 export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    Boolean(resolveApiKey(readProviderConfig(providerConfig).apiKey));
   return {
     id: "fish-audio",
     label: "Fish Audio",
@@ -296,8 +292,9 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       });
     },
-    isConfigured: ({ providerConfig }) =>
-      Boolean(resolveApiKey(readProviderConfig(providerConfig).apiKey)),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const params = await resolveSynthesisRequest(req);
       return {

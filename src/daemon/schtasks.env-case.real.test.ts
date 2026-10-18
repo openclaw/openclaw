@@ -46,6 +46,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 describe.skipIf(process.platform !== "win32")("Windows launcher redirection ownership", () => {
   it.each([
     { message: "a >b & c", normalized: true, extraArgument: "", target: "" },
+    {
+      message: "quoted expansion",
+      normalized: true,
+      extraArgument: "",
+      target: '"%CD%\\gateway output.log"',
+    },
     { message: 'a "q" >b', normalized: false, extraArgument: "", target: "" },
     { message: "comma target", normalized: false, extraArgument: ",extra", target: "" },
     {

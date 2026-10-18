@@ -53,7 +53,7 @@ describe("vydra video-generation provider", () => {
   });
 
   it("submits, polls, and downloads veo3 video with the configured request policy", async () => {
-    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonResponse");
     const pollProviderOperationJsonSpy = vi.spyOn(providerHttp, "pollProviderOperationJson");
     const fetchWithTimeoutGuardedSpy = vi.spyOn(providerHttp, "fetchWithTimeoutGuarded");
     const fetchMock = stubFetch(

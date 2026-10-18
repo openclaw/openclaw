@@ -54,6 +54,7 @@ export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
       execute: async (args, context) => {
         context?.signal?.throwIfAborted();
         const { runDuckDuckGoSearch } = await loadDuckDuckGoClientModule();
+        const safeSearch = readStringParam(args, "safeSearch");
         return await runDuckDuckGoSearch({
           config: ctx.config,
           query: readStringParam(args, "query", { required: true }),
@@ -62,11 +63,10 @@ export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
             message: "count must be an integer from 1 to 10.",
           }),
           region: readStringParam(args, "region"),
-          safeSearch: readStringParam(args, "safeSearch") as
-            | "strict"
-            | "moderate"
-            | "off"
-            | undefined,
+          safeSearch:
+            safeSearch === "strict" || safeSearch === "moderate" || safeSearch === "off"
+              ? safeSearch
+              : undefined,
           ...(context?.signal ? { signal: context.signal } : {}),
         });
       },

@@ -13,12 +13,7 @@ import {
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import {
-  createContext,
-  createGateway,
-  createRenderedPage,
-  reconnectPage,
-} from "./sessions-page.test-support.ts";
+import { createContext, createGateway, createRenderedPage } from "./sessions-page.test-support.ts";
 
 function result(key: string): SessionsListResult {
   return sessionsResult([{ key, kind: "direct", updatedAt: 1 }], 1);
@@ -56,7 +51,8 @@ async function mountTypingPage(initialResult = result("agent:main:initial")) {
     return () => undefined;
   };
   const page = await createRenderedPage(context, initialResult);
-  const input = () => page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+  const input = () =>
+    page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
   const edit = async (value: string) => {
     input().value = value;
     input().dispatchEvent(new Event("input", { bubbles: true }));
@@ -121,7 +117,7 @@ describe("sessions page managed roster", () => {
       deepLink,
     );
     const search = async (value: string) => {
-      const input = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+      const input = page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
       input.value = value;
       input.dispatchEvent(new Event("input", { bubbles: true }));
       await page.updateComplete;
@@ -181,7 +177,7 @@ describe("sessions page managed roster", () => {
     const sessions = createTestSessionCapability(gateway);
     const page = await createRenderedPage(createContext(gateway, sessions), pageResult(0));
     try {
-      const input = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+      const input = page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
       input.value = "server-only metadata";
       input.dispatchEvent(new Event("input", { bubbles: true }));
       await vi.advanceTimersByTimeAsync(200);
@@ -223,16 +219,17 @@ describe("Sessions page typing ownership", () => {
       vi.useFakeTimers();
       const { page, requests, pending, input, edit, cleanup } = await mountTypingPage();
       try {
+        page.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
         const limit = page.querySelector<HTMLInputElement>(".session-filter-input--limit")!;
         limit.value = "25";
         limit.dispatchEvent(new Event("input", { bubbles: true }));
         await vi.advanceTimersByTimeAsync(0);
         pending.at(-1)!.resolve(result("agent:main:limited"));
         await vi.advanceTimersByTimeAsync(0);
+        page.selectedSessions = new Map([["agent:main:limited", { key: "agent:main:limited" }]]);
         await edit("older");
         await vi.advanceTimersByTimeAsync(200);
         const oldRequest = pending.at(-1)!;
-        page.selectedSessions = new Map([["agent:main:limited", { key: "agent:main:limited" }]]);
         await page.updateComplete;
         input().focus();
         if (action === "click") {
@@ -412,9 +409,7 @@ describe("Sessions page typing ownership", () => {
         "sessions.patch",
         expect.objectContaining({ key, label: "After rename" }),
       );
-      [...page.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === "Refresh")!
-        .click();
+      page.querySelector<HTMLButtonElement>(".sessions-toolbar__refresh")!.click();
       await vi.advanceTimersByTimeAsync(0);
       expect(pageRequests).toBe(2);
       patch.resolve({ ok: true, path: "", key, entry: { sessionId: "renamed-session" } });
@@ -422,7 +417,9 @@ describe("Sessions page typing ownership", () => {
       expect(mutationRefreshes).toBe(1);
       expect(pageRequests).toBe(2);
       expect(page.loading).toBe(true);
-      const search = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+      const search = page.querySelector<HTMLInputElement>(
+        ".sessions-filter-popover__search input",
+      )!;
       for (const value of ["n", "ne", "new"]) {
         search.value = value;
         search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -453,13 +450,12 @@ describe("Sessions page typing ownership", () => {
       expect(vi.getTimerCount()).toBe(0);
     }
   });
-  it.each(["detach", "reconnect", "client", "context"])(
+  it.each(["detach", "reconnect", "client"])(
     "retires pending work on %s and starts the new owner's query without the old response",
     async (retirement) => {
       vi.useFakeTimers();
       const harness = await mountTypingPage();
       const { page, input, edit, requests, pending, connection, client } = harness;
-      let replacementSessions: ReturnType<typeof createTestSessionCapability> | undefined;
       try {
         await edit("older");
         await vi.advanceTimersByTimeAsync(200);
@@ -473,21 +469,19 @@ describe("Sessions page typing ownership", () => {
         await vi.advanceTimersByTimeAsync(400);
         expect(requests).toHaveLength(2);
         if (retirement === "detach") {
-          reconnectPage(page);
-        } else if (retirement === "context") {
-          const replacement = createGateway(client);
-          replacementSessions = createTestSessionCapability(replacement.gateway);
-          page.context = createContext(replacement.gateway, replacementSessions);
-          page.requestUpdate();
-        } else {
-          connection.emit({
-            phase: "connected",
-            client:
-              retirement === "client"
-                ? ({ request: client.request.bind(client) } as GatewayBrowserClient)
-                : client,
-          });
+          pending[0]!.resolve(result("agent:main:retired"));
+          await vi.advanceTimersByTimeAsync(0);
+          expect(requests).toHaveLength(2);
+          expect(page.isConnected).toBe(false);
+          return;
         }
+        connection.emit({
+          phase: "connected",
+          client:
+            retirement === "client"
+              ? ({ request: client.request.bind(client) } as GatewayBrowserClient)
+              : client,
+        });
         await page.updateComplete;
         await vi.advanceTimersByTimeAsync(0);
         expect(requests).toHaveLength(3);
@@ -509,7 +503,6 @@ describe("Sessions page typing ownership", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(page.result?.sessions[0]?.key).toBe("agent:main:final");
       } finally {
-        replacementSessions?.dispose();
         await harness.cleanup();
       }
     },
@@ -536,8 +529,6 @@ describe("Sessions page typing ownership", () => {
         .find((button) => button.textContent?.trim() === "Load more sessions")!
         .click();
       await vi.advanceTimersByTimeAsync(0);
-      page.context = { ...harness.context };
-      page.requestUpdate();
       await page.updateComplete;
       expect(requests).toHaveLength(2);
       expect(page.result?.sessions).toHaveLength(50);

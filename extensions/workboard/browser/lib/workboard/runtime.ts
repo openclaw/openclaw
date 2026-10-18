@@ -93,6 +93,7 @@ function createDefaultState(): WorkboardUiState {
     mutationReadiness: "ready",
     error: null,
     cards: [],
+    nextCursor: null,
     boards: [],
     statuses: WORKBOARD_STATUSES,
     lastDispatchSummary: null,

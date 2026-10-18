@@ -58,3 +58,56 @@ describe("delegated CLI tool policy", () => {
     ).rejects.toThrow("cannot enforce delegated execution tool policy");
   });
 });
+
+describe("workspace-only CLI tool policy", () => {
+  const workspaceInput = {
+    ...input,
+    params: {
+      ...params,
+      sessionEntry: undefined,
+      config: { tools: { fs: { workspaceOnly: true } } },
+    },
+  };
+
+  it.each([
+    { canEnforceExactToolAvailability: false },
+    { bundleMcp: false },
+    {
+      params: {
+        ...workspaceInput.params,
+        sessionEntry: { sessionId: "coding", updatedAt: 1, execHost: "node" as const },
+      },
+    },
+  ])("refuses an unmediated workspace-only run: %j", async (overrides) => {
+    await expect(resolveCliRuntimeToolPolicy({ ...workspaceInput, ...overrides })).rejects.toThrow(
+      "cannot enforce workspace-only tool policy",
+    );
+  });
+
+  it("preserves an exact tool cap when replacing native tools", async () => {
+    const result = await resolveCliRuntimeToolPolicy({
+      ...workspaceInput,
+      params: {
+        ...workspaceInput.params,
+        cliToolAvailability: { native: ["Read"], openClaw: ["message"] },
+      },
+      projectNativeToolAuthority: () => ["read"],
+    });
+    expect(result.params.cliToolAvailability).toEqual({
+      native: [],
+      openClaw: ["message", "read"],
+    });
+    expect(result.runtimeToolsAllowPolicy).toBeUndefined();
+  });
+
+  it("keeps backend-enforced tool-free questions independent of the file tool policy", async () => {
+    const result = await resolveCliRuntimeToolPolicy({
+      ...workspaceInput,
+      isSideQuestion: true,
+      skipsTurnPreparation: true,
+      sideQuestionToolMode: "disabled",
+    });
+    expect(result.params.cliToolAvailability).toBeUndefined();
+    expect(result.runtimeToolsAllowPolicy).toBeUndefined();
+  });
+});

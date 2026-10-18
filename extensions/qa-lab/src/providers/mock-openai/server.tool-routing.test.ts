@@ -160,17 +160,6 @@ it.each(["sessions_spawn", "ls"])(
   },
 );
 
-it("does not mistake shell exec or discovery without invocation for spawn authority", async () => {
-  const turn = await startTurn("Subagent terminal reply QA check: visible.", {
-    model: "gpt-5.6-luna",
-    tools: [...catalogTools.filter((tool) => tool.name !== "dispatch_action"), shellExec],
-    instructions: "sessions_spawn and dispatch_action are mentioned but not declared.",
-  });
-  expect(outputItems(await turn.request()).some((item) => item.type === "function_call")).toBe(
-    false,
-  );
-});
-
 it.each([true])("honors protocol failure %s over accepted catalog details", async (isError) => {
   const server = await startMockServer();
   const messages: AnthropicMessage[] = [

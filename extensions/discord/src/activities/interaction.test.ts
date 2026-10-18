@@ -2,7 +2,7 @@ import { ComponentType, InteractionResponseType } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as loggingCore from "openclaw/plugin-sdk/logging-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ButtonInteraction } from "../internal/discord.js";
+import type { BaseComponentInteraction } from "../internal/discord.js";
 import { createInteraction } from "../internal/interactions.js";
 import {
   attachRestMock,
@@ -48,7 +48,7 @@ function createLaunchFixture(userId = "42") {
     reply,
     rawData: { channel_id: "777" },
     userId,
-  } as unknown as ButtonInteraction;
+  } as unknown as BaseComponentInteraction;
   return { runtime, button, launchActivity, reply, interaction };
 }
 
@@ -96,7 +96,7 @@ describe("Discord Activity interaction", () => {
           custom_id: "ocactivity1_AAAAAAAAAAAAAAAAAAAAAA",
         },
       }),
-    ) as ButtonInteraction;
+    ) as BaseComponentInteraction;
 
     await interaction.launchActivity();
 

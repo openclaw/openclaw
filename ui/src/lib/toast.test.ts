@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../components/modal-dialog.ts";
-import { moveToastToNavDrawer, restoreToastFromNavDrawer } from "../app/navigation-surface.ts";
+import { setToastInNavDrawer } from "../app/navigation-surface.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { showToast } from "./toast.ts";
@@ -186,13 +186,14 @@ describe("shared toast", () => {
     showToast({ message: "Queued", fifo: true });
     await vi.advanceTimersByTimeAsync(40);
 
-    moveToastToNavDrawer(app);
+    const elements = { navDrawerElement: drawer, shellElement: shell, toastElement: host };
+    setToastInNavDrawer(elements, true);
     await settleHost(host);
     expect(host.parentElement).toBe(drawer);
     expect(host.dataset.toastPlacement).toBe("overlay");
     expect(host.textContent).toContain("First");
     await vi.advanceTimersByTimeAsync(40);
-    restoreToastFromNavDrawer(app);
+    setToastInNavDrawer(elements, false);
     await settleHost(host);
     expect(host.parentElement).toBe(shell);
     expect(host.dataset.toastPlacement).toBe("shell");

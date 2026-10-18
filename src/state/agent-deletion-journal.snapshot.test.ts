@@ -57,6 +57,15 @@ it("reads fresh deletion and surviving-owner facts from its captured source with
         ?.retainedDeletions,
     ).toEqual({ status: "empty" });
     runOpenClawStateWriteTransaction((database) => {
+      database.db
+        .prepare("UPDATE agent_deletion_journal SET database_paths_json = '[1]' WHERE agent_id = ?")
+        .run("retired");
+    }, options);
+    expect(
+      (await prepareAgentDatabaseDeletionSnapshotRead(options, "runtime-discovery").read()).snapshot
+        ?.retainedDeletions,
+    ).toMatchObject({ status: "present", entries: [{ agentId: "retired" }], held: [] });
+    runOpenClawStateWriteTransaction((database) => {
       expect(
         updateAgentDeletionJournalPathsInDatabase(
           database,
@@ -239,7 +248,7 @@ it("keeps absent discovery conservative until its first canonical creation", asy
   });
 });
 
-it.each(["runtime", "maintenance"] as const)(
+it.each(["runtime", "runtime-discovery", "maintenance"] as const)(
   "keeps reconstructed deletion holds with their %s purpose through the native snapshot",
   async (purpose) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

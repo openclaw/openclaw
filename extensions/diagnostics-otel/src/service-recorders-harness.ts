@@ -77,7 +77,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (inputValue) {
         spanAttrs["input.value"] = inputValue;
       }
-      runtime.trackTrustedSpan(
+      runtime.trackInternalOrTrustedSpan(
         evt,
         metadata,
         runtime.spanWithDuration("openclaw.harness.run", spanAttrs, undefined, {

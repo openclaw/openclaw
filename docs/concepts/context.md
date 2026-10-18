@@ -219,6 +219,12 @@ your agent instructions: use it to answer the active request, keep internal
 details private, and do not treat the carrier as a new user request or wait for
 another message.
 
+Google generate-content requests keep the carrier separate and add explicit
+context-only framing: do not acknowledge the context; continue answering the
+user's request. This prevents the trailing user-role carrier from becoming the
+request to answer. The framing is deterministic for retained replay and does not
+rewrite user messages when turn-scoped context expires.
+
 For embedded Responses requests, current request metadata stays after the user
 message or compaction checkpoint and before its tool calls. This lets supported transports reuse the
 previous response across tool rounds without dropping live context, so OpenClaw
@@ -227,8 +233,9 @@ turn in an OpenAI Responses-family session preserves hidden runtime-context
 carriers append-only, so the previous turn, including tool calls and results,
 remains an unchanged cached prefix. Retained carriers count toward the context
 window until compaction, which does not split a user message from its carrier.
-User-role carriers contain the labeled context body; interpretation guidance lives
-once in the stable system prompt. OpenAI-compatible Chat Completions and native
+User-role carriers contain the labeled context body; except for Google's
+generate-content framing, interpretation guidance lives once in the stable system
+prompt. OpenAI-compatible Chat Completions and native
 Ollama also retain earlier carriers without rewriting the system prompt or prior
 conversation bytes.
 

@@ -196,6 +196,7 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     const syncGitHubIdentity = createAuthenticatedGitHubIdentitySync({
       authResult: params.authResult,
       authConfig: params.cfg.gateway?.auth,
+      config: params.cfg,
       requestHeaders: params.req.headers,
       assertCurrent,
     });

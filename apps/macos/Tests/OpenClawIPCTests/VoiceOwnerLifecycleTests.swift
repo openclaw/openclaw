@@ -220,11 +220,11 @@ struct VoiceOwnerLifecycleTests {
     @Test func `stale originating dismissal cannot hide replacement`() async throws {
         try await withVoiceOwnerFixture { fixture, state, _ in
             let voice = state.voiceRuntime
-            let first = voice.sessions.startSession(source: .pushToTalk, text: "first draft")
+            let first = voice.sessions.startSession(text: "first draft")
             let blink = state.blinkTick
             voice.overlay.dismiss(token: first)
             #expect(fixture.log.count("overlay.request:\(first)") == 1)
-            let second = voice.sessions.startSession(source: .pushToTalk, text: "second draft")
+            let second = voice.sessions.startSession(text: "second draft")
             fixture.completeDismissal(first)
             #expect(voice.sessions.snapshot().token == second)
             #expect(voice.overlay.snapshot().text == "second draft")
@@ -246,7 +246,7 @@ struct VoiceOwnerLifecycleTests {
         try await withVoiceOwnerFixture(activate: false) { fixture, state, _ in
             let voice = state.voiceRuntime
             let celebration = state.sendCelebrationTick
-            let token = voice.sessions.startSession(source: .pushToTalk, text: "owned transcript")
+            let token = voice.sessions.startSession(text: "owned transcript")
             voice.overlay.updateText("edited owned transcript")
             #expect(voice.sessions.snapshot().text == "edited owned transcript")
             voice.overlay.requestSend(token: token)

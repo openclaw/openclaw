@@ -108,6 +108,7 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
     publish([], true);
   };
 
+  // Every connection transition retires stale activity and rebinds the owned message leases synchronously.
   const stopGateway = gateway.subscribe(() => {
     if (!disposed) {
       retireChangedContext();

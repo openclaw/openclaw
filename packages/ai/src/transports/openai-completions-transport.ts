@@ -14,6 +14,7 @@ import {
   reasoningTagTextPolicy,
   type OpenAICompletionsOptions,
 } from "../provider-options.js";
+import { resolveProviderContext } from "../provider-types.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { buildCopilotDynamicHeaders } from "../providers/github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
@@ -314,6 +315,7 @@ export function streamOpenAICompletionsRequest(
     let discardCandidate = false;
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
+      const requestContext = await resolveProviderContext(context, options);
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const directEmitReasoning = Boolean(
         mode === "direct" &&
@@ -340,7 +342,7 @@ export function streamOpenAICompletionsRequest(
               sawStreamDONE: undefined,
             }
           : createManagedCompletionsClient(model, context, options, apiKey, cacheRetention);
-      const builtParams = buildOpenAICompletionsRequest(model, context, options, policy);
+      const builtParams = buildOpenAICompletionsRequest(model, requestContext, options, policy);
       let params = builtParams;
       const encodeBody = prepareModelRequestBody(options);
       const nextParams = await options?.onPayload?.(params, model);
@@ -499,15 +501,6 @@ export function streamOpenAICompletionsRequest(
         error,
         cleanup: () => {
           finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
-          if (mode === "direct") {
-            for (const block of output.content) {
-              delete (block as { index?: number }).index;
-              if (block.type === "toolCall") {
-                delete block.partialJson;
-              }
-              delete (block as { streamIndex?: number }).streamIndex;
-            }
-          }
         },
       });
     } finally {

@@ -106,7 +106,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       if (state.timer) {
         clearTimeoutFn(state.timer);
       }
-      modelSlots.invalidateRequest(state);
+      state.activeController?.abort();
     },
   });
   const { states, dormantRuns, revisionFloors, supersededRuns, disabledRuns } = lifecycle;
@@ -120,6 +120,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     deps,
     readSession,
     companionReader,
+    states,
     handleEventSteps,
     canPublish: (state, session) =>
       audienceLifecycle.stateIsCurrent(state) && lifecycle.acceptPublication(state, session),
@@ -129,7 +130,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       audienceLifecycle.unsubscribe();
       for (const state of states.values()) {
         clearTimeoutFn(state.timer);
-        modelSlots.invalidateRequest(state);
+        state.activeController?.abort();
       }
     },
     finishClose: () => {
@@ -239,7 +240,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       clearTimeoutFn(state.timer);
       state.timer = undefined;
     }
-    modelSlots.invalidateRequest(state);
+    state.activeController?.abort();
     state.preparedPromise = undefined;
     state.utilityModelRef = undefined;
     state.consecutiveFailures = 0;
@@ -345,6 +346,13 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       clearTimeoutFn(state.timer);
       state.timer = undefined;
     }
+    if (!modelSlots.reserve(state)) {
+      state.finalPending ||= final;
+      return;
+    }
+    if (final) {
+      state.finalPending = false;
+    }
     state.inFlight = true;
     state.lastRunAt = now();
     const lastSelectedSequence = selectedNotes.at(-1)?.sequence ?? state.lastDigestNoteSequence;
@@ -352,11 +360,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       // Run rollover replaces state; inFlight keeps its note retirement monotonic.
       state.lastDigestNoteSequence = Math.max(state.lastDigestNoteSequence, lastSelectedSequence);
     };
-    const requestGeneration = modelSlots.beginRequest(state);
     const digestIsStale = () =>
-      !modelStateIsCurrent(state) ||
-      !modelSlots.requestIsCurrent(state, requestGeneration) ||
-      (!final && state.terminalHealth !== undefined);
+      !modelStateIsCurrent(state) || (!final && state.terminalHealth !== undefined);
     const acceptDigestPublication = (session: ReturnType<typeof readSession>) => {
       if (digestIsStale()) {
         retireSelectedNotes();
@@ -445,6 +450,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           }
         });
       } finally {
+        modelSlots.release(state);
         if (lifecycle.isTracked(state)) {
           state.inFlight = false;
           const runFinal = state.finalPending;
@@ -455,6 +461,17 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
             lifecycle.dropState(state);
           } else {
             schedule(state);
+          }
+        }
+        // Pending notes already belong to bounded observer states. Settlement,
+        // not a polling timer or logical eviction, makes their capacity available.
+        for (const waiting of states.values()) {
+          if (waiting !== state) {
+            if (waiting.finalPending) {
+              runDigest(waiting, true);
+            } else {
+              schedule(waiting);
+            }
           }
         }
       }
@@ -669,7 +686,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         ? undefined
         : modelSlots.claim(state.agentId, state);
     if (state.utilityModelRef !== utilityModelRef) {
-      modelSlots.invalidateRequest(state);
+      state.activeController?.abort();
       state.preparedPromise = undefined;
       state.utilityModelRef = utilityModelRef;
       state.consecutiveFailures = 0;
@@ -686,7 +703,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     if (terminal) {
       if (!state.terminalHealth) {
-        modelSlots.invalidateRequest(state);
+        state.activeController?.abort();
       }
       const flush = preamblePublisher.flush(state);
       if (flush) {

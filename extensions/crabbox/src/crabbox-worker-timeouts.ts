@@ -58,6 +58,11 @@ export function resolveCrabboxWarmImageCaptureTimeoutMs(provider: string): numbe
   // Include collection, verification, missing-image deletion, capacity reclamation,
   // and predecessor retirement as well as scrub/create; core must await the owner.
   return (
+    // Lifetime admission: inspect/heartbeat/inspect/list, up to two identical
+    // extension attempts, then inspect/list readback. Runtime preparation can
+    // also precede scrub for a required project capture.
+    8 * resolveCrabboxLifecycleTimeoutMs(provider) +
+    CRABBOX_SETUP_TIMEOUT_MS +
     5 * WARM_IMAGE_COMMAND_TIMEOUT_MS +
     WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS +
     resolveCrabboxCheckpointCaptureTimeoutMs(provider) +

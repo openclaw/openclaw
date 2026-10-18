@@ -185,6 +185,94 @@ describe("matrix task billing", () => {
     options?: Partial<Parameters<typeof collectMatrixUsage>[0]>;
     expected: Record<string, unknown>;
   }[] = [
+    ...[0, 1].map((scale) => ({
+      label: scale === 0 ? "unavailable zero placeholders" : "unavailable provisional counters",
+      events: [
+        assistant({
+          usage: {
+            input: 10 * scale,
+            output: 4 * scale,
+            cacheRead: 8 * scale,
+            cacheWrite: 2 * scale,
+            totalTokens: 24 * scale,
+            reasoningTokens: 3 * scale,
+            cost: { total: 0.012 },
+            usageReport: { state: "unavailable" },
+          },
+        }),
+      ],
+      options: { rootUsage: { usageReport: { state: "unavailable" } } },
+      expected: {
+        complete: false,
+        costComplete: false,
+        totalTokens: null,
+        costUsd: null,
+        knownTotalTokens: 0,
+        knownCostUsd: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoningTokens: null,
+        assistantTurns: 1,
+      },
+    })),
+    ...[false, true].map((unavailableFirst) => {
+      const unavailable = assistant({
+        usage: { ...assistant().usage, usageReport: { state: "unavailable" } },
+        stopReason: "error",
+      });
+      return {
+        label: unavailableFirst
+          ? "unavailable then measured usage"
+          : "measured then unavailable usage",
+        events: unavailableFirst ? [unavailable, assistant()] : [assistant(), unavailable],
+        options: { rootUsage: { usageReport: { state: "unavailable" } } },
+        expected: {
+          complete: false,
+          costComplete: false,
+          totalTokens: null,
+          costUsd: null,
+          knownTotalTokens: 24,
+          knownCostUsd: 0.012,
+          input: 10,
+          output: 4,
+          cacheRead: 8,
+          cacheWrite: 2,
+          reasoningTokens: null,
+          reasoningComplete: false,
+          assistantTurns: 2,
+          modelErrors: 1,
+        },
+      };
+    }),
+    ...[false, true].map((measured) => {
+      const usage = {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        reasoningTokens: 0,
+        cost: { total: 0, totalOrigin: "provider-billed" },
+        ...(measured ? { usageReport: { state: "available" } } : {}),
+      };
+      return {
+        label: measured ? "genuinely measured zero usage" : "unmeasured zero usage",
+        events: [assistant({ usage })],
+        options: { rootUsage: usage },
+        expected: {
+          complete: measured,
+          costComplete: measured,
+          totalTokens: measured ? 0 : null,
+          costUsd: measured ? 0 : null,
+          knownTotalTokens: 0,
+          reasoningTokens: measured ? 0 : null,
+          reasoningComplete: measured,
+          assistantTurns: 1,
+        },
+      };
+    }),
     {
       label: "missing response usage",
       events: [assistant({ usage: undefined })],

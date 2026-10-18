@@ -38,8 +38,9 @@ export function replaceSessionEntryInDatabase(
 ): SessionEntryIdentityChange {
   const identityKeys = collectSessionEntryLookupKeys(sessionKey);
   const previous = readSessionIdentitySnapshot(database, identityKeys);
-  writeSessionEntry(database, sessionKey, entry);
-  const current = readSessionIdentitySnapshot(database, identityKeys);
+  const written = writeSessionEntry(database, sessionKey, entry);
+  const current = new Map(previous);
+  current.set(sessionKey, written);
   return { previous, current };
 }
 

@@ -1,146 +1,124 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { createEffect, createMemo, createSignal, untrack } from "solid-js";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { fetchPluginActivityIconBlobUrl } from "../plugins/icon-loader.ts";
 import { PluginIconController } from "../plugins/plugin-icon-controller.ts";
 
-export type PluginToolIcon = { url: string; onError: () => void };
+type PluginToolIcon = { url: string; onError: () => void };
 export type PluginToolIcons = Pick<ReadonlyMap<string, PluginToolIcon>, "get">;
 
-type ToolIconSession = { sessionKey: string; agentId?: string };
+type ToolIconSource = {
+  context: Pick<ApplicationContext, "resourceBasePath"> & {
+    gateway: Pick<ApplicationContext["gateway"], "snapshot" | "connection" | "connectionRevision">;
+  };
+  session: { sessionKey: string; agentId?: string } | undefined;
+};
 
-export class ChatToolIconController implements ReactiveController {
-  icons: PluginToolIcons = { get: (name) => this.getIcon(name) };
-  private owner: {
-    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
-    session: ToolIconSession;
-    revision: number;
-    controller: AbortController;
-    plugins?: Promise<PluginListResult>;
-    loading?: boolean;
-  } | null = null;
-  private readonly toolIcons = new Map<string, string | undefined>();
-  private readonly activityIcons = new Map<string, { pluginId: string; tool?: string }>();
-  private readonly requested = new Set<string>();
-  private readonly pending = new Set<string>();
-  private urls: Record<string, string> = {};
-  private readonly loader: PluginIconController;
-
-  constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly getContext: () => Pick<ApplicationContext, "resourceBasePath"> & {
-      gateway: Pick<
-        ApplicationContext["gateway"],
-        "snapshot" | "connection" | "connectionRevision"
-      >;
+export function createChatToolIcons(readSource: () => ToolIconSource): PluginToolIcons {
+  const readBinding = () => {
+    const { context, session } = readSource();
+    const { snapshot, connectionRevision: revision } = context.gateway;
+    return snapshot.phase === "connected" && snapshot.client && session
+      ? { client: snapshot.client, session, revision }
+      : null;
+  };
+  type Binding = ReturnType<typeof readBinding>;
+  const sameBinding = (a: Binding, b: Binding) =>
+    a?.client === b?.client &&
+    a?.revision === b?.revision &&
+    a?.session.sessionKey === b?.session.sessionKey &&
+    a?.session.agentId === b?.session.agentId;
+  const binding = createMemo(readBinding, { equals: sameBinding });
+  let owner:
+    | (NonNullable<Binding> & {
+        controller: AbortController;
+        plugins?: Promise<PluginListResult>;
+        loading?: boolean;
+      })
+    | null = null;
+  const [toolKeys, setToolKeys] = createSignal(new Map<string, string | undefined>());
+  const [urls, setUrls] = createSignal<Record<string, string>>({});
+  const activityIcons = new Map<string, { pluginId: string; tool?: string }>();
+  // Request admission must see same-turn misses before Solid publishes icon data.
+  const known = new Set<string>();
+  const requested = new Set<string>();
+  const pending = new Set<string>();
+  // Late responses check synchronous authority without subscribing their callbacks.
+  const isCurrent = () => owner !== null && sameBinding(owner, untrack(readBinding));
+  const loader = new PluginIconController({
+    getFetchContext: () => {
+      // Fetch credentials do not add render dependencies beyond the current binding.
+      const {
+        context: { gateway, resourceBasePath },
+      } = untrack(readSource);
+      return {
+        resourceBasePath,
+        gatewayUrl: gateway.connection.gatewayUrl,
+        auth: {
+          hello: gateway.snapshot.hello,
+          settings: { token: gateway.connection.token },
+          password: gateway.connection.password,
+        },
+      };
     },
-    private readonly getSession: () => ToolIconSession | undefined,
-  ) {
-    host.addController(this);
-    this.loader = new PluginIconController({
-      getFetchContext: () => {
-        const { gateway, resourceBasePath } = getContext();
-        return {
-          resourceBasePath,
-          gatewayUrl: gateway.connection.gatewayUrl,
-          auth: {
-            hello: gateway.snapshot.hello,
-            settings: { token: gateway.connection.token },
-            password: gateway.connection.password,
-          },
-        };
-      },
-      isConnected: () => this.isCurrent(),
-      fetchIcon: (key, context, signal) => {
-        const icon = this.activityIcons.get(key);
-        return icon
-          ? fetchPluginActivityIconBlobUrl({ ...context, ...icon, signal })
-          : Promise.resolve(null);
-      },
-      onUrlsChange: (urls) => this.publish(urls),
-    });
-  }
-
-  private publish(urls = this.urls) {
-    this.urls = urls;
-    this.icons = { get: (name) => this.getIcon(name) };
-    this.host.requestUpdate();
-  }
-
-  private getIcon(name: string): PluginToolIcon | undefined {
-    if (!this.isCurrent()) {
-      return undefined;
-    }
-    this.requested.add(name);
-    if (!this.toolIcons.has(name)) {
-      const scheduled = this.pending.size > 0;
-      this.pending.add(name);
-      if (!scheduled) {
-        queueMicrotask(() => this.refresh());
+    isConnected: isCurrent,
+    fetchIcon: (key, context, signal) => {
+      const icon = activityIcons.get(key);
+      return icon
+        ? fetchPluginActivityIconBlobUrl({ ...context, ...icon, signal })
+        : Promise.resolve(null);
+    },
+    onUrlsChange: (next) => {
+      if (owner) {
+        setUrls(next);
       }
-    }
-    const iconKey = this.toolIcons.get(name);
-    if (!iconKey) {
+    },
+  });
+  // The binding owns abortable icon requests and blob URL retirement.
+  createEffect(binding, (next) => {
+    if (!next) {
       return undefined;
     }
-    this.loader.load(iconKey);
-    const url = this.urls[iconKey];
-    return url ? { url, onError: () => this.loader.handleError(iconKey) } : undefined;
-  }
+    owner = { ...next, controller: new AbortController() };
+    setToolKeys(new Map());
+    setUrls({});
+    return () => {
+      owner?.controller.abort();
+      owner = null;
+      activityIcons.clear();
+      known.clear();
+      requested.clear();
+      pending.clear();
+      // Resource teardown must not publish into the disposed presentation owner.
+      loader.reset();
+    };
+  });
 
-  private isCurrent() {
-    const { snapshot, connectionRevision } = this.getContext().gateway;
-    const session = this.getSession();
-    return Boolean(
-      this.owner &&
-      snapshot.phase === "connected" &&
-      snapshot.client === this.owner.client &&
-      connectionRevision === this.owner.revision &&
-      session?.sessionKey === this.owner.session.sessionKey &&
-      session?.agentId === this.owner.session.agentId,
-    );
-  }
-
-  hostUpdate() {
-    if (this.isCurrent()) {
+  function refresh() {
+    const active = owner;
+    if (!active || !isCurrent() || active.loading || pending.size === 0) {
       return;
     }
-    const { snapshot, connectionRevision: revision } = this.getContext().gateway;
-    const { client, phase } = snapshot;
-    const session = this.getSession();
-    this.hostDisconnected();
-    if (phase === "connected" && client && session) {
-      this.owner = { client, session, revision, controller: new AbortController() };
-      this.publish();
+    // Remember misses and core/iconless tools. Newly displayed names refresh inventory.
+    for (const name of pending) {
+      known.add(name);
     }
-  }
-
-  private refresh() {
-    const owner = this.owner;
-    if (!owner || !this.isCurrent() || owner.loading || this.pending.size === 0) {
-      return;
-    }
-    // Remember misses as well as core/iconless tools. Only newly rendered names
-    // refresh the inventory, including names arriving while a request is active.
-    for (const name of this.pending) {
-      this.toolIcons.set(name, undefined);
-    }
-    this.pending.clear();
-    owner.loading = true;
-    const options = { signal: owner.controller.signal };
+    pending.clear();
+    active.loading = true;
+    const options = { signal: active.controller.signal };
     void Promise.all([
-      owner.client.request<ToolsEffectiveResult>("tools.effective", owner.session, options),
-      (owner.plugins ??= owner.client
+      active.client.request<ToolsEffectiveResult>("tools.effective", active.session, options),
+      (active.plugins ??= active.client
         .request<PluginListResult>("plugins.list", {}, options)
         .catch((error: unknown) => {
           // A later newly displayed tool can recover metadata after a failed read.
-          owner.plugins = undefined;
+          active.plugins = undefined;
           throw error;
         })),
     ])
       .then(([tools, plugins]) => {
-        if (this.owner !== owner || !this.isCurrent()) {
+        if (owner !== active || !isCurrent()) {
           return;
         }
         const availableIcons = new Map(
@@ -149,9 +127,9 @@ export class ChatToolIconController implements ReactiveController {
             { default: plugin.hasActivityIcon, tools: new Set(plugin.activityIconTools) },
           ]),
         );
-        this.activityIcons.clear();
-        // Effective inventory retains plugin ownership for built-ins such as
-        // Browser and Canvas that the static catalog groups with core tools.
+        const keys = new Map<string, string | undefined>();
+        activityIcons.clear();
+        // Effective inventory retains plugin ownership for built-ins such as Browser and Canvas.
         for (const group of tools.groups) {
           for (const tool of group.tools) {
             const pluginId = tool.pluginId;
@@ -162,43 +140,57 @@ export class ChatToolIconController implements ReactiveController {
                 ? JSON.stringify([pluginId, override ?? null])
                 : undefined;
             if (key && pluginId) {
-              this.activityIcons.set(key, { pluginId, tool: override });
+              activityIcons.set(key, { pluginId, tool: override });
             }
-            this.toolIcons.set(tool.id, key);
-            this.pending.delete(tool.id);
+            keys.set(tool.id, key);
+            known.add(tool.id);
+            pending.delete(tool.id);
           }
         }
-        this.loader.reconcileKeys(new Set(this.activityIcons.keys()));
-        for (const name of this.requested) {
-          const key = this.toolIcons.get(name);
+        setToolKeys((previous) => new Map([...previous, ...keys]));
+        loader.reconcileKeys(new Set(activityIcons.keys()));
+        for (const name of requested) {
+          const key = keys.get(name);
           if (key) {
-            this.loader.load(key);
+            loader.load(key);
           }
         }
-        this.publish();
       })
       .catch(() => {
         // Optional presentation keeps the existing symbol after a failed lookup.
       })
       .finally(() => {
-        if (this.owner !== owner) {
+        if (owner !== active) {
           return;
         }
-        owner.loading = false;
-        this.refresh();
+        active.loading = false;
+        refresh();
       });
   }
 
-  hostDisconnected() {
-    if (!this.owner) {
-      return;
-    }
-    this.owner.controller.abort();
-    this.owner = null;
-    this.toolIcons.clear();
-    this.activityIcons.clear();
-    this.requested.clear();
-    this.pending.clear();
-    this.loader.reset();
-  }
+  return {
+    get(name) {
+      const current = binding();
+      const keys = toolKeys();
+      const images = urls();
+      if (!current || !isCurrent()) {
+        return undefined;
+      }
+      requested.add(name);
+      if (!known.has(name)) {
+        const scheduled = pending.size > 0;
+        pending.add(name);
+        if (!scheduled) {
+          queueMicrotask(refresh);
+        }
+      }
+      const key = keys.get(name);
+      if (!key) {
+        return undefined;
+      }
+      loader.load(key);
+      const url = images[key];
+      return url ? { url, onError: () => loader.handleError(key) } : undefined;
+    },
+  };
 }

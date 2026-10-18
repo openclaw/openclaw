@@ -29,6 +29,7 @@ import {
   getRemoteControlUiIngressContext,
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
+  readPreparedGatewayIngressAttribution,
   PROXY_ATTRIBUTION_GUIDANCE,
   PROXY_ATTRIBUTION_REQUIRED_REASON,
   type GatewayIngressTransport,
@@ -135,6 +136,11 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   };
   socket.once("close", releaseUpgradeBudget);
   try {
+    // Skip compression on direct-local ingress. Loopback proxies may still serve
+    // remote clients, so use the ingress owner's prepared attribution.
+    if (readPreparedGatewayIngressAttribution(req)?.kind === "direct-local") {
+      delete req.headers["sec-websocket-extensions"];
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
       const ingressSocket = ws as GatewayIngressWebSocket;
       ingressSocket["__openclawPreauthBudgetKey"] = preauthBudgetKey;

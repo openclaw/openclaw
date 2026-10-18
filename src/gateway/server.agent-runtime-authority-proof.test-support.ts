@@ -1,4 +1,3 @@
-// Real-owner fixture shared by delegated and ordinary RPC compatibility cases.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -15,6 +14,7 @@ import { createMessageReceiptFromOutboundResults } from "../channels/message/rec
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import {
   registerAgentRunDelegatedAuthorityClosedHandler,
   validateAgentRunDelegatedAuthority,
@@ -39,7 +39,6 @@ export const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
 
 type ProofPhase =
-  | "ordinary-admission"
   | "reset-adopted"
   | "reset-adopted-retry"
   | "strict-delivery-failure"
@@ -60,7 +59,7 @@ type ProofPhase =
   | "delivery-setup"
   | "delivery"
   | "delivery-retry";
-type ProofObservation = {
+type ProofObservation = Partial<ReturnType<typeof rpcObservation>> & {
   mode?:
     | "live"
     | "revoked"
@@ -78,14 +77,7 @@ type ProofObservation = {
   gatewayLive?: boolean;
   admittedLive?: boolean;
   closureCount?: number;
-  rpcOk?: boolean;
-  rpcAccepted?: boolean;
-  rpcInFlight?: boolean;
-  rpcInvalidRequest?: boolean;
-  imageUnsupported?: boolean;
   imageCapable?: boolean;
-  rpcCached?: boolean;
-  authorityError?: boolean;
   rowChanged?: boolean;
   sessionPreserved?: boolean;
   transcriptChanged?: boolean;
@@ -100,28 +92,24 @@ type ProofObservation = {
 
 // Fixed keys and primitive observations only: never serialize RPC payloads,
 // errors, identities, file paths, media bytes, or transcript content.
-export function observe(phase: ProofPhase, fields: ProofObservation): void {
+function observe(phase: ProofPhase, fields: ProofObservation): void {
   console.log(JSON.stringify({ proof: "agent-runtime-authority", version: 1, phase, ...fields }));
 }
-export function rpcObservation(response: Response): ProofObservation {
-  const payload = response.payload;
+function rpcObservation(response: Response) {
+  const { payload, error } = response;
+  const status =
+    payload !== null && typeof payload === "object" && "status" in payload
+      ? payload.status
+      : undefined;
   return {
     rpcOk: response.ok,
-    rpcAccepted:
-      payload !== null &&
-      typeof payload === "object" &&
-      "status" in payload &&
-      payload.status === "accepted",
-    rpcInFlight:
-      payload !== null &&
-      typeof payload === "object" &&
-      "status" in payload &&
-      payload.status === "in_flight",
-    rpcInvalidRequest: response.error?.code === "INVALID_REQUEST",
+    rpcAccepted: status === "accepted",
+    rpcInFlight: status === "in_flight",
+    rpcInvalidRequest: error?.code === "INVALID_REQUEST",
     imageUnsupported:
-      response.error?.message?.includes("active model does not accept image inputs") === true,
+      error?.message?.includes("active model does not accept image inputs") === true,
     rpcCached: response.meta?.cached === true,
-    authorityError: response.error?.message?.includes("authority is no longer active") === true,
+    authorityError: error?.message?.includes("authority is no longer active") === true,
   };
 }
 export async function readEffectFile(file: string): Promise<Buffer | undefined> {
@@ -147,9 +135,11 @@ export async function reach<T>(boundary: Promise<T>, request: Promise<Response>)
   return first.boundary;
 }
 
-export function installAgentAuthorityProofFixture() {
+export function installAuthorityProofGateway() {
   let harness: GatewayServerHarness;
-  let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
+  let context: Awaited<
+    ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>
+  >["gatewayRequestContext"];
   installGatewayTestHooks({
     scope: "suite",
     setup: async () => {
@@ -158,7 +148,8 @@ export function installAgentAuthorityProofFixture() {
       const capture = vi
         .spyOn(module, "createGatewayKernel")
         .mockImplementation(async (...args) => {
-          kernel = await create(...args);
+          const kernel = await create(...args);
+          context = kernel.gatewayRequestContext;
           return kernel;
         });
       try {
@@ -167,13 +158,16 @@ export function installAgentAuthorityProofFixture() {
         capture.mockRestore();
       }
     },
-    cleanup: async () => {
-      await harness?.close();
-    },
+    cleanup: () => harness?.close(),
   });
+  return () => context;
+}
+
+export function installAgentAuthorityProofFixture() {
+  const getContext = installAuthorityProofGateway();
 
   async function caller(sessionKey: string) {
-    const context = kernel.gatewayRequestContext;
+    const context = getContext();
     const runId = "proof-caller-" + randomUUID();
     const admission = prepareAgentRunAdmission({
       cfg: context.getRuntimeConfig(),
@@ -207,13 +201,12 @@ export function installAgentAuthorityProofFixture() {
     });
     const observation = (): ProofObservation => ({
       registryLive: validateAgentRunDelegatedAuthority(authority),
-      gatewayLive: context.validateAgentRuntimeApprovalAuthority?.(identity) === true,
+      gatewayLive: context.validateAgentRuntimeApprovalAuthority?.(identity),
       admittedLive: getAdmittedRunDelegatedAuthority(admitted) !== undefined,
       closureCount: closed.length,
     });
     observe("caller-admitted", observation());
-    expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
-    expect(context.validateAgentRuntimeApprovalAuthority?.(identity)).toBe(true);
+    expect(observation()).toMatchObject({ registryLive: true, gatewayLive: true });
     return {
       identity,
       authority,
@@ -222,9 +215,11 @@ export function installAgentAuthorityProofFixture() {
         admission.close();
         observe("authority-close", observation());
         expect(closed).toEqual([authority.claimId]);
-        expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-        expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
-        expect(context.validateAgentRuntimeApprovalAuthority?.(identity)).toBe(false);
+        expect(observation()).toMatchObject({
+          admittedLive: false,
+          registryLive: false,
+          gatewayLive: false,
+        });
       },
       dispose: () => {
         admission.close();
@@ -234,39 +229,33 @@ export function installAgentAuthorityProofFixture() {
   }
   type Caller = Awaited<ReturnType<typeof caller>>;
 
-  async function fixture(options?: { imageCapable?: true }) {
-    // Pin current keyed roster and model through the shared fixture owner; these
-    // scenarios must not depend on an implicit-main migration or catalog defaults.
+  return async (options?: { imageCapable?: true }) => {
+    const context = getContext();
+    // Pin the roster/model instead of relying on implicit-main migration or catalog defaults.
     testState.agentsConfig = { entries: { main: {} } };
     testState.agentConfig = { model: { primary: "anthropic/claude-opus-4-6" } };
     if (options?.imageCapable) {
-      // Use the existing Gateway integration catalog setup, not a mocked
-      // capability decision or a media-writer replacement. Inference stays mocked.
+      // Keep catalog preparation and media writing real; only inference is mocked.
       const [{ refreshPreparedModelRuntimeSnapshots }, config] = await Promise.all([
         import("../agents/prepared-model-runtime.js"),
         import("../config/io.js"),
       ]);
       await resetPreparedModelCatalogStateForTest();
-      await config.writeConfigFile({
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://anthropic.example.test/v1",
-              models: [
-                {
-                  id: "claude-opus-4-6",
-                  name: "Proof image fixture",
-                  input: ["text", "image"],
-                  reasoning: false,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128_000,
-                  maxTokens: 8_192,
-                },
-              ],
-            },
+      const anthropic: ModelProviderConfig = {
+        baseUrl: "https://anthropic.example.test/v1",
+        models: [
+          {
+            id: "claude-opus-4-6",
+            name: "Proof image fixture",
+            input: ["text", "image"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 8_192,
           },
-        },
-      });
+        ],
+      };
+      await config.writeConfigFile({ models: { providers: { anthropic } } });
       config.clearRuntimeConfigSnapshot();
       await refreshPreparedModelRuntimeSnapshots(config.getRuntimeConfig(), {
         gatewayLifecycle: true,
@@ -274,7 +263,6 @@ export function installAgentAuthorityProofFixture() {
     }
     await prepareGatewayReplyRuntimeForTest();
     if (options?.imageCapable) {
-      const context = kernel.gatewayRequestContext;
       const imageCapable = await resolveGatewayModelSupportsImages({
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
@@ -285,7 +273,6 @@ export function installAgentAuthorityProofFixture() {
       observe("media-setup", { imageCapable });
       expect(imageCapable).toBe(true);
     }
-    const context = kernel.gatewayRequestContext;
     const runId = randomUUID();
     const sessionKey = "agent:main:authority-proof:" + runId;
     const sessionId = "proof-session-" + runId;
@@ -313,16 +300,19 @@ export function installAgentAuthorityProofFixture() {
       .mockImplementation(<T>(operation: () => T | Promise<T>): Promise<T> => {
         const pending = track(operation);
         work.add(pending);
-        void pending.then(
-          () => work.delete(pending),
-          () => work.delete(pending),
-        );
+        const settled = () => work.delete(pending);
+        void pending.then(settled, settled);
         return pending;
       });
     const drain = async () => {
       while (work.size) {
         await Promise.allSettled(work);
       }
+    };
+    const dispatchOptions = {
+      forceSyntheticClient: true,
+      syntheticScopes: ["operator.admin"],
+      resolveGatewayContext: () => context,
     };
     return {
       context,
@@ -342,34 +332,13 @@ export function installAgentAuthorityProofFixture() {
         return fresh;
       },
       stop: () =>
-        dispatchGatewayMethodInProcessRaw(
-          "chat.abort",
-          { sessionKey, runId },
-          {
-            forceSyntheticClient: true,
-            syntheticScopes: ["operator.admin"],
-            resolveGatewayContext: () => context,
-          },
-        ),
-      // Raw dispatch goes through the registered RPC handler, not the internal
-      // agent facade. No test-supplied commit guard can mask the production fix.
-      // A null source omits the private identity for ordinary-call compatibility.
+        dispatchGatewayMethodInProcessRaw("chat.abort", { sessionKey, runId }, dispatchOptions),
+      // Use the real RPC handler/commit guard. Null source proves ordinary-call compatibility.
       dispatch: (request: Record<string, unknown>, source: Caller | null = owner) => {
         const pending = dispatchGatewayMethodInProcessRaw(
           "agent",
-          {
-            sessionKey,
-            idempotencyKey: runId,
-            ...request,
-          },
-          withInProcessAgentRuntimeIdentity(
-            {
-              forceSyntheticClient: true,
-              syntheticScopes: ["operator.admin"],
-              resolveGatewayContext: () => context,
-            },
-            source?.identity,
-          ),
+          { sessionKey, idempotencyKey: runId, ...request },
+          withInProcessAgentRuntimeIdentity(dispatchOptions, source?.identity),
         );
         void pending.catch(() => {});
         return pending;
@@ -394,9 +363,7 @@ export function installAgentAuthorityProofFixture() {
         }
       },
     };
-  }
-
-  return fixture;
+  };
 }
 
 export async function holdExecution(signal: AbortSignal) {

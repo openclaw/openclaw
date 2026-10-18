@@ -10,6 +10,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { AgentsListResult } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import {
   AgentSelectionRequiredError,
   listAgentIds,
@@ -23,6 +24,7 @@ import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { readCliGatewayRunFailure, recordCliGatewayRunFailure } from "../cli/failure-output.js";
+import { prepareCliGatewayStateAccess } from "../cli/gateway-rpc.runtime.js";
 import { withProgress } from "../cli/progress.js";
 import {
   readGatewayDispatchConfig,
@@ -40,8 +42,7 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { assertGatewayCliMessageContext } from "../gateway/operator-cli-message-input.js";
-import { ADMIN_SCOPE, READ_SCOPE } from "../gateway/operator-scopes.js";
-import { createAbortError } from "../infra/abort-signal.js";
+import { READ_SCOPE } from "../gateway/operator-scopes.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import {
   createEmbeddedStateSignalBridge,
@@ -65,6 +66,7 @@ import {
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 import { sleep } from "../utils/sleep.js";
+import { resolveAgentGatewayIdentity } from "./agent-gateway-identity.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -134,10 +136,6 @@ type AgentCliDeps = CliDeps & {
   process?: AgentCliProcessLike;
   localGatewayLockOptions?: GatewayLockOptions;
 };
-type AgentGatewayCallIdentity = Pick<
-  Parameters<typeof callGateway>[0],
-  "clientName" | "mode" | "scopes"
->;
 type GatewayAbortRequest = (...args: Parameters<GatewayRequestFunction>) => Promise<unknown>;
 
 function usesImplicitRemoteCompatibilityDefault(roster: RemoteGatewayRoster): boolean {
@@ -226,6 +224,7 @@ function usesRemoteGateway(cfg: OpenClawConfig): boolean {
 async function loadRemoteGatewayRoster(cfg: OpenClawConfig): Promise<RemoteGatewayRoster> {
   const result = await callGateway<AgentsListResult>({
     method: "agents.list",
+    beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
     params: {},
     config: cfg,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
@@ -620,31 +619,6 @@ function createAgentCliSignalBridge(processLike: AgentCliProcessLike = process) 
   };
 }
 
-function isAgentCliProcessLike(value: unknown): value is AgentCliProcessLike {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    typeof (value as { on?: unknown }).on === "function" &&
-    typeof (value as { off?: unknown }).off === "function"
-  );
-}
-
-function resolveAgentCliProcessLike(deps: AgentCliDeps | undefined): AgentCliProcessLike {
-  if (!deps || !Object.hasOwn(deps, "process")) {
-    return process;
-  }
-  const processLike = (deps as { process?: unknown }).process;
-  return isAgentCliProcessLike(processLike) ? processLike : process;
-}
-
-async function delayMs(ms: number, signal?: AbortSignal): Promise<void> {
-  try {
-    await sleep(ms, signal);
-  } catch {
-    throw createAbortError("gateway agent retry aborted");
-  }
-}
-
 function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): boolean {
   const response = asOptionalRecord(value);
   if (response?.aborted !== true) {
@@ -700,7 +674,7 @@ async function abortAcceptedGatewayAgentRunWithRetries(params: {
     if (isFinalAttempt) {
       return false;
     }
-    await delayMs(retryDelayMs);
+    await sleep(retryDelayMs);
   }
   return false;
 }
@@ -809,9 +783,8 @@ async function agentViaGatewayCommand(
     opts.to?.trim() &&
     classifySessionKeyShape(opts.to) !== "agent",
   );
-  const deferRemoteSessionId = Boolean(
-    remoteGateway && opts.sessionId?.trim() && !explicitSessionKey,
-  );
+  // The Gateway owns session metadata even when it shares this CLI's filesystem.
+  const deferSessionId = Boolean(opts.sessionId?.trim() && !explicitSessionKey);
   const deferRemoteBareSessionKey = Boolean(
     remoteGateway && explicitSessionKey && classifySessionKeyShape(explicitSessionKey) !== "agent",
   );
@@ -826,7 +799,7 @@ async function agentViaGatewayCommand(
   const sessionKey =
     preserveImplicitCompatibilitySession || deferRemoteBareSessionKey
       ? explicitSessionKey
-      : deferAgentDefaultSession || deferExplicitRecipientSession || deferRemoteSessionId
+      : deferAgentDefaultSession || deferExplicitRecipientSession || deferSessionId
         ? undefined
         : classifySessionKeyShape(explicitSessionKey) === "agent"
           ? explicitSessionKey
@@ -841,7 +814,7 @@ async function agentViaGatewayCommand(
                 sessionKey: explicitSessionKey,
               })
             ).sessionKey;
-  const abortSessionKey = deferRemoteSessionId
+  const abortSessionKey = deferSessionId
     ? undefined
     : deferExplicitRecipientSession
       ? (
@@ -854,15 +827,7 @@ async function agentViaGatewayCommand(
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);
   const needsAdminGatewayIdentity = Boolean(modelOverride) || isSessionResetCommand(body);
-  const gatewayIdentity: AgentGatewayCallIdentity = {
-    clientName: needsAdminGatewayIdentity
-      ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
-      : GATEWAY_CLIENT_NAMES.CLI,
-    mode: needsAdminGatewayIdentity ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
-    // Overrides/resets require admin; otherwise only the local operator requests
-    // owner scope, and remote callers keep the agent method's least-privilege scope.
-    ...(needsAdminGatewayIdentity || !remoteGateway ? { scopes: [ADMIN_SCOPE] } : {}),
-  };
+  const gatewayIdentity = resolveAgentGatewayIdentity(needsAdminGatewayIdentity, remoteGateway);
 
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
@@ -887,6 +852,10 @@ async function agentViaGatewayCommand(
       async () =>
         await callGateway({
           method: "agent",
+          beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
+          requiredCapabilities: deferSessionId
+            ? [GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE]
+            : undefined,
           params: {
             message: body,
             agentId,
@@ -895,6 +864,7 @@ async function agentViaGatewayCommand(
             replyTo: opts.replyTo,
             sessionId: opts.sessionId,
             sessionKey,
+            createSessionIfMissing: deferSessionId || undefined,
             thinking: opts.thinking,
             deliver: Boolean(opts.deliver),
             channel,
@@ -946,8 +916,9 @@ async function agentViaGatewayCommand(
         await abortGatewayRun((method, params, requestOpts) =>
           callGateway({
             method,
+            beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
             params,
-            timeoutMs: requestOpts?.timeoutMs ?? undefined,
+            timeoutMs: requestOpts?.timeoutMs,
             expectFinal: requestOpts?.expectFinal,
             config: cfg,
             ...gatewayIdentity,
@@ -1039,7 +1010,7 @@ async function agentViaGatewayCommandWithTransientRetries(
       runtime.error?.(
         `Gateway agent connection closed during handshake; retrying in ${retryDelayMs}ms before failing.`,
       );
-      await delayMs(retryDelayMs, signalBridge.signal);
+      await sleep(retryDelayMs, signalBridge.signal);
     }
   }
   throw new Error("Gateway agent retry loop exhausted unexpectedly.");
@@ -1082,7 +1053,7 @@ export async function agentCliCommand(
   const gatewayDispatchOpts = dispatchOpts.runId
     ? dispatchOpts
     : { ...dispatchOpts, runId: randomIdempotencyKey() };
-  const signalBridge = createAgentCliSignalBridge(resolveAgentCliProcessLike(deps));
+  const signalBridge = createAgentCliSignalBridge(deps?.process);
   try {
     if (dispatchOpts.local === true) {
       const stateLock = await acquireEmbeddedAgentStateLock(

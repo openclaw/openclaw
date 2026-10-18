@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
 import type { SessionTranscriptWriteScope } from "../../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
@@ -20,6 +21,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.types.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
@@ -61,6 +63,12 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   }
   if (message.role !== "assistant") {
     return message.role === "toolResult";
+  }
+  if (isOpenClawDeliveryMirrorAssistantMessage(message)) {
+    const delivery = asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"));
+    // Only explicit same-run progress can cross this boundary; final or unmarked
+    // mirrors still close the turn, even if more tool activity followed them.
+    return delivery?.kind === "message-tool-source-reply" && delivery.final === false;
   }
   return (
     message.stopReason === "toolUse" ||
