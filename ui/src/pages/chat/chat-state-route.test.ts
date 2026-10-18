@@ -12,6 +12,8 @@ type LookupState = Pick<
   | "sessionsResultAgentId"
 >;
 
+type SessionRow = NonNullable<LookupState["sessionsResult"]>["sessions"][number];
+
 function createLookupState(overrides: Partial<LookupState> = {}): ChatPageHost {
   const state: LookupState = {
     sessionKey: "agent:main:current",
@@ -28,14 +30,15 @@ function createLookupState(overrides: Partial<LookupState> = {}): ChatPageHost {
 
 it("reuses the selected row without rescanning an unchanged session result", () => {
   const readKey = vi.fn(() => "agent:main:other");
-  const selected = { key: "agent:main:current" };
+  const selected: SessionRow = { key: "agent:main:current", kind: "direct" };
   const state = createLookupState({
     sessionsResult: {
       ts: 0,
       count: 2,
-      defaults: {},
+      defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [
         {
+          kind: "direct",
           get key() {
             return readKey();
           },
@@ -53,7 +56,11 @@ it("reuses the selected row without rescanning an unchanged session result", () 
 
   state.sessionKey = "agent:main:other";
   expect(selectedChatSessionRow(state)?.key).toBe("agent:main:other");
-  const replacement = { key: "agent:main:other", displayName: "Fresh row" };
+  const replacement: SessionRow = {
+    key: "agent:main:other",
+    kind: "direct",
+    displayName: "Fresh row",
+  };
   state.sessionsResult = { ...state.sessionsResult!, sessions: [replacement] };
   expect(selectedChatSessionRow(state)).toBe(replacement);
 });
@@ -65,15 +72,20 @@ it("recomputes selected rows when routing defaults change in place", () => {
     scope: "per-sender",
     agents: [],
   };
-  const home = { key: "agent:main:home" };
-  const work = { key: "agent:work:home" };
-  const global = { key: "global", agentId: "work" };
+  const home: SessionRow = { key: "agent:main:home", kind: "direct" };
+  const work: SessionRow = { key: "agent:work:home", kind: "direct" };
+  const global: SessionRow = { key: "global", agentId: "work", kind: "global" };
   const state = createLookupState({
     sessionKey: "main",
     agentsList,
     assistantAgentId: "work",
     sessionsResultAgentId: "work",
-    sessionsResult: { ts: 0, count: 3, defaults: {}, sessions: [home, work, global] },
+    sessionsResult: {
+      ts: 0,
+      count: 3,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [home, work, global],
+    },
   });
   expect(selectedChatSessionRow(state)).toBe(home);
   agentsList.defaultId = "work";
