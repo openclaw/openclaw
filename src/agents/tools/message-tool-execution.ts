@@ -68,7 +68,7 @@ import {
   enforceSourceReplyOnlyMessageAction,
   enforceSourceReplyOnlyTextDirectives,
   enforceTrustedTurnExplicitAccount,
-  messageToolCallCompletesBeforeSteering,
+  installMessageToolSteeringAllowance,
   resolveSourceReplySinkDeliveryMode,
 } from "./message-tool-source-policy.js";
 import { createMessageToolTurnAuthority } from "./message-tool-turn-authority.js";
@@ -215,7 +215,7 @@ function* createMessageToolSteps(
         }
       : undefined;
 
-  return {
+  const messageTool: AnyAgentTool = {
     label: "Message",
     name: "message",
     displaySummary: "Send and manage messages across configured channels.",
@@ -223,11 +223,6 @@ function* createMessageToolSteps(
     parameters: addSourceReplyFinalControl(baseSchema),
     prepareBeforeToolCallParams: explicitTargetGuard?.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: explicitTargetGuard?.finalizeBeforeToolCallParams,
-    shouldExecuteBeforeSteering: (args) =>
-      messageToolCallCompletesBeforeSteering({
-        args,
-        sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
-      }),
     execute: async (toolCallId, args, signal) => {
       const assertCaller = turnAuthority.captureCaller(signal, captureGatewayToolCallerAssertion);
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
@@ -733,4 +728,10 @@ function* createMessageToolSteps(
       );
     },
   };
+  return installMessageToolSteeringAllowance(messageTool, {
+    ...inferredCurrentChannel,
+    sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
+    currentThreadTs,
+    currentMessageId: options?.currentMessageId,
+  });
 }

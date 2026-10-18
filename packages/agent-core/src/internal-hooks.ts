@@ -117,6 +117,36 @@ export type InternalToolExecutionPreparer = (params: {
 
 const toolExecutionPreparerByTool = new WeakMap<object, InternalToolExecutionPreparer>();
 
+type InternalToolSteeringAllowance = (args: unknown) => boolean;
+const toolSteeringAllowanceByTool = new WeakMap<object, InternalToolSteeringAllowance>();
+
+/** Attach host-owned steering admission to one concrete tool object. */
+export function setInternalToolSteeringAllowance(
+  tool: object,
+  allowance: InternalToolSteeringAllowance | undefined,
+): void {
+  if (allowance) {
+    toolSteeringAllowanceByTool.set(tool, allowance);
+  } else {
+    toolSteeringAllowanceByTool.delete(tool);
+  }
+}
+
+export function getInternalToolSteeringAllowance(
+  tool: object,
+): InternalToolSteeringAllowance | undefined {
+  return toolSteeringAllowanceByTool.get(tool);
+}
+
+/** Preserve private steering ownership when an adapter replaces a tool object. */
+export function copyInternalToolSteeringAllowance<T extends object>(source: object, target: T): T {
+  const allowance = toolSteeringAllowanceByTool.get(source);
+  if (allowance) {
+    toolSteeringAllowanceByTool.set(target, allowance);
+  }
+  return target;
+}
+
 type InternalToolResultAcknowledgement = () => void;
 const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultAcknowledgement>();
 const toolResultProvenanceByValue = new WeakMap<object, object>();

@@ -260,8 +260,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    * After a call from the assistant message actually starts, sequential execution
    * checks before each later call, including again after asynchronous preparation.
    * Streamed batches share that started state. Parallel batches never steering-skip.
-   * A call whose tool declares `shouldExecuteBeforeSteering` for its arguments may
-   * finish first so a visible reply is not lost; other unstarted calls still skip.
+   * A host-owned call may finish first so a visible reply is not lost; other
+   * unstarted calls still skip.
    * Both modes check after a batch settles, before stop hooks. Drained messages
    * follow tool results before the next LLM call; already-running calls continue.
    *
@@ -526,14 +526,6 @@ export interface AgentTool<
    * If omitted, the default execution mode applies.
    */
   executionMode?: ToolExecutionMode;
-  /**
-   * Preserve this invocation when steering arrives at a sequential tool checkpoint.
-   *
-   * The tool owns the decision because it knows which arguments carry output the
-   * current turn still owes the user. A preserved call runs to completion before
-   * the steer is applied; other unstarted calls are skipped normally.
-   */
-  shouldExecuteBeforeSteering?: (args: unknown) => boolean;
 }
 
 /** Context snapshot passed into the low-level agent loop. */

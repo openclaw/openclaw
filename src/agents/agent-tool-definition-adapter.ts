@@ -32,6 +32,7 @@ import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import {
   attachInternalToolExecutionPreparer,
+  copyInternalToolSteeringAllowance,
   copyInternalToolResultState,
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
@@ -268,6 +269,7 @@ export function toToolDefinitions(
         });
       },
     } satisfies ToolDefinition;
+    copyInternalToolSteeringAllowance(tool, definition);
     copyCodeModeControlToolIdentity(tool, definition);
     if (!sourcePreparer) {
       return beforeHookWrapped ? definition : attachAdapterExecutionPreparer(definition);

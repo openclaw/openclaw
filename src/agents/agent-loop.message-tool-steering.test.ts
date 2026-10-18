@@ -5,6 +5,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { installMessageToolTerminalHook } from "./embedded-agent-runner/run/message-tool-terminal.js";
 import {
   terminalModel,
@@ -12,6 +13,8 @@ import {
   terminalToolCall,
 } from "./embedded-agent-runner/run/message-tool-terminal.test-support.js";
 import { Agent, type AgentTool } from "./runtime/index.js";
+import { getInternalToolSteeringAllowance } from "./runtime/internal-hooks.js";
+import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { jsonResult } from "./tools/common.js";
 import { createMessageTool } from "./tools/message-tool-execution.js";
 
@@ -24,6 +27,7 @@ describe("message-tool-only steering", () => {
     const started = createDeferred();
     const release = createDeferred();
     const sent: string[] = [];
+    const executed: string[] = [];
     let deliveries = 0;
     let requests = 0;
     const config = { agents: { entries: { main: {} } } };
@@ -32,6 +36,9 @@ describe("message-tool-only steering", () => {
       config,
       preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
       currentChannelProvider: "webchat",
+      currentChannelId: "source-a",
+      currentMessagingTarget: "source-a",
+      currentMessageId: "m1",
       sourceReplyDeliveryMode: "message_tool_only",
       agentSessionKey: "agent:main:webchat:dm:steering-176028",
       runSessionKey: "agent:main:webchat:dm:steering-176028",
@@ -57,9 +64,6 @@ describe("message-tool-only steering", () => {
         };
       },
     });
-    expect(
-      message.shouldExecuteBeforeSteering?.({ action: "send", message: "reply", final: true }),
-    ).toBe(true);
     const lookup: AgentTool = {
       name: "lookup",
       label: "Lookup",
@@ -72,8 +76,36 @@ describe("message-tool-only steering", () => {
         return jsonResult({ value: 42 });
       },
     };
+    const tail: AgentTool = {
+      name: "tail",
+      label: "Tail",
+      description: "Run after the visible reply",
+      parameters: Type.Object({}),
+      execute: async () => {
+        executed.push("tail");
+        return jsonResult({ ok: true });
+      },
+    };
+    const tools = toToolDefinitions([lookup, message, tail]).map((definition) =>
+      wrapToolDefinition(definition),
+    );
+    const adaptedMessage = tools.find((tool) => tool.name === "message");
+    const steeringAllowance = adaptedMessage
+      ? getInternalToolSteeringAllowance(adaptedMessage)
+      : undefined;
+    expect(steeringAllowance?.({ action: "send", target: "source-a", final: true })).toBe(true);
+    expect(steeringAllowance?.({ action: "send", target: "source-b", final: true })).toBe(false);
+    expect(
+      steeringAllowance?.({
+        action: "react",
+        messageId: "m1",
+        emoji: "eyes",
+        remove: true,
+        final: true,
+      }),
+    ).toBe(false);
     const agent = new Agent({
-      initialState: { model: terminalModel, tools: [lookup, message] },
+      initialState: { model: terminalModel, tools },
       streamFn: () => {
         requests += 1;
         if (requests > 2) {
@@ -83,11 +115,19 @@ describe("message-tool-only steering", () => {
           requests === 1
             ? [
                 terminalToolCall("lookup", "lookup-a"),
+                terminalToolCall("message", "message-b-other", {
+                  action: "send",
+                  target: "source-b",
+                  message: "Unrelated send.",
+                  final: true,
+                }),
                 terminalToolCall("message", "message-a", {
                   action: "send",
+                  target: "source-a",
                   message: "Answer for input A.",
                   final: true,
                 }),
+                terminalToolCall("tail", "tail-a"),
               ]
             : [
                 terminalToolCall("message", "message-b", {
@@ -103,6 +143,12 @@ describe("message-tool-only steering", () => {
     installMessageToolTerminalHook({
       agent,
       sourceReplyDeliveryMode: "message_tool_only",
+      config,
+      currentProvider: "webchat",
+      currentChannelId: "source-a",
+      currentMessagingTarget: "source-a",
+      currentMessageId: "m1",
+      sessionKey: "agent:main:webchat:dm:steering-176028",
       onDeliveredSourceReply: () => {
         deliveries += 1;
       },
@@ -120,5 +166,6 @@ describe("message-tool-only steering", () => {
       requests: 2,
       deliveries: 2,
     });
+    expect(executed).toEqual([]);
   });
 });

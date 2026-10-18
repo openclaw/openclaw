@@ -20,6 +20,7 @@ import {
   attachInternalToolExecutionPreparer,
   getInternalToolTurnInputScope,
   setInternalBeforeToolBatch,
+  setInternalToolSteeringAllowance,
   setInternalToolTurnCompletion,
   type InternalToolExecutionPreparation,
 } from "./internal-hooks.js";
@@ -343,6 +344,69 @@ describe("agentLoop steering", () => {
       args: { rewritten: true },
       executionStarted: false,
     });
+  });
+
+  it("continues to a protected reply after steering arrives during private execution preflight", async () => {
+    const preflight = gate();
+    const executed: string[] = [];
+    const {
+      tool: delayed,
+      execute: delayedExecute,
+      dispose: delayedDispose,
+    } = preparedTool("delayed", async () => {
+      await preflight.wait();
+      return { rewritten: true };
+    });
+    const replyTool = makeTool("reply", executed);
+    replyTool.parameters = Type.Object({ final: Type.Boolean() });
+    setInternalToolSteeringAllowance(
+      replyTool,
+      (args) => (args as { final?: boolean }).final === true,
+    );
+    const tail = makeTool("tail", executed);
+    const steer = user("answer the newer input", 2);
+    const { agent, requests } = makeAgent(
+      [makeTool("first"), delayed, replyTool, tail],
+      { toolExecution: "sequential" },
+      [
+        [
+          makeCall("first"),
+          makeCall("delayed"),
+          { ...makeCall("reply"), arguments: { final: true } },
+          makeCall("tail"),
+        ],
+        done,
+      ],
+    );
+    const { releaseSkippedCalls } = trackBatch(agent);
+
+    const run = agent.prompt("start");
+    await preflight.started;
+    agent.steer(steer);
+    preflight.release();
+    await run;
+
+    expect(executed).toEqual(["reply"]);
+    expect(delayedExecute).not.toHaveBeenCalled();
+    expect(delayedDispose).toHaveBeenCalledOnce();
+    expect(releaseSkippedCalls.mock.calls.flat(2)).toEqual(["delayed", "tail"]);
+    expect(requests[1]?.filter((message) => message.role === "toolResult")).toMatchObject([
+      { role: "toolResult", toolCallId: "first", isError: false },
+      {
+        role: "toolResult",
+        toolCallId: "delayed",
+        isError: true,
+        details: { status: "skipped", deniedReason: "steering" },
+      },
+      { role: "toolResult", toolCallId: "reply", isError: false },
+      {
+        role: "toolResult",
+        toolCallId: "tail",
+        isError: true,
+        details: { status: "skipped", deniedReason: "steering" },
+      },
+    ]);
+    expect(requests[1]?.at(-1)).toBe(steer);
   });
 
   it("uses private final args for parallel launch facts and hooks", async () => {
@@ -698,8 +762,10 @@ describe("agentLoop steering", () => {
       const tail = makeTool("tail", executed);
       const replyTool = makeTool("reply", executed);
       replyTool.parameters = Type.Object({ final: Type.Boolean() });
-      replyTool.shouldExecuteBeforeSteering = (args) =>
-        (args as { final?: boolean }).final === true;
+      setInternalToolSteeringAllowance(
+        replyTool,
+        (args) => (args as { final?: boolean }).final === true,
+      );
       const steer = user("answer the newer input", 2);
       const { agent, requests, events } = makeAgent(
         [first, tail, replyTool],

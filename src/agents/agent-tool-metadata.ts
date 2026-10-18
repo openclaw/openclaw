@@ -10,7 +10,10 @@ import {
 import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { copyCodeModeControlToolIdentity } from "./code-mode-control-tools.js";
 import { copyCronScheduledToolProjection } from "./exec-tool-target-pinning.js";
-import { copyInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
+import {
+  copyInternalToolExecutionPreparer,
+  copyInternalToolSteeringAllowance,
+} from "./runtime/internal-hooks.js";
 import { resolveCoreToolExecutionLocation } from "./tool-catalog.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
@@ -103,6 +106,7 @@ export function copyBeforeToolCallWrapperMetadata(
   copyChannelAgentToolMeta(source as never, target as never);
   copyToolTerminalPresentation(source, target);
   copyCodeModeControlToolIdentity(source, target);
+  copyInternalToolSteeringAllowance(source, target);
   const state = ToolActionMetadata.get(source);
   if (state) {
     ToolActionMetadata.set(target, state);

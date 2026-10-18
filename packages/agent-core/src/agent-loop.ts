@@ -17,6 +17,7 @@ import {
   commitInternalToolTurnInput,
   copyInternalToolResultState,
   getInternalToolExecutionPreparer,
+  getInternalToolSteeringAllowance,
   getInternalToolTurnInputScope,
   getInternalSteeringQueueObserver,
   type InternalToolExecutionPreparation,
@@ -594,11 +595,12 @@ function executesBeforeSteering(
     resolution?.kind === "resolved"
       ? resolution.tool
       : batch.currentContext.tools?.find((candidate) => candidate.name === toolCall.name);
-  if (!tool?.shouldExecuteBeforeSteering) {
+  const allowance = tool ? getInternalToolSteeringAllowance(tool) : undefined;
+  if (!allowance) {
     return false;
   }
   try {
-    return tool.shouldExecuteBeforeSteering(args);
+    return allowance(args);
   } catch {
     return false;
   }
@@ -628,10 +630,16 @@ async function executeToolCallGroups(
   let steeringMessages: AgentMessage[] = [];
   let cursor = 0;
   let fatal: ExecutedToolCallBatch["fatal"];
+  let retainSteeringForLookAhead: boolean;
   let intervention: ToolLoopIntervention | undefined;
 
   while (cursor < toolCalls.length) {
-    if (sequential && batch.toolPlan.executionStarted && !batch.signal?.aborted) {
+    if (
+      steeringMessages.length === 0 &&
+      sequential &&
+      batch.toolPlan.executionStarted &&
+      !batch.signal?.aborted
+    ) {
       const steering = getSteeringAtCheckpoint(batch.config);
       steeringMessages = Array.isArray(steering) ? steering : await steering;
     }
@@ -692,6 +700,14 @@ async function executeToolCallGroups(
           (entry) =>
             "kind" in entry && executesBeforeSteering(batch, entry.toolCall, entry.execution.args),
         );
+      // Steering can arrive while a prepared call awaits private preflight. Keep
+      // looking through the untouched tail so a later reply-bearing call is not
+      // discarded with the ordinary call that happened to be prepared first.
+      retainSteeringForLookAhead =
+        sequential &&
+        steeringMessages.length > 0 &&
+        !completesBeforeSteering &&
+        findExecutesBeforeSteering(batch, toolCalls, cursor) !== undefined;
       const ordered: Array<FinalizedToolCallOutcome | undefined> = entries.map((entry) =>
         "kind" in entry ? undefined : entry,
       );
@@ -749,7 +765,9 @@ async function executeToolCallGroups(
         // Unlaunched rejected calls are released with the prepared calls they accompany.
         const skippedIds = [
           ...admittedEntryIds(entries.slice(skippedIndex)),
-          ...admittedIds(toolCalls.slice(cursor), batch.validated),
+          ...(retainSteeringForLookAhead
+            ? []
+            : admittedIds(toolCalls.slice(cursor), batch.validated)),
         ];
         batch.lifecycle?.releaseSkippedCalls?.(skippedIds);
       }
@@ -805,7 +823,12 @@ async function executeToolCallGroups(
         }
       }
     }
-    if (intervention || steeringMessages.length > 0 || fatal || batch.signal?.aborted) {
+    if (
+      intervention ||
+      fatal ||
+      batch.signal?.aborted ||
+      (steeringMessages.length > 0 && !retainSteeringForLookAhead)
+    ) {
       break;
     }
   }
