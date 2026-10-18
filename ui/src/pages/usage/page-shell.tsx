@@ -3,23 +3,23 @@ import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { PanelRefreshStatus as PanelRefreshStatusView } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { projectAgentSelection } from "../../lib/reactive/application.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 
 export function UsagePageShell(props: {
-  context: ApplicationContext;
   result: SessionsUsageResult | null;
   children: JSX.Element;
 }) {
-  const agents = createMemo(() => projectAgents(props.context.agents));
-  const selection = createMemo(() => projectAgentSelection(props.context.agentSelection));
+  const context = useApplication();
+  const agents = projectAgents(context.agents);
+  const selection = projectAgentSelection(context.agentSelection);
   const header = createMemo(() => {
     getLocale();
     return { title: titleForRoute("usage"), subtitle: subtitleForRoute("usage") };
@@ -37,10 +37,10 @@ export function UsagePageShell(props: {
         subtitle={header().subtitle}
         actions={
           <AgentScopeControl
-            agents={agents().read().agentsList?.agents ?? []}
+            agents={agents.read().agentsList?.agents ?? []}
             additionalAgentIds={additionalAgentIds()}
-            selection={props.context.agentSelection}
-            selectedId={selection().read().state.scopeId}
+            selection={context.agentSelection}
+            selectedId={selection.read().state.scopeId}
           />
         }
       />

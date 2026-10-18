@@ -71,8 +71,13 @@ type ChatSessionRailProps = {
 export type ChatSessionRailElement = SolidBridgeElement<ChatSessionRailProps>;
 
 function ChatSessionRailContent(props: ChatSessionRailProps) {
-  let region!: HTMLElement;
+  let textarea: HTMLTextAreaElement | undefined;
   let thread!: HTMLDivElement;
+  const focusComposer = () => {
+    if (textarea && !textarea.disabled) {
+      textarea.focus({ preventScroll: true });
+    }
+  };
   const blocks = markdownBlocksRef(() => props.presented);
   const uploadConfig = createMemo(() => {
     const config = props.uploadConfig;
@@ -127,9 +132,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
     // Consume the pane's live intent after that commit, not while still hidden.
     const frame = requestAnimationFrame(() => {
       if (props.presented && request()) {
-        region
-          .querySelector<HTMLTextAreaElement>(".chat-session-rail__input:not(:disabled)")
-          ?.focus({ preventScroll: true });
+        focusComposer();
       }
     });
     return () => cancelAnimationFrame(frame);
@@ -146,7 +149,6 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
     (!props.running || (props.activeRunId && props.digest.runId === props.activeRunId));
   return (
     <section
-      ref={(element) => (region = element)}
       class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded"
       role="region"
       aria-label={t("chat.rail.title")}
@@ -321,6 +323,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
         </div>
       )}
       <openclaw-chat-comment-controller
+        prop:onFocusComposer={focusComposer}
         prop:paneId={`side-chat:${props.sessionKey}`}
         prop:props={attachmentProps()}
         prop:disabled={attachmentProps().disabled}
@@ -328,6 +331,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
         prop:presented={props.presented}
       />
       <SessionRailComposer
+        textareaRef={(element) => (textarea = element)}
         companion={props.companion}
         connected={props.connected}
         pending={pending()}
@@ -369,6 +373,7 @@ declare module "@solidjs/web" {
         "prop:disabled"?: boolean;
         "prop:sessionKey": string;
         "prop:presented": boolean;
+        "prop:onFocusComposer": () => void;
       };
     }
   }

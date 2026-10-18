@@ -38,6 +38,7 @@ export type GatewayClient = Pick<
   | "browserOrigin"
   | "presenceKey"
   | "presenceSnapshot"
+  | "includeSessionMessageBodies"
   | "clientIp"
   | "pairedClientId"
   | "authenticatedUserId"

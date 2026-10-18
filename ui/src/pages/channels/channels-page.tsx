@@ -220,16 +220,13 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   function reviewPairingAccount(channel: string, accountId: string) {
     setSelectedChannel(null);
     setPairingFilter(channel, accountId);
-    onSettled(scrollToPairing);
-  }
-
-  function scrollToPairing() {
-    if (!active) {
-      return;
-    }
-    pairingRoot?.scrollIntoView({
-      behavior: resolveScrollBehavior(),
-      block: "start",
+    onSettled(() => {
+      if (active) {
+        pairingRoot?.scrollIntoView({
+          behavior: resolveScrollBehavior(),
+          block: "start",
+        });
+      }
     });
   }
 
