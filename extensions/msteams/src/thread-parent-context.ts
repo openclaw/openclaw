@@ -55,11 +55,11 @@ export async function fetchParentMessageCached(
   return message;
 }
 
-type ParentContextSummary = NonNullable<ReturnType<typeof summarizeParentMessage>>;
-
 const PARENT_TEXT_MAX_CHARS = 400;
 
-export function summarizeParentMessage(message: GraphThreadMessage | undefined) {
+export function formatParentContextEvent(
+  message: GraphThreadMessage | undefined,
+): string | undefined {
   if (!message) {
     return undefined;
   }
@@ -72,17 +72,11 @@ export function summarizeParentMessage(message: GraphThreadMessage | undefined) 
   if (!text) {
     return undefined;
   }
-  return {
-    sender,
-    text:
-      text.length > PARENT_TEXT_MAX_CHARS
-        ? `${truncateUtf16Safe(text, PARENT_TEXT_MAX_CHARS - 1)}…`
-        : text,
-  };
-}
-
-export function formatParentContextEvent(summary: ParentContextSummary): string {
-  return `Replying to @${summary.sender}: ${summary.text}`;
+  const summaryText =
+    text.length > PARENT_TEXT_MAX_CHARS
+      ? `${truncateUtf16Safe(text, PARENT_TEXT_MAX_CHARS - 1)}…`
+      : text;
+  return `Replying to @${sender}: ${summaryText}`;
 }
 
 export function shouldInjectParentContext(sessionKey: string, parentId: string): boolean {

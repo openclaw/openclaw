@@ -956,7 +956,6 @@
 ["extensions/msteams/src/monitor-handler.adaptive-card.test.ts","./reply-dispatcher.js","7290bbf2276ad8a8164f19cd8ee94114465b77a488d504bc47dbbdf242d36f2c",1]
 ["extensions/msteams/src/monitor-handler.feedback-authz.test.ts","./monitor-handler/message-handler.js","211029b43ac7a335e3225504c934e8bf138a7c5b0c1560e47545c64317515483",1]
 ["extensions/msteams/src/monitor-handler.feedback-authz.test.ts","./monitor-handler/reaction-handler.js","90dbfd6c8761b72f2b42bd2570fd4221482955b31b2800b59da15c1aba0c43e3",1]
-["extensions/msteams/src/monitor-handler/inbound-media.test.ts","../attachments.js","5fbe061b61f035db66ad365632e56bf64021832af24274f64aa1b50d1ad02e04",1]
 ["extensions/msteams/src/monitor-handler/message-handler-mock-support.test-support.ts","../reply-dispatcher.js","7290bbf2276ad8a8164f19cd8ee94114465b77a488d504bc47dbbdf242d36f2c",1]
 ["extensions/msteams/src/monitor-handler/message-handler.authz.test.ts","../team-identity.js","0382db0c391093c9a77a54f51f70da2f8ad16a357ed5b5d6386896822d7bc295",1]
 ["extensions/msteams/src/monitor-handler/message-handler.bot-threads.test.ts","../graph-thread.js","878d57d761110f146607eaa5b86fd93580765c75312a6d4feaf5fecb7fac182a",1]

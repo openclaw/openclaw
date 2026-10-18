@@ -1,6 +1,11 @@
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { describe, expect, it } from "vitest";
-import { collectA2aStatusIssues } from "./status-issues.js";
+import { a2aChannelPlugin } from "./channel.js";
+
+const collectA2aStatusIssues = a2aChannelPlugin.status?.collectStatusIssues;
+if (!collectA2aStatusIssues) {
+  throw new Error("expected A2A status issue collector");
+}
 
 /** Extras such as the withheld-peer lists ride on the snapshot but are not in its declared type. */
 function snapshot(fields: Record<string, unknown>): ChannelAccountSnapshot {
