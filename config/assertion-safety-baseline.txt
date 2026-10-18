@@ -2281,7 +2281,6 @@ src/plugins/manifest.ts	2
 src/plugins/marketplace.ts	5
 src/plugins/memory-runtime.ts	1
 src/plugins/native-module-require.ts	2
-src/plugins/official-external-provider-endpoints.ts	1
 src/plugins/openai-compatible-embedding-provider.ts	1
 src/plugins/plugin-command-dispatch-contract.ts	1
 src/plugins/plugin-command-runtime.ts	1
@@ -2298,7 +2297,6 @@ src/plugins/provider-openai-chatgpt-oauth.ts	1
 src/plugins/provider-policy-surface.ts	1
 src/plugins/provider-thinking-active.ts	1
 src/plugins/public-surface-loader.ts	2
-src/plugins/recommended-tool-installs.ts	1
 src/plugins/registry-registrars-host.ts	1
 src/plugins/registry-registrars-operations.ts	2
 src/plugins/registry-registrars-tools-hooks.ts	1
@@ -2486,7 +2484,6 @@ src/worker/worker-process.ts	1
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/app-navigation.ts	1
 ui/src/app-routes.ts	1
-ui/src/app/app-host-route-state.ts	1
 ui/src/app/app-shell-chrome.ts	2
 ui/src/app/app-shell-gateway.ts	1
 ui/src/app/assistant-identity.ts	2
