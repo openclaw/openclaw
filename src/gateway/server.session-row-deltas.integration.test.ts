@@ -1,6 +1,7 @@
 import { JSDOM } from "jsdom";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayChatEvents } from "../../ui/src/api/gateway-chat-events.ts";
 import type { SessionsListResult } from "../../ui/src/api/types.ts";
 import { createTestGatewayClient } from "../../ui/src/test-helpers/gateway-client.ts";
@@ -11,8 +12,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
+  captureGatewayRootWorkReleaseObserver,
   getActiveGatewayRootWorkCount,
-  getActiveGatewayRootWorkHolders,
 } from "../process/gateway-work-admission.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
@@ -143,9 +144,16 @@ test("capable and legacy sockets produce identical session payloads and consumer
   const completed = new Promise<void>((resolve) => {
     finish = resolve;
   });
+  let dispatchFailure: unknown;
+  const rootReleased = createDeferred<"settled" | "reset">();
   dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
     const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
     try {
+      const observeRelease = captureGatewayRootWorkReleaseObserver();
+      if (!observeRelease) {
+        throw new Error("Expected chat send root admission");
+      }
+      observeRelease(rootReleased.resolve);
       await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
       await replyOptions?.onAgentRunStart?.(runId);
       finishSubagents = await startSessionRowDeltaSubagents(keys);
@@ -159,10 +167,9 @@ test("capable and legacy sockets produce identical session payloads and consumer
       for (const [depth, childKey] of keys.entries()) {
         if (depth === 2) {
           // Observe the first two committed tool batches before changing delivery.
-          await vi.waitFor(() =>
-            expect(rosterFrames.filter((frame) => frame.event === "session.message")).toHaveLength(
-              13,
-            ),
+          await drain();
+          expect(rosterFrames.filter((frame) => frame.event === "session.message")).toHaveLength(
+            13,
           );
           expect(
             (await rpcReq(roster.ws, "sessions.subscribe", { includeMessageBodies: true })).ok,
@@ -306,6 +313,9 @@ test("capable and legacy sockets produce identical session payloads and consumer
         data: { phase: "end", endedAt: Date.now() },
       });
       return { queuedFinal, counts: dispatcher.getQueuedCounts() };
+    } catch (error) {
+      dispatchFailure = error;
+      throw error;
     } finally {
       finish();
     }
@@ -319,12 +329,11 @@ test("capable and legacy sockets produce identical session payloads and consumer
   });
   expect(sent.ok).toBe(true);
   await completed;
-  try {
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-  } catch (error) {
-    console.error("ROSTER_PROOF_ACTIVE_ROOT_HOLDERS", getActiveGatewayRootWorkHolders());
-    throw error;
+  if (dispatchFailure !== undefined) {
+    throw new Error("Session row proof dispatch failed", { cause: dispatchFailure });
   }
+  expect(await rootReleased.promise).toBe("settled");
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
   await drain();
   producerClock.mockRestore();
   const [encoded, baseline] = streams;
@@ -427,8 +436,8 @@ test("capable and legacy sockets produce identical session payloads and consumer
         completeRosterMessages += 1;
       }
       if (bodyMeasurements.length === 1) {
-        // A full decoded capable frame reproduces legacy wire bytes except socket sequence.
-        expect(legacyWire[index]).toBe(JSON.stringify({ ...decoded, seq: original.seq }));
+        // Decoding preserves the full envelope, independent of object property order.
+        expect({ ...decoded, seq: original.seq }).toEqual(original);
       }
     }
     expect(rosterDecoded?.payload, `roster frame ${index} ${frame.event}`).toEqual(expectedPayload);
