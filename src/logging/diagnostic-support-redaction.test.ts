@@ -224,6 +224,42 @@ describe("diagnostic support redaction", () => {
     expect(sanitizeSupportConfigValue(18789, redaction, "port")).toBe(18789);
   });
 
+  it("redacts payment fields in support snapshots at parity with log redaction", () => {
+    const redaction = {
+      env: {
+        HOME: tempDir,
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+    };
+
+    expect(
+      sanitizeSupportSnapshotValue(
+        {
+          payment: {
+            cvc: 123,
+            cvv: "456",
+            cardNumber: 4242424242424242,
+            security_code: "321",
+            amount: 1999,
+            currency: "usd",
+          },
+        },
+        redaction,
+      ),
+    ).toEqual({
+      payment: {
+        cvc: "<redacted>",
+        cvv: "<redacted>",
+        cardNumber: "<redacted>",
+        security_code: "<redacted>",
+        amount: 1999,
+        currency: "usd",
+      },
+    });
+    expect(sanitizeSupportConfigValue(123, redaction, "cvc")).toBe("<redacted>");
+  });
+
   it("blocks prototype keys and caps support sanitizer width", () => {
     const redaction = {
       env: {

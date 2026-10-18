@@ -9,7 +9,11 @@ import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { replaceRedactPattern } from "./redact-pattern-runtime.js";
-import { AWS_SECRET_ACCESS_KEY_MATCHER, VENDOR_TOKEN_REDACT_PATTERNS } from "./redact-patterns.js";
+import {
+  AWS_SECRET_ACCESS_KEY_MATCHER,
+  PAYMENT_CREDENTIAL_QUERY_KEYS,
+  VENDOR_TOKEN_REDACT_PATTERNS,
+} from "./redact-patterns.js";
 import { redactSensitiveText, redactText, resolveRedactOptions } from "./redact.js";
 
 const SECRET_SUPPORT_FIELD_RE =
@@ -18,6 +22,8 @@ const PAYLOAD_SUPPORT_FIELD_RE =
   /(?:body|chat|content|detail|error|header|instruction|message|payload|prompt|result|text|tool|transcript)/iu;
 const IDENTIFIER_SUPPORT_FIELD_RE =
   /(?:account[-_]?id|chat[-_]?id|conversation[-_]?id|email|message[-_]?id|phone|thread[-_]?id|user[-_]?id|username)/iu;
+// Shares the log redactor's payment vocabulary so support bundles stay at parity with it.
+const PAYMENT_SUPPORT_FIELD_RE = new RegExp(`(?:${PAYMENT_CREDENTIAL_QUERY_KEYS})`, "iu");
 const PRIVATE_MAP_SUPPORT_FIELD_RE = /^(?:accounts|chats|conversations|messages|threads|users)$/iu;
 const CONFIG_PRIVATE_FIELD_RE =
   /(?:allow[-_]?from|allow[-_]?to|deny[-_]?from|deny[-_]?to|blocked[-_]?from|blocked[-_]?users|owner[-_]?id|sender[-_]?id|recipient[-_]?id)/iu;
@@ -73,7 +79,8 @@ function isPrivateSupportField(key: string): boolean {
   return (
     SECRET_SUPPORT_FIELD_RE.test(key) ||
     PAYLOAD_SUPPORT_FIELD_RE.test(key) ||
-    IDENTIFIER_SUPPORT_FIELD_RE.test(key)
+    IDENTIFIER_SUPPORT_FIELD_RE.test(key) ||
+    PAYMENT_SUPPORT_FIELD_RE.test(key)
   );
 }
 
