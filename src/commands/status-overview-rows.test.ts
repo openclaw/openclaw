@@ -185,12 +185,6 @@ it("builds status-all overview rows from the shared surface", () => {
           },
         },
       ],
-      pluginReload: {
-        phase: "reloading",
-        pluginIds: ["composio", "lobster"],
-        reason:
-          "Plugin replacement queued behind 2 retained work item(s) for plugin composio, lobster; new agent runs wait up to the 600s drain budget. Press Ctrl+C to cancel the waiting reload.",
-      },
     },
     osLabel: "macOS",
     configPath: "/tmp/openclaw.json",
@@ -210,8 +204,6 @@ it("builds status-all overview rows from the shared surface", () => {
     "Secret egress proxy": "Check OpenSSL, then retry the request.",
     "Degraded secrets": "1 degraded · capability:tts",
     "Degraded plugins": "1 configured-unavailable · discord",
-    "Plugin reload":
-      "reloading composio, lobster · Plugin replacement queued behind 2 retained work item(s) for plugin composio, lobster; new agent runs wait up to the 600s drain budget. Press Ctrl+C to cancel the waiting reload.",
     Secrets: "2 diagnostics",
   });
 });
