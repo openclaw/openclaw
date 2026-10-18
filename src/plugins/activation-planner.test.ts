@@ -21,6 +21,18 @@ function entries(trigger: PlanParams["trigger"]) {
   return resolveManifestActivationPlan({ trigger }).entries;
 }
 
+function mockRegistry(plugins: Record<string, unknown>[]) {
+  mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+    plugins: plugins.map((plugin) =>
+      Object.assign(
+        { providers: [], channels: [], cliBackends: [], skills: [], hooks: [] },
+        plugin,
+      ),
+    ),
+    diagnostics: [],
+  });
+}
+
 describe("activation planner", () => {
   beforeAll(async () => {
     ({ resolveManifestActivationPlan, resolveManifestActivationPluginIds } =
@@ -29,75 +41,67 @@ describe("activation planner", () => {
 
   beforeEach(() => {
     mocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
-    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "memory-core",
-          commandAliases: [{ name: "dreaming", kind: "runtime-slash", cliCommand: "memory" }],
-          origin: "bundled",
-        },
-        {
-          id: "device-pair",
-          commandAliases: [{ name: "pair", kind: "runtime-slash" }],
-          origin: "bundled",
-        },
-        {
-          id: "browser",
-          cliCommands: [
-            {
-              name: "browser",
-              description: "Manage the browser",
-              hasSubcommands: true,
-            },
-          ],
-          origin: "bundled",
-        },
-        {
-          id: "openai",
-          providers: ["openai"],
-          activation: {
-            onAgentHarnesses: ["codex"],
+    mockRegistry([
+      {
+        id: "memory-core",
+        commandAliases: [{ name: "dreaming", kind: "runtime-slash", cliCommand: "memory" }],
+        origin: "bundled",
+      },
+      {
+        id: "device-pair",
+        commandAliases: [{ name: "pair", kind: "runtime-slash" }],
+        origin: "bundled",
+      },
+      {
+        id: "browser",
+        cliCommands: [
+          {
+            name: "browser",
+            description: "Manage the browser",
+            hasSubcommands: true,
           },
-          setup: {
-            providers: [{ id: "openai" }],
-          },
-          origin: "bundled",
+        ],
+        origin: "bundled",
+      },
+      {
+        id: "openai",
+        providers: ["openai"],
+        activation: {
+          onAgentHarnesses: ["codex"],
         },
-        {
-          id: "custom-harness-plugin",
-          activation: {
-            onAgentHarnesses: ["custom-harness"],
-          },
-          origin: "workspace",
+        setup: {
+          providers: [{ id: "openai" }],
         },
-        {
-          id: "load-path-harness-plugin",
-          activation: {
-            onAgentHarnesses: ["load-path-harness"],
-          },
-          origin: "config",
+        origin: "bundled",
+      },
+      {
+        id: "custom-harness-plugin",
+        activation: {
+          onAgentHarnesses: ["custom-harness"],
         },
-        {
-          id: "demo-channel",
-          channels: ["telegram"],
-          hooks: ["before-agent-start"],
-          contracts: {
-            tools: ["web-search"],
-          },
-          activation: {
-            onRoutes: ["webhook"],
-            onCommands: ["demo-tools"],
-          },
-          origin: "workspace",
+        origin: "workspace",
+      },
+      {
+        id: "load-path-harness-plugin",
+        activation: {
+          onAgentHarnesses: ["load-path-harness"],
         },
-      ].map((plugin) =>
-        Object.assign(
-          { providers: [], channels: [], cliBackends: [], skills: [], hooks: [] },
-          plugin,
-        ),
-      ),
-      diagnostics: [],
-    });
+        origin: "config",
+      },
+      {
+        id: "demo-channel",
+        channels: ["telegram"],
+        hooks: ["before-agent-start"],
+        contracts: {
+          tools: ["web-search"],
+        },
+        activation: {
+          onRoutes: ["webhook"],
+          onCommands: ["demo-tools"],
+        },
+        origin: "workspace",
+      },
+    ]);
   });
 
   it("keeps ids-only command planning stable", () => {
@@ -211,36 +215,23 @@ describe("activation planner", () => {
   });
 
   it("returns capability reasons from explicit hints and manifest ownership", () => {
-    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "explicit-provider",
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          activation: {
-            onCapabilities: ["provider"],
-            onProviders: ["custom-provider"],
-          },
-          origin: "workspace",
+    mockRegistry([
+      {
+        id: "explicit-provider",
+        activation: {
+          onCapabilities: ["provider"],
+          onProviders: ["custom-provider"],
         },
-        {
-          id: "owned-tool",
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          contracts: {
-            tools: ["custom-tool"],
-          },
-          origin: "workspace",
+        origin: "workspace",
+      },
+      {
+        id: "owned-tool",
+        contracts: {
+          tools: ["custom-tool"],
         },
-      ],
-      diagnostics: [],
-    });
+        origin: "workspace",
+      },
+    ]);
 
     expect(entries({ kind: "capability", capability: "provider" })).toEqual([
       {

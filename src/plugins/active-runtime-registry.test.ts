@@ -1,4 +1,3 @@
-// Covers active runtime plugin registry state and reset behavior.
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
@@ -44,16 +43,8 @@ function createRegistryWithPlugin(
   return registry;
 }
 
-function createOwnedRegistryWithPlugin(pluginId: string, rootDir: string): PluginRegistry {
-  return createRegistryWithPlugin(pluginId, {
-    origin: "bundled",
-    rootDir,
-    source: `${rootDir}/index.js`,
-  });
-}
-
-function activate(registry: PluginRegistry) {
-  setActivePluginRegistry(registry, "fixture", "default", "/tmp/ws");
+function activate(registry: PluginRegistry, key = "fixture", workspaceDir = "/tmp/ws") {
+  setActivePluginRegistry(registry, key, "default", workspaceDir);
 }
 
 function lookup(requiredPluginIds: string[]) {
@@ -92,51 +83,38 @@ describe("getLoadedRuntimePluginRegistry", () => {
     expect(lookup([])).toBeUndefined();
   });
 
-  it("does not treat diagnostics as loaded plugin records", () => {
-    const failedRegistry = createRegistryWithPlugin("failed", { status: "error" });
-    failedRegistry.diagnostics.push({
-      level: "error",
-      pluginId: "failed",
-      message: "failed to load",
-    } as never);
-    activate(failedRegistry);
-    expect(lookup(["failed"])).toBeUndefined();
-  });
+  it.each(["diagnostics", "channelSetups"] as const)(
+    "does not treat %s as loaded plugin records",
+    (registration) => {
+      const registry = createRegistryWithPlugin("unloaded", {
+        status: registration === "diagnostics" ? "error" : "disabled",
+      });
+      if (registration === "diagnostics") {
+        registry.diagnostics.push({
+          level: "error",
+          pluginId: "unloaded",
+          message: "failed to load",
+        } as never);
+      } else {
+        registry.channelSetups.push({ pluginId: "unloaded" } as never);
+      }
+      activate(registry);
+      expect(lookup(["unloaded"])).toBeUndefined();
+    },
+  );
 
-  it("does not treat setup-only registrations as loaded plugin records", () => {
-    const setupRegistry = createRegistryWithPlugin("setup-only", { status: "disabled" });
-    setupRegistry.channelSetups.push({
-      pluginId: "setup-only",
-    } as never);
-    activate(setupRegistry);
-    expect(lookup(["setup-only"])).toBeUndefined();
-  });
-
-  it("does not treat deferred plugin metadata as a loaded runtime", () => {
-    const deferredRegistry = createRegistryWithPlugin("deferred", {
-      format: "openclaw",
-      imported: false,
-    });
-    activate(deferredRegistry);
-    expect(lookup(["deferred"])).toBeUndefined();
-    expect(listLoadedRuntimePluginIds()).not.toContain("deferred");
-    expect(listRuntimePluginIdsFromRegistry(deferredRegistry)).not.toContain("deferred");
-  });
-
-  it("accepts metadata-only bundle plugins as loaded runtimes", () => {
-    const bundleRegistry = createRegistryWithPlugin("bundle", {
-      format: "bundle",
-      imported: false,
-    });
-    activate(bundleRegistry);
-    expect(lookup(["bundle"])).toBe(bundleRegistry);
-    expect(listLoadedRuntimePluginIds()).toContain("bundle");
-    expect(listRuntimePluginIdsFromRegistry(bundleRegistry)).toContain("bundle");
+  it.each(["openclaw", "bundle"] as const)("checks deferred %s metadata availability", (format) => {
+    const registry = createRegistryWithPlugin("metadata", { format, imported: false });
+    activate(registry);
+    expect(lookup(["metadata"])).toBe(format === "bundle" ? registry : undefined);
+    const expected = format === "bundle" ? ["metadata"] : [];
+    expect(listLoadedRuntimePluginIds()).toEqual(expected);
+    expect(listRuntimePluginIdsFromRegistry(registry)).toEqual(expected);
   });
 
   it("reuses scoped loaded owners when load options differ from the active registry", () => {
     const registry = createRegistryWithPlugin("demo");
-    setActivePluginRegistry(registry, "gateway-root-key", "default", "/tmp/ws");
+    activate(registry, "gateway-root-key");
 
     expect(
       getLoadedRuntimePluginRegistry({
@@ -172,10 +150,9 @@ describe("getLoadedRuntimePluginRegistry", () => {
       workspaceDir: "/tmp/owner-workspace",
       onlyPluginIds: ["demo"],
     };
-    setActivePluginRegistry(
+    activate(
       registry,
       resolvePluginLoadCacheContext(loadOptions).cacheKey,
-      "default",
       loadOptions.workspaceDir,
     );
 
@@ -185,7 +162,11 @@ describe("getLoadedRuntimePluginRegistry", () => {
   });
 
   it("rejects a request registry when a workspace selects another physical owner", () => {
-    const registry = createOwnedRegistryWithPlugin("demo", "/plugins/demo");
+    const registry = createRegistryWithPlugin("demo", {
+      origin: "bundled",
+      rootDir: "/plugins/demo",
+      source: "/plugins/demo/index.js",
+    });
 
     expect(
       createRuntimePluginManifestLookup(registry, [
@@ -334,9 +315,7 @@ it("does not reuse a different explicitly selected bundled entry", () => {
   const old = loadOpenClawPlugins(options(runtime.file));
   expect(old.providers[0]?.provider.label).toBe("Old");
   setActivePluginRegistry(old, "old-entry");
-  expect(
-    getLoadedRuntimePluginRegistry({ loadOptions: options(selectedSource) }) === undefined,
-  ).toBe(true);
+  expect(getLoadedRuntimePluginRegistry({ loadOptions: options(selectedSource) })).toBeUndefined();
   expect(loadOpenClawPlugins(options(selectedSource)).providers[0]?.provider.label).toBe(
     "Selected",
   );

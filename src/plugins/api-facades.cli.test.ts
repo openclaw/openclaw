@@ -28,11 +28,7 @@ function fixture(id = "alpha") {
       runtime: {} as PluginRuntime,
       resolvePath: (value) => value,
       logger: { info() {}, warn() {}, error() {}, debug() {} },
-      handlers: {
-        registerCli: (registrar) => {
-          registrations.push(registrar);
-        },
-      },
+      handlers: { registerCli: (registrar) => void registrations.push(registrar) },
     }),
     instance,
   );
@@ -53,6 +49,32 @@ async function register(registrar: OpenClawPluginCliRegistrar, host = new Comman
 const current = () => runtime.getRuntime().id;
 const parse = (command: Command, ...args: string[]) => command.parseAsync(args, { from: "user" });
 const scopedValue = (value: string) => `${current()}:${value}`;
+const retired = (result: Promise<Command>) =>
+  expect(result).rejects.toThrow("reloaded or disabled");
+const adopt = (command: Command) => register(({ program }) => void program.addCommand(command));
+const record = (events: string[], stage: string) => () => void events.push(`${stage}:${current()}`);
+function identities(expected: Command, ...values: unknown[]) {
+  for (const value of values) {
+    expect(value).toBe(expected);
+  }
+}
+function parsedCallbacks(command: Command, events: string[], check?: (self: Command) => void) {
+  command.hook("preAction", (parent, action) => {
+    identities(command, parent, action);
+    const recordPre = record(events, "pre");
+    return check ? Promise.resolve().then(recordPre) : recordPre();
+  });
+  expect(
+    command.action(async function (value, options, action) {
+      identities(command, this, action);
+      check?.(this);
+      expect([value, options.account]).toEqual(["alpha:input", "alpha:target"]);
+      await Promise.resolve();
+      events.push(`action:${current()}`);
+    }),
+  ).toBe(command);
+  command.hook("postAction", record(events, "post"));
+}
 function emitter<T extends Command>(command: T): T & EventEmitter {
   if (!(command instanceof EventEmitter)) {
     throw new Error("Expected native EventEmitter");
@@ -144,9 +166,7 @@ describe("managed CLI callbacks", () => {
     host.command("host").action(() => {
       throw error;
     });
-    await register(({ program }) => {
-      program.command("plugin").action(() => {});
-    }, host);
+    await register(({ program }) => void program.command("plugin").action(() => {}), host);
 
     await expect(parse(host, "host")).rejects.toBe(error);
   });
@@ -170,8 +190,8 @@ describe("managed CLI callbacks", () => {
       const root = program.command("matrix");
       expect(root).toBe(program.commands[0]);
       root.hook("preSubcommand", async (parent, command) => {
-        expect(parent).toBe(root);
-        expect(command).toBe(leaf);
+        identities(root, parent);
+        identities(leaf, command);
         events.push(`sub:${current()}`);
         await Promise.resolve();
         expect(current()).toBe("alpha");
@@ -179,29 +199,12 @@ describe("managed CLI callbacks", () => {
       leaf = root.command("setup");
       expect(leaf.option("--account <id>", "account", scopedValue)).toBe(leaf);
       expect(leaf.argument("<value>", "value", scopedValue)).toBe(leaf);
-      leaf.hook("preAction", async (command, action) => {
-        expect(command).toBe(leaf);
-        expect(action).toBe(leaf);
-        await Promise.resolve();
-        events.push(`pre:${current()}`);
-      });
-      expect(
-        leaf.action(async function (value, options, command) {
-          expect(this).toBe(leaf);
-          expect(command).toBe(leaf);
-          expect(this).toBeInstanceOf(NativeCommand);
-          if (!(this instanceof NativeCommand)) {
-            throw new Error("Expected native command subclass");
-          }
-          expect(this.marker()).toBe("native");
-          expect(value).toBe("alpha:input");
-          expect(options.account).toBe("alpha:target");
-          await Promise.resolve();
-          events.push(`action:${current()}`);
-        }),
-      ).toBe(leaf);
-      leaf.hook("postAction", () => {
-        events.push(`post:${current()}`);
+      parsedCallbacks(leaf, events, (self) => {
+        expect(self).toBeInstanceOf(NativeCommand);
+        if (!(self instanceof NativeCommand)) {
+          throw new Error("Expected native command subclass");
+        }
+        expect(self.marker()).toBe("native");
       });
     }, host);
     expect(events).toEqual([]);
@@ -210,9 +213,7 @@ describe("managed CLI callbacks", () => {
     expect(events).toEqual(["sub:alpha", "pre:alpha", "action:alpha", "post:alpha"]);
     expect(runtime.tryGetRuntime()).toBeNull();
     await instance.dispose();
-    await expect(parse(host, "matrix", "setup", "input", "--account", "target")).rejects.toThrow(
-      "reloaded or disabled",
-    );
+    await retired(parse(host, "matrix", "setup", "input", "--account", "target"));
   });
 
   it("keeps sibling instances and async continuations on their own runtime when sharing a native root", async () => {
@@ -225,16 +226,12 @@ describe("managed CLI callbacks", () => {
       await Promise.resolve();
       observations.push(`${this.name()}:${before}:${current()}`);
     };
-    await alpha.register(host, ({ program }) => {
-      program.command("alpha").action(action);
-    });
-    await beta.register(host, ({ program }) => {
-      program.command("beta").action(action);
-    });
+    await alpha.register(host, ({ program }) => void program.command("alpha").action(action));
+    await beta.register(host, ({ program }) => void program.command("beta").action(action));
     await parse(host, "alpha");
     await parse(host, "beta");
     await alpha.instance.dispose();
-    await expect(parse(host, "alpha")).rejects.toThrow("reloaded or disabled");
+    await retired(parse(host, "alpha"));
     await parse(host, "beta");
     expect(observations).toEqual(["alpha:alpha:alpha", "beta:beta:beta", "beta:beta:beta"]);
     expect(runtime.tryGetRuntime()).toBeNull();
@@ -269,7 +266,7 @@ describe("managed CLI callbacks", () => {
       });
       try {
         const next = parse(second, "run");
-        const rejected = expect(next).rejects.toThrow("reloaded or disabled");
+        const rejected = retired(next);
         expect(disposed).toBe(false);
         finish.resolve();
         await rejected;
@@ -339,21 +336,7 @@ describe("managed CLI callbacks", () => {
     const { host, instance } = await register(({ program }) => {
       child = new Command("prepared");
       child.addOption(option).addArgument(argument);
-      child.hook("preAction", (command) => {
-        expect(command).toBe(child);
-        events.push(`pre:${current()}`);
-      });
-      child.action(async function (value, options, command) {
-        expect(this).toBe(child);
-        expect(command).toBe(child);
-        expect(value).toBe("alpha:input");
-        expect(options.account).toBe("alpha:target");
-        await Promise.resolve();
-        events.push(`action:${current()}`);
-      });
-      child.hook("postAction", () => {
-        events.push(`post:${current()}`);
-      });
+      parsedCallbacks(child, events);
       expect(program.addCommand(child)).toBe(program);
     });
     expect(host.commands[0]).toBe(child);
@@ -366,9 +349,7 @@ describe("managed CLI callbacks", () => {
     await instance.dispose();
     expect(() => option.parseArg!("stale", undefined)).toThrow("reloaded or disabled");
     expect(() => argument.parseArg!("stale", undefined)).toThrow("reloaded or disabled");
-    await expect(parse(host, "prepared", "input", "--account", "target")).rejects.toThrow(
-      "reloaded or disabled",
-    );
+    await retired(parse(host, "prepared", "input", "--account", "target"));
   });
 
   it("adopts prepared descendant help and listeners without replaying listener meta-events", async () => {
@@ -387,15 +368,11 @@ describe("managed CLI callbacks", () => {
     leaf.configureHelp({ commandDescription: () => current() });
     leaf.configureOutput({ writeOut: (text) => output.push(`${current()}:${text}`) });
     leaf.addHelpText("after", () => `help:${current()}`);
-    leaf.action(() => {
-      seen.push(`action:${current()}`);
-    });
+    leaf.action(record(seen, "action"));
     branch.addCommand(leaf);
     const addedBefore = newListener.mock.calls.length;
     const removedBefore = removedListener.mock.calls.length;
-    const { host, instance } = await register(({ program }) => {
-      program.addCommand(branch);
-    });
+    const { host, instance } = await adopt(branch);
     expect(newListener.mock.calls).toHaveLength(addedBefore);
     expect(removedListener.mock.calls).toHaveLength(removedBefore);
     expect(host.commands[0]).toBe(branch);
@@ -412,7 +389,7 @@ describe("managed CLI callbacks", () => {
     expect(seen).toEqual(["alpha", "alpha", "action:alpha"]);
     await instance.dispose();
     expect(() => leaf.outputHelp()).toThrow("reloaded or disabled");
-    await expect(parse(host, "prepared", "leaf")).rejects.toThrow("reloaded or disabled");
+    await retired(parse(host, "prepared", "leaf"));
   });
 
   it("preserves native listener-array descriptors without invoking metadata accessors", async () => {
@@ -430,9 +407,7 @@ describe("managed CLI callbacks", () => {
     Object.defineProperty(stored, "__proto__", { value: marker, configurable: true });
     const length = Object.getOwnPropertyDescriptor(stored, "length");
 
-    await register(({ program }) => {
-      program.addCommand(child);
-    });
+    await adopt(child);
     const rebound = listenerArray(child);
     expect(rebound).not.toBe(stored);
     expect(Object.getPrototypeOf(rebound)).toBe(prototype);
@@ -455,9 +430,7 @@ describe("managed CLI callbacks", () => {
     const seen: string[] = [];
     const listener = () => seen.push(current());
     child.on("custom", listener).once("custom", listener);
-    const { instance } = await register(({ program }) => {
-      program.addCommand(child);
-    });
+    const { instance } = await adopt(child);
     child.off("custom", listener);
     child.emit("custom");
     child.emit("custom");
@@ -493,9 +466,7 @@ describe("managed CLI callbacks", () => {
         });
         command.on("custom", second);
         if (managed) {
-          await register(({ program }) => {
-            program.addCommand(command);
-          });
+          await adopt(command);
         }
         command.emit("custom");
         const firstEmission = [...seen];
@@ -522,23 +493,20 @@ describe("managed CLI callbacks", () => {
     await parse(child);
     expect(seen).toEqual(["alpha"]);
     await instance.dispose();
-    await expect(parse(child)).rejects.toThrow("reloaded or disabled");
+    await retired(parse(child));
   });
 
   it("does not adopt preexisting host callbacks or change a caller-owned command's identity", async () => {
     const host = new Command();
     const foreign = new Command("host");
     const hostAction = vi.fn(function (this: Command, _options, command) {
-      expect(this).toBe(foreign);
-      expect(command).toBe(foreign);
+      identities(foreign, this, command);
       expect(runtime.tryGetRuntime()).toBeNull();
     });
     foreign.action(hostAction);
     host.addCommand(foreign);
     const { instance } = await register(({ program }) => {
-      program.command("plugin").action(() => {
-        current();
-      });
+      program.command("plugin").action(() => void current());
     }, host);
     expect(host.commands[0]).toBe(foreign);
     await instance.dispose();
