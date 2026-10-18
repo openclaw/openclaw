@@ -1,5 +1,8 @@
 import type { RealtimeVoiceProviderCapabilities } from "openclaw/plugin-sdk/realtime-voice";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 // Realtime voice uses browser or Gateway-owned WebRTC when the host owns delegation,
 // and the Platform-key direct WebSocket transport elsewhere.
 
@@ -76,9 +79,9 @@ export function normalizeOpenAIQuicksilverVoiceInput(
   if (typeof value !== "object" || Array.isArray(value)) {
     throw new Error('Invalid GPT-Live custom voice reference: expected { id: "voice_..." }');
   }
-  const record = value as Record<string, unknown>;
-  const id = typeof record.id === "string" ? record.id.trim() : "";
-  if (Object.keys(record).length !== 1 || !OPENAI_GPT_LIVE_CUSTOM_VOICE_ID_RE.test(id)) {
+  const record = asOptionalRecord(value);
+  const id = typeof record?.id === "string" ? record.id.trim() : "";
+  if (!record || Object.keys(record).length !== 1 || !OPENAI_GPT_LIVE_CUSTOM_VOICE_ID_RE.test(id)) {
     throw new Error('Invalid GPT-Live custom voice reference: expected { id: "voice_..." }');
   }
   return { id };
