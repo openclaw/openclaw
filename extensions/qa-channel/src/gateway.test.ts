@@ -1,8 +1,11 @@
+import { once } from "node:events";
 import { createServer } from "node:http";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
+import type { QaBusMessage } from "./bus-client.js";
 import { startQaGatewayAccount } from "./gateway.js";
 import { handleQaInbound } from "./inbound.js";
 import type { ResolvedQaChannelAccount } from "./types.js";
@@ -37,21 +40,40 @@ function startGateway(
   });
 }
 
-async function startJsonServer(
-  handler: (req: { url?: string | undefined }) => { statusCode?: number; body: string },
-) {
-  const server = createServer((req, res) => {
-    const response = handler({ url: req.url });
-    res.writeHead(response.statusCode ?? 200, {
-      "content-type": "application/json; charset=utf-8",
-    });
-    res.end(response.body);
-  });
+function makeInbound(text: string, overrides: Partial<QaBusMessage> = {}): QaBusMessage {
+  return {
+    id: "msg-1",
+    accountId: "default",
+    direction: "inbound",
+    conversation: { id: "alice", kind: "direct" },
+    senderId: "alice",
+    text,
+    timestamp: Date.now(),
+    reactions: [],
+    ...overrides,
+  };
+}
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
+function pollBody(messages: QaBusMessage[]) {
+  return JSON.stringify({
+    cursor: messages.length,
+    events: messages.map((message, index) => ({
+      cursor: index + 1,
+      kind: "inbound-message",
+      accountId: "default",
+      message,
+    })),
   });
+}
+
+async function startPollServer(messages: QaBusMessage[]) {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+    res.end(pollBody(messages));
+  });
+  const listening = once(server, "listening");
+  server.listen(0, "127.0.0.1");
+  await listening;
 
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -78,49 +100,17 @@ describe("qa-channel gateway", () => {
 
   it("lets native commands bypass the ordered inbound queue", async () => {
     const controller = new AbortController();
-    const message = {
-      id: "msg-1",
-      accountId: "default",
-      direction: "inbound" as const,
-      conversation: { id: "alice", kind: "direct" as const },
-      senderId: "alice",
-      text: "hello",
-      timestamp: Date.now(),
-      reactions: [],
-    };
-    const server = await startJsonServer(() => ({
-      body: JSON.stringify({
-        cursor: 3,
-        events: [
-          { cursor: 1, kind: "inbound-message", accountId: "default", message },
-          {
-            cursor: 2,
-            kind: "inbound-message",
-            accountId: "default",
-            message: { ...message, id: "msg-2", text: "follow-up" },
-          },
-          {
-            cursor: 3,
-            kind: "inbound-message",
-            accountId: "default",
-            message: {
-              ...message,
-              id: "msg-3",
-              text: "/stop",
-              nativeCommand: { name: "stop" },
-            },
-          },
-        ],
-      }),
-    }));
+    const message = makeInbound("hello");
+    const server = await startPollServer([
+      message,
+      { ...message, id: "msg-2", text: "follow-up" },
+      { ...message, id: "msg-3", text: "/stop", nativeCommand: { name: "stop" } },
+    ]);
     stops.push(() => server.stop());
-    let releaseFirst: (() => void) | undefined;
-    const firstPending = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+    const firstPending = createDeferred<void>();
     vi.mocked(handleQaInbound).mockImplementation(async ({ message: inbound }) => {
       if (inbound.text === "hello") {
-        await firstPending;
+        await firstPending.promise;
       }
       if (inbound.text === "/stop") {
         controller.abort();
@@ -135,7 +125,7 @@ describe("qa-channel gateway", () => {
       expect(handled).toContain("/stop");
       expect(handled).not.toContain("follow-up");
     });
-    releaseFirst?.();
+    firstPending.resolve();
     await gateway;
     const handled = vi.mocked(handleQaInbound).mock.calls.map(([params]) => params.message.text);
     expect(handled).toHaveLength(3);
@@ -204,30 +194,8 @@ describe("qa-channel gateway", () => {
 
   it("stops the ordered inbound queue after the first dispatch failure", async () => {
     const controller = new AbortController();
-    const message = {
-      id: "msg-1",
-      accountId: "default",
-      direction: "inbound" as const,
-      conversation: { id: "alice", kind: "direct" as const },
-      senderId: "alice",
-      text: "first",
-      timestamp: Date.now(),
-      reactions: [],
-    };
-    const server = await startJsonServer(() => ({
-      body: JSON.stringify({
-        cursor: 2,
-        events: [
-          { cursor: 1, kind: "inbound-message", accountId: "default", message },
-          {
-            cursor: 2,
-            kind: "inbound-message",
-            accountId: "default",
-            message: { ...message, id: "msg-2", text: "second" },
-          },
-        ],
-      }),
-    }));
+    const message = makeInbound("first");
+    const server = await startPollServer([message, { ...message, id: "msg-2", text: "second" }]);
     stops.push(() => server.stop());
     vi.mocked(handleQaInbound).mockImplementationOnce(async () => {
       controller.abort();
@@ -245,25 +213,9 @@ describe("qa-channel gateway", () => {
     const bus = await startQaBusServer({ state });
     stops.push(bus["stop"]);
     const messages = [
-      state.addInboundMessage({
-        accountId: "default",
-        conversation: { id: "alice", kind: "direct" },
-        senderId: "alice",
-        text: "first",
-      }),
-      state.addInboundMessage({
-        accountId: "default",
-        conversation: { id: "alice", kind: "direct" },
-        senderId: "alice",
-        text: "second",
-      }),
-      state.addInboundMessage({
-        accountId: "default",
-        conversation: { id: "alice", kind: "direct" },
-        senderId: "alice",
-        text: "/stop",
-        nativeCommand: { name: "stop" },
-      }),
+      state.addInboundMessage(makeInbound("first")),
+      state.addInboundMessage(makeInbound("second")),
+      state.addInboundMessage(makeInbound("/stop", { nativeCommand: { name: "stop" } })),
     ];
     let pollCount = 0;
     bus.server.on("request", (request) => {
@@ -272,16 +224,13 @@ describe("qa-channel gateway", () => {
       }
     });
 
-    let rejectSecond = (_error: Error) => {};
-    const secondAttempt = new Promise<void>((_resolve, reject) => {
-      rejectSecond = reject;
-    });
+    const secondAttempt = createDeferred<void>();
     let restarting = false;
     const recoveredMessageIds: string[] = [];
     const restartedController = new AbortController();
     vi.mocked(handleQaInbound).mockImplementation(async ({ message }) => {
       if (!restarting && message.id === messages[1]?.id) {
-        await secondAttempt;
+        await secondAttempt.promise;
       }
       if (restarting) {
         recoveredMessageIds.push(message.id);
@@ -301,7 +250,7 @@ describe("qa-channel gateway", () => {
         expect.arrayContaining(messages.map((message) => message.id)),
       );
     });
-    rejectSecond(new Error("inbound failed"));
+    secondAttempt.reject(new Error("inbound failed"));
     await expect(firstGateway).rejects.toThrow("inbound failed");
     expect(state.getAcknowledgedPollCursor("default")).toBe(1);
 
@@ -326,12 +275,7 @@ describe("qa-channel gateway", () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
     stops.push(bus["stop"]);
-    const message = state.addInboundMessage({
-      accountId: "default",
-      conversation: { id: "alice", kind: "direct" },
-      senderId: "alice",
-      text: "stop after delivery",
-    });
+    const message = state.addInboundMessage(makeInbound("stop after delivery"));
     const controller = new AbortController();
     vi.mocked(handleQaInbound).mockImplementation(async ({ message: inbound }) => {
       if (inbound.id === message.id) {

@@ -52,22 +52,24 @@ vi.mock("openclaw/plugin-sdk/media-store", async (importOriginal) => ({
 }));
 
 describe("handleQaInbound", () => {
+  let runtime: ReturnType<typeof createPluginRuntimeMock>;
   beforeEach(() => {
     vi.clearAllMocks();
+    runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
   });
 
-  it("uses one session for inbound channel threads and explicit thread replies", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
+  function receive(overrides: Parameters<typeof createQaInboundParams>[0]) {
+    return handleQaInbound(createQaInboundParams(overrides));
+  }
 
-    await handleQaInbound(
-      createQaInboundParams({
-        message: {
-          conversation: { id: "qa-room", kind: "channel" },
-          threadId: "42",
-        },
-      }),
-    );
+  it("uses one session for inbound channel threads and explicit thread replies", async () => {
+    await receive({
+      message: {
+        conversation: { id: "qa-room", kind: "channel" },
+        threadId: "42",
+      },
+    });
 
     const assembled = firstRunAssembledParams(runtime);
     const outboundRoute = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
@@ -81,12 +83,7 @@ describe("handleQaInbound", () => {
   });
 
   it("treats deliveries without dispatcher metadata as final replies", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-
-    await startQaInbound(runtime, createQaInboundParams());
-
-    const assembled = firstRunAssembledParams(runtime);
+    const assembled = await assembledTurn(runtime);
     await assembled.replyOptions?.onPartialReply?.({ text: "preview" });
     const missingDeliveryInfo = undefined as unknown as Parameters<
       typeof assembled.delivery.deliver
@@ -135,10 +132,7 @@ describe("handleQaInbound", () => {
   });
 
   it("does not suppress the final caption after a failed media delivery", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-    await startQaInbound(runtime, createQaInboundParams());
-    const assembled = firstRunAssembledParams(runtime);
+    const assembled = await assembledTurn(runtime);
     vi.mocked(loadOutboundMediaFromUrl).mockRejectedValueOnce(new Error("media too large"));
     await expect(
       assembled.delivery.deliver(
@@ -149,37 +143,23 @@ describe("handleQaInbound", () => {
     expect(sendQaBusMessage).not.toHaveBeenCalled();
     await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
     expect(sendQaBusMessage).toHaveBeenCalledOnce();
-    expect(sendQaBusMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "single answer" }),
-    );
+    expectSend(1, { text: "single answer" });
   });
 
   it("keeps captionless media and a subsequent text final", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-    await startQaInbound(runtime, createQaInboundParams());
-    const assembled = firstRunAssembledParams(runtime);
+    const assembled = await assembledTurn(runtime);
     await assembled.delivery.deliver({ mediaUrl: "/tmp/answer.png" }, { kind: "block" });
     await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
     expect(sendQaBusMessage).toHaveBeenCalledTimes(2);
-    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        text: "",
-        attachments: [expect.objectContaining({ contentBase64: QA_GENERATED_IMAGE_BASE64 })],
-      }),
-    );
-    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ text: "single answer" }),
-    );
+    expectSend(1, {
+      text: "",
+      attachments: [expect.objectContaining({ contentBase64: QA_GENERATED_IMAGE_BASE64 })],
+    });
+    expectSend(2, { text: "single answer" });
   });
 
   it("retains tool calls started while media is loading in the later final", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-    await startQaInbound(runtime, createQaInboundParams());
-    const assembled = firstRunAssembledParams(runtime);
+    const assembled = await assembledTurn(runtime);
     await assembled.replyOptions?.onToolStart?.({ phase: "start", name: "image" });
     vi.mocked(loadOutboundMediaFromUrl).mockImplementationOnce(async () => {
       await assembled.replyOptions?.onToolStart?.({ phase: "start", name: "search" });
@@ -195,23 +175,12 @@ describe("handleQaInbound", () => {
     );
     await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
     expect(sendQaBusMessage).toHaveBeenCalledTimes(2);
-    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ toolCalls: [{ name: "image" }] }),
-    );
-    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ toolCalls: [{ name: "image" }, { name: "search" }] }),
-    );
+    expectSend(1, { toolCalls: [{ name: "image" }] });
+    expectSend(2, { toolCalls: [{ name: "image" }, { name: "search" }] });
   });
 
   it("suppresses an identical final with the same tool-call trace", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-
-    await startQaInbound(runtime, createQaInboundParams());
-
-    const assembled = firstRunAssembledParams(runtime);
+    const assembled = await assembledTurn(runtime);
     await assembled.replyOptions?.onToolStart?.({
       phase: "start",
       name: "search",
@@ -224,7 +193,6 @@ describe("handleQaInbound", () => {
   });
 
   it("escapes control characters in dispatch error logs", async () => {
-    const runtime = createPluginRuntimeMock();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const c1Control = String.fromCharCode(0x9b);
     const lineSeparator = String.fromCodePoint(0x2028);
@@ -232,12 +200,8 @@ describe("handleQaInbound", () => {
     vi.mocked(deleteQaBusMessage).mockRejectedValueOnce(
       new Error(`cleanup\nforged\u001b[31m${c1Control}32m${lineSeparator}next`),
     );
-    setQaChannelRuntime(runtime);
-
     try {
-      await startQaInbound(runtime, createQaInboundParams());
-
-      const assembled = firstRunAssembledParams(runtime);
+      const assembled = await assembledTurn(runtime);
       await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
       await Promise.resolve(
         assembled.delivery.onError?.(new Error(`dispatch\r\nforged${paragraphSeparator}next`), {
@@ -245,13 +209,9 @@ describe("handleQaInbound", () => {
         }),
       );
 
-      await vi.waitFor(() => {
-        expect(warn).toHaveBeenCalledTimes(2);
-      });
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(2));
       await Promise.resolve(assembled.delivery.onError?.(undefined, { kind: "final" }));
-      await vi.waitFor(() => {
-        expect(warn).toHaveBeenCalledTimes(3);
-      });
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(3));
       const output = warn.mock.calls.flat().join(" ");
       expect(output).not.toContain("\r");
       expect(output).not.toContain("\n");
@@ -268,16 +228,9 @@ describe("handleQaInbound", () => {
   });
 
   it("drops direct messages outside the configured sender allowlist", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-
-    await handleQaInbound(
-      createQaInboundParams({
-        accountConfig: {
-          allowFrom: ["bob"],
-        },
-      }),
-    );
+    await receive({
+      accountConfig: { allowFrom: ["bob"] },
+    });
 
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
@@ -303,17 +256,13 @@ describe("handleQaInbound", () => {
   it("preserves the complete native command in its slash session", async () => {
     const name = "think";
     const text = "/think high";
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
 
-    await handleQaInbound(
-      createQaInboundParams({
-        message: {
-          text,
-          nativeCommand: { name },
-        },
-      }),
-    );
+    await receive({
+      message: {
+        text,
+        nativeCommand: { name },
+      },
+    });
 
     const assembled = firstRunAssembledParams(runtime);
     expect(assembled.ctxPayload).toMatchObject({
@@ -322,33 +271,25 @@ describe("handleQaInbound", () => {
       CommandBody: text,
       CommandSource: "native",
       CommandTargetSessionKey: assembled.route.sessionKey,
-      CommandTurn: {
-        body: text,
-        source: "native",
-      },
+      CommandTurn: { body: text, source: "native" },
     });
     expect(assembled.ctxPayload.SessionKey).toContain("qa-channel:slash:alice");
     expect(assembled.ctxPayload.SessionKey).not.toBe(assembled.route.sessionKey);
   });
 
   it("skips malformed inline attachment base64 without dropping the message", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-
-    await handleQaInbound(
-      createQaInboundParams({
-        message: {
-          attachments: [
-            {
-              id: "attachment-1",
-              kind: "image",
-              mimeType: "image/png",
-              contentBase64: "AAA@@@",
-            },
-          ],
-        },
-      }),
-    );
+    await receive({
+      message: {
+        attachments: [
+          {
+            id: "attachment-1",
+            kind: "image",
+            mimeType: "image/png",
+            contentBase64: "AAA@@@",
+          },
+        ],
+      },
+    });
 
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
@@ -356,25 +297,20 @@ describe("handleQaInbound", () => {
   });
 
   it("projects saved inline attachments through a media-store URL", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-
-    await handleQaInbound(
-      createQaInboundParams({
-        message: {
-          attachments: [
-            {
-              id: "audio-1",
-              kind: "audio",
-              mimeType: "audio/ogg",
-              fileName: "voice-note.ogg",
-              contentBase64: Buffer.alloc(2048, 0x52).toString("base64"),
-              mediaFactCarrier: "media-store-url",
-            },
-          ],
-        },
-      }),
-    );
+    await receive({
+      message: {
+        attachments: [
+          {
+            id: "audio-1",
+            kind: "audio",
+            mimeType: "audio/ogg",
+            fileName: "voice-note.ogg",
+            contentBase64: Buffer.alloc(2048, 0x52).toString("base64"),
+            mediaFactCarrier: "media-store-url",
+          },
+        ],
+      },
+    });
 
     expect(saveMediaBuffer).toHaveBeenCalledOnce();
     const media = firstRunAssembledParams(runtime).ctxPayload.media;
@@ -387,31 +323,26 @@ describe("handleQaInbound", () => {
   });
 
   it("rejects non-http attachment URLs without dropping the message", async () => {
-    const runtime = createPluginRuntimeMock();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    setQaChannelRuntime(runtime);
-
     try {
-      await handleQaInbound(
-        createQaInboundParams({
-          message: {
-            attachments: [
-              {
-                id: "attachment-1",
-                kind: "image",
-                mimeType: "image/png",
-                url: "file:///etc/passwd",
-              },
-              {
-                id: "attachment-2",
-                kind: "file",
-                mimeType: "text/plain",
-                url: "data:text/plain;base64,SGVsbG8=",
-              },
-            ],
-          },
-        }),
-      );
+      await receive({
+        message: {
+          attachments: [
+            {
+              id: "attachment-1",
+              kind: "image",
+              mimeType: "image/png",
+              url: "file:///etc/passwd",
+            },
+            {
+              id: "attachment-2",
+              kind: "file",
+              mimeType: "text/plain",
+              url: "data:text/plain;base64,SGVsbG8=",
+            },
+          ],
+        },
+      });
 
       expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
       const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
@@ -446,36 +377,26 @@ describe("handleQaInbound", () => {
   });
 
   it("skips configured group messages that miss mention activation", async () => {
-    const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.mentions.buildMentionRegexes).mockReturnValue([/\b@?openclaw\b/i]);
-    setQaChannelRuntime(runtime);
-
-    await handleQaInbound(
-      createQaInboundParams({
-        accountConfig: {
-          groups: {
-            "qa-room": {
-              requireMention: true,
-            },
-          },
-        },
-        message: {
-          conversation: {
-            kind: "group",
-            id: "qa-room",
-            title: "QA Room",
-          },
-          text: "plain group message",
-        },
-      }),
-    );
+    await receive({
+      accountConfig: {
+        groups: { "qa-room": { requireMention: true } },
+      },
+      message: {
+        conversation: { kind: "group", id: "qa-room", title: "QA Room" },
+        text: "plain group message",
+      },
+    });
 
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 });
 
-async function assembledTurn() {
-  const runtime = createPluginRuntimeMock();
+function expectSend(nth: number, payload: Record<string, unknown>) {
+  expect(sendQaBusMessage).toHaveBeenNthCalledWith(nth, expect.objectContaining(payload));
+}
+
+async function assembledTurn(runtime = createPluginRuntimeMock()) {
   setQaChannelRuntime(runtime);
   await startQaInbound(runtime);
   return firstRunAssembledParams(runtime);
@@ -514,9 +435,7 @@ describe("QA preview terminal ownership", () => {
     await turn.delivery.deliver({ text: "answer two" }, { kind: "final" });
     expect(editQaBusMessage).toHaveBeenCalledOnce();
     expect(sendQaBusMessage).toHaveBeenCalledTimes(2);
-    expect(sendQaBusMessage).toHaveBeenLastCalledWith(
-      expect.objectContaining({ text: "answer two" }),
-    );
+    expectSend(2, { text: "answer two" });
     expect(deleteQaBusMessage).not.toHaveBeenCalled();
   });
 
