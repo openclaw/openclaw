@@ -10,10 +10,7 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
-import {
-  PluginIconController,
-  pluginIconFetchContext,
-} from "../../plugins/plugin-icon-controller.ts";
+import { PluginIconOwner, pluginIconFetchContext } from "../../plugins/plugin-icon-owner.ts";
 import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
 import "../../../styles/chat/clawhub-card.css";
 
@@ -63,7 +60,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
   let previousArgs: unknown[] = [];
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   const createIcons = (catalog: boolean) =>
-    new PluginIconController({
+    new PluginIconOwner({
       kind: catalog ? "catalog" : undefined,
       getFetchContext: () => pluginIconFetchContext(context),
       isConnected: () => active && context.gateway.snapshot.phase === "connected",
