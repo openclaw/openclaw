@@ -5,8 +5,12 @@ import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configSnapshot from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { OpenKeyedStoreOptions } from "../plugin-sdk/plugin-state-runtime.js";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "../plugin-sdk/plugin-state-runtime.js";
 import * as state from "../plugin-sdk/plugin-state-test-runtime.js";
+import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { recordAgentDatabaseAdmissions } from "./agent-database-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
@@ -15,9 +19,14 @@ import { SQLITE_SESSION_WRITER_QUEUES as writerQueues } from "./openclaw-agent-w
 import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
 
-const { configureMemoryCoreDreamingState, createMemoryRuntime } = await vi.importActual<
-  typeof import("../../extensions/memory-core/runtime-api.js")
->("../../extensions/memory-core/runtime-api.js");
+const { configureMemoryCoreDreamingState, createMemoryRuntime } = await vi.importActual<{
+  configureMemoryCoreDreamingState: (
+    open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+  ) => void;
+  createMemoryRuntime: (host: {
+    runInBackgroundContext: <T>(run: () => T) => T;
+  }) => MemoryPluginRuntime;
+}>("../../extensions/memory-core/runtime-api.js");
 
 const memoryRuntime = createMemoryRuntime({ runInBackgroundContext: (run) => run() });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
