@@ -20,6 +20,21 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+it("carries a platform env snapshot across the advanced-serialization IPC boundary", async () => {
+  const directory = tempDirs.make("agent-schema-proxy-env-");
+  const pathname = path.join(directory, "agent.sqlite");
+  const database = sqlite.openNodeSqliteDatabase(pathname);
+  database.exec("CREATE TABLE probe(value TEXT);");
+  database.close();
+  // `cloneEnvWithPlatformSemantics()` returns a case-insensitive Proxy on win32, and
+  // advanced IPC serialization cannot clone a Proxy (startup preflight DataCloneError). #176111
+  const env = new Proxy({ ...process.env }, {}) as NodeJS.ProcessEnv;
+
+  await using reader = createAgentSchemaInspectionWorker();
+  await expect(
+    reader.inspect({ pathname, supportedVersion: 21, env }, undefined),
+  ).resolves.toBeDefined();
+});
 it("inspects state in cold children without executing comparison DDL", async () => {
   const directory = tempDirs.make("state-schema-contract-transfer-");
   const pathname = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: directory } }).path;

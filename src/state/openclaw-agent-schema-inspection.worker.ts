@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
@@ -25,6 +26,10 @@ if (!process.send || !process.disconnect) {
 }
 const send = (response: AgentSchemaInspectionResponse) => process.send?.(response);
 const disconnect = process.disconnect.bind(process);
+/** The parent sends env values only; restore this platform's lookup semantics here. */
+function restorePlatformEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv | undefined {
+  return env ? cloneEnvWithPlatformSemantics(env) : undefined;
+}
 // SAFETY: Only the schema preflight owner sends this private IPC input.
 process.on(
   "message",
@@ -84,7 +89,8 @@ process.on(
         });
         return;
       }
-      const { input, snapshot } = request;
+      const { snapshot } = request;
+      const input = { ...request.input, env: restorePlatformEnv(request.input.env) };
       const readVerification = () =>
         !snapshot && input.requireStartupMigrationReadiness
           ? readSqliteDatabaseIntegrityVerification(input.pathname)

@@ -360,8 +360,18 @@ export function createAgentSchemaInspectionWorker() {
         active.child.once("close", onClose);
         signal?.addEventListener("abort", onAbort, { once: true });
         try {
+          // Advanced IPC cannot clone the win32 case-insensitive env Proxy from
+          // `cloneEnvWithPlatformSemantics()`; send values and let the child restore
+          // the platform semantics (startup preflight DataCloneError). #176111
+          const ipcInput =
+            "env" in input && input.env ? { ...input, env: { ...input.env } } : input;
           active.child.send(
-            { type: kind === "state" ? "inspect-state" : "inspect", requestId, input, snapshot },
+            {
+              type: kind === "state" ? "inspect-state" : "inspect",
+              requestId,
+              input: ipcInput,
+              snapshot,
+            },
             (error) => {
               if (error) {
                 failure ??= error;
