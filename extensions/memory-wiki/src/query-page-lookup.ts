@@ -1,11 +1,11 @@
 import path from "node:path";
-import { WIKI_PAGE_GROUPS } from "./markdown.js";
 import {
   listWikiMarkdownFiles,
   readQueryableWikiPagesByPaths,
   type QueryableWikiPage,
 } from "./query-pages.js";
 import { normalizeLookupKey } from "./query-shared-memory.js";
+import { WIKI_PAGE_GROUPS } from "./wiki-page-kinds.js";
 
 type LookupPage = { relativePath: string; id?: string | undefined };
 

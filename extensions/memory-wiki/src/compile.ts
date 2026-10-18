@@ -57,10 +57,8 @@ import {
   scanWikiPageSummary,
   type WikiClaim,
   type WikiClaimEvidence,
-  type WikiPageKind,
   type WikiPageSummary,
   type WikiRelationship,
-  WIKI_PAGE_GROUPS,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
@@ -70,6 +68,7 @@ import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { readExistingWikiPageUtf8, writeManagedMarkdownFile } from "./vault-page-write.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
+import { WIKI_PAGE_GROUPS, type WikiPageKind } from "./wiki-page-kinds.js";
 
 const READ_PAGE_SUMMARIES_CONCURRENCY = 16;
 const MAX_RELATED_PAGES_PER_SECTION = 12;
@@ -852,11 +851,7 @@ function buildRootIndexBody(params: {
     `- Render mode: \`${params.config.vault.renderMode}\``,
     `- Total pages: ${params.pages.length}`,
     `- Claims: ${claimCount}`,
-    `- Sources: ${params.counts.source}`,
-    `- Entities: ${params.counts.entity}`,
-    `- Concepts: ${params.counts.concept}`,
-    `- Syntheses: ${params.counts.synthesis}`,
-    `- Reports: ${params.counts.report}`,
+    ...WIKI_PAGE_GROUPS.map(({ kind, heading }) => `- ${heading}: ${params.counts[kind]}`),
   ];
 
   for (const group of WIKI_PAGE_GROUPS) {

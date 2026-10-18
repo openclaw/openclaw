@@ -2248,7 +2248,7 @@ src/plugins/gateway-startup-plugin-config.ts	1
 src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
-src/plugins/hook-types.ts	2
+src/plugins/hook-types.ts	1
 src/plugins/hooks.ts	7
 src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-runtime.ts	1

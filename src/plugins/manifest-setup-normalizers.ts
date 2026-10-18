@@ -20,6 +20,10 @@ import {
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
+import {
+  isPluginManifestOnboardingScope,
+  normalizeProviderAssistantVisibility,
+} from "./manifest-types.js";
 import type {
   PluginManifestActivation,
   PluginManifestActivationCapability,
@@ -28,7 +32,6 @@ import type {
   PluginManifestCliCommand,
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
-  PluginManifestOnboardingScope,
   PluginManifestProviderAuthChoice,
   PluginManifestQaRunner,
   PluginManifestSetup,
@@ -303,8 +306,7 @@ export function normalizeProviderAuthChoices(
       return undefined;
     }
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
-      (scope): scope is PluginManifestOnboardingScope =>
-        scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
+      isPluginManifestOnboardingScope,
     );
     return omitUndefinedManifestFields<PluginManifestProviderAuthChoice>({
       provider,
@@ -322,12 +324,7 @@ export function normalizeProviderAuthChoices(
         typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
           ? entry.assistantPriority
           : undefined,
-      assistantVisibility:
-        entry.assistantVisibility === "manual-only" ||
-        entry.assistantVisibility === "visible" ||
-        entry.assistantVisibility === "detected-only"
-          ? entry.assistantVisibility
-          : undefined,
+      assistantVisibility: normalizeProviderAssistantVisibility(entry.assistantVisibility),
       deprecatedChoiceIds: normalizeOptionalTrimmedStringList(entry.deprecatedChoiceIds),
       groupId: normalizeOptionalString(entry.groupId),
       groupLabel: normalizeOptionalString(entry.groupLabel),

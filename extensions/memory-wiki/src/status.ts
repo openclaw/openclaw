@@ -8,8 +8,9 @@ import type { OpenClawConfig } from "../api.js";
 import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import { filterMemoryWikiBridgeArtifacts, resolveMemoryWikiVaultAgentId } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { parseWikiMarkdown, WIKI_PAGE_GROUPS, type WikiPageKind } from "./markdown.js";
+import { parseWikiMarkdown } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
+import { WIKI_PAGE_GROUPS, type WikiPageKind } from "./wiki-page-kinds.js";
 
 const STATUS_WARNING_FIXES = {
   "vault-missing": "Run `openclaw wiki init` to create the vault layout.",

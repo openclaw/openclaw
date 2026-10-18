@@ -10,6 +10,7 @@ import {
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
+import { capabilityCatalogFamilies } from "./capability-catalog.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
@@ -255,11 +256,7 @@ function collectRequestedCapabilityProviderIds(params: {
 function shouldScopeCapabilityLoadToRequestedProviders(
   key: CapabilityProviderRegistryKey,
 ): key is keyof PluginCapabilityCatalog {
-  return (
-    key === "speechProviders" ||
-    key === "realtimeTranscriptionProviders" ||
-    key === "realtimeVoiceProviders"
-  );
+  return capabilityCatalogFamilies.some((family) => family === key);
 }
 
 function* capabilityProviderIds(provider: { id: string; aliases?: unknown }) {
