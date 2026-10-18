@@ -59,11 +59,11 @@ import {
   registerOperatorAssignmentTests,
   withOperatorModels,
 } from "./operator-assignment.test-support.js";
+import { registerLinkedChannelSteeringTests } from "./operator-authority.steering.test-support.js";
 import {
   createCommandOwnerTestGateway,
   withAdminIngress,
 } from "./operator-authority.test-support.js";
-import { registerLinkedChannelSteeringTests } from "./operator-authority.steering.test-support.js";
 import { createHostChannelIngressRuntime } from "./runtime.js";
 
 function authorize(cfg: Parameters<typeof resolveCommandAuthorization>[0]["cfg"], ctx: MsgContext) {
