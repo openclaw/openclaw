@@ -17,9 +17,7 @@ function toolPolicy(teams: MSTeamsConfig["teams"], groupSpace: string, groupId: 
 describe("msteams policy", () => {
   describe("resolveMSTeamsRouteConfig", () => {
     it("returns undefined configs when teamId is missing", () => {
-      const cfg: MSTeamsConfig = {
-        teams: { team123: { requireMention: false } },
-      };
+      const cfg: MSTeamsConfig = { teams: { team123: { requireMention: false } } };
 
       const res = resolveMSTeamsRouteConfig({
         cfg,
@@ -36,14 +34,7 @@ describe("msteams policy", () => {
 
     it("blocks team and channel name matches by default", () => {
       const res = resolveMSTeamsRouteConfig({
-        cfg: {
-          teams: {
-            "My Team": {
-              requireMention: true,
-              channels: { "General Chat": { requireMention: false } },
-            },
-          },
-        },
+        cfg: { teams: { "My Team": { channels: { "General Chat": {} } } } },
         teamName: "My Team",
         channelName: "General Chat",
         conversationId: "ignored",
@@ -58,42 +49,27 @@ describe("msteams policy", () => {
     });
   });
 
-  describe("resolveMSTeamsReplyPolicy", () => {
-    it("forces thread replies for direct messages", () => {
-      const policy = resolveMSTeamsReplyPolicy({
-        isDirectMessage: true,
-        globalConfig: { replyStyle: "top-level", requireMention: false },
-      });
-      expect(policy).toEqual({ requireMention: false, replyStyle: "thread" });
-    });
-
-    it("defaults to requireMention=true and replyStyle=thread", () => {
-      const policy = resolveMSTeamsReplyPolicy({
+  const mention = { requireMention: true };
+  const noMention = { requireMention: false };
+  const dmGlobal = { ...noMention, replyStyle: "top-level" as const };
+  it.each([
+    ["DM", { isDirectMessage: true, globalConfig: dmGlobal }, false, "thread"],
+    ["default", { globalConfig: {} }, true, "thread"],
+    ["channel", { teamConfig: mention, channelConfig: noMention }, false, "top-level"],
+    ["team", { teamConfig: noMention }, false, "top-level"],
+  ] satisfies [
+    string,
+    Partial<Parameters<typeof resolveMSTeamsReplyPolicy>[0]>,
+    boolean,
+    string,
+  ][])("reply policy: %s", (_name, overrides, requireMention, replyStyle) => {
+    expect(
+      resolveMSTeamsReplyPolicy({
         isDirectMessage: false,
-        globalConfig: {},
-      });
-      expect(policy).toEqual({ requireMention: true, replyStyle: "thread" });
-    });
-
-    it("prefers channel overrides over team and global defaults", () => {
-      const policy = resolveMSTeamsReplyPolicy({
-        isDirectMessage: false,
-        globalConfig: { requireMention: true },
-        teamConfig: { requireMention: true },
-        channelConfig: { requireMention: false },
-      });
-
-      expect(policy).toEqual({ requireMention: false, replyStyle: "top-level" });
-    });
-
-    it("inherits team mention settings when channel config is missing", () => {
-      const policy = resolveMSTeamsReplyPolicy({
-        isDirectMessage: false,
-        globalConfig: { requireMention: true },
-        teamConfig: { requireMention: false },
-      });
-      expect(policy).toEqual({ requireMention: false, replyStyle: "top-level" });
-    });
+        globalConfig: mention,
+        ...overrides,
+      }),
+    ).toEqual({ requireMention, replyStyle });
   });
 
   describe("resolveMSTeamsGroupToolPolicy", () => {
@@ -135,45 +111,41 @@ describe("msteams policy", () => {
       ).toEqual({ allow: ["read"] });
     });
 
-    it("finds a channel across teams when no team matches", () => {
-      expect(
-        toolPolicy(
-          {
-            first: { channels: { other: { tools: { deny: ["other"] } } } },
-            second: { channels: { target: { tools: { allow: ["cross-team"] } } } },
-          },
-          "missing-team",
-          "target",
-        ),
-      ).toEqual({ allow: ["cross-team"] });
-    });
-
-    it("falls through a policy-less matched team to the cross-team scan", () => {
-      // A matched team without any applicable policy must not swallow another
-      // team's channel deny rules (legacy resolver parity).
-      expect(
-        toolPolicy(
-          {
-            "*": {},
-            actual: { channels: { target: { tools: { deny: ["shell"] } } } },
-          },
-          "unknown-team",
-          "target",
-        ),
-      ).toEqual({ deny: ["shell"] });
-    });
-
-    it("does not scan across teams once a channel matched inside the selected team", () => {
-      expect(
-        toolPolicy(
-          {
-            mine: { channels: { target: {} } },
-            other: { channels: { target: { tools: { deny: ["shell"] } } } },
-          },
-          "mine",
-          "target",
-        ),
-      ).toBeUndefined();
+    it.each([
+      [
+        "scans across teams when none matches",
+        "missing-team",
+        {
+          first: { channels: { other: { tools: { deny: ["other"] } } } },
+          second: { channels: { target: { tools: { allow: ["cross-team"] } } } },
+        },
+        { allow: ["cross-team"] },
+      ],
+      [
+        "scans past a policy-less matched team",
+        "unknown-team",
+        {
+          "*": {},
+          actual: { channels: { target: { tools: { deny: ["shell"] } } } },
+        },
+        { deny: ["shell"] },
+      ],
+      [
+        "does not scan past a matched channel",
+        "mine",
+        {
+          mine: { channels: { target: {} } },
+          other: { channels: { target: { tools: { deny: ["shell"] } } } },
+        },
+        undefined,
+      ],
+    ] satisfies [
+      string,
+      string,
+      MSTeamsConfig["teams"],
+      ReturnType<typeof resolveMSTeamsGroupToolPolicy>,
+    ][])("%s", (_name, groupSpace, teams, expected) => {
+      expect(toolPolicy(teams, groupSpace, "target")).toEqual(expected);
     });
 
     it("falls from a fieldless channel entry to its team policy", () => {

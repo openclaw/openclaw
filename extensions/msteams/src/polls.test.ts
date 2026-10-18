@@ -28,6 +28,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 afterEach(() => vi.unstubAllEnvs());
 
 type Poll = Parameters<MSTeamsPollStore["createPoll"]>[0];
+const pollStateKey = (id: string) => crypto.createHash("sha256").update(id).digest("hex");
+
+function pluginStore<T>(namespace: string, maxEntries: number, env: NodeJS.ProcessEnv) {
+  return createPluginStateKeyedStoreForTests<T>("msteams", { namespace, maxEntries, env });
+}
 
 function poll(overrides: Partial<Poll>): Poll {
   return {
@@ -70,21 +75,10 @@ describe("msteams polls", () => {
 
   it("deduplicates selections before enforcing maxSelections", async () => {
     const store = stateStore();
-    await store.createPoll(poll({ id: "poll-dedupe", options: ["A", "B", "C"], maxSelections: 2 }));
-    await store.recordVote({
-      pollId: "poll-dedupe",
-      voterId: "user-1",
-      selections: ["0", "0", "1"],
-    });
-    const stored = await store.getPoll("poll-dedupe");
-    if (!stored) {
-      throw new Error("expected stored poll after recordVote");
-    }
-    expect(stored.votes["user-1"]).toEqual(["0", "1"]);
+    await store.createPoll(poll({ options: ["A", "B", "C"], maxSelections: 2 }));
+    await store.recordVote({ pollId: "poll-1", voterId: "user-1", selections: ["0", "0", "1"] });
+    expect((await store.getPoll("poll-1"))?.votes["user-1"]).toEqual(["0", "1"]);
   });
-});
-
-describe("state poll store", () => {
   it("hashes external poll ids before using plugin-state keys", async () => {
     const store = stateStore();
     const longPollId = `poll-${"x".repeat(900)}`;
@@ -111,18 +105,15 @@ describe("state poll store", () => {
     await supportStore.recordVote({ pollId: "poll-1", voterId: "new-user", selections: ["1"] });
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
-    expect(
-      await createMSTeamsPollStoreState({ accountId: "default" }).getPoll("poll-1"),
-    ).toMatchObject({
-      question: "Default?",
-      votes: { shared: ["0"] },
-    });
-    expect(
-      await createMSTeamsPollStoreState({ accountId: "support" }).getPoll("poll-1"),
-    ).toMatchObject({
-      question: "Support?",
-      votes: { shared: ["1"], "new-user": ["1"] },
-    });
+    for (const [accountId, question, votes] of [
+      ["default", "Default?", { shared: ["0"] }],
+      ["support", "Support?", { shared: ["1"], "new-user": ["1"] }],
+    ] as const) {
+      expect(await createMSTeamsPollStoreState({ accountId }).getPoll("poll-1")).toMatchObject({
+        question,
+        votes,
+      });
+    }
   });
 
   it("serializes concurrent votes for the same poll", async () => {
@@ -157,77 +148,34 @@ describe("state poll store", () => {
   });
 
   it("bounds vote bucket scans while pruning 1003 existing polls", async () => {
-    const existing = 1003;
     const expired = ["poll-expired-a", "poll-expired-b"];
     const removed = ["poll-old", ...Array.from({ length: 4 }, (_, i) => `poll-existing-${i}`)];
-    const scans = 2;
     const stateDir = tempDirs.make("openclaw-msteams-polls-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const metadataStore = createPluginStateKeyedStoreForTests<
-      Omit<Parameters<MSTeamsPollStore["createPoll"]>[0], "votes">
-    >("msteams", {
-      namespace: "polls",
-      maxEntries: 2000,
-      env,
-    });
-    const voteBucketStore = createPluginStateKeyedStoreForTests<{
-      pollId: string;
-      bucket: string;
-      votes: Record<string, string[]>;
-      updatedAt: string;
-    }>("msteams", {
-      namespace: "poll-vote-buckets",
-      maxEntries: 32_032,
-      env,
-    });
-    const pollStateKey = (pollId: string) =>
-      crypto.createHash("sha256").update(pollId).digest("hex");
-    const voteBucket = (pollId: string, voterId: string) => {
-      const hash = crypto
-        .createHash("sha256")
-        .update(pollId)
-        .update("\0")
-        .update(voterId)
-        .digest("hex");
-      return String(Number.parseInt(hash.slice(0, 8), 16) % 32).padStart(4, "0");
-    };
+    // Pruning consumes only identity and timestamps, not poll/card/vote content.
+    const metadataStore = pluginStore<Pick<Poll, "id" | "createdAt">>("polls", 2000, env);
+    const voteBucketStore = pluginStore<{ pollId: string }>("poll-vote-buckets", 32_032, env);
     const baseMs = Date.now() - 60_000;
     const oldPollId = "poll-old";
 
     for (const [index, id] of [
       oldPollId,
-      ...Array.from({ length: existing }, (_, entryIndex) => `poll-existing-${entryIndex}`),
+      ...Array.from({ length: 1003 }, (_, entryIndex) => `poll-existing-${entryIndex}`),
     ].entries()) {
       await metadataStore.register(pollStateKey(id), {
         id,
-        question: "Pick",
-        options: ["A", "B"],
-        maxSelections: 1,
         createdAt: new Date(baseMs + index).toISOString(),
       });
     }
     for (const id of expired) {
       await metadataStore.register(pollStateKey(id), {
         id,
-        question: "Expired",
-        options: ["A", "B"],
-        maxSelections: 1,
         createdAt: new Date(baseMs - 31 * 24 * 60 * 60 * 1000).toISOString(),
       });
-      await voteBucketStore.register(`${pollStateKey(id)}:0000`, {
-        pollId: id,
-        bucket: "0000",
-        votes: { "user-expired": ["0"] },
-        updatedAt: new Date(baseMs).toISOString(),
-      });
+      await voteBucketStore.register(`${pollStateKey(id)}:0000`, { pollId: id });
     }
-    const oldBucket = voteBucket(oldPollId, "user-old");
-    await voteBucketStore.register(`${pollStateKey(oldPollId)}:${oldBucket}`, {
-      pollId: oldPollId,
-      bucket: oldBucket,
-      votes: { "user-old": ["0"] },
-      updatedAt: new Date(baseMs).toISOString(),
-    });
+    // SHA-256("poll-old\0user-old") selects bucket 2 of 32.
+    await voteBucketStore.register(`${pollStateKey(oldPollId)}:0002`, { pollId: oldPollId });
 
     let bucketScans = 0;
     // oxlint-disable-next-line typescript/unbound-method -- Preserve the native statement receiver below.
@@ -260,7 +208,7 @@ describe("state poll store", () => {
     } finally {
       iterateSpy.mockRestore();
     }
-    expect(bucketScans).toBeLessThanOrEqual(scans);
+    expect(bucketScans).toBeLessThanOrEqual(2);
     expect(await metadataStore.entries()).toHaveLength(1000);
     for (const id of [...expired, ...removed]) {
       await expect(store.getPoll(id)).resolves.toBeNull();
@@ -273,16 +221,8 @@ describe("state poll store", () => {
     async (failure) => {
       const stateDir = tempDirs.make("openclaw-msteams-polls-");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const metadata = createPluginStateKeyedStoreForTests<unknown>("msteams", {
-        namespace: "polls",
-        maxEntries: 2000,
-        env,
-      });
-      const buckets = createPluginStateKeyedStoreForTests<unknown>("msteams", {
-        namespace: "poll-vote-buckets",
-        maxEntries: 32_032,
-        env,
-      });
+      const metadata = pluginStore<unknown>("polls", 2000, env);
+      const buckets = pluginStore<unknown>("poll-vote-buckets", 32_032, env);
       const expiredAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
       for (const id of ["expired-a", "expired-b"]) {
         await metadata.register(id, { id, createdAt: expiredAt });
@@ -290,9 +230,6 @@ describe("state poll store", () => {
       for (const key of ["first", "failing", "later"]) {
         await buckets.register(key, {
           pollId: key === "later" ? "expired-b" : "expired-a",
-          bucket: key,
-          votes: { voter: ["0"] },
-          updatedAt: expiredAt,
         });
       }
       const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
@@ -339,7 +276,7 @@ describe("state poll store", () => {
               ? "Plugin state entry contains corrupt JSON."
               : "Failed to delete plugin state entry.",
         );
-        const newPollKey = crypto.createHash("sha256").update("new").digest("hex");
+        const newPollKey = pollStateKey("new");
         const remaining = database
           .prepare(
             "SELECT namespace, entry_key FROM plugin_state_entries WHERE plugin_id = 'msteams' ORDER BY namespace, entry_key",

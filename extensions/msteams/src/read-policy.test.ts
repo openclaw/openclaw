@@ -127,50 +127,20 @@ describe("Microsoft Teams read policy", () => {
     );
   });
 
-  it("rejects an ambiguous Bot Framework team mapping", async () => {
+  it.each([false, true])("rejects %s-truncated Bot Framework mappings", async (truncated) => {
+    const teamIds = (truncated ? ["general"] : ["general", "other"]).map(
+      (name) => `19:${name}@thread.tacv2`,
+    );
     const cfg = config({
       groupPolicy: "allowlist",
-      teams: {
-        "19:general@thread.tacv2": {
-          channels: {
-            "19:roadmap@thread.tacv2": {},
-          },
-        },
-        "19:other@thread.tacv2": {
-          channels: {
-            "19:roadmap@thread.tacv2": {},
-          },
-        },
-      },
+      teams: Object.fromEntries(
+        teamIds.map((id) => [id, { channels: { "19:roadmap@thread.tacv2": {} } }]),
+      ),
     });
     mocks.listChannelsForTeamWithPageInfo.mockResolvedValue({
-      items: [
-        { id: "19:general@thread.tacv2", displayName: "General" },
-        { id: "19:other@thread.tacv2", displayName: "Other" },
-        { id: "19:roadmap@thread.tacv2", displayName: "Roadmap" },
-      ],
-      truncated: false,
+      items: [...teamIds, ...(truncated ? [] : ["19:roadmap@thread.tacv2"])].map((id) => ({ id })),
+      truncated,
     });
-
-    await expect(readTarget(cfg)).rejects.toThrow("Microsoft Teams read target is not allowed.");
-  });
-
-  it("rejects an incomplete Bot Framework team mapping", async () => {
-    const cfg = config({
-      groupPolicy: "allowlist",
-      teams: {
-        "19:general@thread.tacv2": {
-          channels: {
-            "19:roadmap@thread.tacv2": {},
-          },
-        },
-      },
-    });
-    mocks.listChannelsForTeamWithPageInfo.mockResolvedValue({
-      items: [{ id: "19:general@thread.tacv2", displayName: "General" }],
-      truncated: true,
-    });
-
     await expect(readTarget(cfg)).rejects.toThrow("Microsoft Teams read target is not allowed.");
   });
 
