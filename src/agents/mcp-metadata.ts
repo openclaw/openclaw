@@ -44,7 +44,7 @@ export function summarizeServerCapabilities(capabilities: ServerCapabilities | u
   };
 }
 
-function scrubMcpMetadataText(value: unknown, limit?: number): string | undefined {
+function scrubMcpMetadataText(value: string | undefined, limit?: number): string | undefined {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
     return undefined;
@@ -72,6 +72,6 @@ export function sanitizeMcpMetadataText(value: string | undefined): string | und
  * Scrubs a server's initialize instructions. They stay whole: a rule at the end
  * (quota, confirmation) is as binding as the first line.
  */
-export function sanitizeMcpServerInstructions(value: unknown): string | undefined {
+export function sanitizeMcpServerInstructions(value: string | undefined): string | undefined {
   return scrubMcpMetadataText(value);
 }

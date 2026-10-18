@@ -412,13 +412,7 @@ export class ToolSearchRuntime {
     ids: readonly string[],
     undeliveredOnly = false,
   ): McpServerGuidance[] {
-    const wanted = new Set(ids);
-    const entries = new Map<string, ToolSearchCatalogEntry>();
-    for (const entry of resolveCatalog(this.ctx).entries) {
-      if (wanted.has(entry.id)) {
-        entries.set(entry.id, entry);
-      }
-    }
+    const entries = new Map(resolveCatalog(this.ctx).entries.map((entry) => [entry.id, entry]));
     const guidance = new Map<string, McpServerGuidance>();
     for (const id of ids) {
       const entry = entries.get(id);

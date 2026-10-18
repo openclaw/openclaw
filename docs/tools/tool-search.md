@@ -317,33 +317,29 @@ with no matches returns an empty `candidates` array.
 
 MCP servers can publish usage guidance in their `initialize` result. For tools
 deferred behind Tool Search, OpenClaw keeps that remote text out of the system
-prompt and the directory. The discovery response that first names a server's
-tools carries it instead, under the same untrusted-content wrapper as the rest
-of the response:
+prompt and the directory. Tool Search responses carry it instead, under the
+same untrusted-content wrapper as the rest of the response:
 
 - `tool_search`, single or batch: `mcpServerInstructions`, an object keyed by
   server name, follows the candidates. Each server returned in the response
   appears once, however many of its tools matched; a single search then returns
   `{ results, mcpServerInstructions }` instead of a bare array.
 - `tool_describe`: the described tool's server, after its schema.
-- `dispatch_action`: the target's server, only when no earlier discovery
-  response in the run delivered it, for example when the id came from an
-  earlier turn.
+- `dispatch_action`: the target's server, only when no earlier response in the
+  run delivered its whole text, for example when the id came from an earlier
+  turn. Searches and descriptions carry it every time.
 
 Instructions are never truncated. Candidates and results keep priority, so
 server text cannot evict a callable entry. A batch keeps its 4,000-character
 total: guidance shares only the room the fitted candidates leave. Any response
 also stays within its protected-content bound. A server whose whole text does
-not fit gets a marker instead of a partial text:
-
-- `[omitted to fit this response; tool_describe with id "<id>" returns the whole text]`
-  when that `tool_describe` response can carry it.
-- `[omitted: longer than a Tool Search response can carry, including tool_describe]`
-  otherwise.
+not fit gets a marker instead of a partial text. The marker names the
+`tool_describe` id that returns the whole text, or, when the text is too long
+even for `tool_describe`, says no Tool Search response can carry it.
 
 When a batch has no room even for a server's marker, the server is left out of
 `mcpServerInstructions` and the batch reports `truncated: true`; `tool_describe`
-on one of that server's candidates returns its guidance.
+on one of that server's candidates returns its whole text or that marker.
 
 ### Directory mode
 

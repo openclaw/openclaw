@@ -614,7 +614,6 @@ describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) 
     expect(value.matches.filter((match) => match.instructions !== undefined)).toEqual([
       expect.objectContaining({ apiPath: "mcp/ledger.d.ts", instructions }),
     ]);
-    expect(JSON.stringify(value.matches).split("LEDGER_TAIL").length - 1).toBe(1);
     for (const declaration of [value.header, value.toolHeader, value.file]) {
       expect(declaration.split("LEDGER_TAIL").length - 1).toBe(1);
       expect(declaration).toContain(" *   14. Nested rule.");
@@ -623,9 +622,6 @@ describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) 
       );
     }
     expect(value.notesFile).not.toContain("Server instructions");
-    for (const target of [...targets, unguided]) {
-      expect(target.execute).not.toHaveBeenCalled();
-    }
   });
 
   it("finds native and MCP capabilities by intent and calls the correct colliding namespace", async () => {

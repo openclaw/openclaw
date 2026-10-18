@@ -210,11 +210,7 @@ function formatToolSearchBatchResponse(
   if (guidance.omitted) {
     truncated = true;
   }
-  const payload: {
-    results: ToolSearchBatchGroup[];
-    truncated?: true;
-    mcpServerInstructions?: ToolSearchMcpServerInstructions;
-  } = {
+  const payload = {
     ...render(),
     ...(guidance.instructions ? { mcpServerInstructions: guidance.instructions } : {}),
   };

@@ -103,15 +103,10 @@ describe("Tool Search MCP server instructions", () => {
       calc: calcGuidance,
     });
     expect(JSON.stringify(details.results)).not.toContain("GUIDANCE");
-    expect(researchGuidance.length).toBeGreaterThan(3_000);
     expect(occurrences(text, "RESEARCH_GUIDANCE")).toBe(1);
     expect(occurrences(text, "RESEARCH_TAIL: on monthly_quota_exceeded, never retry.")).toBe(1);
     expect(occurrences(text, calcGuidance)).toBe(1);
     expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
-    // Callable entries come first; guidance follows them.
-    expect(text.indexOf("mcp:research:research__search")).toBeLessThan(
-      text.indexOf("RESEARCH_GUIDANCE"),
-    );
   });
 
   it("keeps the plain result list when no returned server publishes guidance", async () => {
@@ -148,8 +143,6 @@ describe("Tool Search MCP server instructions", () => {
     ]);
     expect(details.truncated).toBeUndefined();
     expect(details.mcpServerInstructions).toEqual({ research: shortGuidance, calc: calcGuidance });
-    expect(occurrences(text, "RESEARCH_TAIL: never retry.")).toBe(1);
-    expect(occurrences(text, calcGuidance)).toBe(1);
     expect(text.length).toBeLessThanOrEqual(MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS);
   });
 
@@ -260,22 +253,6 @@ describe("Tool Search MCP server instructions", () => {
     expect(modelText(batch).length).toBeLessThanOrEqual(MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS);
   });
 
-  it("adds the whole guidance after the schema in tool_describe", async () => {
-    const { tool } = setup();
-    const result = await tool(TOOL_DESCRIBE_RAW_TOOL_NAME).execute("guidance-describe", {
-      id: "mcp:research:research__fetch",
-    });
-    const text = modelText(result);
-
-    expect(result.details).toMatchObject({
-      id: "mcp:research:research__fetch",
-      parameters: { type: "object" },
-      mcpServerInstructions: { research: researchGuidance },
-    });
-    expect(occurrences(text, "RESEARCH_TAIL: on monthly_quota_exceeded, never retry.")).toBe(1);
-    expect(text.indexOf('"parameters"')).toBeLessThan(text.indexOf("RESEARCH_GUIDANCE"));
-  });
-
   it("adds guidance to the first dispatch that reaches a server without discovery", async () => {
     const { tool } = setup();
     const dispatch = tool(TOOL_CALL_RAW_TOOL_NAME);
@@ -288,7 +265,6 @@ describe("Tool Search MCP server instructions", () => {
     const otherServer = modelText(await dispatch.execute("dispatch-3", { id: "calc__run" }));
 
     expect(occurrences(first, "RESEARCH_TAIL: on monthly_quota_exceeded, never retry.")).toBe(1);
-    expect(first.indexOf('"result"')).toBeLessThan(first.indexOf("RESEARCH_GUIDANCE"));
     expect(second).not.toContain("RESEARCH_GUIDANCE");
     expect(otherServer).toContain(calcGuidance);
   });

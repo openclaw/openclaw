@@ -351,7 +351,7 @@ it.each([
     }
     const refreshPrompt = await prepared.prepareToolPrompt(revoked.tools);
     const refreshed = refreshPrompt(prepared.systemPromptText);
-    expect(refreshed).not.toContain("RESEARCH_GUIDANCE");
+    expect(refreshed).not.toContain("## MCP Server Instructions");
     expect(refreshed).not.toContain("RESEARCH_TAIL");
   },
 );
