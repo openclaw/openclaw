@@ -59,37 +59,22 @@ export async function writeListToolsMcpServer(
     `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { createInterface } from "node:readline";
 
 ${fixtureReceiptClientSource(receiptEndpoint)}
 
-const {
-  logPath, listToolsReleasePath, databasePath, pidPath, hangToolCallsUntilRestartMarkerPath,
-  toolsByList, listToolsJsonRpcErrorMessage, toolPageCursors, callToolResult,
-  callToolReleasePath, notifyListChangedReleasePath, resourcePageCursors,
-  resourceReadResult, promptPageCursors, utilityListReleasePath, ignoreShutdown,
-  hangFirstInitializeMarkerPath, initializeReleaseToken,
-  notifyListChangedOnInitializedReleaseToken,
-  delayMs = 0, initializeDelayMs = 0, hang = false, capabilities = { tools: {} },
-  inputSchema = { type: "object", properties: {} },
-  tools = [{ name: "slow_tool", description: "Returned after a slow catalog response.", inputSchema }],
-  notifyListChangedOnInitialized = false, notifyListChangedAfterFirstList = false,
-  notifyListChangedBeforeEveryListResponse = false, exitOnListCall = 0,
-  listToolsMethodNotFound = false, callToolJsonRpcError = false,
-  callToolJsonRpcErrorCode = -32000, notifyListChangedOnToolCall = false,
-  resourceReadJsonRpcError = false,
-} = ${JSON.stringify(params)};
+const config = ${JSON.stringify(params)};
+const { logPath, databasePath, pidPath, hangFirstInitializeMarkerPath } = config;
+const delayMs = config.delayMs ?? 0;
+const tools = config.tools ?? [{ name: "slow_tool", description: "Returned after a slow catalog response.", inputSchema: config.inputSchema ?? { type: "object", properties: {} } }];
 
+const exists = (filePath) => fs.access(filePath).then(() => true, () => false);
 async function waitForPath(filePath) {
-  while (filePath) {
-    const exists = await fs.access(filePath).then(() => true).catch(() => false);
-    if (exists) {
-      return;
-    }
+  while (filePath && !(await exists(filePath))) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
 
-let buffer = "";
 let listCount = 0;
 let resourceListCount = 0;
 let promptListCount = 0;
@@ -112,13 +97,10 @@ if (databasePath) {
 if (pidPath) {
   await fs.writeFile(pidPath, String(process.pid), "utf8");
 }
-if (hangToolCallsUntilRestartMarkerPath) {
-  hangToolCallsUntilRestart = !(await fs
-    .access(hangToolCallsUntilRestartMarkerPath)
-    .then(() => true)
-    .catch(() => false));
+if (config.hangToolCallsUntilRestartMarkerPath) {
+  hangToolCallsUntilRestart = !(await exists(config.hangToolCallsUntilRestartMarkerPath));
   if (hangToolCallsUntilRestart) {
-    await fs.writeFile(hangToolCallsUntilRestartMarkerPath, String(process.pid), "utf8");
+    await fs.writeFile(config.hangToolCallsUntilRestartMarkerPath, String(process.pid), "utf8");
   }
 }
 function log(line) {
@@ -134,8 +116,17 @@ function reply(id, result) {
 function fail(id, code, message) {
   send({ jsonrpc: "2.0", id, error: { code, message } });
 }
-function notifyToolsChanged() {
+function notifyToolsChanged(context = "") {
+  log("notify tools/list_changed" + context);
   send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+}
+async function afterPath(filePath, callback) {
+  await waitForPath(filePath);
+  callback();
+}
+function hangRequest(method) {
+  log("hang " + method);
+  keepAlive = setInterval(() => {}, 1000);
 }
 function nextCursor(cursor) {
   return cursor !== undefined && cursor !== null ? { nextCursor: cursor } : {};
@@ -153,31 +144,26 @@ function handle(message) {
     if (hangFirstInitializeMarkerPath) {
       log("fast retry initialize");
     }
-    const response = {
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
+    const respond = () => reply(message.id, {
         protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-        capabilities,
+        capabilities: config.capabilities ?? { tools: {} },
         serverInfo: { name: "test-list-tools", version: "1.0.0" },
-      },
-    };
-    if (initializeReleaseToken) {
-      void awaitRelease(logPath, initializeReleaseToken).then(() => send(response));
-    } else if (initializeDelayMs > 0) {
-      setTimeout(() => send(response), initializeDelayMs);
+    });
+    if (config.initializeReleaseToken) {
+      void awaitRelease(logPath, config.initializeReleaseToken).then(respond);
+    } else if (config.initializeDelayMs > 0) {
+      setTimeout(respond, config.initializeDelayMs);
     } else {
-      send(response);
+      respond();
     }
     return;
   }
   if (message.method === "notifications/initialized") {
-    if (notifyListChangedOnInitialized) {
+    if (config.notifyListChangedOnInitialized) {
       void (async () => {
-        if (notifyListChangedOnInitializedReleaseToken) {
-          await awaitRelease(logPath, notifyListChangedOnInitializedReleaseToken);
+        if (config.notifyListChangedOnInitializedReleaseToken) {
+          await awaitRelease(logPath, config.notifyListChangedOnInitializedReleaseToken);
         }
-        log("notify tools/list_changed");
         notifyToolsChanged();
       })();
     }
@@ -186,130 +172,106 @@ function handle(message) {
   if (message.method === "tools/list") {
     listCount += 1;
     log("tools/list cursor " + JSON.stringify(message.params?.cursor));
-    if (listCount === exitOnListCall) {
+    if (listCount === config.exitOnListCall) {
       log("exit tools/list " + listCount);
       process.exit(1);
     }
-    if (listToolsMethodNotFound) {
+    if (config.listToolsMethodNotFound) {
       log("reject tools/list method not found");
       fail(message.id, -32601, "Method not found");
       return;
     }
-    if (listToolsJsonRpcErrorMessage) {
+    if (config.listToolsJsonRpcErrorMessage) {
       log("reject tools/list with configured error");
-      fail(message.id, -32000, listToolsJsonRpcErrorMessage);
+      fail(message.id, -32000, config.listToolsJsonRpcErrorMessage);
       return;
     }
-    if (hang) {
-      log("hang tools/list");
-      keepAlive = setInterval(() => {}, 1000);
+    if (config.hang) {
+      hangRequest(message.method);
       return;
     }
     const currentListCount = listCount;
-    const toolPageCursor = toolPageCursors?.[currentListCount - 1];
+    const toolPageCursor = config.toolPageCursors?.[currentListCount - 1];
     log("delay tools/list " + delayMs);
     const sendListResponse = () => {
-      if (notifyListChangedBeforeEveryListResponse) {
-        log("notify tools/list_changed before response");
-        notifyToolsChanged();
+      if (config.notifyListChangedBeforeEveryListResponse) {
+        notifyToolsChanged(" before response");
       }
       reply(message.id, {
-        tools: toolsByList
-            ? toolsByList[Math.min(currentListCount - 1, toolsByList.length - 1)]
-            : toolPageCursors
+        tools: config.toolsByList
+            ? config.toolsByList[Math.min(currentListCount - 1, config.toolsByList.length - 1)]
+            : config.toolPageCursors
               ? tools.map((tool) => ({ ...tool, name: tool.name + "-" + currentListCount }))
               : tools,
         ...nextCursor(toolPageCursor),
       });
-      if (notifyListChangedAfterFirstList && currentListCount === 1) {
-        void (async () => {
-          await waitForPath(notifyListChangedReleasePath);
-          log("notify tools/list_changed");
-          notifyToolsChanged();
-        })();
+      if (config.notifyListChangedAfterFirstList && currentListCount === 1) {
+        void afterPath(config.notifyListChangedReleasePath, () => notifyToolsChanged());
       }
     };
-    void (async () => {
-      await waitForPath(listToolsReleasePath);
+    void afterPath(config.listToolsReleasePath, () => {
       pendingTimer = setTimeout(sendListResponse, delayMs);
-    })();
+    });
   }
   if (message.method === "tools/call") {
     if (hangToolCallsUntilRestart) {
-      log("hang tools/call");
-      keepAlive = setInterval(() => {}, 1000);
+      hangRequest(message.method);
       return;
     }
-    if (callToolJsonRpcError) {
-      fail(message.id, callToolJsonRpcErrorCode, "tool request failed");
+    if (config.callToolJsonRpcError) {
+      fail(message.id, config.callToolJsonRpcErrorCode ?? -32000, "tool request failed");
       return;
     }
-    if (notifyListChangedOnToolCall) {
-      log("notify tools/list_changed during tools/call");
-      notifyToolsChanged();
+    if (config.notifyListChangedOnToolCall) {
+      notifyToolsChanged(" during tools/call");
     }
-    void (async () => {
-      await waitForPath(callToolReleasePath);
+    void afterPath(config.callToolReleasePath, () => {
       reply(message.id, {
         isError: false,
-        ...(callToolResult ?? { content: [{ type: "text", text: "tool ok" }] }),
+        ...(config.callToolResult ?? { content: [{ type: "text", text: "tool ok" }] }),
       });
-    })();
+    });
   }
   if (message.method === "resources/list" || message.method === "prompts/list") {
     const resources = message.method === "resources/list";
     const page = resources ? ++resourceListCount : ++promptListCount;
-    const cursors = resources ? resourcePageCursors : promptPageCursors;
+    const cursors = resources ? config.resourcePageCursors : config.promptPageCursors;
     log(message.method + " cursor " + JSON.stringify(message.params?.cursor));
-    void (async () => {
-      await waitForPath(utilityListReleasePath);
+    void afterPath(config.utilityListReleasePath, () => {
       reply(message.id, {
         ...(resources
           ? { resources: cursors ? [{ uri: "memo://page-" + page, name: "page-" + page }] : [] }
           : { prompts: [{ name: "prompt-" + page }] }),
         ...nextCursor(cursors?.[page - 1]),
       });
-    })();
+    });
     return;
   }
   if (message.method === "resources/read") {
-    if (resourceReadJsonRpcError) {
+    if (config.resourceReadJsonRpcError) {
       fail(message.id, -32000, "resource read failed");
       return;
     }
-    reply(message.id, resourceReadResult ?? { contents: [{ uri: message.params?.uri, text: "resource ok" }] });
+    reply(message.id, config.resourceReadResult ?? { contents: [{ uri: message.params?.uri, text: "resource ok" }] });
   }
 }
 process.stdin.setEncoding("utf8");
 function shutdown() {
-  if (ignoreShutdown) {
+  if (config.ignoreShutdown) {
     keepAlive ??= setInterval(() => {}, 60_000);
     return;
   }
-  if (pendingTimer) {
-    clearTimeout(pendingTimer);
-  }
-  if (keepAlive) {
-    clearInterval(keepAlive);
-  }
+  clearTimeout(pendingTimer);
+  clearInterval(keepAlive);
   try {
     database?.exec("ROLLBACK");
   } catch {}
   database?.close();
   process.exit(0);
 }
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  while (true) {
-    const newline = buffer.indexOf("\\n");
-    if (newline < 0) {
-      return;
-    }
-    const line = buffer.slice(0, newline).replace(/\\r$/, "");
-    buffer = buffer.slice(newline + 1);
-    if (line.trim()) {
-      handle(JSON.parse(line));
-    }
+createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", (line) => {
+  if (line.trim()) {
+    handle(JSON.parse(line));
   }
 });
 process.stdin.on("end", shutdown);

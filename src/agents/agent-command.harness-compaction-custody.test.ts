@@ -1,49 +1,27 @@
-import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { resolvePendingFinalDeliveryCompletion } from "../auto-reply/reply/pending-final-delivery.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
 import { getRestartRecoveryTerminalDeliveryEvidence } from "../config/sessions/restart-recovery-state.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
-import { recoverPendingDeliveries } from "../infra/outbound/delivery-queue-recovery.js";
 import { enqueueDeliveryOnce } from "../infra/outbound/delivery-queue-storage.js";
-import {
-  createRecoveryLog,
-  loadPendingDeliveries,
-} from "../infra/outbound/delivery-queue.test-helpers.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadPendingDeliveries } from "../infra/outbound/delivery-queue.test-helpers.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  agentCommandFromGatewayIngress,
   compactionTestRuntime,
   compactionTestState as state,
-  GATEWAY_INGRESS_ARGS,
   makeCompactionResult,
-  registerAgentCommandCompactionTestHooks,
-  requireCompactionStorePath,
 } from "./agent-command.compaction.test-support.js";
+import {
+  createCustodyFixture,
+  registerCustodyHooks,
+} from "./agent-command.custody.test-support.js";
 import {
   createAgentHarnessCompletionScope,
   withAgentHarnessCompletionAdmission,
 } from "./agent-harness-completion-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 
-registerAgentCommandCompactionTestHooks();
-beforeEach(() => {
-  if (!state.cfg) {
-    throw new Error("missing config");
-  }
-  setRuntimeConfigSnapshot(state.cfg);
-});
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
-  resetPluginRuntimeStateForTest();
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  vi.unstubAllEnvs();
-});
+registerCustodyHooks();
 
 it.each(
   (["embedded", "postrun"] as const).flatMap((phase) =>
@@ -58,27 +36,16 @@ it.each(
 )(
   "preserves actual harness admission through $phase compaction ($mode, $variant)",
   async ({ phase, mode, variant }) => {
-    const {
-      acceptCompactionSuccessor,
-      loadSessionEntry,
-      replaceSessionEntry,
-      patchSessionEntryCore,
-    } = compactionTestRuntime;
-    const sessionKey = "agent:main:dashboard:harness-compaction";
-    const sessionId = "original-session";
+    const { acceptCompactionSuccessor, patchSessionEntryCore } = compactionTestRuntime;
+    const fixture = await createCustodyFixture("agent:main:dashboard:harness-compaction", {
+      lifecycleRevision: "generation",
+    });
+    const { sessionId, sessionKey, stateDir, target, entry, recover } = fixture;
     const sourceRunId = "announce:harness-compaction";
     const taskRunId = "harness-child";
-    const storePath = requireCompactionStorePath();
-    const stateDir = path.dirname(storePath);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const target = { agentId: "main", sessionKey, storePath };
-    const context = { channel: "discord", to: "discord:dm:123" };
-    await replaceSessionEntry(target, { sessionId, lifecycleRevision: "generation", updatedAt: 1 });
     let revoked = false;
     let source: SessionSourceAssertion | undefined;
-    let originalClaim: NonNullable<
-      ReturnType<typeof loadSessionEntry>
-    >["restartRecoveryHarnessCompletion"];
+    let originalClaim: NonNullable<ReturnType<typeof entry>>["restartRecoveryHarnessCompletion"];
     let acceptedCount = 0;
     let attemptedRefusal = false;
     const assertCurrent = () => {
@@ -90,35 +57,20 @@ it.each(
       assertActive: SessionSourceAssertion,
       onCommitted?: Parameters<typeof acceptCompactionSuccessor>[0]["onCommitted"],
     ) => {
-      const entry = loadSessionEntry(target);
-      if (!entry?.restartRecoveryHarnessCompletion) {
+      const current = entry();
+      if (!current?.restartRecoveryHarnessCompletion) {
         throw new Error("missing admitted harness claim");
       }
-      expect(entry.restartRecoveryHarnessCompletion).toMatchObject({
+      expect(current.restartRecoveryHarnessCompletion).toMatchObject({
         sessionId,
         taskRunId,
         sourceRunId,
       });
-      originalClaim = { ...entry.restartRecoveryHarnessCompletion };
+      originalClaim = { ...current.restartRecoveryHarnessCompletion };
       const held = await assertActive.prepareSessionSourceScope?.();
       let accepted: Awaited<ReturnType<typeof acceptCompactionSuccessor>>;
       try {
-        accepted = await acceptCompactionSuccessor({
-          currentTarget: { ...target, sessionId: entry.sessionId },
-          currentSessionFile: sessionKey,
-          expectedEntry: {
-            sessionId: entry.sessionId,
-            lifecycleRevision: entry.lifecycleRevision,
-            activeWriterRunId: entry.activeWriterRunId,
-          },
-          assertActive,
-          onCommitted,
-          result: {
-            ok: true,
-            compacted: true,
-            result: { sessionId: "successor", tokensBefore: 120, tokensAfter: 42 },
-          },
-        });
+        accepted = await fixture.accept("successor", assertActive, onCommitted, current);
         expect(held).toBeDefined();
         expect(() => held!.assertCurrent()).toThrow();
       } finally {
@@ -133,9 +85,9 @@ it.each(
         await patchSessionEntryCore(target, () => ({ sessionId: "unauthorized" }));
       }
       if (variant === "task") {
-        await patchSessionEntryCore(target, (current) => ({
+        await patchSessionEntryCore(target, (bound) => ({
           restartRecoveryHarnessCompletion: {
-            ...current.restartRecoveryHarnessCompletion!,
+            ...bound.restartRecoveryHarnessCompletion!,
             taskRunId: "other-child",
           },
         }));
@@ -157,6 +109,8 @@ it.each(
         assertion();
       });
     };
+    const checkAfterCompaction = () =>
+      variant === "owed" ? checkSource() : expect(checkSource()).rejects.toThrow();
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       source = params.opts.assertSourceCurrent;
       expect(source?.prepareSessionSourceScope).toBeTypeOf("function");
@@ -175,11 +129,7 @@ it.each(
             activeWriterRunId: accepted.entry.activeWriterRunId,
           },
         });
-        if (variant === "owed") {
-          await checkSource();
-        } else {
-          await expect(checkSource()).rejects.toThrow();
-        }
+        await checkAfterCompaction();
       }
       return makeCompactionResult({
         sessionId: params.sessionId,
@@ -196,11 +146,7 @@ it.each(
         if (params.sessionStore) {
           params.sessionStore[sessionKey] = accepted.entry;
         }
-        if (variant === "owed") {
-          await checkSource();
-        } else {
-          await expect(checkSource()).rejects.toThrow();
-        }
+        await checkAfterCompaction();
         return accepted.entry;
       });
     }
@@ -225,14 +171,6 @@ it.each(
       durableFinal: { capabilities: { text: true, afterCommit: true } },
     };
     setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
-    const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
-    const recover = () =>
-      recoverPendingDeliveries({
-        cfg: {},
-        stateDir,
-        log: createRecoveryLog(),
-        deliver: deliverOutboundPayloads,
-      });
     state.deliverAgentCommandResultMock.mockImplementation(async (params) => {
       const completion = resolvePendingFinalDeliveryCompletion(params.payloads);
       if (variant !== "owed") {
@@ -254,24 +192,16 @@ it.each(
       if (!completion) {
         throw new Error("missing effective harness delivery custody");
       }
-      const entry = loadSessionEntry(target);
-      expect(entry?.restartRecoveryHarnessCompletion).toEqual({
+      expect(entry()?.restartRecoveryHarnessCompletion).toEqual({
         ...originalClaim,
         sessionId: "successor",
       });
-      const delivery = {
-        cfg: {},
-        ...context,
-        payloads: params.payloads,
-        deliveryCompletion: completion,
-        deliveryIntentId: completion.deliveryId,
-        queuePolicy: "required" as const,
-      };
+      const delivery = fixture.delivery(params.payloads, completion);
       if (mode === "recovery") {
         await enqueueDeliveryOnce(delivery, completion.deliveryId, stateDir);
         await recover();
       } else {
-        await deliverOutboundPayloads(delivery);
+        await fixture.deliver(delivery);
       }
       return { deliverySucceeded: true };
     });
@@ -288,25 +218,12 @@ it.each(
         isSourceCurrent: () => !revoked,
       },
       () =>
-        agentCommandFromGatewayIngress(
-          {
-            sessionKey,
-            sessionId,
-            runId: sourceRunId,
-            message: "child finished",
-            allowModelOverride: false,
-            ...context,
-            deliver: true,
-            assertSourceCurrent: assertCurrent,
-            inputProvenance: {
-              kind: "inter_session",
-              sourceTool: "agent_harness_completion",
-              sourceChannel: "internal",
-              sourceSessionKey: taskRunId,
-            },
-          },
-          ...GATEWAY_INGRESS_ARGS,
-        ),
+        fixture.command(sourceRunId, assertCurrent, {
+          kind: "inter_session",
+          sourceTool: "agent_harness_completion",
+          sourceChannel: "internal",
+          sourceSessionKey: taskRunId,
+        }),
     );
     if (variant === "revoked" || (phase === "embedded" && variant !== "owed")) {
       await expect(command).rejects.toThrow();
@@ -317,10 +234,7 @@ it.each(
     if (phase === "postrun" && !["owed", "revoked"].includes(variant)) {
       expect(attemptedRefusal).toBe(true);
     }
-    const evidence = getRestartRecoveryTerminalDeliveryEvidence(
-      loadSessionEntry(target),
-      sourceRunId,
-    );
+    const evidence = getRestartRecoveryTerminalDeliveryEvidence(entry(), sourceRunId);
     if (variant === "owed") {
       expect(evidence).toMatchObject({
         harnessCompletion: { ...originalClaim, sessionId: "successor" },

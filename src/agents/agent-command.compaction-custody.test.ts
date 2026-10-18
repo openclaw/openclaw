@@ -1,43 +1,21 @@
-import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { resolvePendingFinalDeliveryCompletion } from "../auto-reply/reply/pending-final-delivery.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
 import { getRestartRecoveryTerminalDeliveryEvidence } from "../config/sessions/restart-recovery-state.js";
 import type { SessionAdmissionTransition } from "../config/sessions/session-admission-transition.types.js";
-import { recoverPendingDeliveries } from "../infra/outbound/delivery-queue-recovery.js";
-import {
-  createRecoveryLog,
-  loadPendingDeliveries,
-} from "../infra/outbound/delivery-queue.test-helpers.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadPendingDeliveries } from "../infra/outbound/delivery-queue.test-helpers.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  agentCommandFromGatewayIngress,
   compactionTestRuntime,
   compactionTestState as state,
-  GATEWAY_INGRESS_ARGS,
   makeCompactionResult,
-  registerAgentCommandCompactionTestHooks,
-  requireCompactionStorePath,
 } from "./agent-command.compaction.test-support.js";
+import {
+  createCustodyFixture,
+  registerCustodyHooks,
+} from "./agent-command.custody.test-support.js";
 
-registerAgentCommandCompactionTestHooks();
-beforeEach(() => {
-  if (!state.cfg) {
-    throw new Error("missing config");
-  }
-  setRuntimeConfigSnapshot(state.cfg);
-});
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
-  resetPluginRuntimeStateForTest();
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  vi.unstubAllEnvs();
-});
+registerCustodyHooks();
 
 it.each(
   ([false, true] as const).flatMap((recovery) =>
@@ -58,30 +36,19 @@ it.each(
 )(
   "retains exact original final custody across accepted compaction ($recovery, $mode)",
   async ({ recovery, mode }) => {
-    const {
-      acceptCompactionSuccessor,
-      loadSessionEntry,
-      replaceSessionEntry,
-      patchSessionEntryCore,
-    } = compactionTestRuntime;
-    const sessionId = "original-session";
-    const sessionKey = "agent:main:dashboard:compaction-custody";
-    const storePath = requireCompactionStorePath();
-    const target = { agentId: "main", sessionKey, storePath };
+    const { patchSessionEntryCore } = compactionTestRuntime;
     const context = { channel: "discord", to: "discord:dm:123" };
-    const stateDir = path.dirname(storePath);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    await replaceSessionEntry(target, {
-      sessionId,
-      updatedAt: 1,
-      ...(recovery
+    const fixture = await createCustodyFixture(
+      "agent:main:dashboard:compaction-custody",
+      recovery
         ? {
             restartRecoveryDeliveryRunId: "run",
             restartRecoveryDeliverySourceRunId: "source",
             restartRecoveryDeliveryContext: context,
           }
-        : {}),
-    });
+        : {},
+    );
+    const { sessionId, sessionKey, stateDir, target, entry } = fixture;
     let revoked = false;
     const assertCurrent = () => {
       if (revoked) {
@@ -90,25 +57,7 @@ it.each(
     };
     const transitions: SessionAdmissionTransition[] = [];
     const accept = async (next: string) => {
-      const entry = loadSessionEntry(target);
-      if (!entry) {
-        throw new Error("missing predecessor");
-      }
-      const accepted = await acceptCompactionSuccessor({
-        currentTarget: { ...target, sessionId: entry.sessionId },
-        currentSessionFile: sessionKey,
-        expectedEntry: {
-          sessionId: entry.sessionId,
-          lifecycleRevision: entry.lifecycleRevision,
-          activeWriterRunId: entry.activeWriterRunId,
-        },
-        assertActive: assertCurrent,
-        result: {
-          ok: true,
-          compacted: true,
-          result: { sessionId: next, tokensBefore: 120, tokensAfter: 42 },
-        },
-      });
+      const accepted = await fixture.accept(next, assertCurrent);
       if (accepted.admissionTransition) {
         transitions.push(accepted.admissionTransition);
       }
@@ -200,34 +149,14 @@ it.each(
       if (!completion) {
         throw new Error("missing accepted final custody");
       }
-      expect(loadSessionEntry(target)?.pendingFinalDelivery).toMatchObject({
+      expect(entry()?.pendingFinalDelivery).toMatchObject({
         ...(recovery ? { sourceRunId: "source" } : {}),
         context,
       });
-      const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
-      await deliverOutboundPayloads({
-        cfg: {},
-        ...context,
-        payloads: params.payloads,
-        deliveryCompletion: completion,
-        deliveryIntentId: completion.deliveryId,
-        queuePolicy: "required",
-      });
+      await fixture.deliver(fixture.delivery(params.payloads, completion));
       return { deliverySucceeded: true };
     });
-    const command = agentCommandFromGatewayIngress(
-      {
-        sessionKey,
-        sessionId,
-        runId: "run",
-        message: "finish original source",
-        allowModelOverride: false,
-        ...context,
-        deliver: true,
-        assertSourceCurrent: assertCurrent,
-      },
-      ...GATEWAY_INGRESS_ARGS,
-    );
+    const command = fixture.command("run", assertCurrent);
     if (mode === "revoked") {
       await expect(command).rejects.toThrow("original source revoked");
       expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
@@ -235,7 +164,7 @@ it.each(
       await command;
       expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
     }
-    const stored = loadSessionEntry(target);
+    const stored = entry();
     if (safe && recovery) {
       expect(getRestartRecoveryTerminalDeliveryEvidence(stored, "source")).toMatchObject({
         durableFinalReceipt: { platformMessageId: "final-message" },
@@ -243,19 +172,11 @@ it.each(
     }
     if (!safe) {
       const evidence = getRestartRecoveryTerminalDeliveryEvidence(stored, "source");
-      // Capturing a visible result is not a receipt/acknowledgement. Existing cleanup
-      // may retain that fact even when the original route or live source is revoked.
       expect(evidence?.durableFinalReceipt).toBeUndefined();
       expect(evidence?.deliveryStatus?.status).not.toBe("sent");
       expect(stored?.pendingFinalDelivery).toBeUndefined();
     }
-    const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
-    await recoverPendingDeliveries({
-      cfg: {},
-      stateDir,
-      log: createRecoveryLog(),
-      deliver: deliverOutboundPayloads,
-    });
+    await fixture.recover();
     expect(send).toHaveBeenCalledTimes(safe ? 1 : 0);
     expect(await loadPendingDeliveries(stateDir)).toEqual([]);
   },

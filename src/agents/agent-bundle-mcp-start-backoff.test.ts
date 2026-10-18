@@ -61,21 +61,18 @@ beforeEach(() => {
         if (message.method === "tools/list") {
           await listToolsGate;
         }
-        return new Response(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: message.id,
-            result:
-              message.method === "initialize"
-                ? {
-                    protocolVersion: "2025-06-18",
-                    capabilities: { tools: {} },
-                    serverInfo: { name: "fixture", version: "1" },
-                  }
-                : { tools: [{ name: "probe", inputSchema: { type: "object" } }] },
-          }),
-          { headers: { "content-type": "application/json" } },
-        );
+        return Response.json({
+          jsonrpc: "2.0",
+          id: message.id,
+          result:
+            message.method === "initialize"
+              ? {
+                  protocolVersion: "2025-06-18",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "fixture", version: "1" },
+                }
+              : { tools: [{ name: "probe", inputSchema: { type: "object" } }] },
+        });
       },
     }),
     description: "unreachable fixture",
@@ -102,7 +99,10 @@ function makeRuntime(url = "https://mcp.invalid/mcp", requesterScope?: SessionMc
   return runtime;
 }
 
-async function discover(runtime: SessionMcpRuntime) {
+async function discover(runtime: SessionMcpRuntime, advanceMs = 0) {
+  if (advanceMs) {
+    await vi.advanceTimersByTimeAsync(advanceMs);
+  }
   let settled = false;
   const started = Date.now();
   const pending = runtime.getCatalog().finally(() => {
@@ -112,42 +112,44 @@ async function discover(runtime: SessionMcpRuntime) {
   if (!settled) {
     await vi.advanceTimersToNextTimerAsync();
   }
-  return { catalog: await pending, waitedMs: Date.now() - started };
+  return {
+    catalog: await pending,
+    waitedMs: Date.now() - started,
+    initializes,
+    warnings: warn.mock.calls.length,
+  };
+}
+
+function expectRecovered(catalog: Awaited<ReturnType<SessionMcpRuntime["getCatalog"]>>) {
+  expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+  expect(catalog.diagnostics).toBeUndefined();
 }
 
 it("allows only the first failing runtime one early catalog retry before backing off", async () => {
   const runtime = makeRuntime();
   await discover(runtime);
   expect((await discover(makeRuntime())).waitedMs).toBe(0);
-  await vi.advanceTimersByTimeAsync(4_999);
-  await discover(runtime);
-  expect(initializes).toBe(1);
+  expect(await discover(runtime, 4_999)).toMatchObject({ initializes: 1 });
 
-  await vi.advanceTimersByTimeAsync(1);
-  const retried = await discover(runtime);
-  expect(retried.waitedMs).toBe(30_000);
-  expect(initializes).toBe(2);
+  const retried = await discover(runtime, 1);
+  expect(retried).toMatchObject({ waitedMs: 30_000, initializes: 2 });
   expect(retried.catalog.diagnostics?.[0]?.message).toContain(
     new Date(Date.now() + 60_000).toISOString(),
   );
 
-  await vi.advanceTimersByTimeAsync(5_000);
-  await discover(runtime);
-  expect((await discover(makeRuntime())).waitedMs).toBe(0);
-  expect(initializes).toBe(2);
-  expect(warn).toHaveBeenCalledTimes(2);
+  await discover(runtime, 5_000);
+  expect(await discover(makeRuntime())).toMatchObject({ waitedMs: 0, initializes: 2, warnings: 2 });
 });
 
 it("lists recovered tools on the first turn after a failed startup retry is due", async () => {
   const runtime = makeRuntime();
   const failed = await discover(runtime);
-  expect(failed.catalog.tools).toEqual([]);
-  expect(failed.catalog.diagnostics).toEqual([
-    expect.objectContaining({
-      serverName: "remote",
-      message: expect.stringContaining("server unavailable; retry after"),
-    }),
-  ]);
+  expect(failed.catalog).toMatchObject({
+    tools: [],
+    diagnostics: [
+      { serverName: "remote", message: expect.stringContaining("server unavailable; retry after") },
+    ],
+  });
   reachable = true;
   await vi.advanceTimersByTimeAsync(4_999);
   expect((await runtime.getCatalog()).tools).toEqual([]);
@@ -160,8 +162,7 @@ it("lists recovered tools on the first turn after a failed startup retry is due"
   await vi.advanceTimersByTimeAsync(0);
   listing.resolve();
   const recovered = await turn;
-  expect(recovered.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
-  expect(recovered.diagnostics).toBeUndefined();
+  expectRecovered(recovered);
   expect(initializes).toBe(2);
 });
 
@@ -169,8 +170,7 @@ it("doubles the retry interval to ten minutes and resets it after recovery", asy
   for (const delay of [30_000, 60_000, 120_000, 240_000, 480_000, 600_000, 600_000]) {
     const runtime = makeRuntime();
     const failed = await discover(runtime);
-    expect(failed.waitedMs).toBe(30_000);
-    expect(failed.catalog.tools).toEqual([]);
+    expect(failed).toMatchObject({ waitedMs: 30_000, catalog: { tools: [] } });
     expect(failed.catalog.diagnostics?.[0]?.message).toContain("timed out");
     expect(failed.catalog.diagnostics?.[0]?.message).toContain(
       `server unavailable; retry after ${new Date(Date.now() + (delay === 30_000 ? 5_000 : delay)).toISOString()}. Check server reachability`,
@@ -178,15 +178,16 @@ it("doubles the retry interval to ten minutes and resets it after recovery", asy
     await runtime.dispose();
     const attempts = initializes;
     await vi.advanceTimersByTimeAsync(delay - 1);
-    expect((await discover(makeRuntime())).waitedMs).toBe(0);
-    expect(initializes).toBe(attempts);
-    expect(warn).toHaveBeenCalledTimes(attempts);
+    expect(await discover(makeRuntime())).toMatchObject({
+      waitedMs: 0,
+      initializes: attempts,
+      warnings: attempts,
+    });
     await vi.advanceTimersByTimeAsync(1);
   }
   reachable = true;
   const recovered = await discover(makeRuntime());
-  expect(recovered.catalog.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
-  expect(recovered.catalog.diagnostics).toBeUndefined();
+  expectRecovered(recovered.catalog);
   reachable = false;
   const failedAgain = await discover(makeRuntime());
   expect(failedAgain.waitedMs).toBe(30_000);
@@ -207,21 +208,16 @@ it("shares a single failed startup across concurrent sessions", async () => {
 });
 
 it.each([
-  {
-    change: "configuration",
-    url: "https://changed.invalid/mcp",
-    requesterScope: undefined,
-    reset: () => reloadSessionMcpRuntimes({ cfg: {} }),
-  },
-  {
-    change: "requester",
-    url: undefined,
-    requesterScope: { requesterSenderId: "alice" },
-    reset: disposeAllSessionMcpRuntimes,
-  },
-])(
-  "isolates $change failures and resets them on explicit reload",
-  async ({ url, requesterScope, reset }) => {
+  [
+    "configuration",
+    "https://changed.invalid/mcp",
+    undefined,
+    () => reloadSessionMcpRuntimes({ cfg: {} }),
+  ],
+  ["requester", undefined, { requesterSenderId: "alice" }, disposeAllSessionMcpRuntimes],
+] as const)(
+  "isolates %s failures and resets them on explicit reload",
+  async (_change, url, requesterScope, reset) => {
     await discover(makeRuntime());
     expect((await discover(makeRuntime())).waitedMs).toBe(0);
     expect((await discover(makeRuntime(url, requesterScope))).waitedMs).toBe(30_000);

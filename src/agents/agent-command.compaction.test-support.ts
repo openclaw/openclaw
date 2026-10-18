@@ -1,4 +1,3 @@
-/** Shared mocks and per-file lifecycle for agent-command compaction tests. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -31,7 +30,6 @@ import { waitForSessionMaintenance } from "./session-maintenance/coordinator.js"
 
 type ProviderModelNormalizationParams = { provider: string; context: { modelId: string } };
 type LoadManifestModelCatalogParams = Parameters<typeof loadManifestModelCatalog>[0];
-type RunAgentAttempt = typeof runAgentAttempt;
 type RunSessionCompaction =
   (typeof import("../auto-reply/reply/agent-runner-memory.js"))["runSessionCompactionIfNeeded"];
 type RunMemoryFlush =
@@ -44,7 +42,7 @@ const compactionTestState = vi.hoisted(() => ({
   cfg: undefined as OpenClawConfig | undefined,
   workspaceDir: undefined as string | undefined,
   agentDir: undefined as string | undefined,
-  runAgentAttemptMock: vi.fn<RunAgentAttempt>(),
+  runAgentAttemptMock: vi.fn<typeof runAgentAttempt>(),
   loadManifestModelCatalogMock: vi.fn((_params: LoadManifestModelCatalogParams) => []),
   normalizeProviderModelIdWithRuntimeMock: vi.fn(
     (_params: ProviderModelNormalizationParams) => undefined,
@@ -54,12 +52,8 @@ const compactionTestState = vi.hoisted(() => ({
     sessionEntry: params.sessionEntry,
     outcome: "completed" as const,
   })),
-  runSessionCompactionIfNeededMock: vi.fn<RunSessionCompaction>(
-    async (params) => params.sessionEntry,
-  ),
-  runSessionPreflightCompactionMock: vi.fn<RunSessionCompaction>(
-    async (params) => params.sessionEntry,
-  ),
+  runSessionCompactionIfNeededMock: vi.fn<RunSessionCompaction>(async (p) => p.sessionEntry),
+  runSessionPreflightCompactionMock: vi.fn<RunSessionCompaction>(async (p) => p.sessionEntry),
   deliverAgentCommandResultMock: vi.fn(),
   emitAgentEventMock: vi.fn(),
   deliveryFreshEntries: [] as Array<SessionEntry | undefined>,
@@ -68,8 +62,7 @@ const compactionTestState = vi.hoisted(() => ({
 
 vi.mock("../sessions/session-diff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../sessions/session-diff.js")>()),
-  captureSessionDiffBaseline: (params: Parameters<CaptureSessionDiffBaseline>[0]) =>
-    compactionTestState.captureSessionDiffBaselineMock(params),
+  captureSessionDiffBaseline: compactionTestState.captureSessionDiffBaselineMock,
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -85,58 +78,48 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
   const { createPluginMetadataSnapshot } =
     await import("../config/plugin-auto-enable.test-helpers.js");
+  const resolveSnapshot = () =>
+    createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } });
   return {
     ...actual,
     isPluginMetadataSnapshotCompatible: () => false,
-    resolvePluginMetadataSnapshot: () =>
-      createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
-    resolvePluginMetadataSnapshotAsync: async () =>
-      createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
+    resolvePluginMetadataSnapshot: resolveSnapshot,
+    resolvePluginMetadataSnapshotAsync: async () => resolveSnapshot(),
   };
 });
 
-vi.mock("./agent-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
-  return {
-    ...actual,
-    clearAutoFallbackPrimaryProbeSelection: vi.fn(),
-    entryMatchesAutoFallbackPrimaryProbe: () => false,
-    hasSessionAutoModelFallbackProvenance: () => false,
-    listAgentIds: () => ["main"],
-    markAutoFallbackPrimaryProbe: vi.fn(),
-    resolveAutoFallbackPrimaryProbe: () => undefined,
-    resolveAgentConfig: () => undefined,
-    resolveAgentDir: () => compactionTestState.agentDir ?? "/tmp/openclaw-agent",
-    resolveDefaultAgentId: () => "main",
-    resolveEffectiveModelFallbacks: () => undefined,
-    resolveSessionAgentId: () => "main",
-    resolveAgentWorkspaceDir: () => compactionTestState.workspaceDir ?? "/tmp/openclaw-workspace",
-  };
-});
+vi.mock("./agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-scope.js")>()),
+  clearAutoFallbackPrimaryProbeSelection: vi.fn(),
+  entryMatchesAutoFallbackPrimaryProbe: () => false,
+  hasSessionAutoModelFallbackProvenance: () => false,
+  listAgentIds: () => ["main"],
+  markAutoFallbackPrimaryProbe: vi.fn(),
+  resolveAutoFallbackPrimaryProbe: () => undefined,
+  resolveAgentConfig: () => undefined,
+  resolveAgentDir: () => compactionTestState.agentDir ?? "/tmp/openclaw-agent",
+  resolveDefaultAgentId: () => "main",
+  resolveEffectiveModelFallbacks: () => undefined,
+  resolveSessionAgentId: () => "main",
+  resolveAgentWorkspaceDir: () => compactionTestState.workspaceDir ?? "/tmp/openclaw-workspace",
+}));
 
 vi.mock("./model-catalog.js", async () => {
   const { buildPreparedModelCatalogSnapshot } =
     await vi.importActual<typeof import("./model-catalog.js")>("./model-catalog.js");
   return {
     buildPreparedModelCatalogSnapshot,
-    loadManifestModelCatalog: (params: LoadManifestModelCatalogParams) =>
-      compactionTestState.loadManifestModelCatalogMock(params),
+    loadManifestModelCatalog: compactionTestState.loadManifestModelCatalogMock,
   };
 });
 
 vi.mock("./model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
-    entries: [],
-    routeVariants: [],
-  })),
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
 }));
 
 vi.mock("./provider-model-normalization.runtime.js", () => ({
-  normalizeProviderModelIdWithRuntime: (params: {
-    provider: string;
-    context: { modelId: string };
-  }) => compactionTestState.normalizeProviderModelIdWithRuntimeMock(params),
+  normalizeProviderModelIdWithRuntime: compactionTestState.normalizeProviderModelIdWithRuntimeMock,
 }));
 
 vi.mock("./harness/runtime-plugin.js", () => ({
@@ -159,23 +142,16 @@ vi.mock("./workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async () => undefined),
 }));
 
-vi.mock("./auth-profiles/store-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./auth-profiles/store-runtime.js")>(
-    "./auth-profiles/store-runtime.js",
-  );
-  return {
-    ...actual,
-    ensureAuthProfileStore: () => ({ profiles: {} }),
-    ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
-    saveAuthProfileStore: vi.fn(),
-    updateAuthProfileStoreWithLock: vi.fn(async () => ({ profiles: {} })),
-  };
-});
+vi.mock("./auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-profiles/store-runtime.js")>()),
+  ensureAuthProfileStore: () => ({ profiles: {} }),
+  ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
+  saveAuthProfileStore: vi.fn(),
+  updateAuthProfileStoreWithLock: vi.fn(async () => ({ profiles: {} })),
+}));
 
 vi.mock("../acp/control-plane/manager.js", () => ({
-  getAcpSessionManager: () => ({
-    resolveSessionAsync: async () => null,
-  }),
+  getAcpSessionManager: () => ({ resolveSessionAsync: async () => null }),
 }));
 
 vi.mock("../skills/runtime/remote.js", () => ({
@@ -185,12 +161,7 @@ vi.mock("../skills/runtime/remote.js", () => ({
 vi.mock("../skills/runtime/session-snapshot.js", () => ({
   resolveReusableWorkspaceSkillSnapshot: () => ({
     shouldRefresh: true,
-    snapshot: {
-      prompt: "",
-      skills: [],
-      resolvedSkills: [],
-      version: 0,
-    },
+    snapshot: { prompt: "", skills: [], resolvedSkills: [], version: 0 },
   }),
 }));
 
@@ -218,35 +189,25 @@ vi.mock("./model-fallback-runner.js", () => ({
   }),
 }));
 
-vi.mock("./command/attempt-execution.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./command/attempt-execution.runtime.js")>(
-    "./command/attempt-execution.runtime.js",
-  );
-  return {
-    ...actual,
-    runAgentAttempt: (...args: Parameters<RunAgentAttempt>) =>
-      compactionTestState.runAgentAttemptMock(...args),
-  };
-});
+vi.mock("./command/attempt-execution.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./command/attempt-execution.runtime.js")>()),
+  runAgentAttempt: compactionTestState.runAgentAttemptMock,
+}));
 
 vi.mock("./command/cli-compaction.js", () => ({
-  runCliTurnCompactionLifecycle: (...args: Parameters<CliCompaction>) =>
-    compactionTestState.runCliTurnCompactionLifecycleMock(...args),
+  runCliTurnCompactionLifecycle: compactionTestState.runCliTurnCompactionLifecycleMock,
 }));
 
 vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
-  runMemoryFlushIfNeeded: (params: Parameters<RunMemoryFlush>[0]) =>
-    compactionTestState.runMemoryFlushIfNeededMock(params),
+  runMemoryFlushIfNeeded: compactionTestState.runMemoryFlushIfNeededMock,
   runSessionCompactionIfNeeded: (params: Parameters<RunSessionCompaction>[0]) =>
     params.beforeCompaction
       ? compactionTestState.runSessionPreflightCompactionMock(params)
       : compactionTestState.runSessionCompactionIfNeededMock(params),
 }));
 
-vi.mock("../infra/agent-events.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/agent-events.js")>(
-    "../infra/agent-events.js",
-  );
+vi.mock("../infra/agent-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/agent-events.js")>();
   return {
     ...actual,
     emitAgentEvent: (...args: Parameters<typeof actual.emitAgentEvent>) => {
@@ -257,8 +218,7 @@ vi.mock("../infra/agent-events.js", async () => {
 });
 
 vi.mock("./command/delivery.runtime.js", () => ({
-  deliverAgentCommandResult: (params: unknown) =>
-    compactionTestState.deliverAgentCommandResultMock(params),
+  deliverAgentCommandResult: compactionTestState.deliverAgentCommandResultMock,
 }));
 
 let agentCommand: typeof import("./agent-command.js").agentCommand;
@@ -273,20 +233,11 @@ export function registerAgentCommandCompactionTestHooks(): void {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    // Failed tests can leave once queues unconsumed. Reset only fixture-owned
-    // mocks; Vitest restores their constructor implementations along with clearing queues.
-    for (const mock of [
-      compactionTestState.runAgentAttemptMock,
-      compactionTestState.loadManifestModelCatalogMock,
-      compactionTestState.normalizeProviderModelIdWithRuntimeMock,
-      compactionTestState.runCliTurnCompactionLifecycleMock,
-      compactionTestState.runMemoryFlushIfNeededMock,
-      compactionTestState.runSessionCompactionIfNeededMock,
-      compactionTestState.runSessionPreflightCompactionMock,
-      compactionTestState.deliverAgentCommandResultMock,
-      compactionTestState.captureSessionDiffBaselineMock,
-    ]) {
-      mock.mockReset();
+    // Discard unconsumed once queues; mockReset restores constructor implementations.
+    for (const value of Object.values(compactionTestState)) {
+      if (vi.isMockFunction(value) && value !== compactionTestState.emitAgentEventMock) {
+        value.mockReset();
+      }
     }
     compactionTestState.deliveryFreshEntries = [];
     compactionTestState.deliverAgentCommandResultMock.mockImplementation(
@@ -305,16 +256,8 @@ export function registerAgentCommandCompactionTestHooks(): void {
     await fs.mkdir(compactionTestState.workspaceDir, { recursive: true });
     await fs.mkdir(compactionTestState.agentDir, { recursive: true });
     compactionTestState.cfg = {
-      session: {
-        store: path.join(tmpDir, "sessions.json"),
-      },
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": {},
-          },
-        },
-      },
+      session: { store: path.join(tmpDir, "sessions.json") },
+      agents: { defaults: { models: { "openai/gpt-5.5": {} } } },
     } as OpenClawConfig;
   });
 
