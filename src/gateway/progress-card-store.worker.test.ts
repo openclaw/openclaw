@@ -24,7 +24,22 @@ import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
 const sessionKey = "agent:main:progress-worker";
+const mainTarget = { agentId: "main" };
+const put = progressCardStore.put.bind(progressCardStore, sessionKey);
+const get = progressCardStore.get.bind(progressCardStore, sessionKey);
 afterEach(() => vi.restoreAllMocks());
+
+function interceptWorker(intercept: <T>(execute: () => Promise<T>) => Promise<T>) {
+  const open = publications.openOpenClawAgentSqliteWorkerStore;
+  return vi
+    .spyOn(publications, "openOpenClawAgentSqliteWorkerStore")
+    .mockImplementation(async (...args) => {
+      const worker = await open(...args);
+      const execute = worker.execute.bind(worker);
+      worker.execute = (...command) => intercept(() => execute(...command));
+      return worker;
+    });
+}
 
 function withCardSession(custom: boolean, run: (cfg: OpenClawConfig) => Promise<void>) {
   return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -89,12 +104,11 @@ it.each([false, true])(
 
 it("keeps queued inputs, FIFO revisions, and the captured store through a config change", async () => {
   await withCardSession(false, async (cfg) => {
-    const target = { agentId: "main" };
     const release = createDeferredCore();
-    const holding = runOpenClawAgentWriteAdmission(target, () => release.promise);
+    const holding = runOpenClawAgentWriteAdmission(mainTarget, () => release.promise);
     const steps = [{ step: "Captured", status: "pending" as const }];
-    const first = progressCardStore.put(sessionKey, { steps });
-    const second = progressCardStore.put(sessionKey, { markdown: "Second" });
+    const first = put({ steps });
+    const second = put({ markdown: "Second" });
     steps[0]!.step = "Changed after acceptance";
     release.resolve();
     try {
@@ -103,17 +117,12 @@ it("keeps queued inputs, FIFO revisions, and the captured store through a config
     } finally {
       await Promise.allSettled([first, second, holding]);
     }
-    const changed = progressCardStore.put(sessionKey, { markdown: "Captured store" });
+    const changed = put({ markdown: "Captured store" });
     const next = { session: { store: "/synthetic/changed/cards.sqlite" } };
     setRuntimeConfigSnapshot(next, next);
-    await expect(changed).resolves.toMatchObject({
-      card: { revision: 3, markdown: "Captured store" },
-    });
+    expect(await changed).toMatchObject({ card: { revision: 3, markdown: "Captured store" } });
     setRuntimeConfigSnapshot(cfg, cfg);
-    expect(await progressCardStore.get(sessionKey)).toMatchObject({
-      revision: 3,
-      markdown: "Captured store",
-    });
+    expect(await get()).toMatchObject({ revision: 3, markdown: "Captured store" });
   });
 });
 
@@ -121,7 +130,6 @@ it("settles card discovery cleanup while history waits for the same database wri
   signal,
 }) => {
   await withCardSession(false, async () => {
-    const target = { agentId: "main" };
     const committed = createDeferredCore();
     const statusRequested = createDeferredCore();
     const releaseOnFailure = createDeferredCore<boolean>();
@@ -129,41 +137,32 @@ it("settles card discovery cleanup while history waits for the same database wri
     // Start outside the card's write admission so the host publication must queue behind it.
     const history = (async () => {
       await committed.promise;
-      return withSessionHistoryWorkerDatabase(target, (owner) =>
+      return withSessionHistoryWorkerDatabase(mainTarget, (owner) =>
         owner.searchTranscripts({ agentId: "main", query: "concurrent" }, () => {
-          status = readSessionTranscriptIndexStatus(target, owner.assertCurrent);
+          status = readSessionTranscriptIndexStatus(mainTarget, owner.assertCurrent);
           statusRequested.resolve();
           // Test cancellation releases the reader before joining the actual admitted write.
           return Promise.race([status, releaseOnFailure.promise]);
         }),
       );
     })();
-    const open = publications.openOpenClawAgentSqliteWorkerStore;
-    const spy = vi
-      .spyOn(publications, "openOpenClawAgentSqliteWorkerStore")
-      .mockImplementation(async (...args) => {
-        const worker = await open(...args);
-        return {
-          ...worker,
-          execute: async (...command) => {
-            const receipt = await worker.execute(...command);
-            committed.resolve();
-            await awaitGateBeforeSettlement(
-              statusRequested.promise,
-              history,
-              "history finished before requesting its writer-backed status",
-            );
-            return receipt;
-          },
-        };
-      });
-    const card = progressCardStore.put(sessionKey, { markdown: "Concurrent history" });
+    const spy = interceptWorker(async (execute) => {
+      const receipt = await execute();
+      committed.resolve();
+      await awaitGateBeforeSettlement(
+        statusRequested.promise,
+        history,
+        "history finished before requesting its writer-backed status",
+      );
+      return receipt;
+    });
+    const card = put({ markdown: "Concurrent history" });
     try {
       const [saved, searched] = await withinTest(Promise.all([card, history]), signal);
       expect(saved).toMatchObject({ card: { revision: 1, markdown: "Concurrent history" } });
       expect(searched.hits).toEqual([]);
       expect(await status).toBe(false);
-      expect(await progressCardStore.get(sessionKey)).toMatchObject({ revision: 1 });
+      expect(await get()).toMatchObject({ revision: 1 });
     } finally {
       committed.resolve();
       releaseOnFailure.resolve(false);
@@ -178,21 +177,21 @@ it.each(["transaction", "commit"] as const)(
   "preserves authorization error identity and rolls back %s refusal",
   async (stage) => {
     await withCardSession(false, async () => {
-      await progressCardStore.put(sessionKey, { markdown: "Before" });
+      await put({ markdown: "Before" });
       const denied = new SessionMutationAuthorizationChangedError({
         code: "INVALID_REQUEST",
         message: "Card authority revoked",
       });
       let current = true;
-      const spy = probe.admission(admission, (request, grant, admit) => {
-        if (request.stage === stage) {
-          current = false;
-        }
-        admit(request, grant);
-      });
-      try {
+      {
+        using _ = probe.admission(admission, (request, grant, admit) => {
+          if (request.stage === stage) {
+            current = false;
+          }
+          admit(request, grant);
+        });
         await expect(
-          progressCardStore.put(sessionKey, {
+          put({
             markdown: "Refused",
             assertCurrent: () => {
               if (!current) {
@@ -201,47 +200,27 @@ it.each(["transaction", "commit"] as const)(
             },
           }),
         ).rejects.toBe(denied);
-      } finally {
-        spy.mockRestore();
       }
       expect(current).toBe(false);
-      expect(await progressCardStore.get(sessionKey)).toMatchObject({
-        revision: 1,
-        markdown: "Before",
-      });
-      expect(await progressCardStore.put(sessionKey, { markdown: "After" })).toMatchObject({
-        card: { revision: 2 },
-      });
+      expect(await get()).toMatchObject({ revision: 1, markdown: "Before" });
+      expect(await put({ markdown: "After" })).toMatchObject({ card: { revision: 2 } });
     });
   },
 );
 
 it("never replays a lost committed reply", async () => {
   await withCardSession(false, async () => {
-    await progressCardStore.put(sessionKey, { markdown: "Before" });
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    await put({ markdown: "Before" });
+    const db = openOpenClawAgentDatabase(mainTarget).db;
     const unknown = new SqliteWorkerError("Synthetic lost commit reply", "outcome-unknown");
-    const open = publications.openOpenClawAgentSqliteWorkerStore;
     let dispatches = 0;
-    const spy = vi
-      .spyOn(publications, "openOpenClawAgentSqliteWorkerStore")
-      .mockImplementation(async (...args) => {
-        const worker = await open(...args);
-        return {
-          ...worker,
-          execute: async (...command) => {
-            dispatches++;
-            await worker.execute(...command);
-            throw unknown;
-          },
-        };
+    {
+      using _ = interceptWorker(async (execute) => {
+        dispatches++;
+        await execute();
+        throw unknown;
       });
-    try {
-      await expect(progressCardStore.put(sessionKey, { markdown: "Committed once" })).rejects.toBe(
-        unknown,
-      );
-    } finally {
-      spy.mockRestore();
+      await expect(put({ markdown: "Committed once" })).rejects.toBe(unknown);
     }
     expect(dispatches).toBe(1);
     expect(readSessionProgressCard(db, sessionKey)).toMatchObject({

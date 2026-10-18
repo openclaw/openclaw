@@ -1,5 +1,5 @@
-// Probe device-auth scope tests exercise the real probe -> client -> connect-frame path.
 import { Buffer } from "node:buffer";
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -13,11 +13,9 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
-type WebSocketEvent = "open" | "message" | "close" | "error" | "unexpected-response";
-
 let onSocketCreated: ((socket: ProbeWebSocket) => void) | undefined;
 
-class ProbeWebSocket {
+class ProbeWebSocket extends EventEmitter {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
   static readonly CLOSING = 2;
@@ -26,20 +24,9 @@ class ProbeWebSocket {
   readonly firstSent = createDeferred<string>();
   readyState = ProbeWebSocket.CONNECTING;
   binaryType = "nodebuffer";
-  private readonly handlers: Record<WebSocketEvent, Array<(...args: unknown[]) => void>> = {
-    open: [],
-    message: [],
-    close: [],
-    error: [],
-    "unexpected-response": [],
-  };
-
   constructor(_url: string, _options?: unknown) {
+    super();
     onSocketCreated?.(this);
-  }
-
-  on(event: WebSocketEvent, handler: (...args: unknown[]) => void): void {
-    this.handlers[event].push(handler);
   }
 
   send(data: string): void {
@@ -59,22 +46,12 @@ class ProbeWebSocket {
 
   emitOpen(): void {
     this.readyState = ProbeWebSocket.OPEN;
-    for (const handler of this.handlers.open) {
-      handler();
-    }
-  }
-
-  emitMessage(data: string): void {
-    for (const handler of this.handlers.message) {
-      handler(data);
-    }
+    this.emit("open");
   }
 
   emitClose(code: number, reason: string): void {
     this.readyState = ProbeWebSocket.CLOSED;
-    for (const handler of this.handlers.close) {
-      handler(code, Buffer.from(reason));
-    }
+    this.emit("close", code, Buffer.from(reason));
   }
 }
 
@@ -125,13 +102,8 @@ function withAuth(
 
 function challenge(socket: ProbeWebSocket, nonce: string) {
   socket.emitOpen();
-  socket.emitMessage(
-    JSON.stringify({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce, ts: Date.now() },
-    }),
-  );
+  const payload = { nonce, ts: Date.now() };
+  socket.emit("message", JSON.stringify({ type: "event", event: "connect.challenge", payload }));
 }
 
 async function captureProbeConnectFrame(params: {
@@ -160,18 +132,12 @@ async function captureConnectFrame(startProbe: () => Promise<unknown>): Promise<
     const rawConnect = await Promise.race([socket.firstSent.promise, endedWithoutConnect]);
     expect(rawConnect).toContain('"method":"connect"');
     const connect = JSON.parse(rawConnect) as ConnectFrame;
-    socket.emitMessage(
-      JSON.stringify({
-        type: "res",
-        id: connect.id,
-        ok: true,
-        payload: {
-          type: "hello-ok",
-          auth: { role: "operator", scopes: ["operator.read"] },
-          server: { connId: "probe-scope-test", version: "test" },
-        },
-      }),
-    );
+    const payload = {
+      type: "hello-ok",
+      auth: { role: "operator", scopes: ["operator.read"] },
+      server: { connId: "probe-scope-test", version: "test" },
+    };
+    socket.emit("message", JSON.stringify({ type: "res", id: connect.id, ok: true, payload }));
     await probePromise;
     expect(socket.readyState).toBe(ProbeWebSocket.CLOSED);
     return connect;
@@ -204,7 +170,7 @@ describe("probeGateway device auth scope", () => {
         env,
       });
       let connect: ConnectFrame | undefined;
-      onSocketCreated = (socket) => {
+      onSocketCreated = (socket) =>
         queueMicrotask(() => {
           challenge(socket, "restart-probe-nonce");
           void socket.firstSent.promise.then((raw) => {
@@ -212,7 +178,6 @@ describe("probeGateway device auth scope", () => {
             socket.emitClose(1008, "unverified listener");
           });
         });
-      };
       try {
         await expect(
           signalGatewayRestart(18789, {
@@ -230,18 +195,13 @@ describe("probeGateway device auth scope", () => {
   });
 
   it.each([
-    { mode: "local" as const, url: loopbackUrl, envOverride: false, expectedToken: "local-token" },
-    { mode: "remote" as const, url: loopbackUrl, envOverride: false, expectedToken: undefined },
-    {
-      mode: "remote" as const,
-      url: "wss://gateway.example",
-      envOverride: false,
-      expectedToken: "scoped-token",
-    },
-    { mode: "local" as const, url: loopbackUrl, envOverride: true, expectedToken: undefined },
-  ])(
-    "binds status credentials to the $mode target at $url (env override=$envOverride)",
-    async ({ mode, url, envOverride, expectedToken }) => {
+    ["local", loopbackUrl, false, "local-token"],
+    ["remote", loopbackUrl, false, undefined],
+    ["remote", "wss://gateway.example", false, "scoped-token"],
+    ["local", loopbackUrl, true, undefined],
+  ] as const)(
+    "binds status credentials to the %s target at %s (env override=%s)",
+    async (mode, url, envOverride, expectedToken) => {
       vi.stubEnv("OPENCLAW_GATEWAY_URL", envOverride ? url : undefined);
       await withAuth(
         { legacy: "local-token", origin: "scoped-token", scope: url },
@@ -268,31 +228,34 @@ describe("probeGateway device auth scope", () => {
     },
   );
 
-  it("does not serialize origin-A legacy or scoped tokens to a remote origin", async () => {
-    await withAuth(
+  it.each([
+    [
+      "does not serialize origin-A legacy or scoped tokens to a remote origin",
       {
         legacy: "origin-a-legacy-token",
         origin: "origin-a-scoped-token",
         scope: "wss://origin-a.example/rpc",
       },
-      async ({ env }) => {
-        const connect = await captureProbeConnectFrame({
-          url: "wss://origin-b.example/rpc",
-          originScopedDeviceAuth: false,
-          env,
-        });
-
-        expect(connect.params?.auth).toBeUndefined();
-        expect(connect.params?.device).toBeUndefined();
-      },
-    );
-  });
-
-  it("rejects unverified origin-only device auth for a local loopback probe", async () => {
-    await withAuth({ origin: "retired-tunnel-device-token" }, async ({ env }) => {
-      const connect = await captureProbeConnectFrame({ url: loopbackUrl, env });
+      { url: "wss://origin-b.example/rpc", originScopedDeviceAuth: false },
+      false,
+    ],
+    [
+      "rejects unverified origin-only device auth for a local loopback probe",
+      { origin: "retired-tunnel-device-token" },
+      { url: loopbackUrl },
+      true,
+    ],
+    [
+      "does not reuse stored auth across SSH targets sharing a forwarded port",
+      { legacy: "local-device-token", origin: "prior-ssh-target-token" },
+      { url: loopbackUrl, suppressStoredDeviceAuth: true },
+      false,
+    ],
+  ] as const)("%s", async (_name, tokens, probe, deviceIdOnly) => {
+    await withAuth(tokens, async ({ env }) => {
+      const connect = await captureProbeConnectFrame({ ...probe, env });
       expect(connect.params?.auth).toBeUndefined();
-      expect(connect.params?.device?.id).toBeUndefined();
+      expect(deviceIdOnly ? connect.params?.device?.id : connect.params?.device).toBeUndefined();
     });
   });
 
@@ -309,22 +272,6 @@ describe("probeGateway device auth scope", () => {
 
         expect(connect.params?.auth).toEqual({ token: "explicit-remote-token" });
         expect(connect.params?.device?.id).toBe(deviceId);
-      },
-    );
-  });
-
-  it("does not reuse stored auth across SSH targets sharing a forwarded port", async () => {
-    await withAuth(
-      { legacy: "local-device-token", origin: "prior-ssh-target-token" },
-      async ({ env }) => {
-        const connect = await captureProbeConnectFrame({
-          url: loopbackUrl,
-          suppressStoredDeviceAuth: true,
-          env,
-        });
-
-        expect(connect.params?.auth).toBeUndefined();
-        expect(connect.params?.device).toBeUndefined();
       },
     );
   });

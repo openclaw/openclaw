@@ -55,25 +55,17 @@ beforeAll(async () => {
   ssh.port = gatewayHarness.port;
 });
 
-afterAll(async () => {
-  await gatewayHarness.close();
-});
+afterAll(() => gatewayHarness.close());
 
-function requireGatewayToken(): string {
-  const token = testState.gatewayAuth?.token;
-  if (typeof token !== "string" || !token) {
-    throw new Error("expected gateway auth token");
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value) {
+    throw new Error(`expected ${label}`);
   }
-  return token;
+  return value;
 }
-
-function statePath(...parts: string[]): string {
-  const stateDir = process.env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    throw new Error("expected OPENCLAW_STATE_DIR");
-  }
-  return path.join(stateDir, ...parts);
-}
+const requireGatewayToken = () => requireString(testState.gatewayAuth?.token, "gateway auth token");
+const statePath = (...parts: string[]) =>
+  path.join(requireString(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR"), ...parts);
 
 function expectRecord(value: unknown, label: string) {
   if (typeof value !== "object" || value === null) {
@@ -84,6 +76,15 @@ function expectRecord(value: unknown, label: string) {
 const gatewayUrl = () => `ws://127.0.0.1:${gatewayHarness.port}`;
 const probe = (auth?: { token: string }, timeoutMs = 10_000) =>
   probeGateway({ url: gatewayUrl(), auth, timeoutMs });
+type ProbeResult = Awaited<ReturnType<typeof probe>> | null | undefined;
+function expectStatus(result: ProbeResult, label: string) {
+  expect(result).toMatchObject({ error: null, ok: true });
+  expectRecord(result?.status, label);
+}
+type OriginAuth = Omit<Parameters<typeof seedOriginDeviceToken>[0], "gatewayScope">;
+function seedOrigin(auth: OriginAuth, token = auth.token) {
+  seedOriginDeviceToken({ ...auth, gatewayScope: gatewayUrl(), token });
+}
 async function snapshot(cfg: OpenClawConfig) {
   const { gatewayProbe } = await resolveGatewayProbeSnapshot({
     cfg,
@@ -93,7 +94,7 @@ async function snapshot(cfg: OpenClawConfig) {
   });
   return gatewayProbe;
 }
-function expectRead(result: Awaited<ReturnType<typeof probe>> | null | undefined) {
+function expectRead(result: ProbeResult) {
   expect(result).toMatchObject({ error: null, ok: true, auth: { capability: "read_only" } });
   expectRecord(result?.health, "probe health");
   expectRecord(result?.status, "probe status");
@@ -106,29 +107,24 @@ async function seedCachedOperatorToken() {
   const pairing = await requestDevicePairing({
     deviceId: identity.deviceId,
     publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-    displayName: "vitest probe",
     platform: process.platform,
-    clientId: "test",
-    clientMode: "probe",
     role: "operator",
     scopes,
     silent: true,
   });
   const approved = await approveDevicePairing(pairing.request.requestId, { callerScopes: scopes });
   expect(approved?.status).toBe("approved");
-  const token =
-    approved?.status === "approved" ? (approved.device.tokens?.operator?.token ?? "") : "";
-  if (!token) {
-    throw new Error("expected approved operator token");
-  }
+  const token = requireString(
+    approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined,
+    "approved operator token",
+  );
   const auth = { deviceId: identity.deviceId, role: "operator", token, scopes };
-  seedOriginDeviceToken({ gatewayScope: gatewayUrl(), ...auth });
+  seedOrigin(auth);
   return auth;
 }
 
 describe("probeGateway auth integration", () => {
   it("reuses enrolled SSH route auth across local ports without sending it to another route", async () => {
-    const token = requireGatewayToken();
     const localAuth = await seedCachedOperatorToken();
     const url = gatewayUrl();
     const remote = {
@@ -141,7 +137,7 @@ describe("probeGateway auth integration", () => {
     try {
       const enrolled = await callGateway({
         config,
-        token,
+        token: requireGatewayToken(),
         clientName: GATEWAY_CLIENT_NAMES.TUI,
         mode: GATEWAY_CLIENT_MODES.UI,
         method: "status",
@@ -151,9 +147,8 @@ describe("probeGateway auth integration", () => {
       expectRecord(enrolled, "SSH enrollment status");
 
       // Lookup/persistence must use the SSH route, not this different local port.
-      const movedUrl = "ws://127.0.0.1:18999";
-      const moved = { gateway: { ...config.gateway, remote: { ...remote, url: movedUrl } } };
-      const result = await snapshot(moved);
+      const moved = { ...remote, url: "ws://127.0.0.1:18999" };
+      const result = await snapshot({ gateway: { ...config.gateway, remote: moved } });
       expect(result).toMatchObject({ error: null, ok: true, auth: { capability: "read_only" } });
       expectRecord(result?.status, "SSH route paired read without shared credentials");
 
@@ -171,17 +166,14 @@ describe("probeGateway auth integration", () => {
       await removePairedDevice(localAuth.deviceId);
       await deviceAuthStore.clearDeviceAuthToken(localAuth);
       await deviceAuthStore.clearOriginDeviceToken({ ...localAuth, gatewayScope: url });
-      const route = resolveGatewayDeviceAuthRoute({
+      const { deviceAuthScope: gatewayScope } = resolveGatewayDeviceAuthRoute({
         config,
         url,
         remote: true,
         configuredRemote: true,
       });
-      if (route.deviceAuthScope) {
-        await deviceAuthStore.clearOriginDeviceToken({
-          ...localAuth,
-          gatewayScope: route.deviceAuthScope,
-        });
+      if (gatewayScope) {
+        await deviceAuthStore.clearOriginDeviceToken({ ...localAuth, gatewayScope });
       }
     }
   });
@@ -193,7 +185,6 @@ describe("probeGateway auth integration", () => {
       method: "status",
       timeoutMs: 5_000,
     });
-
     expectRecord(status, "status response");
   });
 
@@ -221,20 +212,14 @@ describe("probeGateway auth integration", () => {
     expectRead(await snapshot({ gateway: { mode: "remote", remote: { url, token } } }));
 
     // A retired SSH tunnel can leave another Gateway's token at the local URL.
-    seedOriginDeviceToken({
-      ...localAuth,
-      gatewayScope: url,
-      token: "retired-tunnel-device-token",
-    });
+    seedOrigin(localAuth, "retired-tunnel-device-token");
     const unbound = await probe();
     expect(unbound.ok).toBe(false);
     expect(unbound.connectErrorDetails).toMatchObject({
       code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
     });
 
-    const explicit = await probe({ token });
-    expect(explicit).toMatchObject({ error: null, ok: true });
-    expectRecord(explicit.status, "explicit local auth with stale origin cache");
+    expectStatus(await probe({ token }), "explicit local auth with stale origin cache");
 
     seedDeviceAuthToken(localAuth);
     expectRead(await probe());
@@ -242,27 +227,17 @@ describe("probeGateway auth integration", () => {
 
   it("keeps a locally verified origin token when the client cache changes", async () => {
     const localAuth = await seedCachedOperatorToken();
-    await deviceAuthStore.clearDeviceAuthToken({
-      deviceId: localAuth.deviceId,
-      role: "operator",
-    });
-    const url = gatewayUrl();
+    await deviceAuthStore.clearDeviceAuthToken(localAuth);
     const load = deviceAuthStore.loadOriginDeviceTokenReadOnly;
     const read = vi
       .spyOn(deviceAuthStore, "loadOriginDeviceTokenReadOnly")
       .mockImplementationOnce(async (...args) => {
         const entry = await load(...args);
-        seedOriginDeviceToken({
-          ...localAuth,
-          gatewayScope: url,
-          token: "replacement-tunnel-device-token",
-        });
+        seedOrigin(localAuth, "replacement-tunnel-device-token");
         return entry;
       });
     try {
-      const result = await probe();
-      expect(result).toMatchObject({ error: null, ok: true });
-      expectRecord(result.status, "status after origin cache replacement");
+      expectStatus(await probe(), "status after origin cache replacement");
     } finally {
       read.mockRestore();
     }

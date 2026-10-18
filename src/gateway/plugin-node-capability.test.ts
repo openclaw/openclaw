@@ -60,6 +60,10 @@ function makeRefreshClient() {
   });
 }
 
+function refresh(client: GatewayWsClient, surface = "canvas", nowMs = 1_000) {
+  return refreshClientPluginNodeCapability({ client, surface: { surface }, nowMs });
+}
+
 function makeTokenClient(expiresAtMs = 1_500, key = "canvas") {
   return makeClient({
     pluginNodeCapabilities: { [key]: { capability: "canvas-token", expiresAtMs } },
@@ -305,9 +309,7 @@ describe("plugin node capability helpers", () => {
       expect(reconcileClientPluginNodeCapabilities(client, surfaces, close)).toBe(true);
       expect(client.invalidated).toBeUndefined();
       expect(close).not.toHaveBeenCalled();
-      expect(
-        refreshClientPluginNodeCapability({ client, surface: { surface: "files" } }),
-      ).toBeUndefined();
+      expect(refresh(client, "files")).toBeUndefined();
       client.pluginNodeCapabilitySurfaces = surfaces;
     }
   });
@@ -355,11 +357,7 @@ describe("plugin node capability helpers", () => {
 
   test("refreshes client plugin surface url and stored capability", () => {
     const client = makeRefreshClient();
-    const refreshed = refreshClientPluginNodeCapability({
-      client,
-      surface: { surface: "canvas" },
-      nowMs: 1_000,
-    });
+    const refreshed = refresh(client);
     expect(refreshed).toMatchObject({ surface: "canvas", expiresAtMs: 1_100 });
     expect(refreshed?.capability).toBeTypeOf("string");
     expect(refreshed?.capability).not.toBe("");
@@ -375,13 +373,7 @@ describe("plugin node capability helpers", () => {
   test("does not refresh client plugin capabilities when the clock is invalid", () => {
     const client = makeRefreshClient();
 
-    expect(
-      refreshClientPluginNodeCapability({
-        client,
-        surface: { surface: "canvas" },
-        nowMs: Number.NaN,
-      }),
-    ).toBeUndefined();
+    expect(refresh(client, "canvas", Number.NaN)).toBeUndefined();
     expect(client.pluginSurfaceUrls?.canvas).toBe(
       "http://127.0.0.1:18789/__openclaw__/cap/old-token",
     );
