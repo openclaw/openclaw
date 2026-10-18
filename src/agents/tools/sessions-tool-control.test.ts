@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readGatewayRequestMutationAuthority } from "../../gateway/server-methods/session-mutation-guards.js";
+import type { GatewayRequestHandlerOptions } from "../../gateway/server-methods/types.js";
 import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -29,7 +30,7 @@ it.each(["current", "replaced target", "retired Gateway"] as const)(
             "sessions.abort",
             "operator.write",
             "sessions",
-            async (options) => {
+            async (options: GatewayRequestHandlerOptions) => {
               entered.resolve();
               await resume.promise;
               readGatewayRequestMutationAuthority(options).assertCurrent();
