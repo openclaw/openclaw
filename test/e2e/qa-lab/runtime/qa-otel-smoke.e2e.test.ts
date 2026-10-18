@@ -1,4 +1,3 @@
-// QA OTEL Smoke tests cover QA Lab telemetry evidence.
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync } from "node:fs";
@@ -49,40 +48,49 @@ async function expectCloses(promise: Promise<unknown>, label: string) {
   ]);
 }
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-  vi.restoreAllMocks();
-});
-
 describe("qa-otel-smoke receiver bounds", () => {
-  function makePassingSmokeAssertionInput(): Parameters<typeof testing.assertSmoke>[0] {
-    return {
-      bodyText: {
-        logs: ["diagnostics-otel: logs exporter enabled"],
+  function makeLeakingSmokeAssertionInput(
+    logsExporter: "otlp" | "stdout",
+  ): Parameters<typeof testing.assertSmoke>[0] {
+    const log = "diagnostics-otel: log payload contains OTEL-QA-SECRET";
+    const stdoutLogRecords = [
+      {
+        ts: "2026-06-18T00:00:00.000Z",
+        signal: "openclaw.diagnostic.log" as const,
+        "service.name": "openclaw-qa-lab-otel-smoke",
+        severityText: "INFO",
+        severityNumber: 9,
+        body: "log",
+        attributes: {},
       },
+    ].filter(() => logsExporter === "stdout");
+    return {
+      bodyText: logsExporter === "otlp" ? { logs: [log] } : {},
       childExitCode: 0,
       disallowedBodyNeedles: ["OTEL-QA-SECRET"],
-      logsExporter: "otlp",
+      logsExporter,
       logRecords: [
         {
           body: "diagnostics-otel: logs exporter enabled",
           traceId: "trace",
           spanId: "span",
         },
-      ],
+      ].filter(() => logsExporter === "otlp"),
       metrics: [{ name: "openclaw.harness.duration_ms" }],
-      requests: (["traces", "metrics", "logs"] as const).map((signal) => ({
-        path: `/v1/${signal}`,
-        signal,
-        bytes: 16,
-        contentEncoding: undefined,
-        status: 200,
-        spanCount: signal === "traces" ? 5 : 0,
-        metricCount: signal === "metrics" ? 1 : 0,
-        logCount: signal === "logs" ? 1 : 0,
-      })),
-      stdoutLogLines: [],
-      stdoutLogRecords: [],
+      requests: (["traces", "metrics", "logs"] as const)
+        .filter((signal) => logsExporter === "otlp" || signal !== "logs")
+        .map((signal) => ({
+          path: `/v1/${signal}`,
+          signal,
+          bytes: 16,
+          contentEncoding: undefined,
+          status: 200,
+          spanCount: signal === "traces" ? 5 : 0,
+          metricCount: signal === "metrics" ? 1 : 0,
+          logCount: signal === "logs" ? 1 : 0,
+        })),
+      stdoutLogLines: stdoutLogRecords.map((record) => JSON.stringify({ ...record, body: log })),
+      stdoutLogRecords,
       spans: [
         ...["openclaw.run", "openclaw.harness.run"].map((name) => ({
           name,
@@ -152,18 +160,11 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(result.stdout).toContain("qa-otel-smoke: passed");
   });
 
-  it("rejects identity OTLP bodies above the decoded byte ceiling", () => {
-    expect(() => testing.decodeRequestBody(Buffer.alloc(65), undefined, 64)).toThrow(
-      "OTLP request body exceeded 64 bytes: 65 bytes",
-    );
-  });
-
-  it("rejects gzip OTLP bodies above the decoded byte ceiling", () => {
-    const compressed = gzipSync(Buffer.alloc(256, "a"));
-
-    expect(() => testing.decodeRequestBody(compressed, "gzip", 64)).toThrow(
-      "decoded OTLP request body exceeded 64 bytes",
-    );
+  it.each([
+    [undefined, Buffer.alloc(65), "OTLP request body exceeded 64 bytes: 65 bytes"],
+    ["gzip", gzipSync(Buffer.alloc(256, "a")), "decoded OTLP request body exceeded 64 bytes"],
+  ] as const)("rejects %s OTLP bodies above the decoded byte ceiling", (encoding, body, error) => {
+    expect(() => testing.decodeRequestBody(body, encoding, 64)).toThrow(error);
   });
 
   it("returns a bounded failure for malformed local OTLP protobuf", async () => {
@@ -232,66 +233,23 @@ describe("qa-otel-smoke receiver bounds", () => {
     }
   });
 
-  it("still fails when OTLP log payload text leaks scenario content", () => {
-    const input = makePassingSmokeAssertionInput();
-    input.bodyText = {
-      logs: ["diagnostics-otel: log payload contains OTEL-QA-SECRET"],
-    };
-
-    const assertion = testing.assertSmoke(input);
-
-    expect(assertion.passed).toBe(false);
-    expect(assertion.failures).toContain("OTLP logs payload leaked content: OTEL-QA-SECRET");
-    expect(assertion.leakContexts.logs?.[0]).toContain("[needle]");
-  });
-
-  it("still fails when stdout diagnostic log payload text leaks scenario content", () => {
-    const input = makePassingSmokeAssertionInput();
-    input.logsExporter = "stdout";
-    input.bodyText = {};
-    input.logRecords = [];
-    input.requests = input.requests.filter((request) => request.signal !== "logs");
-    input.stdoutLogRecords = [
-      {
-        ts: "2026-06-18T00:00:00.000Z",
-        signal: "openclaw.diagnostic.log",
-        "service.name": "openclaw-qa-lab-otel-smoke",
-        severityText: "INFO",
-        severityNumber: 9,
-        body: "log",
-        attributes: {},
-      },
-    ];
-    input.stdoutLogLines = [
-      JSON.stringify({
-        ...input.stdoutLogRecords[0],
-        body: "diagnostics-otel: log payload contains OTEL-QA-SECRET",
-      }),
-    ];
-
-    const assertion = testing.assertSmoke(input);
-
-    expect(assertion.passed).toBe(false);
-    expect(assertion.failures).toContain(
-      "stdout diagnostic log payload leaked content: OTEL-QA-SECRET",
-    );
-    expect(assertion.leakContexts.logs?.[0]).toContain("[needle]");
+  it.each([
+    ["otlp", "OTLP logs"],
+    ["stdout", "stdout diagnostic log"],
+  ] as const)("still fails when %s log payload text leaks scenario content", (exporter, label) => {
+    expect(testing.assertSmoke(makeLeakingSmokeAssertionInput(exporter))).toMatchObject({
+      passed: false,
+      failures: expect.arrayContaining([`${label} payload leaked content: OTEL-QA-SECRET`]),
+      leakContexts: { logs: [expect.stringContaining("[needle]")] },
+    });
   });
 
   it("preserves leak markers even when later body text is truncated", () => {
     const captured: { traces?: string[] } = {};
-
-    testing.appendCapturedBodyText(
-      captured,
-      "traces",
-      Buffer.from(`prefix OTEL-QA-SECRET ${"a".repeat(20)}`),
-      16,
-      ["OTEL-QA-SECRET"],
-    );
-    testing.appendCapturedBodyText(captured, "traces", Buffer.from("b".repeat(128)), 16, [
-      "OTEL-QA-SECRET",
-    ]);
-
+    const append = (body: string) =>
+      testing.appendCapturedBodyText(captured, "traces", Buffer.from(body), 16, ["OTEL-QA-SECRET"]);
+    append(`prefix OTEL-QA-SECRET ${"a".repeat(20)}`);
+    append("b".repeat(128));
     expect(captured.traces?.join("\n")).toContain("OTEL-QA-SECRET");
     expect(captured.traces?.join("\n")).toContain("[captured body text truncated");
   });
@@ -342,7 +300,7 @@ describe("qa-otel-smoke receiver bounds", () => {
   });
   it("reports bounded Docker collector output when readiness exits", async () => {
     const { child, deps } = makeCollectorFixture();
-    let thrown: unknown;
+    let message = "";
     await testing
       .startDockerOtelCollector(4317, {
         ...deps,
@@ -356,11 +314,9 @@ describe("qa-otel-smoke receiver bounds", () => {
         },
       })
       .catch((error: unknown) => {
-        thrown = error;
+        expect(error).toBeInstanceOf(Error);
+        message = error instanceof Error ? error.message : String(error);
       });
-
-    expect(thrown).toBeInstanceOf(Error);
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
     expect(message).toContain("COLLECTOR_TAIL_MARKER");
     expect(message).not.toContain("DO_NOT_DUMP_COLLECTOR_PREFIX");
     expect(message.length).toBeLessThan(24 * 1024);
