@@ -1,4 +1,23 @@
-import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
+
+export type ChatPaneElement = HTMLElement & {
+  active?: boolean;
+  conversationPresented?: boolean;
+  readonly composerElement?: HTMLTextAreaElement | null;
+  readonly headerElement?: HTMLElement | null;
+  discardStagedAttachments?: () => void;
+  paneId?: string;
+  prepareForEviction?: () => void;
+  hasQueuedMessageEdit?: boolean;
+  presented?: boolean;
+  captureNavigationFace?: () => BoardFace | undefined;
+  routeFace?: BoardFace;
+  sessionKey?: string;
+  transcriptLoading?: boolean;
+  transcriptReady?: boolean;
+  updateComplete?: Promise<unknown>;
+  visuallyPresented?: boolean;
+};
 
 const panes = new Set<ChatPaneElement>();
 const unboundPanes = new Set<HTMLElement>();

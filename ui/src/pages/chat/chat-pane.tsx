@@ -40,6 +40,8 @@ const runtimes = new WeakMap<HTMLElement, ChatPaneRuntime>();
 const pendingInputs = new WeakSet<ChatPaneRuntime>();
 
 function synchronizeInputs(runtime: ChatPaneRuntime, host: ChatPaneProps) {
+  // Publish a queued stream before the input change admits its next pane frame.
+  runtime.chatState.publishPendingRunState();
   const changes: ChatPaneInputChanges = {
     sessionKey: !Object.is(runtime.sessionKey, host.sessionKey),
     inputRegion: !Object.is(runtime.inputRegion, host.inputRegion),

@@ -24,7 +24,6 @@ import { createParkedProjection } from "../../lib/reactive/parked-projection.ts"
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { projectTheme } from "../../lib/reactive/theme.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
-import { sessionProgressCardsForGateway } from "../../lib/session-progress-cards.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
 import { projectChatFields } from "./chat-field-projection.ts";
@@ -126,7 +125,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     void waitForCommit();
     focusPending ||= runtime.focusComposer !== previousFocusComposer;
     previousFocusComposer = runtime.focusComposer;
-    runtime.chatState.prepareRender();
+    // Other source frames may show a buffered stream before its normal RAF publishes it.
+    runtime.chatState.captureRenderChanges();
     // Target/activation checks make reconciliation idempotent; apply layout before sampling it.
     runtime.synchronizeInputs({});
   }
@@ -279,10 +279,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     });
     // Commit transcript geometry and control the browser timer after Solid publishes the frame.
     createEffect(
-      () => ({ frame: frame(), presented: runtime.presented, progress: progressScope() }),
+      () => ({ frame: frame(), presented: runtime.presented }),
       (next, previous) => {
-        // Store watches follow the connection even while the rendered frame is parked.
-        progress.replaceSource(next.progress);
         if (next.frame !== previous?.frame) {
           commitRender();
         }

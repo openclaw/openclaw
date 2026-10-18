@@ -10,8 +10,8 @@ import {
   isUiGlobalSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { chatPanesWithin } from "./chat-pane-elements.ts";
+import type { ChatPaneElement } from "./chat-pane-elements.ts";
 import { clearPaneSessionHandoff, clearPaneSessionHandoffs } from "./chat-pane-shared.ts";
-import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import type { ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
 import { findPane, visiblePanesOf } from "./split-layout.ts";
 

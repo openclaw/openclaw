@@ -1,4 +1,3 @@
-import type { BoardFace } from "../../lib/board/settings.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { chatPanesWithin } from "./chat-pane-elements.ts";
@@ -12,25 +11,6 @@ type PendingHandoff = {
   expiresAt: number;
   sessionKey: string;
   sourceData: SessionChatRouteData;
-};
-
-export type ChatPaneElement = HTMLElement & {
-  active?: boolean;
-  conversationPresented?: boolean;
-  readonly composerElement?: HTMLTextAreaElement | null;
-  readonly headerElement?: HTMLElement | null;
-  discardStagedAttachments?: () => void;
-  paneId?: string;
-  prepareForEviction?: () => void;
-  hasQueuedMessageEdit?: boolean;
-  presented?: boolean;
-  captureNavigationFace?: () => BoardFace | undefined;
-  routeFace?: BoardFace;
-  sessionKey?: string;
-  transcriptLoading?: boolean;
-  transcriptReady?: boolean;
-  updateComplete?: Promise<unknown>;
-  visuallyPresented?: boolean;
 };
 
 let pendingHandoff: PendingHandoff | undefined;

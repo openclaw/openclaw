@@ -57,7 +57,6 @@ type ChatViewInput = {
   application?: ApplicationContext;
   bindTranscriptViewport: (element: HTMLDivElement) => () => void;
   getTranscriptElement: () => HTMLDivElement | null;
-  replacementRef?: (element: HTMLElement) => void | (() => void);
 };
 
 function ChatTranscript(input: ChatViewInput) {
@@ -252,15 +251,14 @@ function ChatSurface(input: {
   viewProps: ChatViewInput;
   view: Component<ChatViewInput>;
   companion?: Component<ChatViewInput>;
+  replacementRef?: (element: HTMLElement) => void | (() => void);
 }) {
   return (
     <PluginSurface
       surface={input.binding["prop:surface"]}
       props={input.binding["prop:props"]}
       presented={input.viewProps.presented}
-      replacementRef={
-        input.binding["prop:surface"] === "composer" ? input.viewProps.replacementRef : undefined
-      }
+      replacementRef={input.replacementRef}
       renderDefault={() => <ChatSurfaceContent view={input.view} viewProps={input.viewProps} />}
       renderCompanion={() => (
         <Show when={input.companion} keyed>
@@ -296,6 +294,14 @@ function ChatContent(input: { props: ChatProps }) {
   };
   const getTranscriptElement = () => (transcriptViewport?.isConnected ? transcriptViewport : null);
   let replacementComposer: HTMLElement | undefined;
+  const registerReplacementComposer = (element: HTMLElement) => {
+    replacementComposer = element;
+    return () => {
+      if (replacementComposer === element) {
+        replacementComposer = undefined;
+      }
+    };
+  };
   const application = useOptionalApplication();
   const gateway = application && projectGateway(application.gateway);
   const skillFileHovercard = createSkillFileHovercard({
@@ -352,14 +358,6 @@ function ChatContent(input: { props: ChatProps }) {
     application,
     bindTranscriptViewport,
     getTranscriptElement,
-    replacementRef: (element: HTMLElement) => {
-      replacementComposer = element;
-      return () => {
-        if (replacementComposer === element) {
-          replacementComposer = undefined;
-        }
-      };
-    },
   });
   const historyMessage = () => {
     const state = frame().historyLoadState;
@@ -542,6 +540,7 @@ function ChatContent(input: { props: ChatProps }) {
                         viewProps={viewProps()}
                         view={ChatComposerView}
                         companion={ChatComposerCompanion}
+                        replacementRef={registerReplacementComposer}
                       />
                     </div>
                   </div>
