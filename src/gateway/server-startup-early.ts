@@ -1,4 +1,3 @@
-// Gateway early-startup runtime helpers.
 // Starts discovery, remote skills, and delayed maintenance setup.
 import { setSessionMcpRuntimeScheduler } from "../agents/agent-bundle-mcp-manager-api.js";
 import { isNixMode } from "../config/paths.js";
@@ -43,6 +42,7 @@ export async function startGatewayEarlyRuntime(params: {
   broadcast: GatewayMaintenanceParams["broadcast"];
   maintenance: Omit<
     GatewayMaintenanceParams,
+    | "resolveGatewayContext"
     | "scheduler"
     | "broadcast"
     | "getRuntimeConfig"
@@ -178,6 +178,7 @@ export async function startGatewayEarlyRuntime(params: {
         () =>
           startGatewayMaintenanceTimers({
             ...params.maintenance,
+            resolveGatewayContext,
             scheduler: params.scheduler,
             broadcast: params.broadcast,
             activeWorkInspectors,

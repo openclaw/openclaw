@@ -695,6 +695,9 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     expect(result.status, JSON.stringify(result)).toBe("waiting");
     const runId = result.runId as string;
     const initial = expectDefined(testing.activeRuns.get(runId), "initial snapshot");
+    controller.abort(new Error("exec observer finished"));
+    expect(testing.activeRuns.get(runId)).toBe(initial);
+    expect(initial.owner.signal.aborted).toBe(false);
     expect(applyCodeModeCatalog(owner).catalogReused).toBe(true);
     addClientToolsToToolCatalog({
       enabled: true,
@@ -708,7 +711,6 @@ describe("Code Mode subscribed bridge lifecycle", () => {
 
     for (let index = 0; index < 2; index += 1) {
       const previous = expectDefined(testing.activeRuns.get(runId), "previous snapshot");
-      const previousController = controller;
       controller = new AbortController();
       result = resultDetails(
         await wait.execute(`transfer-wait-${index}`, { runId }, controller.signal),
@@ -716,7 +718,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       expect(result).toMatchObject({ status: "waiting", runId });
       const replacement = expectDefined(testing.activeRuns.get(runId), "replacement snapshot");
       expect(replacement).not.toBe(previous);
-      previousController.abort();
+      controller.abort(new Error("wait observer finished"));
       expect(testing.activeRuns.get(runId)).toBe(replacement);
       expect(replacement.owner).toBe(previous.owner);
       expect(replacement.owner.signal.aborted).toBe(false);

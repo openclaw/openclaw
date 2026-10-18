@@ -37,12 +37,15 @@ import {
   runLiveUpdaterMain,
   verifyGatewayReadiness,
 } from "../../.agents/skills/openclaw-live-updater/scripts/update-main.mjs";
+import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../gateway-shutdown-budget.mjs";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata.mts";
 import { writeUpdateCompatibilityChunks } from "../../scripts/lib/update-compat-chunks.mts";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
+import { buildLaunchAgentEnvironmentWrapper } from "../../src/daemon/launchd-env-wrapper.js";
+import { buildLaunchAgentPlist } from "../../src/daemon/launchd-plist.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   previousReleaseInventory,
@@ -416,7 +419,7 @@ function makeManagedFixture(options: Omit<FixtureOptions, "includeSeed"> = {}) {
 function pushFixtureChange(seed: string, file = "docs/index.md") {
   writeFixtureFile(path.join(seed, file), "// changed\n");
   git(seed, "add", file);
-  git(seed, "commit", "-m", "fixture update");
+  git(seed, "commit", "--quiet", "-m", "fixture update");
   git(seed, "push");
 }
 
@@ -507,6 +510,16 @@ if (Object.hasOwn(params, "terminalPolicy")) {
     deployment: { ...gatewayCliDeployment(root, checkout), invocationPrefix: [capturePath] },
   };
 }
+
+test("admits the installed Gateway shutdown budget while rejecting unbounded stops", () => {
+  expect(resolveLaunchAgentExitTimeoutSeconds(LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS)).toBe(
+    LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  );
+  expect(() => resolveLaunchAgentExitTimeoutSeconds(0)).toThrow("prevents bounded stopped proof");
+  expect(() => resolveLaunchAgentExitTimeoutSeconds(LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 1)).toThrow(
+    "prevents bounded stopped proof",
+  );
+});
 
 describe("openclaw live updater", () => {
   beforeAll(() => {
@@ -843,45 +856,64 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     }
   });
 
-  test("pins managed Gateway calls with a backward-compatible local overlay", () => {
-    const root = realpathSync(tempDirs.make("openclaw-gateway-call-"));
-    const checkout = path.join(root, "checkout");
-    const entrypoint = path.join(checkout, "dist/index.js");
-    const capture = path.join(root, "capture.mjs");
-    const configPath = path.join(root, "openclaw.json");
-    mkdirSync(path.dirname(entrypoint), { recursive: true });
-    writeFileSync(configPath, "{}\n");
-    writeFileSync(
-      capture,
-      'import fs from "node:fs"; console.log(JSON.stringify({ argv: process.argv.slice(2), config: JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), hasToken: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN), url: process.env.OPENCLAW_GATEWAY_URL ?? null }));\n',
-    );
+  test.each(["direct", "shell", "executable"])(
+    "pins managed Gateway calls with a backward-compatible local overlay (%s)",
+    (layout) => {
+      const root = realpathSync(tempDirs.make("openclaw-gateway-call-"));
+      const checkout = path.join(root, "checkout");
+      const entrypoint = path.join(checkout, "dist/index.js");
+      const capture = path.join(root, "capture.mjs");
+      const configPath = path.join(root, "openclaw.json");
+      mkdirSync(path.dirname(entrypoint), { recursive: true });
+      writeFileSync(configPath, "{}\n");
+      writeFileSync(
+        capture,
+        'import fs from "node:fs"; console.log(JSON.stringify({ argv: process.argv.slice(2), execArgv: process.execArgv, config: JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), hasToken: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN), url: process.env.OPENCLAW_GATEWAY_URL ?? null }));\n',
+      );
 
-    const result = JSON.parse(
-      runBuiltGatewayCall(
-        checkout,
-        "gateway.suspend.prepare",
-        { requestId: "request-1" },
-        {
-          ...gatewayCliDeployment(root, checkout),
-          invocationPrefix: [capture],
-          port: 19001,
-          serviceEnvironment: {
-            OPENCLAW_GATEWAY_TOKEN: ["fixture", "value"].join("-"),
-            OPENCLAW_GATEWAY_URL: "https://foreign.invalid",
+      const wrapper = path.join(root, "env-wrapper.sh");
+      const envFile = path.join(root, "gateway.env");
+      writeFileSync(wrapper, '#!/bin/sh\nshift\nexec "$@"\n', { mode: 0o700 });
+      writeFileSync(envFile, "");
+      const runtimePrefix = [process.execPath, "--max-old-space-size=128", capture];
+      const invocationPrefix =
+        layout === "direct"
+          ? runtimePrefix.slice(1)
+          : layout === "shell"
+            ? [wrapper, envFile, ...runtimePrefix]
+            : [envFile, ...runtimePrefix];
+      const result = JSON.parse(
+        runBuiltGatewayCall(
+          checkout,
+          "gateway.suspend.prepare",
+          { requestId: "request-1" },
+          {
+            ...gatewayCliDeployment(root, checkout),
+            invocationPrefix,
+            executable:
+              layout === "direct" ? process.execPath : layout === "shell" ? "/bin/sh" : wrapper,
+            ...(layout === "direct"
+              ? { envFilePath: null, wrapperPath: null }
+              : { envFilePath: envFile, wrapperPath: wrapper }),
+            port: 19001,
+            serviceEnvironment: {
+              OPENCLAW_GATEWAY_TOKEN: ["fixture", "value"].join("-"),
+              OPENCLAW_GATEWAY_URL: "https://foreign.invalid",
+            },
           },
-          wrapperPath: null,
-        },
-      ),
-    );
+        ),
+      );
 
-    expect(result).toMatchObject({
-      config: { gateway: { mode: "local", port: 19001 } },
-      hasToken: true,
-      url: null,
-    });
-    expect(result.argv).not.toContain("--port");
-    expect(result.argv).not.toContain("--url");
-  });
+      expect(result).toMatchObject({
+        execArgv: ["--max-old-space-size=128"],
+        config: { gateway: { mode: "local", port: 19001 } },
+        hasToken: true,
+        url: null,
+      });
+      expect(result.argv).not.toContain("--port");
+      expect(result.argv).not.toContain("--url");
+    },
+  );
 
   test.each<[string, string, (fixture: Omit<Fixture, "seed">) => void]>([
     [
@@ -997,6 +1029,66 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     expect(existsSync(snapshotExecutionMarker)).toBe(false);
   });
 
+  test.skipIf(process.platform !== "darwin")(
+    "inspects the generated wrapper before invoking the managed CLI",
+    () => {
+      const home = realpathSync(tempDirs.make("updater-generated-wrapper-"));
+      const checkout = path.join(home, "checkout");
+      const state = path.join(home, ".openclaw");
+      const entrypoint = path.join(checkout, "dist/index.js");
+      const wrapper = path.join(state, "service-env/ai.openclaw.gateway-env-wrapper.sh");
+      const envFile = path.join(state, "service-env/ai.openclaw.gateway.env");
+      const plist = path.join(home, "Library/LaunchAgents/ai.openclaw.gateway.plist");
+      for (const file of [entrypoint, wrapper, plist]) {
+        mkdirSync(path.dirname(file), { recursive: true });
+      }
+      writeFileSync(
+        entrypoint,
+        "console.log(JSON.stringify({execArgv: process.execArgv, port: process.env.OPENCLAW_GATEWAY_PORT}));\n",
+      );
+      writeFileSync(path.join(state, "openclaw.json"), "{}\n");
+      writeFileSync(wrapper, buildLaunchAgentEnvironmentWrapper(), { mode: 0o700 });
+      writeFileSync(
+        envFile,
+        "# Generated by OpenClaw. Do not edit while the gateway service is installed.\n",
+        { mode: 0o600 },
+      );
+      writeFileSync(
+        plist,
+        buildLaunchAgentPlist({
+          label: "ai.openclaw.gateway",
+          programArguments: [
+            "/bin/sh",
+            wrapper,
+            envFile,
+            process.execPath,
+            "--max-old-space-size=128",
+            entrypoint,
+            "gateway",
+            "--port",
+            "18789",
+          ],
+          workingDirectory: state,
+          stdoutPath: path.join(state, "gateway.log"),
+          stderrPath: path.join(state, "gateway.log"),
+        }),
+      );
+      vi.stubEnv("HOME", home);
+      try {
+        expect(JSON.parse(runBuiltGatewayCli(checkout, ["gateway", "status"], undefined))).toEqual({
+          execArgv: ["--max-old-space-size=128"],
+          port: "18789",
+        });
+        writeFileSync(wrapper, `${buildLaunchAgentEnvironmentWrapper()}# custom behavior\n`);
+        expect(() => runBuiltGatewayCli(checkout, ["gateway", "status"], undefined)).toThrow(
+          "LaunchAgent does not describe this checkout",
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   test("accepts supported LaunchAgent layouts and rejects foreign commands", () => {
     const home = "/Users/test";
     const entrypoint = "/Users/test/.openclaw/runtime/gateway-1234567/dist/index.js";
@@ -1010,11 +1102,26 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const customEnvFile = `${customState}/service-env/ai.openclaw.gateway.env`;
     const layouts: [string[], string | null][] = [
       [nodeCommand, entrypoint],
+      [[nodeCommand[0]!, "--max-old-space-size=131072", ...nodeCommand.slice(1)], entrypoint],
+      [
+        [
+          "/bin/sh",
+          wrapper,
+          envFile,
+          nodeCommand[0]!,
+          "--max-old-space-size",
+          "131072",
+          ...nodeCommand.slice(1),
+        ],
+        entrypoint,
+      ],
       [["/opt/homebrew/bin/bun", entrypoint, "gateway"], entrypoint],
       [["/bin/sh", wrapper, envFile, ...nodeCommand], entrypoint],
       [[wrapper, envFile, ...nodeCommand], entrypoint],
       [["/bin/sh", customWrapper, customEnvFile, ...nodeCommand], entrypoint],
       [["/usr/bin/python3", entrypoint, "gateway"], null],
+      [[nodeCommand[0]!, "--eval", "0", entrypoint, "gateway"], null],
+      [[nodeCommand[0]!, "--unknown-option", "value", entrypoint, "gateway"], null],
       [["/bin/sh", foreignWrapper, envFile, ...nodeCommand], null],
     ];
     for (const [args, expected] of layouts) {
@@ -1118,6 +1225,18 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     });
     writeFileSync(path.join(seed, "package.json"), '{"name":"openclaw"}\n');
     git(seed, "add", "package.json");
+    // A long catch-up can exceed execFileSync's 1 MiB default with paths alone.
+    const catchupPaths = Array.from(
+      { length: 6000 },
+      (_, index) => `docs/${"catchup-".repeat(27)}${index}.md`,
+    );
+    const emptyBlob = execFileSync("git", ["-C", seed, "hash-object", "-w", "--stdin"], {
+      input: "",
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["-C", seed, "update-index", "--index-info"], {
+      input: catchupPaths.map((file) => `100644 ${emptyBlob}\t${file}\n`).join(""),
+    });
     const changedPath = "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
     pushFixtureChange(seed, changedPath);
     const commands = fakeCommands(mirror);
@@ -1135,7 +1254,11 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       afterSha: git(seed, "rev-parse", "HEAD"),
       actions: { macAppRebuild: true, macUiVerification: true },
     });
-    expect(output.buildChangedPaths).toEqual([changedPath, "package.json"]);
+    expect(output.buildChangedPaths).toEqual([
+      changedPath,
+      ...catchupPaths.toSorted(),
+      "package.json",
+    ]);
     expect(commands.calls).toEqual([
       `${process.execPath} dist/index.js gateway stop`,
       "pnpm install --frozen-lockfile",

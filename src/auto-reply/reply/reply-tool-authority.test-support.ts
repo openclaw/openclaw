@@ -1,4 +1,4 @@
-import type { ReplyToolAuthorityRoute } from "./reply-run-registry.contracts.js";
+import type { ReplyToolAuthorityRoute } from "../../sessions/session-controller.contracts.js";
 import { prepareFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 

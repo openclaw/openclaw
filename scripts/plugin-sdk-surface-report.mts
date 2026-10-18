@@ -231,7 +231,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the shared state-owner boundary for plugin CLIs.
       // +1: owner-approved service-bound remote Control UI ingress.
       // +2: shared database-engine host and worker adapters.
-      155,
+      // +1: maintainer-requested context-engine-transcript-runtime watermark subpath (2026-10-08).
+      156,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -284,7 +285,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // DoctorMemoryStatusPayload for the plugin-owned Memory overview.
       // +2: MemorySearchResponse and AgentsWorkspaceGetResult type-only contracts
       // for the plugin-owned indexed Memory search presentation.
-      3800,
+      // +5: maintainer-requested context-engine transcript watermark reader, its types, and fence error.
+      // +3: ControlUiChannelSettingsSnapshot, ControlUiChannelSettingsContext, and
+      // ControlUiChannelSettingsView for plugin-owned channel Settings presentations.
+      // +1: the shared message-tool source-reply finality resolver.
+      3809,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -324,7 +329,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +6: four lossless Decision codecs and two bounded V2 validators.
       // +1: the same boot-selected family lookup.
       // +1: the same shared auth-patch application.
-      2205,
+      // +1: maintainer-requested context-engine transcript watermark reader.
+      // +1: the shared message-tool source-reply finality resolver, so harnesses apply a run's default.
+      2207,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

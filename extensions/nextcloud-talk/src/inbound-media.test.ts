@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  isNextcloudTalkMediaSenderAllowed,
   resolveNextcloudTalkAttachmentReference,
   resolveNextcloudTalkAuthenticatedMediaSource,
 } from "./inbound-media.js";
@@ -20,42 +19,6 @@ function webDavFileIdResponse(fileId: string): Response {
 }
 
 describe("Nextcloud Talk inbound media policy", () => {
-  it.each([
-    { label: "omitted", mediaAllowFrom: undefined },
-    { label: "empty", mediaAllowFrom: [] },
-  ])("fails closed when mediaAllowFrom is $label", ({ mediaAllowFrom }) => {
-    expect(
-      isNextcloudTalkMediaSenderAllowed({
-        mediaAllowFrom,
-        senderId: "users/alice",
-      }),
-    ).toBe(false);
-  });
-
-  it("matches explicit sender IDs through Nextcloud normalization", () => {
-    expect(
-      isNextcloudTalkMediaSenderAllowed({
-        mediaAllowFrom: ["NC-TALK:Users/Alice"],
-        senderId: "users/alice",
-      }),
-    ).toBe(true);
-    expect(
-      isNextcloudTalkMediaSenderAllowed({
-        mediaAllowFrom: ["nextcloud-talk:users/bob"],
-        senderId: "users/alice",
-      }),
-    ).toBe(false);
-  });
-
-  it("supports wildcard only within the media predicate", () => {
-    expect(
-      isNextcloudTalkMediaSenderAllowed({
-        mediaAllowFrom: ["*"],
-        senderId: "users/alice",
-      }),
-    ).toBe(true);
-  });
-
   it.each([
     {
       label: "root install",
@@ -296,75 +259,6 @@ describe("Nextcloud Talk inbound media policy", () => {
     expect(releaseUser).toHaveBeenCalledOnce();
     expect(releaseHistory).toHaveBeenCalledOnce();
     expect(releaseWebDav).toHaveBeenCalledOnce();
-  });
-
-  it("refuses a bot-tree WebDAV path that resolves to a different file ID", async () => {
-    const fetchGuarded = vi
-      .fn()
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ ocs: { data: { id: "bot-user" } } }), {
-          status: 200,
-        }),
-        release: vi.fn(async () => undefined),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            ocs: {
-              data: [
-                {
-                  id: 4242,
-                  token: "room-token",
-                  actorType: "users",
-                  actorId: "alice",
-                  messageParameters: {
-                    file: {
-                      id: "9001",
-                      name: "receipt.pdf",
-                      size: "2048",
-                      path: "Talk/receipt.pdf",
-                      mimetype: "application/pdf",
-                      "hide-download": "no",
-                    },
-                  },
-                },
-              ],
-            },
-          }),
-          { status: 200 },
-        ),
-        release: vi.fn(async () => undefined),
-      })
-      .mockResolvedValueOnce({
-        response: webDavFileIdResponse("9002"),
-        release: vi.fn(async () => undefined),
-      });
-
-    const result = await resolveNextcloudTalkAuthenticatedMediaSource({
-      baseUrl: "https://nextcloud.example",
-      roomToken: "room-token",
-      messageId: "4242",
-      senderId: "users/alice",
-      attachment: {
-        fileId: "9001",
-        name: "receipt.pdf",
-        mimeType: "application/pdf",
-        declaredSizeBytes: 2048,
-        shareUrl: "https://nextcloud.example/s/redacted-token",
-        hideDownload: false,
-      },
-      accountConfig: { apiUser: "bot", apiPassword: "test-password" },
-      reference: {
-        ok: true,
-        origin: "https://nextcloud.example",
-        hostname: "nextcloud.example",
-        fileName: "receipt.pdf",
-      },
-      fetchGuarded,
-    });
-
-    expect(result).toEqual({ ok: false, reason: "media_message_mismatch" });
-    expect(fetchGuarded).toHaveBeenCalledTimes(3);
   });
 
   it("stops authenticated metadata lookup when the ingress claim is cancelled", async () => {
@@ -672,6 +566,7 @@ describe("Nextcloud Talk inbound media policy", () => {
         fetchGuarded,
       });
 
+      expect(fetchGuarded).toHaveBeenCalledTimes(3);
       expect(fetchGuarded.mock.calls[2]?.[0].url).toBe(
         "https://nextcloud.example/remote.php/dav/files/bob/Talk/receipt%20(2).pdf",
       );

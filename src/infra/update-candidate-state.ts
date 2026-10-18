@@ -568,6 +568,7 @@ export async function snapshotUpdateCandidateState(
     candidateRoot: string;
     pluginPlanPath: string;
     databaseInventory: string[];
+    fullIntegrityCheck?: boolean;
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
   },
 ): Promise<z.infer<typeof UpdateCandidateStateSnapshotSchema>> {
@@ -638,6 +639,21 @@ export async function snapshotUpdateCandidateState(
       sourcePath: snapshotSource,
       targetPath: target,
       sourceAcquisition: { mode: "isolated-process", stagingRoot: input.targetStateDir },
+      integrity:
+        snapshotSource === file
+          ? {
+              check: input.fullIntegrityCheck ? "full" : "quick",
+              tables:
+                file === shared
+                  ? [
+                      "migration_sources",
+                      "agent_database_leases",
+                      "state_leases",
+                      "agent_databases",
+                    ]
+                  : undefined,
+            }
+          : undefined,
       // The rehearsal is private and disposable; compaction would create another
       // full image and alter implicit row IDs before candidate migrations run.
       preserveRowIds: true,

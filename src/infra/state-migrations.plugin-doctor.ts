@@ -591,6 +591,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   homedir?: () => string;
   log?: MigrationLogger;
   doctorOnlyStateMigrations?: boolean;
+  integrityCheck?: "quick" | "full";
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -609,7 +610,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
   const stateSchema = await prepareOpenClawStateDatabaseSchema(
-    { env: { ...env, OPENCLAW_STATE_DIR: stateDir } },
+    { env: { ...env, OPENCLAW_STATE_DIR: stateDir }, integrityCheck: params.integrityCheck },
     params.doctorOnlyStateMigrations === true ? "doctor" : "automatic",
   );
   const changes = [...stateDirResult.changes, ...stateSchema.changes];

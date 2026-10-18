@@ -20,8 +20,12 @@ import {
 import { isGatewayServiceStateLive } from "../../daemon/service-runtime.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
+import { readGatewayLockProcessCmdline } from "../../infra/gateway-lock-process.js";
+import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import { classifyOpenClawArgv } from "../../infra/gateway-process-argv.js";
 import { createUpdatePreflightDiagnostics } from "../../infra/update-failure-facts.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { formatCliCommand } from "../command-format.js";
 import { UpdatePreMutationError } from "./shared.js";
@@ -32,6 +36,7 @@ import type {
 } from "./update-command-service-context-types.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
+  collectServiceInspectionFailureFacts,
   GatewayServiceUpdateOwnershipError,
   GATEWAY_SERVICE_INSPECTION_WARNING,
   inspectManagedGatewayServiceBeforeUpdate,
@@ -73,6 +78,58 @@ function matchesStoppedService(
   );
 }
 
+/** Native inspection cannot authorize publication over a live or unverified state owner. */
+export async function assertUnavailableGatewayPackageConsumerStopped(params: {
+  roots: readonly string[];
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  assertCurrent: () => void;
+  verdict: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }>;
+}): Promise<void> {
+  const refuse = (cause?: unknown): never => {
+    const failure = createUpdatePreflightFailure("gateway-stop-unverified", params.verdict.message);
+    throw new UpdatePreMutationError("gateway-stop-unverified", failure.message, {
+      failureFacts: [
+        ...failure.failureFacts,
+        ...(collectServiceInspectionFailureFacts(params.verdict) ?? []),
+      ],
+      cause,
+    });
+  };
+  try {
+    const owner = await readActiveGatewayLockIdentity({
+      env: params.env,
+      requireInspection: true,
+      timeoutMs: params.timeoutMs,
+    });
+    params.assertCurrent();
+    if (!owner) {
+      return;
+    }
+    const argv = readGatewayLockProcessCmdline(
+      owner.pid,
+      process.platform,
+      params.timeoutMs,
+      undefined,
+      params.env,
+    );
+    const entry = classifyOpenClawArgv(argv ?? [], {
+      requirePackageIdentity: true,
+      pid: owner.pid,
+    });
+    // A rewritten title loses the installation path, not the recorded ownership.
+    // Only a positively identified disjoint installation can be ignored.
+    const packageRoot = entry.kind === "openclaw" ? entry.packageIdentity?.root : undefined;
+    if (packageRoot && params.roots.every((root) => !updateInstallRootsMatch(root, packageRoot))) {
+      return;
+    }
+  } catch (error) {
+    params.assertCurrent();
+    refuse(error);
+  }
+  refuse();
+}
+
 /** Observe other consumers; discovery never grants permission to stop them. */
 export async function assertManagedGatewayArtifactPublication(params: {
   roots: readonly string[];
@@ -88,6 +145,9 @@ export async function assertManagedGatewayArtifactPublication(params: {
   params.assertCurrent();
   const serving = params.selected;
   const servingVerdict = serving?.serviceUpdateVerdict;
+  if (params.updateInstallKind === "package" && servingVerdict?.kind === "unavailable") {
+    await assertUnavailableGatewayPackageConsumerStopped({ ...params, verdict: servingVerdict });
+  }
   if (
     (params.phase !== "before-stop" || !params.shouldRestart) &&
     params.updateInstallKind === "git" &&

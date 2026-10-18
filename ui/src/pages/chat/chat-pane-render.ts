@@ -70,8 +70,6 @@ import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
-  private readonly notify = () => this.invalidate();
-
   get realtimeTalk() {
     return this.state?.realtimeTalk;
   }
@@ -112,7 +110,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const placement = selectedSession?.placement;
     const visibleWorkspaceConflict =
       workspaceConflict &&
-      this.dismissedWorkspaceConflictRefs.get(selectedSession?.key ?? state.sessionKey) !==
+      this.workspaceConflicts.dismissedRefs.get(selectedSession?.key ?? state.sessionKey) !==
         workspaceConflict.stagedResultRef
         ? workspaceConflict
         : undefined;
@@ -196,7 +194,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       !catalogKey &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.typing") === true &&
       hasSessionPresenceViewers(
-        this.presencePayload,
+        this.presence.snapshot,
         gatewaySnapshot.selfUser,
         gatewaySnapshot.client?.instanceId,
         state.sessionKey,
@@ -223,7 +221,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     });
     const { selfUser, ...userPresentation } = resolveChatPaneUserPresentation({
       gatewaySnapshot,
-      presencePayload: this.presencePayload,
+      presencePayload: this.presence.snapshot,
       previousUserId: this.presentationUserId,
       state,
       selectedSession,
@@ -249,7 +247,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const setReply = (target: ChatProps["replyTarget"]) => {
       state.chatReplyTarget = target;
       state.handleChatDraftChange(state.chatMessage);
-      state.requestUpdate?.();
     };
     const replyMessageAccess = this.currentReplyMessageAccess(state.sessionKey);
     const composerControls = catalogKey
@@ -288,18 +285,17 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish") !== true ||
       !canCallGatewayMethod(gatewaySnapshot, "sessions.github.options", "operator.read")
     ) {
-      this.githubPublication?.detach();
-      this.githubPublication = null;
+      this.publication.binding?.detach();
+      this.publication.binding = null;
     } else {
-      if (!this.githubPublication?.matches(publicationRow)) {
-        this.githubPublication?.detach();
-        this.githubPublication = this.context.sessions.githubPublication.attach(
+      if (!this.publication.binding?.matches(publicationRow)) {
+        this.publication.binding?.detach();
+        this.publication.binding = this.context.sessions.githubPublication.attach(
           publicationRow,
-          this.notify,
           GitHubPublicationOwner,
         );
       }
-      const publication = this.githubPublication;
+      const publication = this.publication.binding;
       publication?.sync({
         ...readChatPublicationAccess(gatewaySnapshot, publicationRow, sessionParticipationBlocked),
         personalReady:
@@ -390,8 +386,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       routeLoadingSkeleton: this.routeLoadingSkeleton && initialHistoryUnavailable,
       sending:
         state.chatSending ||
-        this.recoveringSession ||
-        this.sessionSuggestionAddOperation !== undefined,
+        this.sessionCreation.recovering ||
+        this.collaboration.addOperation !== undefined,
       placementStartup: placementStartup ?? placementComposer.startup,
       onRetrySessionPlacementStartup: placementStartup?.retryable
         ? this.retrySessionPlacementStartup
@@ -502,7 +498,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onOpenDictationSettings: () => this.context.navigate("model-setup"),
       suggestionComposer: suggestionViewer,
       typingActors: multiIdentity ? this.typingActorViews() : [],
-      typingOverflow: multiIdentity ? this.typingOverflow : undefined,
+      typingOverflow: multiIdentity ? this.collaboration.typingOverflow : undefined,
       onTypingChange: typingEnabled
         ? (typing, preview, cursor) => this.sendTypingState(typing, preview, cursor)
         : undefined,
@@ -528,11 +524,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onDismissWorkspaceConflict:
         visibleWorkspaceConflict && selectedSession
           ? () => {
-              this.dismissedWorkspaceConflictRefs.set(
-                selectedSession.key,
-                visibleWorkspaceConflict.stagedResultRef,
-              );
-              this.invalidate();
+              this.workspaceConflicts.dismissedRefs = new Map(
+                this.workspaceConflicts.dismissedRefs,
+              ).set(selectedSession.key, visibleWorkspaceConflict.stagedResultRef);
             }
           : undefined,
       sessions: state.sessionsResult,
@@ -554,7 +548,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       composerControls: composerControls?.composerControls,
       permissionPicker: composerControls?.permissionPicker,
       ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
-      messageReactions: this.messageReactions,
+      messageReactions: this.collaboration.reactions,
       onReact: this.canReactToCurrentSession() ? this.handleMessageReaction : undefined,
       pullRequests: this.visibleSessionPullRequests,
       pullRequestsGateway: this.context.gateway,
@@ -570,7 +564,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       githubRepositories: projectCatalog.repositories,
 
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
-      githubPublication: this.githubPublication?.view(),
+      githubPublication: this.publication.binding?.view(),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),
@@ -612,7 +606,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
       onDismissError: () => {
         dismissChatError(state);
-        state.requestUpdate?.();
       },
       onDismissRealtimeTalkError: () => {
         dismissRealtimeTalkError(state);

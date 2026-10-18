@@ -733,24 +733,19 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest();
       await gateway.waitForRequest("connect", { after: connected });
+      const navigationSidebar = page.locator("openclaw-app-sidebar");
       for (const collapsed of [false, true]) {
         if (collapsed) {
           await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         }
-        const chrome = page.locator(collapsed ? ".shell-chrome-controls" : ".sidebar-rail");
-        await expect
-          .poll(async () => {
-            const banner = await page.locator(".connection-action-block").boundingBox();
-            const controls = await chrome.boundingBox();
-            if (!banner || !controls) {
-              throw new Error("The reconnect banner and shell controls must be visible.");
-            }
-            // Expanded controls occupy the sidebar; collapsed controls share the content column.
-            return collapsed
-              ? banner.y - (controls.y + controls.height)
-              : banner.x - (controls.x + controls.width);
-          })
-          .toBeGreaterThanOrEqual(0);
+        await navigationSidebar.locator(".sidebar-shell").waitFor({
+          state: collapsed ? "hidden" : "visible",
+        });
+        // Web collapse keeps navigation in the rail; the native control cluster can be empty.
+        await navigationSidebar.locator(".sidebar-rail").waitFor({ state: "visible" });
+        expect(await page.locator(".connection-action-block").count()).toBe(0);
+        expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
+        expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
       }
       await page.locator('[data-navigation-view="pages"]').click();
       await expectPluginLoading(page);

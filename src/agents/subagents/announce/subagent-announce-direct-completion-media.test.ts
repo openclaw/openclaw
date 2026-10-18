@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
@@ -36,12 +37,6 @@ async function deliver(params: {
   onDeliveryError?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryError"];
 }) {
   const sendMessage = params.sendMessage ?? vi.fn<SendMessage>(async () => sent);
-  const queue = vi.fn((sessionId: string) => ({
-    queued: false as const,
-    reason: "no_active_run" as const,
-    gatewayHealth: "live" as const,
-    sessionId,
-  }));
   testing.setDepsForTest({
     callGateway: vi.fn(async () => {
       if (params.event?.status === "error") {
@@ -49,8 +44,17 @@ async function deliver(params: {
       }
       return { result: { payloads: params.payloads ?? [] } };
     }),
-    getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: true }),
-    queueEmbeddedAgentMessageWithOutcome: queue,
+    getRequesterSessionActivity: (sessionKey, requester) => ({
+      sessionId: "requester-session",
+      isActive: true,
+      target: captureSessionTarget({
+        storeScope: requester.storePath ?? "/synthetic/completion-media/sessions.json",
+        sessionKey: requester.canonicalKey,
+        aliases: [sessionKey],
+        agentId: requester.agentId,
+        incarnation: "requester-session",
+      }),
+    }),
     getRuntimeConfig: () => ({}),
     sendMessage,
   });
@@ -79,7 +83,6 @@ async function deliver(params: {
     onDeliveryResult: params.onDeliveryResult,
     onDeliveryError: params.onDeliveryError,
   });
-  expect(queue).toHaveBeenCalled();
   return { result, sendMessage: vi.mocked(sendMessage) };
 }
 

@@ -130,13 +130,13 @@ For the CI Control UI comparison, run the full selection on Node followed by Bun
 ```sh
 OPENCLAW_NODE_TEST_CONFIGS_JSON='["ui/vitest.config.ts"]' \
 OPENCLAW_NODE_TEST_VITEST_ARGS_JSON='["--maxWorkers", "3"]' \
-OPENCLAW_CI_TEST_RUNTIME_POLICY=dual \
+OPENCLAW_CI_TEST_RUNTIME_POLICY=dual-all \
 node --import tsx scripts/ci-run-node-test-shard.mts
 ```
 
-Both passes include the retention assertions, which use runtime-neutral garbage
-collection and WeakRef checks. Run the complete UI selection only on Bun with
-`OPENCLAW_VITEST_RUNTIME=bun`.
+The Node pass covers the complete selection; exact Node-only retention contracts
+stay on Node. To run the CI Bun selection with its named Node companions, use
+`OPENCLAW_CI_TEST_RUNTIME_POLICY=bun-all` in the same command.
 
 Test processes and their CLI fixtures keep Sparkplug baseline compilation enabled
 but run it synchronously. This avoids a Node 24 shutdown deadlock where a

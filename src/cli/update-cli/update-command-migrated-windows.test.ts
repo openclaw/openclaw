@@ -13,7 +13,7 @@ import {
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { runUtf8CommandBuffersWithTimeout } from "../../process/exec-runner.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -59,9 +59,9 @@ vi.mock("../../daemon/schtasks.js", async (importOriginal) => ({
     return true;
   }),
 }));
-vi.mock("../../process/exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../process/exec.js")>()),
-  runUtf8CommandWithTimeout: vi.fn(),
+vi.mock("../../process/exec-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec-runner.js")>()),
+  runUtf8CommandBuffersWithTimeout: vi.fn(),
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -178,7 +178,7 @@ it.each([
       let databaseCountAtTerminal = 0;
       const inspectTerminal = () =>
         readMigratedUpdateRunRow(resolveOpenClawStateSqlitePath(), runId);
-      vi.mocked(runUtf8CommandWithTimeout).mockImplementationOnce(async (_argv, options) => {
+      vi.mocked(runUtf8CommandBuffersWithTimeout).mockImplementationOnce(async (_argv, options) => {
         assert(typeof options === "object");
         expect(options.timeoutMs).toBe(activationTimeoutMs);
         const input = JSON.parse(String(options.input)) as MigratedUpdateFinalizationInput; // SAFETY: The real typed parent serializes this private worker input.
@@ -238,10 +238,12 @@ it.each([
           terminalFromCandidate = inspectTerminal();
           databaseCountAtTerminal = databases.length;
         }
-        return createCommandResult({
-          cleanup: "normal",
-          stdout: compensationRefusal ? "candidate terminal result\n" : "",
-        });
+        return {
+          ...createCommandResult({ cleanup: "normal" }),
+          stdout: Buffer.from(compensationRefusal ? "candidate terminal result\n" : ""),
+          stderr: Buffer.alloc(0),
+          windowsEncoding: null,
+        };
       });
       const continueUpdate = () =>
         continueMigratedUpdateInFreshProcess(

@@ -1,6 +1,6 @@
 // Log file path tests cover profile-aware rolling filename resolution.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isLegacyRollingLogFilePath,
   isSameRollingLogFileFamily,
@@ -11,65 +11,61 @@ import {
 const date = new Date(2026, 6, 22, 12, 0, 0);
 
 describe("resolveConfiguredLogFilePath", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(date);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  const resolveForProfile = (profile?: string) => {
+    vi.stubEnv("OPENCLAW_PROFILE", profile);
+    return resolveConfiguredLogFilePath();
+  };
+
   it.each([
-    { name: "unset", env: {}, expected: "openclaw-2026-07-22.log" },
+    { name: "unset", profile: undefined, expected: "openclaw-2026-07-22.log" },
     {
       name: "explicit default",
-      env: { OPENCLAW_PROFILE: "Default" },
+      profile: "Default",
       expected: "openclaw-2026-07-22.log",
     },
     {
       name: "named",
-      env: { OPENCLAW_PROFILE: "dev" },
+      profile: "dev",
       expected: "openclaw-dev-2026-07-22.log",
     },
     {
       name: "sanitized",
-      env: { OPENCLAW_PROFILE: "QA_Profile" },
+      profile: "QA_Profile",
       expected: "openclaw--1q-1a-0-1profile-2026-07-22.log",
     },
-  ])("uses the $name profile filename", ({ env, expected }) => {
-    const resolved = resolveConfiguredLogFilePath(undefined, { date, env });
+  ])("uses the $name profile filename", ({ profile, expected }) => {
+    const resolved = resolveForProfile(profile);
 
     expect(path.basename(resolved)).toBe(expected);
   });
 
   it("keeps profiles distinct when sanitization would otherwise collide", () => {
-    const underscored = resolveConfiguredLogFilePath(undefined, {
-      date,
-      env: { OPENCLAW_PROFILE: "QA_Profile" },
-    });
-    const dashed = resolveConfiguredLogFilePath(undefined, {
-      date,
-      env: { OPENCLAW_PROFILE: "qa-profile" },
-    });
+    const underscored = resolveForProfile("QA_Profile");
+    const dashed = resolveForProfile("qa-profile");
 
     expect(underscored).not.toBe(dashed);
     expect(path.basename(dashed)).toBe("openclaw-qa--profile-2026-07-22.log");
   });
 
   it("keeps escaped output distinct from a profile that resembles the encoding", () => {
-    const transformed = resolveConfiguredLogFilePath(undefined, {
-      date,
-      env: { OPENCLAW_PROFILE: "QA_Profile" },
-    });
-    const lookalike = resolveConfiguredLogFilePath(undefined, {
-      date,
-      env: { OPENCLAW_PROFILE: "-1q-1a-0-1profile" },
-    });
+    const transformed = resolveForProfile("QA_Profile");
+    const lookalike = resolveForProfile("-1q-1a-0-1profile");
 
     expect(transformed).not.toBe(lookalike);
   });
 
   it("bounds direct environment profiles that exceed the CLI length contract", () => {
-    const first = resolveConfiguredLogFilePath(undefined, {
-      date,
-      env: { OPENCLAW_PROFILE: "A".repeat(80) },
-    });
-    const second = resolveConfiguredLogFilePath(undefined, {
-      date,
-      env: { OPENCLAW_PROFILE: "B".repeat(80) },
-    });
+    const first = resolveForProfile("A".repeat(80));
+    const second = resolveForProfile("B".repeat(80));
 
     expect(path.basename(first)).toMatch(/^openclaw--3[a-f0-9]{64}-2026-07-22\.log$/u);
     expect(path.basename(first).length).toBeLessThanOrEqual(255);
@@ -77,11 +73,9 @@ describe("resolveConfiguredLogFilePath", () => {
   });
 
   it("preserves an explicit logging.file override", () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "dev");
     expect(
-      resolveConfiguredLogFilePath(
-        { logging: { file: "/var/log/openclaw/custom.log" } },
-        { date, env: { OPENCLAW_PROFILE: "dev" } },
-      ),
+      resolveConfiguredLogFilePath({ logging: { file: "/var/log/openclaw/custom.log" } }),
     ).toBe("/var/log/openclaw/custom.log");
   });
 });

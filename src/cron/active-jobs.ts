@@ -208,7 +208,6 @@ export type CronActiveJobMarker = {
   preserveAcrossGenerationAdvance?: boolean;
   onInactive?: Set<() => void>;
   inactiveNotified?: true;
-  heartbeatWait?: symbol;
 };
 
 function getCronActiveJobState(): CronActiveJobState {
@@ -479,54 +478,6 @@ export function isCronActiveJobMarkerCurrent(marker: CronActiveJobMarker | undef
   return (
     activeMarker?.token === marker.token && isMarkerActiveInGeneration(marker, state.generation)
   );
-}
-
-/** Ignores only the exact cron executions represented by one coalesced heartbeat wake. */
-export function hasActiveCronJobsExceptMarkers(
-  markersToIgnore: readonly CronActiveJobMarker[],
-  matches: (marker: CronActiveJobMarker) => boolean = () => true,
-) {
-  const state = getCronActiveJobState();
-  const ignoredMarkers = new Set(markersToIgnore);
-  for (const marker of state.activeJobs.values()) {
-    if (
-      !ignoredMarkers.has(marker) &&
-      isMarkerActiveInGeneration(marker, state.generation) &&
-      matches(marker)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/** Records that an exact cron execution is idle until its heartbeat wake settles. */
-export function markCronJobWaitingForHeartbeat(
-  marker: CronActiveJobMarker | undefined,
-): () => void {
-  if (!marker || !isCronActiveJobMarkerCurrent(marker)) {
-    return () => {};
-  }
-  const heartbeatWait = Symbol("cron-heartbeat-wait");
-  marker.heartbeatWait = heartbeatWait;
-  return () => {
-    if (marker.heartbeatWait === heartbeatWait) {
-      delete marker.heartbeatWait;
-    }
-  };
-}
-
-/** Returns exact live cron executions currently waiting on heartbeat settlement. */
-export function listCronHeartbeatWaitOwners(): CronActiveJobMarker[] {
-  const state = getCronActiveJobState();
-  const activeJobMarkers: CronActiveJobMarker[] = [];
-  for (const marker of state.activeJobs.values()) {
-    if (!marker.heartbeatWait || !isMarkerActiveInGeneration(marker, state.generation)) {
-      continue;
-    }
-    activeJobMarkers.push(marker);
-  }
-  return activeJobMarkers;
 }
 
 /** Returns the number of active cron runs in this process. */

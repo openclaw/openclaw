@@ -19,9 +19,11 @@ it("keeps admitted session ownership when transformed plugins import the native 
   }).href;
   const deferredModules = new Set<string>();
   const source = (relativePath: string) => JSON.stringify(path.join(repo, relativePath));
+  const writeFixture = (name: string, contents: string) =>
+    fs.writeFileSync(path.join(root, name), contents);
   const ownerExports = `
     export { admitReplyTurn } from ${source("src/auto-reply/reply/reply-turn-admission.ts")};
-    export { replyRunRegistry } from ${source("src/auto-reply/reply/reply-run-registry.ts")};
+    export { waitForSessionRunIdle } from ${source("src/sessions/session-controller.wait.ts")};
     export { replaceSessionEntrySync } from ${source("src/config/sessions/session-accessor.sqlite-entry.ts")};
     export { closeOpenClawAgentDatabasesAsync } from ${source("src/state/openclaw-agent-db.ts")};
     export { closeOpenClawStateDatabaseAsync } from ${source("src/state/openclaw-state-db.ts")};
@@ -29,18 +31,15 @@ it("keeps admitted session ownership when transformed plugins import the native 
   try {
     fs.mkdirSync(dist);
     fs.symlinkSync(path.join(repo, "node_modules"), path.join(root, "node_modules"), "junction");
-    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
-    fs.writeFileSync(path.join(root, "config.json"), "{}\n");
-    fs.writeFileSync(
-      path.join(root, "host.ts"),
+    writeFixture("package.json", '{"type":"module"}\n');
+    writeFixture("config.json", "{}\n");
+    writeFixture(
+      "host.ts",
       `${ownerExports}
        export { getCachedPluginModuleLoader } from ${source("src/plugins/plugin-module-loader-cache.ts")};`,
     );
-    fs.writeFileSync(path.join(root, "admission-runtime.ts"), ownerExports);
-    fs.writeFileSync(
-      path.join(root, "plugin.ts"),
-      'export * from "openclaw/plugin-sdk/admission-fixture";\n',
-    );
+    writeFixture("admission-runtime.ts", ownerExports);
+    writeFixture("plugin.ts", 'export * from "openclaw/plugin-sdk/admission-fixture";\n');
     // Admission uses the real history worker and its cleanup owner. Borrow the maintained
     // subprocess generation; keep unrelated recovery/archival graphs deferred.
     await build({
@@ -98,6 +97,7 @@ it("keeps admitted session ownership when transformed plugins import the native 
         import assert from "node:assert/strict";
         import path from "node:path";
         import { registerHooks } from "node:module";
+        import { withTimeout } from "@openclaw/fs-safe/advanced";
         const root = ${JSON.stringify(root)};
         const deferredModules = new Set(${JSON.stringify([...deferredModules])});
         const unexpectedImports = [];
@@ -110,107 +110,83 @@ it("keeps admitted session ownership when transformed plugins import the native 
             return nextResolve(specifier, context);
           },
         });
-        const operations = new Set();
         let host;
         let transformed;
-        const bounded = async (work, label) => {
-          let timer;
-          try {
-            return await Promise.race([
-              work,
-              new Promise((_, reject) => {
-                timer = setTimeout(() => reject(new Error("Admission probe stalled: " + label)), 5_000);
-              }),
-            ]);
-          } finally {
-            clearTimeout(timer);
-          }
-        };
+        const bounded = (work, label) => withTimeout(work, 5_000, {
+          message: "Admission probe stalled: " + label,
+        });
         try {
           host = await import(${JSON.stringify(pathToFileURL(path.join(dist, "host.js")).href)});
           const native = await import(${JSON.stringify(pathToFileURL(path.join(dist, "admission-runtime.js")).href)});
           assert.equal(native.admitReplyTurn, host.admitReplyTurn, "native SDK shares the host graph");
+          assert.equal(native.waitForSessionRunIdle, host.waitForSessionRunIdle, "native wait shares the host graph");
           const modulePath = path.join(root, "plugin.ts");
           transformed = host.getCachedPluginModuleLoader({
             modulePath, rootDir: root, importerUrl: import.meta.url, tryNative: false,
             aliasMap: { "openclaw/plugin-sdk/admission-fixture": path.join(root, "dist/admission-runtime.js") },
           })(modulePath);
           assert.equal(transformed.admitReplyTurn, host.admitReplyTurn, "plugin transformation retains the native admission owner");
-          const cases = [
-            { name: "transformed-same-store", parent: transformed, foreign: false },
-            { name: "transformed-foreign-store", parent: transformed, foreign: true },
-          ];
-          for (const scenario of cases) {
+          assert.equal(transformed.waitForSessionRunIdle, host.waitForSessionRunIdle, "plugin transformation retains the native wait owner");
+          for (const foreign of [false, true]) {
+            const name = foreign ? "transformed-foreign-store" : "transformed-same-store";
             const sessionKey = "global";
-            const sessionId = "before-" + scenario.name;
-            const successorId = "after-" + scenario.name;
+            const sessionId = "before-" + name;
+            const successorId = "after-" + name;
             // Reuse the target database; each scenario still owns a distinct operation and UUID.
             const caseRoot = path.join(root, "state");
             const targetStore = path.join(caseRoot, "target", "sessions.json");
-            const parentStore = scenario.foreign
+            const parentStore = foreign
               ? path.join(caseRoot, "foreign", "sessions.json") : targetStore;
             const write = (storePath, id) => host.replaceSessionEntrySync(
-              { storePath, sessionKey }, { sessionId: id, updatedAt: Date.now() },
+              { agentId: "main", storePath, sessionKey }, { sessionId: id, updatedAt: Date.now() },
             );
             write(targetStore, sessionId);
-            if (scenario.foreign) write(parentStore, sessionId);
-            const admitted = await bounded(scenario.parent.admitReplyTurn({
-              sessionKey, sessionId, storePath: parentStore, kind: "visible", resetTriggered: false,
-            }), scenario.name + " parent");
+            if (foreign) write(parentStore, sessionId);
+            const admitted = await bounded(transformed.admitReplyTurn({
+              agentId: "main", sessionKey, sessionId, storePath: parentStore, kind: "visible", resetTriggered: false,
+            }), name + " parent");
             assert.equal(admitted.status, "owned", "parent must hold actual admission");
             const parent = admitted.operation;
-            operations.add(parent);
-            parent.setPhase("preflight_compacting");
-            let enteredWait;
-            const waiting = new Promise(resolve => { enteredWait = resolve; });
-            const waitForIdle = host.replyRunRegistry.waitForIdle;
-            host.replyRunRegistry.waitForIdle = function (...args) {
-              const result = waitForIdle.apply(this, args);
-              enteredWait();
-              return result;
-            };
             const controller = new AbortController();
             let child;
             let pending;
             try {
+              parent.setPhase("preflight_compacting");
+              const ownerIdle = foreign
+                ? undefined
+                : host.waitForSessionRunIdle(sessionKey);
               pending = host.admitReplyTurn({
-                sessionKey, sessionId, expectedSessionId: sessionId, storePath: targetStore,
+                agentId: "main", sessionKey, sessionId, expectedSessionId: sessionId, storePath: targetStore,
                 kind: "queued_followup", resetTriggered: false, waitTimeoutMs: 5_000,
                 upstreamAbortSignal: controller.signal,
               });
               void pending.catch(() => {});
-              await bounded(waiting, scenario.name + " native waitForIdle");
+              if (foreign) {
+                // Equal logical keys/UUIDs do not serialize independent physical stores.
+                child = await bounded(pending, name + " independent physical admission");
+              } else {
+                await Promise.resolve();
+              }
               write(parentStore, successorId);
-              // Equal UUIDs in a separately replaced store cannot prove this parent's ownership.
-              if (scenario.foreign) write(targetStore, successorId);
               parent.updateSessionId(successorId);
               parent.complete();
-              child = await bounded(pending, scenario.name + " successor");
-              if (child.status === "owned") operations.add(child.operation);
-              if (scenario.foreign) {
-                assert.equal(child.status, "skipped");
-                assert.equal(child.reason, "lifecycle-invalidated");
-              } else {
-                assert.equal(child.status, "owned");
-                assert.equal(child.operation.sessionId, successorId);
-              }
+              await ownerIdle;
+              child ??= await bounded(pending, name + " successor");
+              assert.equal(child.status, "owned");
+              assert.equal(child.operation.sessionId, foreign ? sessionId : successorId);
             } finally {
-              host.replyRunRegistry.waitForIdle = waitForIdle;
               parent.complete();
               if (child?.status === "owned") child.operation.complete();
               controller.abort();
               if (pending) {
-                const unfinished = await bounded(pending, scenario.name + " cleanup").catch(() => undefined);
+                const unfinished = await bounded(pending, name + " cleanup").catch(() => undefined);
                 if (unfinished?.status === "owned") unfinished.operation.complete();
               }
             }
           }
         } finally {
-          for (const operation of operations) operation.complete();
-          await transformed?.closeOpenClawAgentDatabasesAsync();
-          await host?.closeOpenClawAgentDatabasesAsync();
-          await transformed?.closeOpenClawStateDatabaseAsync();
-          await host?.closeOpenClawStateDatabaseAsync();
+          for (const runtime of [transformed, host]) await runtime?.closeOpenClawAgentDatabasesAsync();
+          for (const runtime of [transformed, host]) await runtime?.closeOpenClawStateDatabaseAsync();
           hooks.deregister();
         }
         assert.deepEqual(unexpectedImports, [], "all exercised runtime must stay in the fixture graph");

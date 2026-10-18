@@ -14,6 +14,7 @@ import {
   withSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -86,8 +87,13 @@ export function seedSessionActorOutcomeTransferEntry(
   );
 }
 
-function createFixture() {
-  const seed = createSessionCompoundWorkerFixture();
+export function createSessionActorWorkerFixture<Database extends OpenClawAgentDatabase>(
+  seed: {
+    database: Database;
+    scope: ReturnType<typeof createSessionCompoundWorkerFixture>["scope"];
+  },
+  reopen: (options: AgentWorkerOperationContext["options"]) => Database,
+) {
   let database = seed.database;
   const target = sessionActorFileTarget(database, seed.scope.sessionKey);
   const hooks: {
@@ -224,6 +230,7 @@ function createFixture() {
       return receipts.shift();
     },
     prepare: (command: Command) => actor.prepare(command),
+    prepareTurn: (input: Parameters<typeof actor.prepareTurn>[0]) => actor.prepareTurn(input),
     writeEntry(entry: Parameters<typeof writeSessionEntry>[2], sessionKey = target.sessionKey) {
       return runSqliteImmediateTransactionSync(database.db, () =>
         writeSessionEntry(database, sessionKey, entry),
@@ -236,8 +243,7 @@ function createFixture() {
     },
     async reopenDatabase() {
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
-      const reopened = openOpenClawAgentDatabase(context.options);
-      database = Object.assign(reopened, { db: requireNativeSqliteDatabase(reopened.db) });
+      database = reopen(context.options);
     },
     closeActor: () => actor.close(),
     close() {
@@ -248,6 +254,13 @@ function createFixture() {
       port2.close();
     },
   };
+}
+
+function createFixture() {
+  return createSessionActorWorkerFixture(createSessionCompoundWorkerFixture(), (options) => {
+    const reopened = openOpenClawAgentDatabase(options);
+    return Object.assign(reopened, { db: requireNativeSqliteDatabase(reopened.db) });
+  });
 }
 
 export type Fixture = ReturnType<typeof createFixture>;

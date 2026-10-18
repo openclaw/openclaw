@@ -501,6 +501,55 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     },
   );
 
+  it.each(["agent", "plugin"] as const)(
+    "retains canonical %s credential scope in a configured static catalog descriptor",
+    (scope) => {
+      mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["fixture"]);
+      mockManifestPlugins([
+        catalogManifest(
+          "fixture",
+          {
+            fixture: {
+              authScope: scope,
+              baseUrl: "https://fixture.invalid/v1",
+              api: "openai-completions",
+              models: [catalogModel("configured", "Configured", 10000, 1000)],
+            },
+          },
+          { fixture: "static" },
+        ),
+      ]);
+      const providers = resolvePluginDiscoveryProvidersRuntime({
+        discoveryEntriesOnly: true,
+        config: {
+          models: {
+            providers: {
+              fixture: {
+                baseUrl: "https://fixture.invalid/v1",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "configured",
+                    name: "Configured",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 10000,
+                    maxTokens: 1000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      });
+      expect(providers).toHaveLength(1);
+      expect(providers[0]?.authScope).toBe(scope);
+      expect(providers[0]?.staticCatalog).toBeDefined();
+      expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
+    },
+  );
+
   it("can omit manifest model catalogs from static discovery entries", () => {
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["openai"]);
     mockManifestPlugins([createManifestPluginWithModelCatalog("openai")]);

@@ -29,24 +29,36 @@ implements the agent-store portion of the
 [accepted column-promotion design](https://github.com/openclaw/openclaw/issues/169254).
 The JSON remains canonical. Each writer derives its query columns in TypeScript
 and commits them with the JSON in one statement; the session actor reuses that
-derivation. Runtime predicates use columns. No trigger, second persistence owner,
-or read-time backfill is introduced.
+derivation. Session-node and outbox predicates use stored columns. SQLite
+transcript predicates use stored classifications when available and otherwise
+derive them in the existing SQL query before predicate filters, counts, and
+`LIMIT`. Reads do not persist these derived values.
 
-The versioned migration uses SQLite JSON functions only to classify existing rows
-and publishes both schema markers after the complete backfill. It preserves
+The versioned migration eagerly backfills session-node and existing outbox rows,
+but leaves transcript classification lazy. SQLite can still check retained rows
+while adding columns to STRICT tables. It publishes both schema markers after the
+required migration work. Classification preserves
 first-member lookups, legacy last-member transcript navigation, SQLite integer-cast
 semantics, malformed-row handling, payload bytes, and existing retention rules.
 Schema admission and Doctor remain the only migration owners. Optional outbox
-storage stays lazy. Added text and integer fields translate to PostgreSQL text
-with C collation and bigint; supporting engines share the schema version and
-must supply their equivalent forward migration.
+storage stays lazy.
+
+New transcript payload writes and canonical payload rewrites materialize the
+predicate fields; metadata-only updates and byte-preserving copies do not. There
+is no background convergence job or new schema version. Existing beta stores with
+materialized predicates remain valid. SQLite-to-PostgreSQL ports normalize
+unclassified transcript predicates from payloads already being transferred, so
+PostgreSQL reads stored columns. Added text and integer fields translate to
+PostgreSQL text with C collation and bigint; supporting engines share the schema
+version and must supply their equivalent forward migration.
 
 SQL projections that bound large payloads before transfer stay in SQL. Current
-writer-authority comparisons also retain their existing implementation rather
-than weakening a real effect boundary. The migration adds storage proportional
-to retained rows, and first-upgrade proof measures time per database and across
-many-agent hosts. Older binaries refuse the new schema; recovery restores a
-verified pre-migration backup and its matching binary.
+writer-authority comparisons retain their existing implementation. Lazy transcript
+classification removes that eager backfill from candidate-side migration; other
+upgrade work and later transcript queries can still scale with retained data.
+First-upgrade proof measures time per database and across many-agent hosts.
+Older binaries refuse the new schema; recovery restores a verified pre-migration
+backup and its matching binary.
 
 <a id="canonical-writer-validation" />
 
@@ -776,6 +788,31 @@ Eligible terminal session-state events share the row transaction. Unknown write
 outcomes fence affected rows until restoration from the store; they never authorize replay.
 The digest requires no new column, schema migration, or updater behavior, and also
 detects writes from older processes that cannot maintain a new revision column.
+
+Private requester-settle wakes retain `privateInput` (the dispatch run ID and raw
+prompt) inside their existing `subagent_runs.payload_json` wake state before
+Gateway dispatch. The same row transition owns retries; this adds no table,
+column, index, schema version, or scheduler. Accepted input can be transformed by
+transcript hooks or reduced to a hash/outcome receipt, so it cannot reconstruct
+the original raw request. Later descendant delivery and findings updates must
+not change that request under its existing idempotency key.
+
+The field is optional and needs no backfill. Wakes already dispatched by an older
+build retain their existing strict input comparison: if the original raw prompt
+cannot be reconstructed, a mismatch remains a refusal, never permission to
+replace accepted input. Older builds ignore the field and may discard it when
+writing wake state; rollback therefore loses this retry guarantee without
+changing transcript bytes or requiring reverse migration. Upgrading again
+cannot recover raw bytes already discarded by an older writer.
+
+The prompt has the same private scope as the existing child findings. It is
+retained only with the pending wake, removed when the wake settles or is
+cancelled, and cleared when its retry identity resets. New yield generations
+replace the wake. Each member of a frozen batch retains the shared wake value,
+so temporary storage grows with prompt size times the number of batch members;
+there is no extra payload read or write transaction. Registry deletion removes
+it with the row. Current requester, cohort, store, and execution authority still
+revalidate before dispatch; the saved prompt grants no authority.
 
 An ordinary follow-up to a completed child creates a new task and execution while
 retaining the completed row's pending parent delivery and receipt. The same row
@@ -1777,6 +1814,14 @@ and lease cleanup; explicit shutdown, deletion, quarantine, and replacement keep
 their existing close and revocation paths. Reuse preserves read admission and
 owning-writer invalidation, without changing schemas, stored retention, or update
 behavior. The idle window is an internal constant, not a configuration option.
+
+Agent database handles and executors hold a lease that Doctor maintenance waits
+for, and no owner can tell an idle holder in another process that an update is
+waiting. CLI processes therefore retire an unused agent handle, executor, or
+session reclamation Worker 30 seconds after its last use; the Gateway (including
+the bare `openclaw` TUI entry) and embedders that install no process role keep
+the 30-minute window. Borrowed handles, open transactions, and an executor's
+pinned Worker handle keep their lease until the work settles.
 
 Explicit artifact-preserving inspections, private snapshots, and extension-enabled or nested
 transaction reads retain their isolated connection and cleanup contracts.

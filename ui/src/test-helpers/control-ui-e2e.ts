@@ -33,7 +33,7 @@ import type {
   MockGatewayRequestSelector,
   MockGatewayWindow,
 } from "./control-ui-e2e-contract.ts";
-import { createMockGatewayControls } from "./control-ui-e2e-controls.ts";
+import { createMockGatewayControls, installMockGatewayScript } from "./control-ui-e2e-controls.ts";
 import {
   defaultControlUiFeatureMethods,
   createControlUiDefaultResponses,
@@ -44,9 +44,9 @@ import {
 } from "./control-ui-e2e-diagnostics.ts";
 import { resolveAvailableLoopbackPort } from "./control-ui-e2e-port.ts";
 import {
+  installControlUiRosterNavigationWait,
   controlUiE2eWaitTimeoutMs,
   extendControlUiE2eWaitTimeoutForSourceServer,
-  waitForControlUiInitialRoster,
 } from "./control-ui-e2e-readiness.ts";
 import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
 import { createControlUiMockDeferredRequests } from "./control-ui-mock-deferred-requests.ts";
@@ -2748,6 +2748,9 @@ export async function prepareControlUiMockGatewayScenario(
 export async function installMockGateway(
   page: Page,
   scenario: ControlUiMockGatewayScenario = {},
+  options: {
+    requestHandlers?: Record<string, (params: unknown) => unknown>;
+  } = {},
 ): Promise<MockGatewayControls> {
   const prepared = await prepareControlUiMockGatewayScenario(scenario);
   if (prepared.assets.size) {
@@ -2766,7 +2769,11 @@ export async function installMockGateway(
     }),
   );
   await installControlUiE2eUnhandledRejectionRing(page);
-  await page.addInitScript({ content: createControlUiMockGatewayInitScript(normalizedScenario) });
+  await installMockGatewayScript(
+    page,
+    createControlUiMockGatewayInitScript(normalizedScenario),
+    options.requestHandlers,
+  );
   const rosterGates = new Set([
     "connect",
     "agents.list",
@@ -2792,20 +2799,7 @@ export async function installMockGateway(
         ...normalizedScenario.deferredRequests.map((request) => request.method),
       ].some((method) => rosterGates.has(method)))
   ) {
-    // Startup renders the selected descriptor before releasing the automatic roster.
-    // Keep navigation's Response, but give ordinary scenarios the fully rendered roster.
-    const goto = page.goto.bind(page);
-    const reload = page.reload.bind(page);
-    page.goto = async (...args) => {
-      const response = await goto(...args);
-      await waitForControlUiInitialRoster(page);
-      return response;
-    };
-    page.reload = async (...args) => {
-      const response = await reload(...args);
-      await waitForControlUiInitialRoster(page);
-      return response;
-    };
+    installControlUiRosterNavigationWait(page);
   }
   return createMockGatewayControls(
     page,

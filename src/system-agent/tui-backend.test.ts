@@ -112,7 +112,6 @@ async function createVerifiedTuiOptions(
   return {
     verifiedInference: fixture.binding,
     deps: {
-      ...fixture.deps,
       readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
       ...deps,
     },

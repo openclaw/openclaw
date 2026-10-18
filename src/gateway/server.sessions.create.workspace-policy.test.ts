@@ -14,7 +14,7 @@ import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/se
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
+import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -366,7 +366,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
           reason: "session-reset",
         });
         markRemovalStarted();
-        expect(isSessionLifecycleMutationActive(storePath, ["agent:main:main"])).toBe(true);
+        expect(isSessionMutationActive(storePath, ["agent:main:main"])).toBe(true);
         await removalGate.promise;
       }
       return await originalRemoveIfLossless(this, id);

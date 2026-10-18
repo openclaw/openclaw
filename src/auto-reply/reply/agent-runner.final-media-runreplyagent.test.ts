@@ -1,13 +1,10 @@
 // Tests final media delivery through the run-reply-agent path.
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import {
-  createMockFollowupRun,
-  createMockReplyOperation,
-  createMockTypingController,
-} from "./test-helpers.js";
+import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const executeAgentTurnMock = vi.fn();
 const resolveOutboundAttachmentFromUrlMock = vi.fn();
@@ -119,6 +116,12 @@ function makeRunReplyAgentParams(
   const provider = "telegram";
   const workspaceDir = "/tmp/workspace";
   const prompt = "generate chart";
+  const replyOperation = createReplyOperation({
+    sessionKey: "main",
+    sessionId: "session",
+    resetTriggered: false,
+  });
+  onTestFinished(() => replyOperation.complete());
 
   return {
     commandBody: prompt,
@@ -152,7 +155,7 @@ function makeRunReplyAgentParams(
     resolvedBlockStreamingBreak: "message_end",
     shouldInjectGroupIntro: false,
     typingMode: "instant",
-    replyOperation: createMockReplyOperation().replyOperation,
+    replyOperation,
     ...overrides,
   };
 }

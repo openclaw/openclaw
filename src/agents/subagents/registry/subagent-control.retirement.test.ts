@@ -17,9 +17,12 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import {
   createSubagentRunRecord,
@@ -31,6 +34,10 @@ import {
   seedSubagentCompletionDelivery,
 } from "../completion/subagent-completion-admission.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import {
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+} from "./subagent-control-native.test-support.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.js";
@@ -352,7 +359,7 @@ it.each([
   const ancestor = subagentRuns.get("draining-ancestor")!;
   const child = subagentRuns.get("draining-child")!;
   const entered = createDeferred();
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     scope: storePath,
     identities: [ancestorKey, "draining-ancestor-session"],
     assertAllowed: () => {},
@@ -452,57 +459,106 @@ it.each([
   }
 });
 
-it("signals the non-main runtime owner in a template session store", async () => {
-  const store = path.join(fixture.stateDir, "stores", "{agentId}", "sessions.json");
-  const storePath = resolveSessionStorePathCore(store, { agentId: "other" });
-  const mainStorePath = resolveSessionStorePathCore(store, { agentId: "main" });
-  const childSessionKey = "agent:other:subagent:fixed-store-child";
-  const sessionId = "fixed-store-child-session";
-  await replaceSessionEntry(
-    { storePath: mainStorePath, sessionKey: "agent:main:main" },
-    { sessionId: "main-session", updatedAt: Date.now() },
-  );
-  await replaceSessionEntry(
-    { storePath, sessionKey: childSessionKey },
-    { sessionId, lifecycleRevision: `${sessionId}-revision`, updatedAt: Date.now() },
-  );
-  await registerSubagentRun({
-    runId: "fixed-store-child",
-    childSessionKey,
-    childAgentId: "other",
-    sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
-    requesterSessionKey: "agent:main:main",
-    requesterAgentId: "main",
-    requesterDisplayKey: "main",
-    task: "cross-agent child",
-    cleanup: "keep",
-    expectsCompletionMessage: false,
-  });
-  const abort = vi.fn();
-  const handle = createEmbeddedRunHandle({ abort, runId: "fixed-store-child" });
-  setActiveEmbeddedRun(sessionId, handle, childSessionKey);
-  try {
-    const result = await killAllControlledSubagentRuns({
-      cfg: { ...getRuntimeConfig(), session: { store } },
-      controller: {
-        controllerSessionKey: "agent:main:main",
-        controllerAgentId: "main",
-        callerSessionKey: "agent:main:main",
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
-      runs: [subagentRuns.get("fixed-store-child")!],
+it.each(["default", "template", "fixed JSON-style", "exact SQLite"])(
+  "signals only the physical non-main runtime owner in a %s session store",
+  async (layout) => {
+    const store =
+      layout === "default"
+        ? undefined
+        : layout === "template"
+          ? path.join(fixture.stateDir, "stores", "{agentId}", "sessions.json")
+          : path.join(
+              fixture.stateDir,
+              "fixed",
+              layout === "exact SQLite" ? "shared.sqlite" : "sessions.json",
+            );
+    const storePath = resolveSessionStorePathCore(store, { agentId: "other" });
+    const mainStorePath = resolveSessionStorePathCore(store, { agentId: "main" });
+    const childSessionKey = "agent:other:subagent:fixed-store-child";
+    const sessionId = "fixed-store-child-session";
+    await replaceSessionEntry(
+      { storePath: mainStorePath, sessionKey: "agent:main:main" },
+      { sessionId: "main-session", updatedAt: Date.now() },
+    );
+    await replaceSessionEntry(
+      { storePath, sessionKey: childSessionKey },
+      { sessionId, lifecycleRevision: `${sessionId}-revision`, updatedAt: Date.now() },
+    );
+    const foreignStorePath = path.join(fixture.stateDir, "foreign", "session-control.sqlite");
+    await replaceSessionEntry(
+      { storePath: foreignStorePath, sessionKey: childSessionKey },
+      { sessionId, lifecycleRevision: "foreign-revision", updatedAt: Date.now() },
+    );
+    const foreignEntry = loadSessionEntry({
+      storePath: foreignStorePath,
+      sessionKey: childSessionKey,
     });
-    expect(abort, JSON.stringify(result)).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({ status: "ok", killed: 1 });
-    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })?.abortedLastRun).toBe(true);
-    expect(
-      loadSessionEntry({ storePath: mainStorePath, sessionKey: "agent:main:main" })?.abortedLastRun,
-    ).toBeUndefined();
-  } finally {
-    clearActiveEmbeddedRun(sessionId, handle, childSessionKey);
-  }
-});
+    await registerSubagentRun({
+      runId: "fixed-store-child",
+      childSessionKey,
+      childAgentId: "other",
+      sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
+      requesterSessionKey: "agent:main:main",
+      requesterAgentId: "main",
+      requesterDisplayKey: "main",
+      task: "cross-agent child",
+      cleanup: "keep",
+      expectsCompletionMessage: false,
+    });
+    const abort = vi.fn();
+    const handle = createEmbeddedRunHandle({ abort, runId: "fixed-store-child" });
+    attachActiveEmbeddedRun(sessionId, handle, childSessionKey, storePath);
+    const foreign = createReplyOperation({
+      sessionKey: childSessionKey,
+      sessionId,
+      agentId: "other",
+      resetTriggered: false,
+      target: captureSessionTarget({
+        storeScope: foreignStorePath,
+        sessionKey: childSessionKey,
+        agentId: "other",
+        incarnation: sessionId,
+      }),
+    });
+    const foreignAbort = vi.fn();
+    foreign.attachBackend({
+      kind: "embedded",
+      runId: "foreign-fixed-store-child",
+      isStreaming: () => true,
+      cancel: foreignAbort,
+    });
+    try {
+      const result = await killAllControlledSubagentRuns({
+        cfg: { ...getRuntimeConfig(), session: { store } },
+        controller: {
+          controllerSessionKey: "agent:main:main",
+          controllerAgentId: "main",
+          callerSessionKey: "agent:main:main",
+          callerIsSubagent: false,
+          controlScope: "children",
+        },
+        runs: [subagentRuns.get("fixed-store-child")!],
+      });
+      expect(abort, JSON.stringify(result)).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({ status: "ok", killed: 1 });
+      expect(foreignAbort).not.toHaveBeenCalled();
+      expect(foreign.abortSignal.aborted).toBe(false);
+      expect(
+        loadSessionEntry({ storePath: foreignStorePath, sessionKey: childSessionKey }),
+      ).toEqual(foreignEntry);
+      expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })?.abortedLastRun).toBe(
+        true,
+      );
+      expect(
+        loadSessionEntry({ storePath: mainStorePath, sessionKey: "agent:main:main" })
+          ?.abortedLastRun,
+      ).toBeUndefined();
+    } finally {
+      foreign.complete();
+      await detachActiveEmbeddedRun(sessionId, handle, childSessionKey);
+    }
+  },
+);
 
 it("does not create a missing child database while binding cancellation", async () => {
   const childSessionKey = "agent:missing:subagent:unprepared";
@@ -615,7 +671,7 @@ describe("restored historical cancellation ownership", () => {
       expectsCompletionMessage: true,
       completion: { required: true },
       delivery: { status: "pending" },
-      requesterSettleWake: { status: "dispatching", attemptCount: 3, rearmGeneration: 1 },
+      requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
     });
     return input;
   }
@@ -655,8 +711,8 @@ describe("restored historical cancellation ownership", () => {
       };
       input.subagent.completionTarget = "parent";
       input.subagent.requesterSettleWake = {
-        status: "dispatching",
-        attemptCount: 3,
+        status: "pending",
+        attemptCount: 0,
         batchRunIds: [input.subagent.runId],
         rearmGeneration: 1,
         ...(yielded ? { requesterYieldBatch: true, afterRequesterYield: true } : {}),
@@ -743,13 +799,21 @@ describe("restored historical cancellation ownership", () => {
       }
       const originalBefore = loadSubagentRegistryFromSqlite().get(input.subagent.runId);
       const successorBefore = structuredClone(subagentRuns.get(successor.runId));
+      const successorPersistedBefore = loadSubagentRegistryFromSqlite().get(successor.runId);
+      expect(successorBefore).toMatchObject({ runId: "successor-run", generation: 2 });
+      expect(successorPersistedBefore).toMatchObject({
+        runId: "successor-run",
+        generation: 2,
+        completion: { resultText: "completed" },
+      });
       resumeSubagentRun(input.subagent.runId, "restore");
       await settle();
-      const before = loadSubagentRegistryFromSqlite().get(successor.runId);
       await testing.sweepOnceForTests();
       await settle();
 
-      expect(loadSubagentRegistryFromSqlite().get(successor.runId)).toEqual(before);
+      expect(loadSubagentRegistryFromSqlite().get(successor.runId)).toEqual(
+        successorPersistedBefore,
+      );
       expect(subagentRuns.get(successor.runId)).toEqual(successorBefore);
       expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)).toEqual(originalBefore);
       expect(wake).not.toHaveBeenCalled();
@@ -806,7 +870,7 @@ describe("restored historical cancellation ownership", () => {
         expect(driver.wake).not.toHaveBeenCalled();
         expectNoExecutionReplay();
       } finally {
-        driver.controller.clearScheduledResumeTimers();
+        driver.controller.clearRuntimeState();
       }
     },
   );

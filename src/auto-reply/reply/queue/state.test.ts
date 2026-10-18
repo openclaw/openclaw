@@ -1,5 +1,16 @@
 // Tests queue state storage, dedupe, and cleanup primitives.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  submitSessionControllerInput,
+  retireSessionControllerInput,
+  reserveSessionControllerSource,
+  bindSessionControllerSource,
+  sessionControllerMailboxes,
+  releaseSessionControllerClaim,
+  tryClaimSessionControllerTask,
+  type SessionControllerMailbox,
+} from "../../../sessions/session-controller.mailbox.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { enqueueFollowupRun } from "./enqueue.js";
 import {
   clearFollowupQueue,
@@ -12,9 +23,45 @@ import type { FollowupRun } from "./types.js";
 
 const QUEUE_KEY = "agent:main:dm:test";
 
-afterEach(() => {
-  clearFollowupQueue(QUEUE_KEY);
-});
+async function clearOwnedQueues() {
+  // Capture owners before cleanup can mutate the registry or publish a successor.
+  const capturedOwners = Array.from(sessionControllerMailboxes());
+  for (const queue of capturedOwners) {
+    if (!queue.owner.aliases.has(QUEUE_KEY)) {
+      continue;
+    }
+    const sources = [
+      ...queue.entries.flatMap((input) => (input.source ? [input.source] : [])),
+      ...queue.summarySources,
+      ...queue.summaryElisions.flatMap((part) => part.sources),
+    ];
+    // Metadata-only summary fixtures still retire through the exact physical
+    // queue they were inserted into, not through a newly inferred config path.
+    for (const source of sources) {
+      if (!source.controllerInput) {
+        const input = reserveSessionControllerSource(queue.key, {
+          target: queue.owner.target,
+          policy: { mode: queue.mode },
+        });
+        bindSessionControllerSource(input, source);
+      }
+    }
+    const inputs = [...queue.entries];
+    const claim = queue.claim;
+    clearFollowupQueue(QUEUE_KEY, queue);
+    if (claim) {
+      releaseSessionControllerClaim(claim);
+    }
+    await Promise.allSettled([
+      ...inputs.map((input) => input.settlement.promise),
+      ...sources.flatMap((source) =>
+        source.controllerInput ? [source.controllerInput.settlement.promise] : [],
+      ),
+      ...(claim ? [claim.settlement.promise] : []),
+    ]);
+  }
+}
+afterEach(clearOwnedQueues);
 
 function makeRun(): FollowupRun["run"] {
   return {
@@ -24,7 +71,7 @@ function makeRun(): FollowupRun["run"] {
     sessionKey: QUEUE_KEY,
     sessionFile: "/tmp/session-1.jsonl",
     workspaceDir: "/tmp/workspace",
-    config: {} as FollowupRun["run"]["config"],
+    config: { session: { store: "/synthetic/queue-state/sessions.sqlite" } },
     provider: "anthropic",
     model: "claude-opus-4-6",
     requestedRouteResolution: "resolved",
@@ -63,13 +110,15 @@ describe("clearRemovedQueuedAuthProfiles", () => {
       fallbackAuthProfileId: "profile-b",
     };
     queue.lastRun = lastRun;
-    queue.items.push(source(queued), source(newer), source(otherAgent));
+    const otherAgentSource = source(otherAgent);
+    addSources(queue, source(queued), source(newer), otherAgentSource);
     queue.summarySources.push(source(summarized));
     queue.summaryElisions.push({
       contextKey: "context",
+      count: 1,
       sources: [source(elided)],
       summaryLines: ["pending summary"],
-      sourceRefs: new WeakMap(),
+      sourceRefs: new Map(),
     });
     const rewrittenConfig = { agents: { entries: { main: { model: "anthropic/model" } } } };
 
@@ -96,7 +145,9 @@ describe("clearRemovedQueuedAuthProfiles", () => {
     expect(newer.config).toBe(rewrittenConfig);
     expect(otherAgent.authProfileId).toBe("profile-a");
     expect(otherAgent.config).toBe(retainedConfig);
-    expect(queue.items).toHaveLength(3);
+    expect(queue.items).toHaveLength(2);
+    expect(otherAgentSource.controllerInput?.mailbox).not.toBe(queue);
+    expect(otherAgentSource.controllerInput?.mailbox.items).toEqual([otherAgentSource]);
   });
 });
 
@@ -115,10 +166,11 @@ describe("refreshQueuedFollowupSession", () => {
       run: makeRun(),
     };
     queue.lastRun = lastRun;
-    queue.items.push(queuedRun);
+    addSources(queue, queuedRun);
     queue.summarySources.push(summarizedRun);
     queue.summaryElisions.push({
       contextKey: "context",
+      count: 2,
       sources: [
         {
           prompt: "elided summary",
@@ -127,7 +179,7 @@ describe("refreshQueuedFollowupSession", () => {
         },
       ],
       summaryLines: ["elided summary"],
-      sourceRefs: new WeakMap(),
+      sourceRefs: new Map(),
     });
 
     refreshQueuedFollowupSession({
@@ -159,7 +211,7 @@ describe("refreshQueuedFollowupSession", () => {
       enqueuedAt: Date.now(),
       run: { ...makeRun(), hasAutoFallbackProvenance: true },
     };
-    queue.items.push(queuedRun);
+    addSources(queue, queuedRun);
 
     refreshQueuedFollowupSession({
       key: QUEUE_KEY,
@@ -178,7 +230,134 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
+  it("clears queued model override strictness when retargeting to the configured default", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    addSources(queue, {
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: {
+        ...makeRun(),
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
+      },
+    });
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      nextProvider: "anthropic",
+      nextModel: "claude-opus-4-6",
+      nextRouteResolution: "resolved",
+      nextModelOverrideSource: undefined,
+    });
+
+    expect(queue.items[0]?.run).toMatchObject({
+      hasSessionModelOverride: false,
+      modelOverrideSource: undefined,
+    });
+  });
+
+  it("preserves queued Sol Ultra work when switching to Codex Luna", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    addSources(queue, {
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: {
+        ...makeRun(),
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        thinkLevel: "ultra",
+      },
+    });
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      nextProvider: "openai",
+      nextModel: "gpt-5.6-luna",
+      nextRouteResolution: "resolved",
+      nextThinking: {
+        level: "ultra",
+        catalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna", reasoning: true }],
+        agentRuntime: "codex",
+      },
+    });
+
+    expect(queue.items[0]?.run).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      thinkLevel: "ultra",
+      thinkingCatalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna", reasoning: true }],
+    });
+  });
+
+  it("preserves harness-only Ultra when retargeting queued work", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    addSources(queue, {
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: { ...makeRun(), thinkLevel: "ultra" },
+    });
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      nextProvider: "custom",
+      nextModel: "reasoner",
+      nextRouteResolution: "resolved",
+      nextThinking: { level: "ultra", agentRuntime: "openclaw" },
+    });
+
+    expect(queue.items[0]?.run.thinkLevel).toBe("ultra");
+  });
+
   it.each([
+    ["turn", "high", "off", "gpt-5.6-sol", true, "high"],
+    ["turn", "off", "high", "gpt-5.6-sol", true, "off"],
+    ["default", "high", "high", "gpt-5.6-sol", true, "medium"],
+    [undefined, "high", "low", "gpt-5.6-sol", true, "low"],
+    ["turn", "ultra", "off", "gpt-5.6-luna", true, "ultra"],
+    ["turn", "high", "off", "non-reasoner", false, "high"],
+  ] as const)(
+    "retargets requested %s thinking %s with stored %s to %s (reasoning %s) as %s",
+    (source, current, stored, model, reasoning, expected) => {
+      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+      const runs = Array.from({ length: 4 }, () => ({
+        ...makeRun(),
+        thinkLevel: current,
+        thinkLevelOverride: source === "turn" ? current : source,
+      }));
+      const wrap = (run: FollowupRun["run"]): FollowupRun => ({
+        prompt: "queued",
+        enqueuedAt: Date.now(),
+        run,
+      });
+      queue.lastRun = runs[0];
+      addSources(queue, wrap(runs[1]!));
+      queue.summarySources.push(wrap(runs[2]!));
+      queue.summaryElisions.push({
+        contextKey: "elided",
+        count: 1,
+        sources: [wrap(runs[3]!)],
+        summaryLines: ["queued"],
+        sourceRefs: new Map(),
+      });
+      refreshQueuedFollowupSession({
+        key: QUEUE_KEY,
+        nextProvider: "openai",
+        nextModel: model,
+        nextThinking: {
+          level: stored,
+          catalog: [{ provider: "openai", id: model, name: model, reasoning }],
+          agentRuntime: "codex",
+        },
+      });
+      expect(runs.map((run) => run.thinkLevel)).toEqual(Array(4).fill(expected));
+      expect(runs.map((run) => run.thinkLevelOverride)).toEqual(
+        Array(4).fill(source === "turn" ? current : source),
+      );
+    },
+  );
+
+  it.each([
+    { requested: "high", stored: "low", expected: ["high", "high", "high"] },
     { requested: "off", stored: "high", expected: ["off", "off", "off"] },
     { requested: "default", stored: "off", expected: ["high", "off", "low"] },
     { requested: undefined, stored: "high", expected: ["high", "high", "high"] },
@@ -201,7 +380,7 @@ describe("refreshQueuedFollowupSession", () => {
         thinkLevel: "high",
         thinkLevelOverride: requested,
       };
-      queue.items.push({ prompt: "task", enqueuedAt: Date.now(), run });
+      addSources(queue, { prompt: "task", enqueuedAt: Date.now(), run });
       for (const [index, model] of ["gpt-5.6-sol", "non-reasoner", "gpt-5.6-luna"].entries()) {
         refreshQueuedFollowupSession({
           key: QUEUE_KEY,
@@ -219,9 +398,80 @@ describe("refreshQueuedFollowupSession", () => {
     },
   );
 
+  describe.each(["default", undefined] as const)("thinking source %s", (source) => {
+    it.each<{ name: string; config: FollowupRun["run"]["config"]; expected: string }>([
+      {
+        name: "agent",
+        config: {
+          agents: {
+            entries: { main: { thinkingDefault: "low" } },
+            defaults: {
+              thinkingDefault: "off",
+              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
+            },
+          },
+        },
+        expected: "low",
+      },
+      {
+        name: "agent model",
+        config: {
+          agents: {
+            entries: {
+              main: {
+                models: { "openai/gpt-5.6-sol": { params: { thinking: "low" } } },
+              },
+            },
+            defaults: {
+              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
+            },
+          },
+        },
+        expected: "low",
+      },
+      {
+        name: "model",
+        config: {
+          agents: {
+            defaults: {
+              thinkingDefault: "off",
+              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
+            },
+          },
+        },
+        expected: "high",
+      },
+      {
+        name: "global",
+        config: { agents: { defaults: { thinkingDefault: "high" } } },
+        expected: "high",
+      },
+    ])("honors the configured $name default when retargeting", ({ config, expected }) => {
+      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+      const run: FollowupRun["run"] = {
+        ...makeRun(),
+        config,
+        thinkLevel: "medium",
+        thinkLevelOverride: source,
+      };
+      addSources(queue, { prompt: "task", enqueuedAt: Date.now(), run });
+      refreshQueuedFollowupSession({
+        key: QUEUE_KEY,
+        nextProvider: "openai",
+        nextModel: "gpt-5.6-sol",
+        nextThinking: {
+          level: source === "default" ? "off" : undefined,
+          catalog: [{ provider: "openai", id: "gpt-5.6-sol", name: "Sol", reasoning: true }],
+          agentRuntime: "codex",
+        },
+      });
+      expect(run.thinkLevel).toBe(expected);
+    });
+  });
+
   it("recomputes the retargeted model default when the session has no thinking override", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-    queue.items.push({
+    addSources(queue, {
       prompt: "queued message",
       enqueuedAt: Date.now(),
       run: { ...makeRun(), thinkLevel: "ultra", thinkingExplicit: true },
@@ -292,13 +542,14 @@ describe("getFollowupQueue", () => {
     ] as const) {
       queue.summaryElisions.push({
         contextKey,
+        count,
         sources: Array.from({ length: count }, () => ({
           prompt: contextKey,
           enqueuedAt: Date.now(),
           run: makeRun(),
         })),
         summaryLines: Array.from({ length: count }, () => contextKey),
-        sourceRefs: new WeakMap(),
+        sourceRefs: new Map(),
       });
     }
     queue.evictedSummaryCount = 5;
@@ -313,17 +564,68 @@ describe("getFollowupQueue", () => {
 });
 
 describe("hasPendingFollowupQueueWork", () => {
-  it("detects each actionable queued-work representation", () => {
+  it("checks separate pending mailboxes within one physical selection", async () => {
+    const keys = [QUEUE_KEY, "session-id-only-queue"];
+    const selection = captureSessionTarget({
+      storeScope: "/synthetic/queue-state/two-mailboxes.sqlite",
+      sessionKey: QUEUE_KEY,
+      aliases: keys,
+      agentId: "main",
+    });
+    const pending = keys.map((key, index) => ({
+      key,
+      source: {
+        prompt: `Pending input ${index}`,
+        enqueuedAt: 1,
+        run: {
+          ...makeRun(),
+          sessionKey: key,
+          sessionId: `independent-incarnation-${index}`,
+          config: { session: { store: selection.storeScope } },
+        },
+      } satisfies FollowupRun,
+    }));
+    const sources: FollowupRun[] = pending.map(({ source }) => source);
+    try {
+      for (const { key, source } of pending) {
+        expect(
+          enqueueFollowupRun(key, source, { mode: "followup" }, "none", undefined, false),
+        ).toBe(true);
+      }
+      const [first, second] = sources.map((source) => source.controllerInput);
+      if (!first || !second) {
+        throw new Error("Expected two accepted queue inputs");
+      }
+      expect(first.mailbox).not.toBe(second.mailbox);
+      expect(hasPendingFollowupQueueWork(keys, selection)).toBe(true);
+      retireSessionControllerInput(first);
+      await first.settlement.promise;
+      expect(hasPendingFollowupQueueWork(keys, selection)).toBe(true);
+    } finally {
+      for (const source of sources) {
+        if (source.controllerInput) {
+          retireSessionControllerInput(source.controllerInput);
+        }
+      }
+      await Promise.all(
+        sources.flatMap((source) =>
+          source.controllerInput ? [source.controllerInput.settlement.promise] : [],
+        ),
+      );
+    }
+  });
+
+  it("detects each actionable queued-work representation", async () => {
     const cases = [
       (queue: ReturnType<typeof getFollowupQueue>) => {
-        queue.items.push({
+        addSources(queue, {
           prompt: "queued message",
           enqueuedAt: Date.now(),
           run: makeRun(),
         });
       },
       (queue: ReturnType<typeof getFollowupQueue>) => {
-        queue.inFlight.add({
+        claimSource(queue, {
           prompt: "in-flight collected message",
           enqueuedAt: Date.now(),
           run: makeRun(),
@@ -338,7 +640,7 @@ describe("hasPendingFollowupQueueWork", () => {
       const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
       populate(queue);
       expect(hasPendingFollowupQueueWork(["", ` ${QUEUE_KEY} `, QUEUE_KEY])).toBe(true);
-      clearFollowupQueue(QUEUE_KEY);
+      await clearOwnedQueues();
     }
   });
 
@@ -349,3 +651,18 @@ describe("hasPendingFollowupQueueWork", () => {
     expect(hasPendingFollowupQueueWork([undefined, "", QUEUE_KEY])).toBe(false);
   });
 });
+
+function addSources(queue: SessionControllerMailbox, ...sources: FollowupRun[]): void {
+  for (const source of sources) {
+    const input = submitSessionControllerInput(queue.key, source, { mode: queue.mode });
+    input.payload = "ready";
+    input.phase = "waiting";
+  }
+}
+function claimSource(queue: SessionControllerMailbox, source: FollowupRun): void {
+  const input = submitSessionControllerInput(queue.key, source, { mode: queue.mode });
+  const claim = tryClaimSessionControllerTask(input);
+  if (!claim) {
+    throw new Error("Expected isolated test input to be selected");
+  }
+}

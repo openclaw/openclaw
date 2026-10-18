@@ -155,6 +155,7 @@ export function rewriteDoctorSessionEntries(
     updateDeliveryProjection?: boolean;
     assertCurrent?: () => void;
     expectedIdentity?: DatabaseFileIdentity;
+    integrityCheck?: "quick" | "full";
   } & (
     | { transform: (entry: SessionEntry, sessionKey: string) => SessionEntry; rawTransform?: never }
     | {
@@ -344,6 +345,13 @@ export function rewriteDoctorSessionEntries(
       {
         operationLabel: "doctor.rewrite-session-entries",
         repairAdmission: {
+          integrityCheck: params.integrityCheck,
+          integrityTables: [
+            "session_nodes",
+            "session_entry_snapshots",
+            "session_windows",
+            "session_canonical_validation_pending",
+          ],
           expectedIdentity: params.expectedIdentity,
           assertCurrent: params.assertCurrent,
         },

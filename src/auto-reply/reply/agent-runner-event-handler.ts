@@ -243,7 +243,7 @@ export function createAgentRunEventHandler(params: {
     const backend = readStringValue(evt.data.backend);
     const hookMessages = normalizeTrimmedStringList(evt.data.messages);
     const sendCompactionUserNotices = async (
-      noticePhase: "start" | "end" | "incomplete" | "degraded",
+      noticePhase: "start" | "end" | "incomplete" | "degraded" | "context_bounded",
     ) => {
       if (hookMessages.length > 0) {
         const noticePayload = createCompactionHookNoticePayload({
@@ -255,7 +255,11 @@ export function createAgentRunEventHandler(params: {
           await deliverCompactionNoticePayload(noticePayload, "hook");
         }
       }
-      if (noticePhase === "degraded" || params.notifyUserAboutCompaction) {
+      if (
+        noticePhase === "degraded" ||
+        noticePhase === "context_bounded" ||
+        params.notifyUserAboutCompaction
+      ) {
         await deliverCompactionNoticePayload(
           createCompactionNoticePayload({
             phase: noticePhase,
@@ -266,6 +270,10 @@ export function createAgentRunEventHandler(params: {
         );
       }
     };
+    if (phase === "context_bounded") {
+      await sendCompactionUserNotices("context_bounded");
+      return;
+    }
     if (phase === "start") {
       await params.turn.opts?.onCompactionStart?.();
       await sendCompactionUserNotices("start");

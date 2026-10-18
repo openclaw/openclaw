@@ -19,8 +19,10 @@ import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 import type { TranscriptPolicy } from "./transcript-policy.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
-vi.mock("./embedded-agent-helpers.js", async () => ({
-  ...(await vi.importActual("./embedded-agent-helpers.js")),
+vi.mock("./embedded-agent-helpers/images.js", async () => ({
+  ...(await vi.importActual<typeof import("./embedded-agent-helpers/images.js")>(
+    "./embedded-agent-helpers/images.js",
+  )),
   sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
 }));
 

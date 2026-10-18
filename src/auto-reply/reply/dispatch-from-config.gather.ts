@@ -32,6 +32,8 @@ import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycl
 import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
@@ -40,11 +42,6 @@ import { prepareTtsPreferences, type PreparedTtsPreferences } from "../../tts/tt
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { FinalizedRuntimeMsgContext as FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
-import type {
-  DispatchProcessedOptions,
-  DispatchProcessedOutcome,
-  InboundMessageAuditTerminalRecorder,
-} from "./dispatch-from-config.audit.js";
 import {
   resolveBoundAcpDispatchRuntimeOwner,
   resolveBoundAcpDispatchSessionKey,
@@ -57,7 +54,12 @@ import {
   loadRuntimePlugins,
 } from "./dispatch-from-config.runtime-loaders.js";
 import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.js";
-import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
+import type {
+  DispatchFromConfigParams,
+  DispatchProcessedOptions,
+  DispatchProcessedOutcome,
+  InboundMessageAuditTerminalRecorder,
+} from "./dispatch-from-config.types.js";
 import { noteDispatchProcessedOutcome } from "./dispatch-processed-outcome.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
@@ -68,7 +70,7 @@ import {
   resolveReplyOperationRunState,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
+import { readReplySourceInput } from "./reply-source-binding.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
@@ -364,9 +366,22 @@ export async function gatherDispatchRequest(
   if (params.replyOptions?.abortSignal?.aborted) {
     return finishReplyOperationAborted();
   }
-  const initialDispatchReplyOperation = dispatchOperationSessionKey
-    ? replyRunRegistry.get(dispatchOperationSessionKey)
-    : undefined;
+  const sourceInput = readReplySourceInput(normalizedParams.replyOptions);
+  const initialDispatchReplyOperation = sourceInput
+    ? sourceInput.mailbox.owner.active
+    : dispatchOperationSessionKey
+      ? getSessionControllerOperation(
+          dispatchOperationSessionKey,
+          operationSessionStoreEntry.storePath
+            ? captureSessionTarget({
+                storeScope: operationSessionStoreEntry.storePath,
+                sessionKey: dispatchOperationSessionKey,
+                agentId: operationSessionStoreEntry.agentId,
+                incarnation: operationSessionStoreEntry.entry?.sessionId,
+              })
+            : undefined,
+        )
+      : undefined;
   if (
     params.replyOptions?.isHeartbeat === true &&
     dispatchOperationSessionKey &&

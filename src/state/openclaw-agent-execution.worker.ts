@@ -480,7 +480,6 @@ function openAgentDatabaseBackend(
     "session.archivePruning.reclaimPages": loadAgentArchivePruningOperations,
     "session.maintenance.prepare": loadMaintenanceOperations,
     "session.maintenance.metadata": loadMaintenanceOperations,
-    "session.maintenance.release": loadMaintenanceOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,
     "usageCache.retireLegacy": loadUsageCacheOperations,
@@ -544,6 +543,9 @@ function openAgentDatabaseBackend(
   const executeCommand = (command: SqliteWorkerCommand<AgentDatabaseOperations>) => {
     if (isSessionActorCommand(command)) {
       return expectDefined(actor, "Session actor command was not prepared").execute(command);
+    }
+    if (command.type === "session.turn.prepare" && actor) {
+      return actor.prepareTurn(command.input);
     }
     if (
       command.type === "database.domain.bind" ||

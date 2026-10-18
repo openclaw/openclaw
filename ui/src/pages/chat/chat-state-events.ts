@@ -13,7 +13,7 @@ import {
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
@@ -117,7 +117,7 @@ function finishSessionMessageRunReconcile(
     : reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true });
   const session = row ?? selectedChatSessionRow(state);
   const needsRunObservation = Boolean(
-    state.chatRunId && session?.hasActiveRun === false && !isSessionRunActive(session),
+    state.chatRunId && session?.hasActiveRun === false && !isSessionRunStateActive(session),
   );
   if (!cleared && !needsRunObservation) {
     return false;

@@ -134,9 +134,12 @@ suite.define(() => {
           await row.waitFor({ state: "visible" });
           expect(await row.getAttribute("title")).toBeNull();
           expect(await header.locator("a").count()).toBe(1);
-          expect(
-            await header.locator(".sidebar-agent-roster__avatar .session-glyph__ring").count(),
-          ).toBe(1);
+          // Agent metadata renders before the separate session-activity query can settle.
+          await expect
+            .poll(() =>
+              header.locator(".sidebar-agent-roster__avatar .session-glyph__ring").count(),
+            )
+            .toBe(1);
           expect(await sidebar.locator("[data-agent-collapse]").count()).toBe(0);
           expect(
             await sidebar

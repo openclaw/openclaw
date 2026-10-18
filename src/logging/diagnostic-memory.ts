@@ -283,6 +283,7 @@ export function emitDiagnosticMemorySample(
   return memory;
 }
 
+/** @internal Test-support reset; see diagnostic.test-support.ts. */
 export function resetDiagnosticMemoryForTest(): void {
   lastPressureAtByKey.clear();
 }

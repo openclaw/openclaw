@@ -202,6 +202,43 @@ describe("SessionsCard", () => {
     usage: { ...totals, totalTokens: tokens },
   });
 
+  it("exposes the selected session view to assistive technology", () => {
+    const base = createUsageProps();
+    const [display, setDisplay] = createSignal(base.display);
+    const onChange = vi.fn((patch: Partial<UsageProps["display"]>) =>
+      setDisplay((current) => ({ ...current, ...patch })),
+    );
+    const usage = {
+      ...base,
+      get display() {
+        return display();
+      },
+      callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onChange } },
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    const view = mountSolid(() => SessionsCard({ sessions: [], usage, totalSessions: 0 }), {
+      container,
+    });
+    flush();
+
+    const all = view.getByRole<HTMLButtonElement>("button", { name: "All", pressed: true });
+    const recent = view.getByRole<HTMLButtonElement>("button", {
+      name: "Recently viewed",
+      pressed: false,
+    });
+    recent.click();
+    flush();
+    expect(onChange).toHaveBeenLastCalledWith({ sessionsTab: "recent" });
+    expect(view.getByRole("button", { name: "Recently viewed", pressed: true })).toBe(recent);
+    expect(view.getByRole("button", { name: "All", pressed: false })).toBe(all);
+
+    all.click();
+    flush();
+    expect(onChange).toHaveBeenLastCalledWith({ sessionsTab: "all" });
+    expect(view.getByRole("button", { name: "All", pressed: true })).toBe(all);
+    expect(view.getByRole("button", { name: "Recently viewed", pressed: false })).toBe(recent);
+  });
+
   it("preserves sort focus while waiting for the server to reorder rows", () => {
     const base = createUsageProps();
     const [display, setDisplay] = createSignal(base.display);

@@ -4,9 +4,9 @@ import {
   createApplicationGateway,
 } from "../../../test-helpers/application-context.ts";
 
-export function createChatSidebarContainer() {
+export function createChatSidebarContainer(gateway = createApplicationGateway().gateway) {
   const context: Pick<ApplicationContext, "gateway" | "agentSelection"> = {
-    gateway: createApplicationGateway().gateway,
+    gateway,
     agentSelection: {
       state: { selectedId: "main", scopeId: "main" },
       intentRevision: 0,
@@ -15,6 +15,6 @@ export function createChatSidebarContainer() {
       subscribe: () => () => {},
     },
   };
-  // SAFETY: Disconnected file-preview fixtures only use Gateway and agent selection; discovery is unavailable.
+  // SAFETY: Preview fixtures only use Gateway and agent selection; discovery is unavailable.
   return createApplicationContextProvider(context as ApplicationContext);
 }

@@ -1368,7 +1368,20 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const recoverAutostartSuppression = createChannelAutostartRecovery({
     getSuppression: () => autostartSuppression,
     clearSuppression: () => {
+      const message = autostartSuppression?.message;
       autostartSuppression = null;
+      if (message === undefined) {
+        return;
+      }
+      // Accounts that stay stopped after recovery (unlinked, disabled) are not
+      // restarted, so they would keep reporting the breaker as the failure.
+      for (const [channelId, store] of channelStores) {
+        for (const [accountId, runtime] of store.runtimes) {
+          if (runtime.lastError === message) {
+            setRuntime(channelId, accountId, { lastError: null });
+          }
+        }
+      }
     },
     tryRecover: opts.tryRecoverAutostartSuppression,
     signal: opts.scheduler.signal,

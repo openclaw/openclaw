@@ -1163,9 +1163,12 @@
       },
       {
         "deferLoading": true,
-        "description": "Show visible-session model/usage/time/cost/tasks. `sessionKey=\"current\"` for current; UI labels are not keys. `model` overrides; `model=default` resets. Use for active model/session questions.",
+        "description": "Show visible-session model/usage/time/cost/tasks. `sessionKey=\"current\"` for current; UI labels are not keys. `model` overrides; `model=default` resets. Use for active model/session questions. `capabilities=true` lists this session's available tools and why others are missing.",
         "inputSchema": {
           "properties": {
+            "capabilities": {
+              "type": "boolean"
+            },
             "changesSince": {
               "minimum": 0,
               "type": "integer"
@@ -1589,6 +1592,45 @@
     "description": "",
     "name": "openclaw_direct",
     "tools": [
+      {
+        "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "nextCheck": {
+              "type": "string"
+            },
+            "notificationText": {
+              "type": "string"
+            },
+            "notify": {
+              "type": "boolean"
+            },
+            "outcome": {
+              "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
+              "type": "string"
+            },
+            "priority": {
+              "enum": ["low", "normal", "high"],
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "scratch": {
+              "description": "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            }
+          },
+          "required": ["outcome", "notify", "summary"],
+          "type": "object"
+        },
+        "name": "heartbeat_respond",
+        "type": "function"
+      },
       {
         "description": "End this turn to await pending child completions, not submit a final result. Return completed work normally. Does not message other sessions; use sessions_send. Unfinished subagents awaiting an incoming continuation must set waitFor:\"message\". For background tools, follow their continuation instructions. Collector runs require agents_wait instead.",
         "inputSchema": {

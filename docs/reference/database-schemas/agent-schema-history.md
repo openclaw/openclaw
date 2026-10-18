@@ -188,15 +188,26 @@ The context-engine turn outbox records its payload state. Shared TypeScript
 derivations populate these fields in the same statement as each JSON write.
 The session actor uses the same session derivation.
 
-The migration classifies every existing row once in its owning agent database's
-transaction, preserving canonical JSON and compressed transcript bytes. SQLite
-classification retains first-member JSON lookup and last-member legacy navigation
-semantics. Optional outbox tables remain absent until first use. Fresh and
-incognito databases start at schema 26. Later opens reuse admitted schema facts;
-runtime predicates do not fall back to JSON or re-run the backfill.
+The migration eagerly classifies existing session nodes and outbox rows in its
+owning agent database's transaction. It adds transcript predicate columns without
+the eager classification update, preserving canonical JSON and compressed
+transcript bytes. SQLite can still check retained rows while adding columns to
+STRICT tables; upgrade measurements include that work. Optional outbox tables
+remain absent until first use. Later opens reuse admitted schema facts.
+
+SQLite transcript reads derive unclassified predicates within their existing
+queries, before predicate filters, counts, and `LIMIT`. Classification preserves
+first-member JSON lookup, last-member legacy navigation, and malformed-input
+handling. New transcript payload writes and canonical payload rewrites materialize
+all predicate fields atomically. Metadata-only updates and byte-preserving copies
+do not materialize older rows, and no background backfill is scheduled. Existing
+beta databases with materialized predicates remain valid. This lazy classification
+changes no schema version.
 
 The [accepted design](https://github.com/openclaw/openclaw/issues/169254) keeps
-predicate types portable and uses the same derivations for future engine adapters.
+predicate types portable and uses shared derivations for engine adapters.
+SQLite-to-PostgreSQL ports normalize unclassified transcript predicates from the
+payloads already being transferred; PostgreSQL reads the stored columns.
 PostgreSQL bootstrap DDL is generated from the canonical schema; an engine that
 supports this database must provide each forward migration under the same version.
 Size-limiting JSON projections and current writer-authority checks keep their
@@ -205,9 +216,10 @@ existing owners and semantics.
 Schema 25 and older builds refuse schema 26. Rollback requires restoring the
 verified pre-migration backup with its matching build; never lower either version
 marker. Update-time Doctor retains its private rehearsal and verified backup
-requirements for older update drivers. First-upgrade cost scales with retained
-rows in each agent database and the number of databases on a host; implementation
-proof records both measurements.
+requirements for older update drivers. The installed updater runs first; lazy
+transcript classification changes candidate-side migration and reads only.
+Session-node and outbox backfills and other upgrade phases can still scale with
+retained data and the number of databases on a host.
 
 <a id="canonical-writer-validation" />
 

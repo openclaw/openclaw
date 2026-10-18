@@ -302,6 +302,7 @@ export async function runWorkerDescriptor(
             turnId: descriptor.assignment.turnId,
             modelRef: descriptor.assignment.modelRef,
             computerContextEpoch,
+            onCancelled: (reason) => abortController.abort(reason),
           });
     options.assertWorkspaceCurrent?.();
     const github = descriptor.assignment.github

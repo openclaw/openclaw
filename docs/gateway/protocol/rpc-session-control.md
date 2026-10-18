@@ -35,6 +35,11 @@ waiting for unrelated runtime-ownership or display-row preparation. Uncertain
 session metadata and membership still reconcile before selection, and responses
 recheck the current caller and contributing session identities before delivery.
 
+Session member listing and recipient selection also use committed metadata and
+the resident creator index. Adding a member does not wait for unrelated session
+display or worker-placement refreshes; sharing management permissions are still
+checked after preparation and at the write boundary.
+
 GitHub publication options read independent account status and publication receipts concurrently. The response still checks current session access and personal account authority after those reads settle.
 
 ## Session control

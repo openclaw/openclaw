@@ -164,26 +164,6 @@ export function publishPostgresSearchExtensionFacts(
   });
 }
 
-/** Optional native housekeeping is skipped on PostgreSQL; explicit native requests refuse below. */
-export const physicalDatabaseCapabilities = {
-  sqlite: {
-    nativeFile: true,
-    integrity: "native",
-    wal: "native",
-    checkpoint: "native",
-    vacuum: "native",
-    readSnapshot: "sqlite",
-  },
-  postgres: {
-    nativeFile: false,
-    integrity: "server-constraints",
-    wal: "skip",
-    checkpoint: "skip",
-    vacuum: "skip",
-    readSnapshot: "repeatable-read",
-  },
-} as const;
-
 export function requireNativeDatabaseFile(
   engine: "postgres",
   operation: "integrity" | "repair" | "file-snapshot",

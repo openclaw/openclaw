@@ -1,6 +1,4 @@
 /**
- * Normalized `web_search` output contract.
- *
  * Every bundled or external provider payload is normalized at the core tool
  * boundary into one of four closed branches (error / results / answer / raw).
  * The boundary owns the untrusted-content envelope: provider prose is
@@ -19,6 +17,10 @@ import {
   truncateSanitizedExternalContent,
   wrapWebContent,
 } from "../../security/external-content.js";
+import {
+  formatWebSearchNotConfiguredMessage,
+  isMissingCredentialCode,
+} from "../../web-search/runtime-error.js";
 import { MAX_SEARCH_COUNT } from "./web-search-provider-common.js";
 
 const WebSearchExternalContentSchema = Type.Object(
@@ -251,14 +253,17 @@ export function normalizeWebSearchOutput(params: {
     );
     const rawMessage = typeof result.message === "string" ? result.message : rawError;
     const docs = typeof result.docs === "string" ? toHttpUrl(result.docs) : undefined;
+    const detail = wrapProse(rawMessage === rawError ? rawError : `${rawError}: ${rawMessage}`, {
+      remaining: 4_000,
+      truncated: false,
+    });
     return {
       kind: "error",
       provider,
       error: "provider_error",
-      message: wrapProse(rawMessage === rawError ? rawError : `${rawError}: ${rawMessage}`, {
-        remaining: 4_000,
-        truncated: false,
-      }),
+      message: isMissingCredentialCode(result.error)
+        ? `${formatWebSearchNotConfiguredMessage(provider)}\nProvider setup details:\n${detail}`
+        : detail,
       ...(docs ? { docs } : {}),
     };
   }

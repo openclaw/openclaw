@@ -66,6 +66,10 @@ export async function prepareAgentContentPhase(params: {
   explicitRecipientSession?: ExplicitRecipientSession;
   knownAgents: string[];
   assertAdmissionCurrent?: () => void;
+  onTargetResolved?: (target: {
+    sessionKey?: string;
+    agentId?: string;
+  }) => boolean | void | Promise<boolean | void>;
 }) {
   const transcriptInputText = params.request.message.trim();
   let content: Awaited<ReturnType<typeof parseMessageWithAttachments>> = {
@@ -174,6 +178,10 @@ export async function prepareAgentContentPhase(params: {
     }
   }
 
+  params.assertAdmissionCurrent?.();
+  if ((await params.onTargetResolved?.({ sessionKey: requestedSessionKey, agentId })) === false) {
+    return undefined;
+  }
   if (params.normalizedAttachments.length > 0) {
     let session: Awaited<ReturnType<typeof readAcpSessionEntryAsync>> = null;
     let catalogAgentId = agentId;
@@ -234,6 +242,9 @@ export async function prepareAgentContentPhase(params: {
           : content.message
       ).trim();
     } catch (err) {
+      // A retired request owns its terminal response even when media parsing
+      // fails while the captured input is being cancelled.
+      params.assertAdmissionCurrent?.();
       if (err instanceof AgentRequestReservationEndedError) {
         throw err;
       }

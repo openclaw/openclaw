@@ -8,7 +8,7 @@ import {
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
@@ -712,7 +712,7 @@ it("keeps durable delivery generations live only through same-generation writes"
     const revoked = expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" });
     const authority = await prepareSessionDeliveryGeneration(descriptor);
     try {
-      await runExclusiveSessionLifecycleMutation("patch", {
+      await runSessionMutation({
         scope: database.path,
         identities: [sessionKey, entry.sessionId],
         prepare: async () => {

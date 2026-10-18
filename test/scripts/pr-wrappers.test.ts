@@ -1,13 +1,16 @@
 // PR wrapper tests cover maintainer helper command delegation.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   constants as fsConstants,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
@@ -920,6 +923,262 @@ describe("scripts/pr wrappers", () => {
     fixture.git(fixture.canonical, ["push", "origin", `${advanced}:refs/heads/main`]);
     return advanced;
   }
+
+  const itRecovery = process.platform === "linux" ? it : it.skip;
+  const mvHelp =
+    process.platform === "linux" ? spawnSync("mv", ["--help"], { encoding: "utf8" }).stdout : "";
+  const itExchange = mvHelp?.includes("--exchange") && mvHelp.includes("--no-copy") ? it : it.skip;
+  function recoveryFixture() {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    const runtime = spawnSync(
+      requireNodeTool("node"),
+      [
+        "-p",
+        "JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch })",
+      ],
+      { env: fixture.env, encoding: "utf8" },
+    );
+    expect(runtime.status, runtime.stderr).toBe(0);
+    parkCanonicalOffAnchor(fixture);
+    const anchor = materializeAnchor(fixture);
+    fixture.git(fixture.canonical, ["checkout", "main"]);
+    const modules = join(anchor, "node_modules");
+    const donor = join(fixture.root, "isolated-tooling");
+    const origin = fixture.git(fixture.canonical, ["remote", "get-url", "origin"]).stdout.trim();
+    fixture.git(fixture.root, ["clone", "--quiet", origin, donor]);
+    writeFileSync(join(donor, ".git/info/exclude"), "node_modules/\n");
+    const manifest = JSON.parse(readScript(join(donor, "package.json")));
+    const donorModules = join(donor, "node_modules");
+    const store = join(donorModules, ".pnpm");
+    mkdirSync(store, { recursive: true });
+    writeFileSync(
+      join(donorModules, ".modules.yaml"),
+      JSON.stringify({
+        packageManager: manifest.packageManager.split("+")[0],
+        nodeLinker: "isolated",
+        virtualStoreDir: ".pnpm",
+      }),
+    );
+    writeFileSync(join(store, "lock.yaml"), "lockfileVersion: '9.0'\n");
+    const packages: Record<string, string> = {};
+    for (const entry of readdirSync(modules)) {
+      const names = entry.startsWith("@")
+        ? readdirSync(join(modules, entry)).map((name) => `${entry}/${name}`)
+        : [entry];
+      for (const name of names) {
+        const version = manifest.dependencies?.[name] ?? manifest.devDependencies?.[name];
+        const target = join(store, `${name.replace("/", "+")}@${version}`, "node_modules", name);
+        mkdirSync(target, { recursive: true });
+        writeFileSync(join(target, "package.json"), JSON.stringify({ name, version }));
+        mkdirSync(join(donorModules, name, ".."), { recursive: true });
+        symlinkSync(target, join(donorModules, name));
+        packages[name] = target;
+      }
+    }
+    const identity = (path: string) => {
+      const stat = lstatSync(path, { bigint: true });
+      return Object.fromEntries(
+        ["dev", "ino", "uid", "gid", "mode"].map((key) => [
+          key,
+          String(stat[key as keyof typeof stat]),
+        ]),
+      );
+    };
+    const projection = (directory: string) => {
+      const entries: Record<string, Record<string, string>> = {};
+      const visit = (name: string) => {
+        const path = join(directory, name);
+        entries[name] = identity(path);
+        if (lstatSync(path).isSymbolicLink()) {
+          entries[name].target = readlinkSync(path);
+        } else {
+          for (const child of readdirSync(path).toSorted()) {
+            visit(name ? `${name}/${child}` : child);
+          }
+        }
+      };
+      visit("");
+      return entries;
+    };
+    const hash = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+    // The original failure: a previously pinned directory has disappeared.
+    rmSync(join(modules, "yaml"));
+    symlinkSync(join(fixture.root, "removed-install/yaml"), join(modules, "yaml"));
+    const helper = join(anchor, "scripts/pr-lib/materialize-dependencies.mjs");
+    const frozenHelper = readFileSync(helper);
+    const plan = {
+      version: 1,
+      pr: 123,
+      revision: fixture.git(donor, ["rev-parse", "HEAD"]).stdout.trim(),
+      runtime: JSON.parse(runtime.stdout),
+      anchor: {
+        path: anchor,
+        identity: identity(anchor),
+        parentIdentity: identity(fixture.root),
+        projection: projection(modules),
+      },
+      donor: {
+        path: donor,
+        identity: identity(donor),
+        parentIdentity: identity(fixture.root),
+        modulesSha256: hash(join(donorModules, ".modules.yaml")),
+        installLockSha256: hash(join(store, "lock.yaml")),
+        packages,
+      },
+    };
+    const planPath = join(fixture.root, "recovery.json");
+    const run = () => {
+      writeFileSync(planPath, JSON.stringify(plan));
+      return runWrapper(
+        fixture,
+        [
+          "tooling-recover",
+          "123",
+          planPath,
+          "--plan-sha256",
+          hash(planPath),
+          "--confirmed-quiescent",
+        ],
+        "canonical",
+      );
+    };
+    const validate = () =>
+      spawnSync(requireNodeTool("node"), [helper, donorModules, modules], {
+        env: fixture.env,
+        encoding: "utf8",
+      });
+    return {
+      ...fixture,
+      anchor,
+      modules,
+      donor,
+      plan,
+      run,
+      validate,
+      projection,
+      identity,
+      helper,
+      frozenHelper,
+    };
+  }
+
+  itExchange.each([false, true])(
+    "recovers a frozen dangling projection through the locked wrapper (exchange reports failure: %s)",
+    (reportsFailure) => {
+      const fixture = recoveryFixture();
+      // Older parents can have pinned only part of the child's dependency set.
+      rmSync(join(fixture.modules, "zod"));
+      chmodSync(fixture.modules, 0o2775);
+      chmodSync(join(fixture.modules, "@openclaw"), 0o1775);
+      fixture.plan.anchor.projection = fixture.projection(fixture.modules);
+      expect(fixture.validate().status).toBe(78);
+      const original = fixture.projection(fixture.modules);
+      const yamlPackage = fixture.plan.donor.packages.yaml;
+      if (!yamlPackage) {
+        throw new Error("Fixture yaml package missing");
+      }
+      const donorBytes = readFileSync(join(yamlPackage, "package.json"));
+      const alias = readlinkSync(join(fixture.canonical, "node_modules/yaml"));
+      writeFileSync(join(fixture.anchor, "retained-evidence"), "unchanged");
+      const mv = resolveCommand("mv");
+      fixture.write(
+        "mv",
+        `#!/bin/sh\n"${mv}" "$@"\n${reportsFailure ? "exit 7" : "exit $?"}\n`,
+        fixture.bin,
+      );
+      chmodSync(join(fixture.bin, "mv"), 0o755);
+      const result = fixture.run();
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const receipt = JSON.parse(result.stdout.trim().split("\n").at(-1)!);
+      expect(receipt.state).toBe("complete");
+      expect(fixture.projection(receipt.stage)).toEqual(original);
+      expect(fixture.identity(fixture.modules)).toEqual(receipt.installed);
+      expect(fixture.identity(fixture.modules).mode).toBe(original[""]?.mode);
+      expect(fixture.identity(join(fixture.modules, "@openclaw")).mode).toBe(
+        original["@openclaw"]?.mode,
+      );
+      for (const [name, target] of Object.entries(fixture.plan.donor.packages)) {
+        expect(readlinkSync(join(fixture.modules, name))).toBe(target);
+      }
+      expect(fixture.validate().status).toBe(0);
+      expect(readFileSync(fixture.helper)).toEqual(fixture.frozenHelper);
+      expect(readFileSync(join(yamlPackage, "package.json"))).toEqual(donorBytes);
+      expect(readlinkSync(join(fixture.canonical, "node_modules/yaml"))).toBe(alias);
+      expect(readScript(join(fixture.anchor, "retained-evidence"))).toBe("unchanged");
+      // An already exchanged plan cannot swap the original directory back.
+      const repeat = fixture.run();
+      expect(repeat.status).not.toBe(0);
+      expect(repeat.stderr).toContain("Projection preimage differs");
+    },
+  );
+
+  itRecovery("refuses changed recovery inputs before replacing the retained projection", () => {
+    const fixture = recoveryFixture();
+    const original = fixture.projection(fixture.modules);
+    const check = (message: string) => {
+      const result = fixture.run();
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stderr).toContain(message);
+      expect(fixture.projection(fixture.modules)).toEqual(original);
+      expect(readFileSync(fixture.helper)).toEqual(fixture.frozenHelper);
+    };
+    fixture.plan.anchor.identity.ino += "1";
+    check("directory identity differs");
+    fixture.plan.anchor.identity = fixture.identity(fixture.anchor);
+    const yamlEntry = fixture.plan.anchor.projection.yaml;
+    const yamlPackage = fixture.plan.donor.packages.yaml;
+    if (!yamlEntry || !yamlPackage) {
+      throw new Error("Fixture yaml projection missing");
+    }
+    yamlEntry.target = "changed-preimage";
+    check("Projection preimage differs");
+    fixture.plan.anchor.projection = fixture.projection(fixture.modules);
+    const packagePath = join(yamlPackage, "package.json");
+    const packageBytes = readFileSync(packagePath);
+    writeFileSync(packagePath, '{"name":"yaml","version":"0.0.0"}');
+    check("prerequisite command failed");
+    writeFileSync(packagePath, packageBytes);
+    const packageModules = join(yamlPackage, "..");
+    symlinkSync(fixture.canonical, join(packageModules, "borrowed-workspace"));
+    check("escapes the isolated installation");
+    rmSync(join(packageModules, "borrowed-workspace"));
+    const nestedModules = join(yamlPackage, "node_modules");
+    mkdirSync(nestedModules);
+    symlinkSync(fixture.canonical, join(nestedModules, "borrowed-workspace"));
+    check("escapes the isolated installation");
+    rmSync(nestedModules, { recursive: true });
+    fixture.plan.donor.packages.yaml = fixture.canonical;
+    check("Qualified package path differs");
+  });
+
+  itRecovery.each(["unchanged", "unknown"])(
+    "retains both projection directories after an %s exchange outcome",
+    (state) => {
+      const fixture = recoveryFixture();
+      const original = fixture.projection(fixture.modules);
+      // Real PATH process boundary, without a production-only interruption seam.
+      const mv = resolveCommand("mv");
+      fixture.write(
+        "mv",
+        state === "unchanged"
+          ? "#!/bin/sh\nexit 7\n"
+          : `#!/bin/sh\n"${mv}" "$6" "$6.displaced"\nexit 7\n`,
+        fixture.bin,
+      );
+      chmodSync(join(fixture.bin, "mv"), 0o755);
+      const result = fixture.run();
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      const receipt = JSON.parse(result.stdout.trim().split("\n").at(-1)!);
+      expect(receipt.state).toBe(state);
+      expect(result.stderr).toContain("do not retry");
+      expect(existsSync(receipt.stage)).toBe(true);
+      expect(
+        fixture.projection(
+          state === "unchanged" ? fixture.modules : `${fixture.modules}.displaced`,
+        ),
+      ).toEqual(original);
+    },
+  );
 
   itPosix(
     "sources anchor dependencies from the environment tooling root without changing canonical",

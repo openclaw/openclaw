@@ -49,7 +49,8 @@ it("keeps private pane probes on the reported runtime while composing stream ins
   expect(Reflect.get(element, "state")).toBe(fixture.state);
   expect(Reflect.get(element, "chatState")).toBe(Reflect.get(runtime, "chatState"));
   expect(Reflect.get(element, "context")).toBe(fixture.pane.context);
-  expect(Reflect.get(element, "presencePayload")).toBeUndefined();
+  expect(Reflect.get(element, "presence")).toBe(runtime.presence);
+  expect(runtime.presence.snapshot).toBeUndefined();
   expect(firstProbe).toHaveBeenCalledWith(runtime, "commit");
   expect(Reflect.get(element, "updateComplete")).toBe(commitFence);
   expect(Object.getOwnPropertyDescriptor(element, "sessionSnapshotStore")).toMatchObject(
@@ -66,12 +67,12 @@ it("keeps private pane probes on the reported runtime while composing stream ins
   runtime.history.loadingOlder = true;
   Reflect.set(runtime, "historyIntentTimer", 37);
   const presence = { presence: [] };
-  Reflect.set(runtime, "presencePayload", presence);
+  runtime.presence.update(presence);
   expect(Reflect.get(element, "taskSuggestions")).toBe(suggestions);
   expect(Reflect.get(element, "catalogMessages")).toBe(catalogMessages);
   expect(Reflect.get(element, "loadingOlder")).toBe(true);
   expect(Reflect.get(element, "historyIntentTimer")).toBe(37);
-  expect(Reflect.get(element, "presencePayload")).toBe(presence);
+  expect(Reflect.get(element, "presence")).toMatchObject({ snapshot: presence });
   const boardProviderLease = { update: vi.fn() };
   Reflect.set(runtime, "boardProviderLease", boardProviderLease);
   expect(Reflect.get(element, "boardProviderLease")).toBe(boardProviderLease);

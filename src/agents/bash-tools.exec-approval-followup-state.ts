@@ -76,7 +76,6 @@ function pruneExpiredExecApprovalFollowupRuntimeHandoffs(nowMs: number): void {
   }
 }
 
-/** Build the idempotency key used for an exec approval follow-up. */
 export function buildExecApprovalFollowupIdempotencyKey(params: {
   approvalId: string;
   nonce?: string;
@@ -86,7 +85,6 @@ export function buildExecApprovalFollowupIdempotencyKey(params: {
   return nonce ? `${base}${EXEC_APPROVAL_FOLLOWUP_IDEMPOTENCY_NONCE_MARKER}${nonce}` : base;
 }
 
-/** Parse the approval id embedded in a follow-up idempotency key. */
 export function parseExecApprovalFollowupApprovalId(idempotencyKey: string): string | undefined {
   const normalized = normalizeOptionalString(idempotencyKey);
   if (!normalized?.startsWith(EXEC_APPROVAL_FOLLOWUP_IDEMPOTENCY_PREFIX)) {

@@ -211,6 +211,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs!",
   "scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs!",
   "scripts/e2e/lib/upgrade-survivor/update-report-recovery.mjs!",
+  // run.sh wraps the legacy operator-state updater with this timeout observer.
+  "scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
@@ -449,10 +451,7 @@ const rootEntries = [
   "config/knip.all-exports.config.ts!",
   "config/knip.scripts-exports.config.ts!",
   // OpenGrep rule tests read these as static source inputs; they are never executed.
-  "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.js!",
-  "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.ts!",
-  "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.js!",
-  "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.ts!",
+  "security/opengrep/rules/*/*.{js,ts}!",
   "{openclaw,docker-entrypoint}.mjs!",
   // Desktop service integration consumes this API in the staged builder/app cutover (#172569).
   // Remove this audit root after those in-tree callers land.
@@ -850,6 +849,14 @@ const config = {
     "src/infra/database-engine/physical-facts.ts": ["exports"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
+    // Diagnostic fixtures reset owner-private state; the full-tree audit checks these consumers.
+    "src/logging/diagnostic-memory.ts": ["exports"],
+    "src/logging/diagnostic-phase.ts": ["exports"],
+    "src/logging/diagnostic-run-activity.ts": ["exports"],
+    "src/logging/diagnostic-runtime.ts": ["exports"],
+    "src/logging/diagnostic-session-recovery-coordinator.ts": ["exports"],
+    "src/logging/diagnostic-session-state.ts": ["exports"],
+    "src/logging/diagnostic-stability.ts": ["exports"],
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],

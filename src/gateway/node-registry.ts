@@ -1102,7 +1102,11 @@ export class NodeRegistry {
     runId?: string;
     sessionKey: string;
     terminal: boolean;
-  }): Pick<PendingSystemRunEvent, "invocationDeliveryContext"> | null {
+  }):
+    | (Pick<PendingSystemRunEvent, "invocationDeliveryContext"> & {
+        holdNotice?: (notify: () => void) => void;
+      })
+    | null {
     if (!params.connId || !params.sessionKey) {
       return null;
     }
@@ -1126,11 +1130,35 @@ export class NodeRegistry {
     if (match === null) {
       return null;
     }
-    const source = this.authorizedSystemRunEvents.get(match)?.invocationDeliveryContext;
+    const event = this.authorizedSystemRunEvents.get(match);
+    const source = event?.invocationDeliveryContext;
+    let waiting: PendingInvoke | undefined;
     if (params.terminal) {
       this.authorizedSystemRunEvents.delete(match);
+      // The node reports completion before its result; a still-waiting caller receives that output.
+      waiting = [...this.pendingInvokes.values()].find(
+        (pending) =>
+          pending.nodeId === params.nodeId &&
+          pending.connId === connId &&
+          pending.systemRunEvent?.runId === event?.runId,
+      );
     }
-    return source ? { invocationDeliveryContext: { ...source } } : {};
+    return {
+      ...(source ? { invocationDeliveryContext: { ...source } } : {}),
+      ...(waiting
+        ? {
+            holdNotice: (notify: () => void) => {
+              const resolve = waiting.resolve;
+              waiting.resolve = (value) => {
+                resolve(value);
+                if (!value.ok) {
+                  notify();
+                }
+              };
+            },
+          }
+        : {}),
+    };
   }
 
   private rememberAuthorizedSystemRunEvent(

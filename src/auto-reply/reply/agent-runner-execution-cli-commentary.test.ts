@@ -99,6 +99,7 @@ function useScriptedClaudeCliBackend() {
 function createClaudeCliFollowupRun() {
   const followupRun = createFollowupRun();
   followupRun.run.agentId = "agent";
+  followupRun.run.sessionKey = "agent:agent:main";
   followupRun.run.provider = "claude-cli";
   followupRun.run.model = "claude-opus-4-6";
   followupRun.run.skillsSnapshot = { prompt: "", skills: [], version: 0 };
@@ -107,9 +108,10 @@ function createClaudeCliFollowupRun() {
 }
 
 function createTurnParams(opts: GetReplyOptions, blockStreamingEnabled: boolean) {
+  const followupRun = createClaudeCliFollowupRun();
   return {
     commandBody: "hi",
-    followupRun: createClaudeCliFollowupRun(),
+    followupRun,
     sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
     opts,
     typingSignals: createMockTypingSignaler(),
@@ -121,7 +123,7 @@ function createTurnParams(opts: GetReplyOptions, blockStreamingEnabled: boolean)
     shouldEmitToolOutput: () => false,
     pendingToolTasks: new Set<Promise<void>>(),
     isHeartbeat: false,
-    sessionKey: "main",
+    sessionKey: followupRun.run.sessionKey,
     getActiveSessionEntry: () => undefined,
     resolvedVerboseLevel: "off" as const,
   };

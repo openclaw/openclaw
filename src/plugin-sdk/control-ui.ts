@@ -319,4 +319,7 @@ export type {
   ControlUiSettingsComponents,
   ControlUiSettingsContext,
   ControlUiSettingsView,
+  ControlUiChannelSettingsSnapshot,
+  ControlUiChannelSettingsContext,
+  ControlUiChannelSettingsView,
 } from "./control-ui-settings.js";

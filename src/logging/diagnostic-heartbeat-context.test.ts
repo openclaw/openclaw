@@ -132,16 +132,16 @@ it.each(["enabled", "disabled", "incognito"])(
     await tick();
     await tick();
     expect(recover).toHaveBeenCalled();
-    if (enabled) {
+    if (enabled && label !== "incognito") {
       await logged.promise;
       for (const identity of [`sessionId=${sessionId}`, `sessionKey=${sessionKey}`]) {
         expect(warn).toHaveBeenCalledWith(expect.stringContaining(identity));
       }
-      for (const content of [label === "incognito" ? privateReply : reply, "lastAssistant="]) {
-        expect(JSON.stringify(warn.mock.calls)).not.toContain(content);
-      }
     } else {
       expect(warn).not.toHaveBeenCalled();
+    }
+    for (const content of [label === "incognito" ? privateReply : reply, "lastAssistant="]) {
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(content);
     }
     for (const query of queries) {
       expect(query).not.toHaveBeenCalled();

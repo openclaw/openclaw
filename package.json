@@ -7,9 +7,15 @@
       "sqlite",
       "postgres"
     ],
-    "postgresFamilies": ["state", "agent", "workboard", "logbook", "team-reports"],
+    "postgresFamilies": [
+      "state",
+      "agent",
+      "workboard",
+      "logbook",
+      "team-reports"
+    ],
     "schemaVersions": {
-      "state": 27,
+      "state": 28,
       "agent": 31
     }
   },
@@ -474,7 +480,8 @@
     "!dist/plugin-sdk/collection-input-runtime.d.ts",
     "!dist/plugin-sdk/http-response-runtime.d.ts",
     "!dist/plugin-sdk/node-crypto-runtime.d.ts",
-    "!dist/plugin-sdk/path-existence-runtime.d.ts"
+    "!dist/plugin-sdk/path-existence-runtime.d.ts",
+    "!dist/plugin-sdk/provider-auth-markers.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1269,6 +1276,10 @@
     "./plugin-sdk/session-transcript-runtime": {
       "default": "./dist/plugin-sdk/session-transcript-runtime.js"
     },
+    "./plugin-sdk/context-engine-transcript-runtime": {
+      "types": "./dist/plugin-sdk/context-engine-transcript-runtime.d.ts",
+      "default": "./dist/plugin-sdk/context-engine-transcript-runtime.js"
+    },
     "./plugin-sdk/sqlite-runtime": {
       "default": "./dist/plugin-sdk/sqlite-runtime.js"
     },
@@ -1485,6 +1496,9 @@
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
+    },
+    "./plugin-sdk/provider-auth-markers": {
+      "default": "./dist/plugin-sdk/provider-auth-markers.js"
     },
     "./plugin-sdk/provider-auth-aliases": {
       "default": "./dist/plugin-sdk/provider-auth-aliases.js"
@@ -1750,6 +1764,7 @@
     "channels:catalog:gen": "node scripts/write-official-channel-catalog.mjs --write",
     "changed:lanes": "node scripts/changed-lanes.mjs",
     "check": "node --import ./scripts/tsx.mjs scripts/check.mts",
+    "check:agents-md-size": "node --import ./scripts/tsx.mjs scripts/check-agents-md-size.mts",
     "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:wrapper-shadowing && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm db:postgres:check && pnpm lint:kysely && pnpm check:database-first-legacy-stores",
     "check:assertion-safety": "node --import ./scripts/tsx.mjs scripts/check-assertion-safety-ratchet.mts",
     "check:base-config-schema": "node --import ./scripts/tsx.mjs scripts/generate-base-config-schema.ts --check",
@@ -2322,7 +2337,6 @@
     "@grammyjs/transformer-throttler": "1.2.1",
     "@homebridge/ciao": "1.3.12",
     "@lydell/node-pty": "1.2.0-beta.15",
-    "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/core": "2.3.1",
     "@modelcontextprotocol/node": "2.1.1",
     "@modelcontextprotocol/sdk": "1.32.1",
@@ -2392,6 +2406,7 @@
     "@copilotkit/aimock": "1.44.0",
     "@mdx-js/mdx": "3.1.1",
     "@mistralai/mistralai": "2.7.0",
+    "@modelcontextprotocol/client": "2.3.1",
     "@openclaw/crabline": "0.1.29",
     "@openclaw/session-url-contract": "workspace:*",
     "@opentelemetry/sdk-node": "0.223.0",

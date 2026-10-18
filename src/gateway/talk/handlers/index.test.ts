@@ -4,10 +4,10 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../../agents/embedded-agent-runner/runs.test-support.js";
 import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { resolveCommandAuthorization } from "../../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -17,6 +17,7 @@ import { normalizeResolvedSecretInputString } from "../../../config/types.secret
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../../../secrets/runtime-degraded-state.js";
+import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../../talk/agent-consult-tool.js";
@@ -26,6 +27,8 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "../../server-methods/types.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
+import { claimRpcSourceForTest, createRpcSourceForTest } from "../../test-helpers.rpc-source.js";
+import { prepareTalkSessionTarget } from "../session-target.js";
 import { preparedTalkSessionProjection as projection } from "../test-helpers.js";
 import { createBrowserProvider, createBrowserSessionMock } from "./client-fixtures.test-support.js";
 import { forgetLegacyVoiceBinding } from "./client-legacy-voice-bindings.js";
@@ -410,6 +413,7 @@ beforeEach(() => {
       control: mocks.gatewayControl,
     }),
   );
+  rpcSourceTesting.clear();
   setActiveDegradedSecretOwners([]);
   mocks.getRealtimeTranscriptionProvider.mockImplementation((providerId: string | undefined) => {
     const normalized = providerId?.trim().toLowerCase();
@@ -748,6 +752,17 @@ describe("talk.catalog handler", () => {
         outputAudioFormats: [],
         voices: ["marin", "cedar"],
         voiceSelectionPolicy: "allowlist-default",
+        modelFamilySettings: {
+          family: "gpt-live",
+          unlistedModelVoices: "active",
+          unsupportedTransports: ["provider-websocket"],
+          gatewayRelayHandlesAgentConsult: true,
+          hint: {
+            titleKey: "talkPage.gptLive.title",
+            descriptionKey: "talkPage.gptLive.hint",
+            readyKey: "talkPage.gptLive.ready",
+          },
+        },
       },
     } as never);
 
@@ -777,6 +792,17 @@ describe("talk.catalog handler", () => {
       voices: ["alloy", "marin"],
       activeVoices: ["marin", "cedar"],
       activeVoiceSelectionPolicy: "allowlist-default",
+      modelFamilySettings: {
+        family: "gpt-live",
+        unlistedModelVoices: "active",
+        unsupportedTransports: ["provider-websocket"],
+        gatewayRelayHandlesAgentConsult: true,
+        hint: {
+          titleKey: "talkPage.gptLive.title",
+          descriptionKey: "talkPage.gptLive.hint",
+          readyKey: "talkPage.gptLive.ready",
+        },
+      },
     });
     expect(JSON.stringify(catalog)).not.toContain("gpt-live-test-canary");
     // Catalog readiness must mirror talk.client.create: top-level
@@ -2843,6 +2869,21 @@ describe("talk.client.toolCall handler", () => {
   });
 
   it("links relay-owned agent consult runs so relay cancellation can abort them", async () => {
+    const target = await prepareTalkSessionTarget({}, "main");
+    rpcSourceTesting.set(
+      "run-voice-1",
+      createRpcSourceForTest(
+        {},
+        {
+          runId: "run-voice-1",
+          sessionId: "session-main",
+          sessionKey: target.canonicalKey,
+          agentId: target.agentId,
+          storeScope: target.storePath,
+        },
+      ),
+    );
+
     const respond = await invokeTalkHandler("talk.client.toolCall", {
       params: {
         sessionKey: "main",
@@ -2854,7 +2895,6 @@ describe("talk.client.toolCall handler", () => {
       },
       context: {
         getRuntimeConfig: () => ({}),
-        chatAbortControllers: new Map([["run-voice-1", { sessionId: "session-main" }]]),
         logGateway: { warn: vi.fn() },
       },
     });
@@ -2927,26 +2967,26 @@ describe("talk.client.toolCall handler", () => {
 });
 
 describe("talk.client.steer handler", () => {
-  const createSteerContext = (ownerConnId = "conn-1") =>
-    ({
-      getRuntimeConfig: () => ({}),
-      chatAbortControllers: new Map([
-        [
-          "run-voice-1",
-          {
-            controller: new AbortController(),
-            sessionId: "session-active",
-            sessionKey: "agent:main:main",
-            agentId: "main",
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-            startedAtMs: 1,
-            expiresAtMs: Date.now() + 60_000,
-            ownerConnId,
-            kind: "chat-send",
-          },
-        ],
-      ]),
-    }) as never;
+  const createSteerContext = async (ownerConnId = "conn-1") => {
+    const target = await prepareTalkSessionTarget({}, "agent:main:main");
+    const source = createRpcSourceForTest(
+      {
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        requester: { connectionId: ownerConnId },
+        kind: "chat-send",
+      },
+      {
+        runId: "run-voice-1",
+        storeScope: target.storePath,
+        sessionId: "session-active",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+      },
+    );
+    await claimRpcSourceForTest(source);
+    rpcSourceTesting.set("run-voice-1", source);
+    return { getRuntimeConfig: () => ({}) } as never;
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -2964,7 +3004,7 @@ describe("talk.client.steer handler", () => {
   ])("rejects steering with $name", async ({ text, mode, message }) => {
     const respond = await invokeTalkHandler("talk.client.steer", {
       params: { sessionKey: "agent:main:main", text, ...(mode ? { mode } : {}) },
-      context: message ? createSteerContext("conn-2") : {},
+      context: await createSteerContext("conn-2"),
     });
     expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
     expectRespondError(respond, {
@@ -3256,10 +3296,9 @@ describe("talk.client.create handler", () => {
   it("binds GPT-Live delegations to the voice session and browser-owned steer lifecycle", async () => {
     const started = createDeferred();
     const release = createDeferred();
-    const chatAbortControllers = new Map();
+    let releaseSource = () => {};
     const config = realtimeConfig({ provider: "openai", model: "gpt-live-1" }) as OpenClawConfig;
     const context = {
-      chatAbortControllers,
       getRuntimeConfig: () => config,
       logGateway: { warn: vi.fn() },
     };
@@ -3287,8 +3326,11 @@ describe("talk.client.create handler", () => {
         sessionId: "session-main",
         timeoutMs: 30_000,
       });
+      const source = rpcSourceTesting.get("talk-realtime-consult:gpt-live")!;
+      releaseSource = await claimRpcSourceForTest(source);
       const handle = createEmbeddedRunHandle({ runId: "talk-realtime-consult:gpt-live" });
-      setActiveEmbeddedRun("session-main", handle, "agent:main:main");
+      const operation = source.input.claim?.operation;
+      setActiveEmbeddedRun("session-main", handle, "agent:main:main", undefined, "main", operation);
       started.resolve();
       try {
         await release.promise;
@@ -3328,14 +3370,7 @@ describe("talk.client.create handler", () => {
       assertCurrent: expect.any(Function),
       physicalSource: voiceWriter.source,
     });
-    expect(chatAbortControllers.get("talk-realtime-consult:gpt-live")).toMatchObject({
-      sessionId: "session-main",
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      ownerConnId: "conn-1",
-      controlUiVisible: false,
-      kind: "chat-send",
-    });
+    const consultSource = rpcSourceTesting.get("talk-realtime-consult:gpt-live")!;
 
     mocks.controlRealtimeVoiceAgentRun.mockResolvedValueOnce({
       ok: true,
@@ -3360,13 +3395,16 @@ describe("talk.client.create handler", () => {
       getToolAuthorityOverlay: expect.any(Function),
       text: "Use the safer plan",
       mode: "steer",
+      cancelRun: expect.any(Function),
     });
     expectRespondOk(steerRespond, { ok: true, mode: "steer" });
 
     release.resolve();
     await expect(consult).resolves.toEqual({ text: "Done" });
     expect(providerConsult.claimAppend?.()).toBe(true);
-    expect(chatAbortControllers.has("talk-realtime-consult:gpt-live")).toBe(false);
+    releaseSource();
+    await consultSource.input.settlement.promise;
+    expect(rpcSourceTesting.has("talk-realtime-consult:gpt-live")).toBe(false);
   });
 
   it.each([

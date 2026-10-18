@@ -1,7 +1,7 @@
 import { createEffect, onSettled } from "solid-js";
 import type {
   ControlUiSettingsContext,
-  ControlUiSettingsPlacement,
+  ControlUiSettingsView,
   ControlUiSettingsSnapshot,
 } from "../../../src/plugin-sdk/control-ui-settings.js";
 import type { ApplicationContext } from "../app/context.ts";
@@ -24,7 +24,7 @@ function authority(snapshot: ControlUiSettingsSnapshot): string {
 
 export function ControlUiSettingsPresentation(props: {
   application: ApplicationContext;
-  placement: ControlUiSettingsPlacement;
+  placement: ControlUiSettingsView["placement"];
   readSnapshot: () => ControlUiSettingsSnapshot;
   subscribe: (listener: () => void) => () => void;
   navigate: ControlUiSettingsContext["navigate"];

@@ -174,10 +174,6 @@ export function chatSubmitState(
     submitPending: pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
     onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {
       state.handleChatDraftChange(...args);
-      // Nonempty draft edits can skip a pane render, but this gate depends on command intent.
-      if (pendingReason && controlCommand !== isChatControlCommand(state.chatMessage)) {
-        state.requestUpdate?.();
-      }
     },
   };
 }

@@ -258,10 +258,9 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   private progressPresentationSessionKey: string | undefined;
   private progressPresentationReady = false;
   private hiddenProgressCardScope: object | undefined;
-  private readonly hiddenProgressCards = new Map<
-    string,
-    { lifetime: object | undefined; revision: number }
-  >();
+  readonly progressVisibility = {
+    hiddenCards: new Map<string, { lifetime: object | undefined; revision: number }>(),
+  };
   private retainedProgressCard:
     | {
         gatewayScope: object;
@@ -294,7 +293,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const gatewayScope = gatewayPresentationScope(this.context.gateway);
     if (this.hiddenProgressCardScope !== gatewayScope) {
       this.hiddenProgressCardScope = gatewayScope;
-      this.hiddenProgressCards.clear();
+      this.progressVisibility.hiddenCards.clear();
     }
     const agentId = resolveUiSelectedSessionAgentId(state);
     const previous = this.retainedProgressCard;
@@ -333,7 +332,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (!presented) {
       return null;
     }
-    const hidden = this.hiddenProgressCards.get(presented.identity);
+    const hidden = this.progressVisibility.hiddenCards.get(presented.identity);
     if (!hidden) {
       return presented;
     }
@@ -344,7 +343,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     ) {
       return null;
     }
-    this.hiddenProgressCards.delete(presented.identity);
+    this.progressVisibility.hiddenCards.delete(presented.identity);
     return presented;
   }
 
@@ -363,12 +362,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (!presented || presented.card !== card) {
       return;
     }
-    this.hiddenProgressCards.delete(presented.identity);
-    this.hiddenProgressCards.set(presented.identity, {
-      lifetime: presented.lifetime,
-      revision: card.revision,
-    });
-    this.invalidate();
+    this.progressVisibility.hiddenCards = new Map(this.progressVisibility.hiddenCards).set(
+      presented.identity,
+      { lifetime: presented.lifetime, revision: card.revision },
+    );
   }
 
   protected override initialProgressCardTarget() {
@@ -376,7 +373,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (
       !state ||
       !this.presented ||
-      document.visibilityState === "hidden" ||
+      !this.presentation.documentVisible ||
       this.isCurrentSessionArchived(state) ||
       parseCatalogSessionKey(state.sessionKey) ||
       (!this.transcriptReady && !state.currentSessionId && !getAcceptedChatHistorySession(state))
@@ -413,7 +410,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       if (
         state.connected &&
         (!this.presented ||
-          document.visibilityState === "hidden" ||
+          !this.presentation.documentVisible ||
           (!this.transcriptReady && !getAcceptedChatHistorySession(state)) ||
           (this.initialProgressCardTarget() && progress.loading && !progress.error))
       ) {
@@ -451,41 +448,39 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   protected confirmConversationReset(): Promise<boolean> {
     const board = this.resolveBoardView();
     const scopeKey = boardProviderCacheKey(this.resolveBoardConversation());
-    const pending = this.resetConfirmation;
+    const pending = this.resetConfirmation.pending;
     if (pending && pending.scopeKey !== scopeKey) {
       this.settleResetConfirmation(false);
     }
     if (!board.hasBoard) {
       return Promise.resolve(true);
     }
-    if (this.resetConfirmation) {
-      return this.resetConfirmation.promise;
+    if (this.resetConfirmation.pending) {
+      return this.resetConfirmation.pending.promise;
     }
     const { promise, resolve } = createDeferredCore<boolean>();
-    this.resetConfirmation = { scopeKey, promise, resolve };
-    this.invalidate();
+    this.resetConfirmation.pending = { scopeKey, promise, resolve };
     return promise;
   }
 
   protected cancelResetConfirmationForSessionChange(): void {
-    const pending = this.resetConfirmation;
+    const pending = this.resetConfirmation.pending;
     if (pending && pending.scopeKey !== boardProviderCacheKey(this.resolveBoardConversation())) {
       this.settleResetConfirmation(false);
     }
   }
 
   protected settleResetConfirmation(confirmed: boolean): void {
-    const pending = this.resetConfirmation;
+    const pending = this.resetConfirmation.pending;
     if (!pending) {
       return;
     }
-    this.resetConfirmation = undefined;
-    this.invalidate();
+    this.resetConfirmation.pending = undefined;
     pending.resolve(confirmed);
   }
 
   protected renderResetConfirmation() {
-    if (!this.resetConfirmation) {
+    if (!this.resetConfirmation.pending) {
       return null;
     }
     return { onResolve: (confirmed: boolean) => this.settleResetConfirmation(confirmed) };
@@ -580,7 +575,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       invalidateImageLightbox(state);
       state.sidebarContent = null;
       clearSessionWorkspacePreviews(state);
-      state.requestUpdate?.();
     }
     // Hidden snapshots stay parked, so the retained live region must be silenced synchronously.
     this.element.querySelector(".chat-transcript-announcement")?.setAttribute("aria-live", "off");
@@ -635,7 +629,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     state.chatGoalDraftMode = handoff.goalMode ?? null;
     state.chatReplyTarget = handoff.replyTarget ?? null;
     state.handleChatDraftChange(handoff.draft, handoff.mentions ?? []);
-    state.requestUpdate?.();
+    state.composerDraftChanged?.();
     if (handoff.send) {
       const composer = getChatComposerState(this.presentationId);
       const editRevision = composer.editRevision;

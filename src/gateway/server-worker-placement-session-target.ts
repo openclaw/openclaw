@@ -13,7 +13,7 @@ import { captureSessionTranscriptTargetBinding } from "../config/sessions/transc
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
@@ -205,8 +205,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
     params.getConfig(),
     params,
   );
-  const operation = params.action === "activation" ? "placement-activate" : "placement-recover";
-  return await runExclusiveSessionLifecycleMutation(operation, {
+  return await runSessionMutation({
     scope: target.storePath,
     identities: [params.sessionKey, target.canonicalKey, ...target.storeKeys, params.sessionId],
     signal: params.signal,

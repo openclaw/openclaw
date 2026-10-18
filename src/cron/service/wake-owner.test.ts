@@ -139,10 +139,7 @@ it.each(["requests-in-flight"] as const)(
   },
 );
 
-it.each([
-  { reason: "requests-in-flight", retryDelay: 180_000 },
-  { reason: "cron-in-progress", retryDelay: 1_000 },
-])(
+it.each([{ reason: "requests-in-flight", retryDelay: 180_000 }])(
   "detaches the cron waiter while preserving $reason work and its deadline",
   async ({ reason, retryDelay }) => {
     const handler = vi

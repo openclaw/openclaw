@@ -2,7 +2,6 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { classifyDoctorMaintenanceRefusal } from "../../commands/doctor-maintenance-inspection.js";
 import { resolveStateDir } from "../../config/paths.js";
-import { formatServiceInspectionReason } from "../../daemon/service-inspection-error.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { acquireWithWait } from "../../infra/acquire-with-wait.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
@@ -25,7 +24,6 @@ import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import {
   createUpdateErrorFact,
-  createUpdateFailureFact,
   normalizeUpdateFailureFacts,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
@@ -66,10 +64,12 @@ import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
 import type {
   OriginalManagedServiceRuntime,
-  ManagedGatewayUpdateVerdict,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
-import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import {
+  collectServiceInspectionFailureFacts,
+  GatewayServiceUpdateOwnershipError,
+} from "./update-command-service-plan.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 export function failUpdateCommandRun(
@@ -114,24 +114,6 @@ export function failUpdateCommandRun(
     );
   }
   return fact;
-}
-
-export function collectServiceInspectionFailureFacts(
-  verdict: ManagedGatewayUpdateVerdict | undefined,
-): UpdateFailureFact[] | undefined {
-  return verdict?.kind === "unavailable"
-    ? [
-        createUpdateFailureFact({
-          check: "managed-service",
-          code: verdict.inspectionReason ?? "service-inspection-unavailable",
-          message:
-            verdict.inspectionReason &&
-            verdict.inspectionReason !== "windows-task-inspection-failed"
-              ? formatServiceInspectionReason(verdict.inspectionReason)
-              : verdict.message,
-        }),
-      ]
-    : undefined;
 }
 
 export function recordServiceReconciliationWarning(
@@ -290,13 +272,15 @@ export function createUpdateCommandFailureResult(
   },
 ): UpdateRunResult & { failedStep: UpdateStepResult } {
   const { failure, admission, phase, ...result } = params;
-  const { detail } = failure;
   const cause = primaryUpdateFailure(failure.cause);
   const refusal = classifyDoctorMaintenanceRefusal(failure.cause);
   const preMutationFailure = cause instanceof UpdatePreMutationError;
   const pkgOwnershipFailure = cause instanceof SystemPackageOwnershipError;
   const admissionFailure =
     admission === true && cause instanceof GatewayServiceUpdateOwnershipError;
+  const detail = admissionFailure
+    ? `The installation and Gateway were left unchanged. ${failure.detail ?? cause.message}`
+    : failure.detail;
   const reason =
     cause instanceof UpdateRequesterRevokedError
       ? cause.code

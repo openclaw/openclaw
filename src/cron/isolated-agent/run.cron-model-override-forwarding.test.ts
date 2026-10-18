@@ -115,8 +115,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
   });
 
   it("builds cron context from the published replacement owner", async () => {
-    const callerConfig = { agents: { defaults: { model: "anthropic/caller" } } };
+    const callerConfig = {
+      session: { store: "/tmp/store.json" },
+      agents: { defaults: { model: "anthropic/caller" } },
+    };
     const ownerConfig = {
+      session: { store: "/tmp/store.json" },
       agents: {
         defaults: { model: "google/gemini-2.0-flash" },
         entries: { main: { workspace: "/tmp/replacement-workspace" } },

@@ -105,10 +105,10 @@ export function renderUsage(props: UsageProps) {
         tool: [],
       },
   );
-  const querySuggestions = createMemo(() =>
-    buildQuerySuggestions(props.filters.queryDraft, filterOptions()),
-  );
   const queryTerms = createMemo(() => extractQueryTerms(props.filters.queryDraft));
+  const querySuggestions = createMemo(() =>
+    buildQuerySuggestions(props.filters.queryDraft, queryTerms(), filterOptions()),
+  );
   const primarySelectedEntry = createMemo(() =>
     props.filters.selectedSessions.length === 1 && props.data.overview?.selectedRowCount !== 0
       ? (props.data.selectedSession ??
