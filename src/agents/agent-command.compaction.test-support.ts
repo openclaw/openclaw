@@ -221,8 +221,8 @@ vi.mock("./command/delivery.runtime.js", () => ({
   deliverAgentCommandResult: compactionTestState.deliverAgentCommandResultMock,
 }));
 
-let agentCommand: typeof import("./agent-command.js").agentCommand;
-let agentCommandFromGatewayIngress: typeof import("./agent-command.js").agentCommandFromGatewayIngress;
+export let agentCommand: typeof import("./agent-command.js").agentCommand;
+export let agentCommandFromGatewayIngress: typeof import("./agent-command.js").agentCommandFromGatewayIngress;
 
 // Each leaf calls this during collection; hooks must belong to that file even
 // when the shared worker has already evaluated a support module.
@@ -281,7 +281,7 @@ export function registerAgentCommandCompactionTestHooks(): void {
   });
 }
 
-function makeCompactionResult(params: {
+export function makeCompactionResult(params: {
   sessionId: string;
   sessionFile?: string;
   text: string;
@@ -314,7 +314,7 @@ function makeCompactionResult(params: {
   };
 }
 
-function requireCompactionStorePath(): string {
+export function requireCompactionStorePath(): string {
   const storePath = compactionTestState.cfg?.session?.store;
   if (!storePath) {
     throw new Error("missing test session store path");
@@ -322,26 +322,26 @@ function requireCompactionStorePath(): string {
   return storePath;
 }
 
-function findCompactionSessionEntry(sessionKey: string): SessionEntry | undefined {
+export function findCompactionSessionEntry(sessionKey: string): SessionEntry | undefined {
   return listSessionEntriesCore({ storePath: requireCompactionStorePath() }).find(
     (candidate) => candidate.sessionKey === sessionKey,
   )?.entry;
 }
 
-function readCompactionLifecyclePhases(): Array<string | undefined> {
+export function readCompactionLifecyclePhases(): Array<string | undefined> {
   return compactionTestState.emitAgentEventMock.mock.calls
     .map(([event]) => event as { stream?: string; data?: { phase?: string } })
     .filter((event) => event.stream === "lifecycle")
     .map((event) => event.data?.phase);
 }
 
-const COMPACTION_ERROR =
+export const COMPACTION_ERROR =
   "CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.";
-const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined, {}] as const;
+export const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined, {}] as const;
 
 // Vitest rewrites imported references, but not re-export specifiers. Materialize
 // these runtime bindings after its hoisted mocks register, or exports become undefined.
-const compactionTestRuntime = {
+export const compactionTestRuntime = {
   acceptCompactionSuccessor,
   loadSessionEntry,
   patchSessionEntryCore,
@@ -357,16 +357,5 @@ const compactionTestRuntime = {
   SessionWorkStartInvalidatedError,
 };
 
-export {
-  agentCommand,
-  agentCommandFromGatewayIngress,
-  compactionTestRuntime,
-  compactionTestState,
-  findCompactionSessionEntry,
-  makeCompactionResult,
-  readCompactionLifecyclePhases,
-  requireCompactionStorePath,
-  COMPACTION_ERROR,
-  GATEWAY_INGRESS_ARGS,
-};
+export { compactionTestState };
 export type { ProviderModelNormalizationParams };

@@ -154,17 +154,13 @@ function parseTestModelRef(model: string, provider: string): ModelRef {
 }
 
 function isTestModelKeyAllowed(allowedKeys: ReadonlySet<string>, key: string): boolean {
-  if (allowedKeys.has(key)) {
-    return true;
-  }
-  let separator = key.indexOf("/");
-  while (separator > 0) {
-    if (allowedKeys.has(`${key.slice(0, separator + 1)}*`)) {
-      return true;
-    }
-    separator = key.indexOf("/", separator + 1);
-  }
-  return false;
+  return (
+    allowedKeys.has(key) ||
+    [...allowedKeys].some(
+      (allowed) =>
+        allowed !== "/*" && allowed.endsWith("/*") && key.startsWith(allowed.slice(0, -1)),
+    )
+  );
 }
 
 function buildTestConfiguredModelCatalog(cfg?: unknown): ModelCatalogEntry[] {
@@ -175,10 +171,7 @@ function buildTestConfiguredModelCatalog(cfg?: unknown): ModelCatalogEntry[] {
       };
     }
   )?.models?.providers;
-  if (!providers) {
-    return [];
-  }
-  return Object.entries(providers).flatMap(([provider, entry]) =>
+  return Object.entries(providers ?? {}).flatMap(([provider, entry]) =>
     Array.isArray(entry?.models)
       ? entry.models
           .filter(
@@ -299,21 +292,14 @@ function resolveTestModelAliasFromPair(
     aliasIndex?: ReturnType<typeof buildTestModelAliasIndex>;
   },
 ) {
-  const bareAlias = resolveTestModelRefFromString({
-    raw: params.model,
-    defaultProvider: params.provider,
-    aliasIndex: params.aliasIndex,
-  });
-  const providerAlias = resolveTestModelRefFromString({
-    raw: `${params.provider}/${params.model}`,
-    defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-  });
-  if (providerAlias.alias) {
+  const aliases = params.aliasIndex?.byAlias;
+  const providerAlias = aliases?.get(`${params.provider}/${params.model}`.trim().toLowerCase());
+  if (providerAlias?.alias) {
     return providerAlias.ref;
   }
+  const bareAlias = aliases?.get(params.model.trim().toLowerCase());
   const provider = normalizeTestProviderId(params.provider);
-  return bareAlias.alias &&
+  return bareAlias?.alias &&
     (normalizeTestProviderId(bareAlias.ref.provider) === provider ||
       provider === normalizeTestProviderId(params.defaultProvider))
     ? bareAlias.ref

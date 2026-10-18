@@ -35,7 +35,6 @@ export async function writeListToolsMcpServer(
     notifyListChangedOnInitializedReleaseToken?: string;
     notifyListChangedAfterFirstList?: boolean;
     notifyListChangedReleasePath?: string;
-    notifyListChangedBeforeEveryListResponse?: boolean;
     exitOnListCall?: number;
     listToolsMethodNotFound?: boolean;
     listToolsJsonRpcErrorMessage?: string;
@@ -75,9 +74,7 @@ async function waitForPath(filePath) {
   }
 }
 
-let listCount = 0;
-let resourceListCount = 0;
-let promptListCount = 0;
+const listCounts = { tools: 0, resources: 0, prompts: 0 };
 let pendingTimer;
 let keepAlive;
 let database;
@@ -170,10 +167,10 @@ function handle(message) {
     return;
   }
   if (message.method === "tools/list") {
-    listCount += 1;
+    listCounts.tools += 1;
     log("tools/list cursor " + JSON.stringify(message.params?.cursor));
-    if (listCount === config.exitOnListCall) {
-      log("exit tools/list " + listCount);
+    if (listCounts.tools === config.exitOnListCall) {
+      log("exit tools/list " + listCounts.tools);
       process.exit(1);
     }
     if (config.listToolsMethodNotFound) {
@@ -190,20 +187,16 @@ function handle(message) {
       hangRequest(message.method);
       return;
     }
-    const currentListCount = listCount;
-    const toolPageCursor = config.toolPageCursors?.[currentListCount - 1];
+    const currentListCount = listCounts.tools;
     log("delay tools/list " + delayMs);
     const sendListResponse = () => {
-      if (config.notifyListChangedBeforeEveryListResponse) {
-        notifyToolsChanged(" before response");
-      }
       reply(message.id, {
         tools: config.toolsByList
             ? config.toolsByList[Math.min(currentListCount - 1, config.toolsByList.length - 1)]
             : config.toolPageCursors
               ? tools.map((tool) => ({ ...tool, name: tool.name + "-" + currentListCount }))
               : tools,
-        ...nextCursor(toolPageCursor),
+        ...nextCursor(config.toolPageCursors?.[currentListCount - 1]),
       });
       if (config.notifyListChangedAfterFirstList && currentListCount === 1) {
         void afterPath(config.notifyListChangedReleasePath, () => notifyToolsChanged());
@@ -234,7 +227,7 @@ function handle(message) {
   }
   if (message.method === "resources/list" || message.method === "prompts/list") {
     const resources = message.method === "resources/list";
-    const page = resources ? ++resourceListCount : ++promptListCount;
+    const page = ++listCounts[resources ? "resources" : "prompts"];
     const cursors = resources ? config.resourcePageCursors : config.promptPageCursors;
     log(message.method + " cursor " + JSON.stringify(message.params?.cursor));
     void afterPath(config.utilityListReleasePath, () => {
@@ -255,7 +248,6 @@ function handle(message) {
     reply(message.id, config.resourceReadResult ?? { contents: [{ uri: message.params?.uri, text: "resource ok" }] });
   }
 }
-process.stdin.setEncoding("utf8");
 function shutdown() {
   if (config.ignoreShutdown) {
     keepAlive ??= setInterval(() => {}, 60_000);

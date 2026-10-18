@@ -54,7 +54,6 @@ export async function createCustodyFixture(
     sessionKey,
     stateDir,
     target,
-    context,
     entry: () => runtime.loadSessionEntry(target),
     accept: (
       next: string,
