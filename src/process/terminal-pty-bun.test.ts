@@ -93,17 +93,26 @@ async function start(args: string[], overrides: Partial<TerminalPtySpawnParams> 
   return { handle, observed, exited: exited.promise, waitForOutput };
 }
 
+function shell(script: string, overrides: Partial<TerminalPtySpawnParams> = {}) {
+  return start(["-c", script], overrides);
+}
+
+async function pausedShell(script: string, cwd: string) {
+  const result = await shell(`stty -echo; printf "READY\\n"; read input; ${script}`, { cwd });
+  await vi.waitFor(() => expect(result.observed.output).toBe("READY\r\n"), deadline);
+  result.handle.pause();
+  result.handle.write("go\r");
+  return result;
+}
+
 // Stock Bun and the current CI pin lack the capability required by the native route.
 describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && hasFlowControl)(
   "Bun native terminal PTY (requires Bun on POSIX with Terminal.pause/resume)",
   () => {
     it("preserves cwd, env, terminal input, resize, Unicode, and final output", async () => {
       const cwd = fs.realpathSync(tempDirs.make("openclaw-bun-pty-"));
-      const { handle, observed } = await start(
-        [
-          "-c",
-          'stty -echo; printf "READY\\n"; IFS= read -r input; stty size; printf "%s\\n%s\\n%s\\n%s\\n" "$input" "$PWD" "$TERM" "$PTY_VALUE"; exit 7',
-        ],
+      const { handle, observed } = await shell(
+        'stty -echo; printf "READY\\n"; IFS= read -r input; stty size; printf "%s\\n%s\\n%s\\n%s\\n" "$input" "$PWD" "$TERM" "$PTY_VALUE"; exit 7',
         { cwd, env: { PATH: "/usr/bin:/bin", TERM: "dumb", PWD: "/wrong", PTY_VALUE: "custom" } },
       );
       await vi.waitFor(() => expect(observed.output).toBe("READY\r\n"), deadline);
@@ -118,7 +127,7 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
     it("inherits env without host multiplexer state and preserves an explicit TERM", async () => {
       vi.stubEnv("TMUX", "host-multiplexer");
       vi.stubEnv("TERM", "dumb");
-      const { observed } = await start(["-c", 'printf "%s|%s|%s" "$TMUX" "$TERM" "$PWD"'], {
+      const { observed } = await shell('printf "%s|%s|%s" "$TMUX" "$TERM" "$PWD"', {
         env: undefined,
         name: "screen-256color",
       });
@@ -160,7 +169,7 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
     });
 
     it("maps signal termination to node-pty's exit code and signal number", async () => {
-      const { handle, observed } = await start(["-c", 'printf "READY\\n"; exec sleep 30']);
+      const { handle, observed } = await shell('printf "READY\\n"; exec sleep 30');
       await vi.waitFor(() => expect(observed.output).toBe("READY\r\n"), deadline);
       handle.kill("SIGTERM");
       await vi.waitFor(
@@ -172,10 +181,9 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
     it("reports shell exit promptly with a slave-holding descendant and still kills that descendant", async ({
       signal,
     }) => {
-      const { handle, observed } = await start([
-        "-c",
+      const { handle, observed } = await shell(
         'trap \'\' HUP; sleep 30 & printf "CHILD:%s\\n" "$!"; exit 3',
-      ]);
+      );
       await vi.waitFor(() => expect(observed.exit?.exitCode).toBe(3), {
         timeout: 1_000,
         interval: 10,
@@ -196,16 +204,10 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
         const cwd = tempDirs.make("openclaw-bun-pty-flow-");
         const payload = "x".repeat(4 * 1024 * 1024);
         fs.writeFileSync(path.join(cwd, "payload"), payload);
-        const { handle, observed } = await start(
-          [
-            "-c",
-            'stty -echo; printf "READY\\n"; read input; printf started > progress; cat payload; printf finished > progress',
-          ],
-          { cwd },
+        const { handle, observed } = await pausedShell(
+          "printf started > progress; cat payload; printf finished > progress",
+          cwd,
         );
-        await vi.waitFor(() => expect(observed.output).toBe("READY\r\n"), deadline);
-        handle.pause();
-        handle.write("go\r");
         const progress = () => fs.readFileSync(path.join(cwd, "progress"), "utf8");
         await vi.waitFor(() => expect(progress()).toBe("started"), deadline);
         let samples = 0;
@@ -226,16 +228,10 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
 
       it("preserves the tail when the child finishes while output is paused", async () => {
         const cwd = tempDirs.make("openclaw-bun-pty-tail-");
-        const { handle, observed } = await start(
-          [
-            "-c",
-            'stty -echo; printf "READY\\n"; read input; printf "tail 🦞\\n"; : > written; exit 9',
-          ],
-          { cwd },
+        const { handle, observed } = await pausedShell(
+          'printf "tail 🦞\\n"; : > written; exit 9',
+          cwd,
         );
-        await vi.waitFor(() => expect(observed.output).toBe("READY\r\n"), deadline);
-        handle.pause();
-        handle.write("go\r");
         await vi.waitFor(
           () => expect(fs.existsSync(path.join(cwd, "written"))).toBe(true),
           deadline,
@@ -425,7 +421,7 @@ it.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && !hasFl
   async () => {
     const helper = vi.spyOn(nodeAdapter, "spawnNodeTerminalPty");
     const done = createDeferredCore<number>();
-    const { handle, observed } = await start(["-c", 'printf "helper-output"; exit 7']);
+    const { handle, observed } = await shell('printf "helper-output"; exit 7');
     handle.onExit(({ exitCode }) => done.resolve(exitCode));
     expect(await done.promise).toBe(7);
     expect(helper).toHaveBeenCalledOnce();

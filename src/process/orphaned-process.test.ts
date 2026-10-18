@@ -75,6 +75,11 @@ function reap(
   });
 }
 
+async function expectUntouched(options: Parameters<typeof reap>[0] = {}) {
+  expect(await reap(options)).toEqual([]);
+  expect(killSpy).not.toHaveBeenCalled();
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
@@ -137,10 +142,11 @@ it("reaps only the captured managed macOS tree", async () => {
   add(103, { parentPid: 100, executable: "/other/llama-server" });
   add(104, { parentPid: 103 });
   expect(await reap()).toEqual([100]);
-  expect(killSpy).toHaveBeenCalledTimes(3);
-  expect(killSpy).toHaveBeenCalledWith(100, "SIGTERM");
-  expect(killSpy).toHaveBeenCalledWith(101, "SIGTERM");
-  expect(killSpy).toHaveBeenCalledWith(102, "SIGTERM");
+  expect(killSpy.mock.calls).toEqual([
+    [100, "SIGTERM"],
+    [101, "SIGTERM"],
+    [102, "SIGTERM"],
+  ]);
   expect([...processes.keys()]).toEqual([103, 104]);
 });
 
@@ -152,8 +158,7 @@ it.each([
   { name: "different port", change: { argv: [...rootArgs.slice(0, -1), "19322"] } },
 ])("leaves $name untouched", async ({ change }) => {
   add(100, change);
-  expect(await reap()).toEqual([]);
-  expect(killSpy).not.toHaveBeenCalled();
+  await expectUntouched();
   expect(processes.has(100)).toBe(true);
 });
 
@@ -168,29 +173,23 @@ it("leaves hosts without native birth identity support unchanged", async () => {
   mocks.identity.mockImplementation((pid: number) =>
     pid === process.pid ? null : (processes.get(pid)?.startedAt ?? null),
   );
-  expect(await reap()).toEqual([]);
+  await expectUntouched();
   expect(mocks.ps).not.toHaveBeenCalled();
-  expect(killSpy).not.toHaveBeenCalled();
 });
 
-it.each([{ cwd: "/other", expected: [] }])(
-  "requires the configured working directory, observed $cwd",
-  async ({ cwd, expected }) => {
-    add(100, { cwd });
-    mocks.realpath.mockReturnValue("/state");
-    expect(await reap({ cwd: "/state-alias" })).toEqual(expected);
-    expect(killSpy).toHaveBeenCalledTimes(expected.length);
-  },
-);
+it("requires the configured working directory", async () => {
+  add(100, { cwd: "/other" });
+  mocks.realpath.mockReturnValue("/state");
+  await expectUntouched({ cwd: "/state-alias" });
+});
 
 it("does not inspect an unreadable server from another installation", async () => {
   add(100, { command: "/other/llama-server" });
   mocks.command.mockImplementation(() => {
     throw new Error("foreign process arguments are unavailable");
   });
-  expect(await reap()).toEqual([]);
+  await expectUntouched();
   expect(mocks.command).not.toHaveBeenCalled();
-  expect(killSpy).not.toHaveBeenCalled();
 });
 
 it("refuses a root that acquires a live parent before signaling its tree", async () => {
@@ -213,21 +212,17 @@ it("treats disappearance during the final process inspection as already stopped"
       exit(pid);
     }
   };
-  expect(await reap()).toEqual([]);
-  expect(killSpy).not.toHaveBeenCalled();
+  await expectUntouched();
 });
 
 it("does not signal any captured process when the root PID is recycled before TERM", async () => {
   const root = add(100);
   add(101, { parentPid: 100 });
-  expect(
-    await reap({
-      onReap: () => {
-        root.startedAt = 999;
-      },
-    }),
-  ).toEqual([]);
-  expect(killSpy).not.toHaveBeenCalled();
+  await expectUntouched({
+    onReap: () => {
+      root.startedAt = 999;
+    },
+  });
 });
 
 it("finishes captured children after root exit without signaling a reused PID or new descendant", async () => {
@@ -312,10 +307,9 @@ it.each(["arguments", "executable", "user", "working directory"])(
   },
 );
 
-it.each(["linux"])("does not infer orphanhood from PID 1 on %s", async (platform) => {
-  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+it("does not infer orphanhood from PID 1 on Linux", async () => {
+  Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
   add(100);
-  expect(await reap()).toEqual([]);
+  await expectUntouched();
   expect(mocks.ps).not.toHaveBeenCalled();
-  expect(killSpy).not.toHaveBeenCalled();
 });

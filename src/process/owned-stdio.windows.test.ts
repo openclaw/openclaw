@@ -56,6 +56,40 @@ function rejectJobAdmission(cause: Error, abort?: AbortController) {
   native.inspect.mockReturnValue([]);
 }
 
+function stubLauncher(error?: Error & { code?: string }) {
+  return (_command: string, args: string[]) => {
+    stub.child.send = vi.fn((message: unknown, ...sendArgs: unknown[]) => {
+      if (error || (message && typeof message === "object" && "command" in message)) {
+        stub.child.emit(
+          "message",
+          error
+            ? { job: args[1], type: "error", error: error.message, code: error.code }
+            : { job: args[1], type: "spawned", pid: 5678 },
+        );
+      }
+      if (error) {
+        return true;
+      }
+      const callback = sendArgs.findLast((value) => typeof value === "function");
+      if (typeof callback === "function") {
+        callback(null);
+      }
+      return true;
+    });
+    queueMicrotask(() => {
+      stub.child.emit("spawn");
+      stub.child.emit("message", { job: args[1], type: "ready" });
+    });
+    return stub.child;
+  };
+}
+
+function finishRoot() {
+  stub.emitExit(0);
+  stub.emitClose(0);
+}
+
+const fixture = { argv: [process.execPath, "fixture"], exactEnv: true };
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 let createOwnedStdioProcess: typeof import("./owned-stdio.js").createOwnedStdioProcess;
 let closeOwnedStdioProcess: typeof import("./owned-stdio.js").closeOwnedStdioProcess;
@@ -79,23 +113,7 @@ beforeEach(async () => {
     stub.emitClose(0);
     return true;
   });
-  native.spawn.mockReset().mockImplementation((_command, args) => {
-    stub.child.send = vi.fn((message: unknown, ...sendArgs: unknown[]) => {
-      if (message && typeof message === "object" && "command" in message) {
-        stub.child.emit("message", { job: args[1], type: "spawned", pid: 5678 });
-      }
-      const callback = sendArgs.findLast((value) => typeof value === "function");
-      if (typeof callback === "function") {
-        callback(null);
-      }
-      return true;
-    });
-    queueMicrotask(() => {
-      stub.child.emit("spawn");
-      stub.child.emit("message", { job: args[1], type: "ready" });
-    });
-    return stub.child;
-  });
+  native.spawn.mockReset().mockImplementation(stubLauncher());
 });
 afterEach(() => {
   Object.defineProperty(process, "platform", platform);
@@ -103,10 +121,7 @@ afterEach(() => {
 });
 
 it("joins the retained Windows Job after the root exits with descendants still holding stdio", async () => {
-  const child = await createOwnedStdioProcess({
-    argv: [process.execPath, "fixture"],
-    exactEnv: true,
-  });
+  const child = await createOwnedStdioProcess(fixture);
   child.onStdout(() => {});
   child.onStderr(() => {});
   try {
@@ -137,10 +152,7 @@ it.each([false, true])(
   "publishes Job certification before root completion (observation fails=%s)",
   async (fails) => {
     const cause = new Error("Job accounting unavailable");
-    const child = await createOwnedStdioProcess({
-      argv: [process.execPath, "fixture"],
-      exactEnv: true,
-    });
+    const child = await createOwnedStdioProcess(fixture);
     native.inspect.mockImplementation(() => {
       if (fails) {
         throw cause;
@@ -152,8 +164,7 @@ it.each([false, true])(
       observed = true;
       return result;
     });
-    stub.emitExit(0);
-    stub.emitClose(0);
+    finishRoot();
     try {
       await child.wait();
       expect(observed).toBe(true);
@@ -187,10 +198,7 @@ it.each(["binding", "launcher", "create", "admission"] as const)(
     } else {
       rejectJobAdmission(cause);
     }
-    const child = await createOwnedStdioProcess({
-      argv: [process.execPath, "fixture"],
-      exactEnv: true,
-    });
+    const child = await createOwnedStdioProcess(fixture);
     expect(native.spawn.mock.calls.filter(([, args]) => args[0] === "fixture")).toHaveLength(1);
     if (unavailable) {
       expect(native.spawn).toHaveBeenCalledWith(process.execPath, ["fixture"], expect.any(Object));
@@ -199,8 +207,7 @@ it.each(["binding", "launcher", "create", "admission"] as const)(
         native.spawn.mock.invocationCallOrder.at(-1)!,
       );
     }
-    stub.emitExit(0);
-    stub.emitClose(0);
+    finishRoot();
     await expect(child.wait()).resolves.toEqual({ code: 0, signal: null });
     const extinction = child.waitForExtinction!();
     if (unavailable) {
@@ -222,22 +229,7 @@ it.each(["binding", "launcher", "create", "admission"] as const)(
 
 it("does not retry a genuine command-launch error after Job admission", async () => {
   const cause = Object.assign(new Error("command not found"), { code: "ENOENT" });
-  native.spawn.mockImplementationOnce((_command, args) => {
-    stub.child.send = vi.fn(() => {
-      stub.child.emit("message", {
-        job: args[1],
-        type: "error",
-        error: cause.message,
-        code: cause.code,
-      });
-      return true;
-    });
-    queueMicrotask(() => {
-      stub.child.emit("spawn");
-      stub.child.emit("message", { job: args[1], type: "ready" });
-    });
-    return stub.child;
-  });
+  native.spawn.mockImplementationOnce(stubLauncher(cause));
   await expect(
     createOwnedStdioProcess({ argv: ["missing-command"], exactEnv: true }),
   ).rejects.toMatchObject(cause);
@@ -258,8 +250,7 @@ it.each(["create", "admission"] as const)(
     }
     await expect(
       createOwnedStdioProcess({
-        argv: [process.execPath, "fixture"],
-        exactEnv: true,
+        ...fixture,
         abortSignal: abort.signal,
       }),
     ).rejects.toThrow("child construction aborted");
@@ -294,8 +285,7 @@ it.each([
     });
     const run = await supervisor.spawn({
       mode: "child",
-      argv: [process.execPath, "fixture"],
-      exactEnv: true,
+      ...fixture,
       scopeKey,
       ...(external ? { cleanupOwnership: "external" } : {}),
     });
@@ -310,8 +300,7 @@ it.each([
       } else {
         native.inspect.mockReturnValue([]);
       }
-      stub.emitExit(0);
-      stub.emitClose(0);
+      finishRoot();
       await expect(run.wait()).resolves.toMatchObject({
         exitCode: 0,
         reason: "exit",

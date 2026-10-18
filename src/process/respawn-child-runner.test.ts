@@ -1,4 +1,3 @@
-// Respawn child runner tests cover signal forwarding and process-tree cleanup.
 import childProcess, { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -80,55 +79,35 @@ afterEach(async () => {
 
 describe("runRespawnChildWithSignalBridge", () => {
   it.each([
-    {
-      signal: "SIGINT",
-      firstSignal: "SIGINT",
-      laterSignal: "SIGTERM",
-      windowsCode: 130,
-      posixCode: 130,
-    },
-    {
-      signal: "SIGTERM",
-      firstSignal: "SIGTERM",
-      laterSignal: "SIGINT",
-      windowsCode: 143,
-      posixCode: 143,
-    },
-    {
-      signal: "SIGTERM",
-      firstSignal: "SIGINT",
-      laterSignal: undefined,
-      windowsCode: 1,
-      posixCode: 143,
-    },
+    ["SIGINT", "SIGINT", "SIGTERM", 130, 130],
+    ["SIGTERM", "SIGTERM", "SIGINT", 143, 143],
+    ["SIGTERM", "SIGINT", undefined, 1, 143],
   ] as const)(
-    "settles actual $signal status only after close (first=$firstSignal)",
-    async (testCase) => {
+    "settles actual %s status only after close (first=%s, later=%s)",
+    async (signal, firstSignal, laterSignal, windowsCode, posixCode) => {
       const run = start({ pid: 2345 });
       let settled = false;
       void run.completion.then(() => {
         settled = true;
       });
-      if (testCase.firstSignal) {
-        run.signal(testCase.firstSignal);
+      run.signal(firstSignal);
+      if (laterSignal) {
+        run.signal(laterSignal);
       }
-      if (testCase.laterSignal) {
-        run.signal(testCase.laterSignal);
-      }
-      run.child.emit("exit", null, testCase.signal);
+      run.child.emit("exit", null, signal);
       await Promise.resolve();
       expect(settled).toBe(false);
       expect(run.detach).not.toHaveBeenCalled();
       expect(killProcess).not.toHaveBeenCalled();
-      run.child.emit("close", null, testCase.signal);
+      run.child.emit("close", null, signal);
       await expect(run.completion).resolves.toBe(
-        process.platform === "win32" ? testCase.windowsCode : testCase.posixCode,
+        process.platform === "win32" ? windowsCode : posixCode,
       );
       expect(run.detach).toHaveBeenCalledOnce();
       if (process.platform === "win32") {
         expect(killProcess).not.toHaveBeenCalled();
       } else {
-        expect(killProcess).toHaveBeenCalledExactlyOnceWith(process.pid, testCase.signal);
+        expect(killProcess).toHaveBeenCalledExactlyOnceWith(process.pid, signal);
         expect(run.detach).toHaveBeenCalledBefore(killProcess);
       }
     },
