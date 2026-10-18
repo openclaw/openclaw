@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { PluginControlUiDiagnostic } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
+import { registerListener } from "../../../src/shared/listeners.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -22,9 +23,8 @@ import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-
 import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
 
-type ContributionsElement = HTMLElementTagNameMap["openclaw-plugin-contributions"];
 const sessionKey = "agent:main:main";
-const cleanups: (() => void)[] = [];
+const destination = { sessionKey: "agent:writer:resumed", agentId: "writer" };
 const button = (element: Element) => element.querySelector<HTMLButtonElement>("button")!;
 function expectButton(element: Element, text: string, disabled: boolean) {
   expect([button(element).textContent?.trim(), button(element).disabled]).toEqual([text, disabled]);
@@ -77,10 +77,7 @@ it("renders customization inline and retains pending reload state", async () => 
     }),
     reload: vi.fn(() => pendingReload.promise),
     refresh: vi.fn(async () => undefined),
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
   };
   const navigate = vi.fn();
   // SAFETY: this fixture supplies the application services consumed by the manager.
@@ -116,10 +113,10 @@ it("renders customization inline and retains pending reload state", async () => 
     if (!select) {
       throw new Error("Missing replacement selector");
     }
-    plugins.selectReplacement("composer", replacement.key);
-    await vi.waitFor(() => expect(select.value).toBe(replacement.key));
-    plugins.selectReplacement("composer", null);
-    await vi.waitFor(() => expect(select.value).toBe(""));
+    for (const key of [replacement.key, null]) {
+      plugins.selectReplacement("composer", key);
+      await vi.waitFor(() => expect(select.value).toBe(key ?? ""));
+    }
 
     plugins.errors = [];
     listeners.forEach((listener) => listener());
@@ -131,12 +128,11 @@ it("renders customization inline and retains pending reload state", async () => 
     listeners.forEach((listener) => listener());
     await vi.waitFor(() => expect(alert()).toBeNull());
 
-    select.value = replacement.key;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(plugins.selectReplacement).toHaveBeenLastCalledWith("composer", replacement.key);
-    select.value = "";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(plugins.selectReplacement).toHaveBeenLastCalledWith("composer", null);
+    for (const key of [replacement.key, ""]) {
+      select.value = key;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(plugins.selectReplacement).toHaveBeenLastCalledWith("composer", key || null);
+    }
 
     managerButton(t("pluginUi.reload")).click();
     expect(plugins.reload).toHaveBeenCalledOnce();
@@ -154,12 +150,7 @@ it("renders customization inline and retains pending reload state", async () => 
   }
 });
 
-afterEach(() => {
-  document.body.replaceChildren();
-  for (const cleanup of cleanups.splice(0)) {
-    cleanup();
-  }
-});
+afterEach(() => document.body.replaceChildren());
 
 async function mountActions(
   options: {
@@ -206,22 +197,8 @@ async function mountActions(
     run,
   };
   const plugins = {
-    registrations: () =>
-      registered
-        ? [
-            {
-              key: "fixture/review",
-              pluginId: "fixture",
-              value: action,
-              host,
-              signal: actionSignal,
-            },
-          ]
-        : [],
-    subscribe: (listener: () => void) => {
-      pluginListeners.add(listener);
-      return () => pluginListeners.delete(listener);
-    },
+    registrations: () => (registered ? [entry] : []),
+    subscribe: (listener: () => void) => registerListener(pluginListeners, listener),
     reportError: vi.fn(),
     isCurrent: () => !abort.signal.aborted,
   } as unknown as ControlUiPluginRuntime;
@@ -241,12 +218,19 @@ async function mountActions(
     disposers: new Set(),
   } as Omit<ControlUiPluginOwner, "host">;
   const host = createControlUiPluginHost(() => context, plugins, owner);
+  const entry = {
+    key: "fixture/review",
+    pluginId: "fixture",
+    value: action,
+    host,
+    signal: actionSignal,
+  };
   const provider = createApplicationContextProvider(context);
-  const element = document.createElement("openclaw-plugin-contributions") as ContributionsElement;
+  const element = document.createElement("openclaw-plugin-contributions");
   element.kind = options.placement ?? "header";
   element.sessionKey = session.key;
   element.agentId = options.agentId;
-  cleanups.push(() => {
+  onTestFinished(() => {
     abort.abort();
     agents.dispose();
     sessions.dispose();
@@ -262,6 +246,20 @@ async function mountActions(
     request,
     navigate,
     setSessionKey,
+    patch: async (changes: Partial<GatewaySessionRow>) => {
+      sessions.patchRowLocal(session.key, changes);
+      await element.updateComplete;
+    },
+    startPending: () => {
+      const release = createDeferred();
+      run.mockImplementationOnce(async ({ host: currentHost }) => {
+        await release.promise;
+        currentHost.sessions.open(destination);
+      });
+      const retained = button(element);
+      retained.click();
+      return { release, retained, current: invocation(run), completed: completion(run) };
+    },
     unregister: () => {
       registered = false;
       actionAbort.abort();
@@ -272,228 +270,181 @@ async function mountActions(
   };
 }
 
-describe("native plugin session actions", () => {
-  it("replaces placement subscriptions and resumes current session presentation", async () => {
-    const { element, sessions } = await mountActions();
-    expect(element.querySelector("button")?.textContent).toBe("Review Ready");
+it("replaces placement subscriptions and resumes current session presentation", async () => {
+  const { element, sessions, patch } = await mountActions();
+  expect(element.querySelector("button")?.textContent).toBe("Review Ready");
 
-    element.kind = "composer";
-    await element.updateComplete;
-    expect(element.querySelector("button")).toBeNull();
-    sessions.patchRowLocal(sessionKey, { label: "Updated while hidden" });
+  element.kind = "composer";
+  await element.updateComplete;
+  expect(element.querySelector("button")).toBeNull();
+  sessions.patchRowLocal(sessionKey, { label: "Updated while hidden" });
 
-    element.kind = "header";
-    await element.updateComplete;
-    expect(element.querySelector("button")?.textContent).toBe("Review Updated while hidden");
-    sessions.patchRowLocal(sessionKey, { label: "Live again" });
-    await element.updateComplete;
-    expect(element.querySelector("button")?.textContent).toBe("Review Live again");
+  element.kind = "header";
+  await element.updateComplete;
+  expect(element.querySelector("button")?.textContent).toBe("Review Updated while hidden");
+  await patch({ label: "Live again" });
+  expect(element.querySelector("button")?.textContent).toBe("Review Live again");
+});
+
+it("keeps header metadata scoped to its pane agent when the global key is shared", async () => {
+  const { element, sessions, run, resolve, request } = await mountActions({
+    placement: "header",
+    agentId: "writer",
+    session: globalSession(),
+  });
+  expect(button(element).textContent?.trim()).toBe("Review unavailable");
+  button(element).click();
+  expect(run).toHaveBeenCalledOnce();
+  expect(invocation(run)).toMatchObject({
+    sessionKey: "global",
+    agentId: "writer",
+    session: undefined,
+  });
+  expect(resolve).toHaveBeenLastCalledWith({
+    sessionKey: "global",
+    agentId: "writer",
+    session: undefined,
   });
 
-  it("keeps header metadata scoped to its pane agent when the global key is shared", async () => {
-    const { element, sessions, run, resolve, request } = await mountActions({
-      placement: "header",
-      agentId: "writer",
-      session: globalSession(),
-    });
-    expect(button(element).textContent?.trim()).toBe("Review unavailable");
-    button(element).click();
-    expect(run).toHaveBeenCalledOnce();
-    expect(run.mock.calls[0]?.[0].session).toBeUndefined();
-    expect(resolve).toHaveBeenLastCalledWith({
-      sessionKey: "global",
-      agentId: "writer",
-      session: undefined,
-    });
-    expect(run.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "global", agentId: "writer" });
-
-    request.mockResolvedValueOnce(
-      sessionsResult(
-        [{ key: "global", kind: "global", agentId: "writer", updatedAt: 2, label: "Writer" }],
-        2,
-      ),
-    );
-    await sessions.refresh({ agentId: "writer", force: true });
-    await element.updateComplete;
-    expect(button(element).textContent?.trim()).toBe("Review Writer");
-    button(element).click();
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0].session).toMatchObject({
-      key: "global",
-      agentId: "writer",
-      label: "Writer",
-    });
+  request.mockResolvedValueOnce(
+    sessionsResult(
+      [{ key: "global", kind: "global", agentId: "writer", updatedAt: 2, label: "Writer" }],
+      2,
+    ),
+  );
+  await sessions.refresh({ agentId: "writer", force: true });
+  await element.updateComplete;
+  expect(button(element).textContent?.trim()).toBe("Review Writer");
+  button(element).click();
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(run.mock.calls[1]?.[0].session).toMatchObject({
+    key: "global",
+    agentId: "writer",
+    label: "Writer",
   });
+});
 
-  it("retires a composer invocation when only its pane agent changes", async () => {
-    const { element, run, request } = await mountActions({
-      placement: "composer",
-      agentId: "main",
-      session: globalSession(),
-    });
-    button(element).click();
-    const current = invocation(run);
-    expect(current.session).toMatchObject({ key: "global", agentId: "main" });
-    await current.host.request("fixture.current-owner");
-
-    element.agentId = "writer";
-    expect(current.signal.aborted).toBe(true);
-    await expect(current.host.request("fixture.retired-owner")).rejects.toThrow("view has ended");
-    expect(request.mock.calls.filter(([method]) => method === "fixture.retired-owner")).toEqual([]);
-    await element.updateComplete;
+it("retires a composer invocation when only its pane agent changes", async () => {
+  const { element, run, request } = await mountActions({
+    placement: "composer",
+    agentId: "main",
+    session: globalSession(),
   });
+  button(element).click();
+  const current = invocation(run);
+  expect(current.session).toMatchObject({ key: "global", agentId: "main" });
+  await current.host.request("fixture.current-owner");
 
-  it("retires a hidden header action across a same-turn hide/show and admits a fresh action", async () => {
-    const { element, run, navigate, setSessionKey } = await mountActions({ placement: "header" });
-    const destination = { sessionKey: "agent:writer:resumed", agentId: "writer" };
-    const release = createDeferred();
-    run.mockImplementationOnce(async ({ host }) => {
-      await release.promise;
-      host.sessions.open(destination);
-    });
-    const retained = button(element);
-    retained.click();
-    const current = invocation(run);
-    const pending = completion(run);
+  element.agentId = "writer";
+  expect(current.signal.aborted).toBe(true);
+  await expect(current.host.request("fixture.retired-owner")).rejects.toThrow("view has ended");
+  expect(request.mock.calls.filter(([method]) => method === "fixture.retired-owner")).toEqual([]);
+  await element.updateComplete;
+});
 
-    // Neither a retained button nor an immediate reshow revives the old action.
-    element.presented = false;
-    retained.click();
-    element.presented = true;
-    release.resolve();
-    const completionError = await pending;
-    expect(navigate).not.toHaveBeenCalled();
-    expect(setSessionKey).not.toHaveBeenCalled();
-    expect(run).toHaveBeenCalledOnce();
-    expect(current.signal.aborted).toBe(true);
-    expect(completionError).toMatchObject({ message: "This plugin UI view has ended." });
-    expect(() => current.host.sessions.open(destination)).toThrow("view has ended");
-    await element.updateComplete;
-    expect(element.querySelector('[role="alert"]')).toBeNull();
-
-    run.mockImplementationOnce(({ host }) => {
-      host.sessions.open(destination);
-    });
-    retained.click();
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]?.[0].signal.aborted).toBe(false);
-    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(destination.sessionKey);
-    expect(navigate).toHaveBeenCalledOnce();
-    expect(navigate.mock.calls[0]?.[0]).toBe("chat");
-    expect(current.signal.aborted).toBe(true);
-  });
-
-  it("revokes a removed action before its pending render", async () => {
-    const { element, run, unregister } = await mountActions();
-    const retained = button(element);
-    unregister();
-    retained.click();
-    expect(run.mock.calls.length).toBe(0);
-    await element.updateComplete;
-    expect(element.querySelector("button")).toBeNull();
-  });
-
-  it("does not start an action that withdraws itself during resolution", async () => {
-    const { element, run, resolve, unregister } = await mountActions();
-    resolve.mockImplementationOnce(() => {
-      unregister();
-      return {};
-    });
-
-    button(element).click();
-
-    expect(run.mock.calls.length).toBe(0);
-    await element.updateComplete;
-    expect(element.querySelector("button")).toBeNull();
-  });
-
-  it("updates composer action presentation and retires hidden invocations", async () => {
-    const { element, sessions, run, navigate, setSessionKey } = await mountActions({
-      placement: "composer",
-    });
+it.each(["header", "composer"] as const)(
+  "retires hidden %s actions before settlement",
+  async (placement) => {
+    const { element, sessions, run, navigate, setSessionKey, startPending, patch } =
+      await mountActions({ placement });
     expectButton(element, "Review Ready", false);
-    const pending = createDeferred();
-    run.mockImplementationOnce(async ({ host }) => {
-      await pending.promise;
-      host.sessions.open({ sessionKey: "agent:writer:resumed", agentId: "writer" });
-    });
-    button(element).click();
-    const current = invocation(run);
-    const completed = completion(run);
-
-    sessions.patchRowLocal(sessionKey, { label: "Busy", hasActiveRun: true });
-    await element.updateComplete;
-    expectButton(element, "Review Busy", true);
-    expect(current.signal.aborted).toBe(false);
-
-    sessions.patchRowLocal(sessionKey, { archived: true });
-    const hiddenBeforeRender = current.signal.aborted;
-    pending.resolve();
-    const completionError = await completed;
-    expect(hiddenBeforeRender).toBe(true);
+    const pending = startPending();
+    if (placement === "header") {
+      // An immediate reshow and retained button cannot revive the old action.
+      element.presented = false;
+      pending.retained.click();
+      element.presented = true;
+    } else {
+      await patch({ label: "Busy", hasActiveRun: true });
+      expectButton(element, "Review Busy", true);
+      expect(pending.current.signal.aborted).toBe(false);
+      sessions.patchRowLocal(sessionKey, { archived: true });
+    }
+    expect(pending.current.signal.aborted).toBe(true);
+    pending.release.resolve();
+    expect(await pending.completed).toMatchObject({ message: "This plugin UI view has ended." });
     expect(navigate).not.toHaveBeenCalled();
     expect(setSessionKey).not.toHaveBeenCalled();
-    expect(completionError).toMatchObject({ message: "This plugin UI view has ended." });
+    expect(run).toHaveBeenCalledOnce();
+    await element.updateComplete;
+    if (placement === "header") {
+      expect(() => pending.current.host.sessions.open(destination)).toThrow("view has ended");
+      expect(element.querySelector('[role="alert"]')).toBeNull();
+      run.mockImplementationOnce(({ host }) => host.sessions.open(destination));
+      pending.retained.click();
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[1]?.[0].signal.aborted).toBe(false);
+      expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(destination.sessionKey);
+      expect(navigate).toHaveBeenCalledOnce();
+      expect(navigate.mock.calls[0]?.[0]).toBe("chat");
+    } else {
+      expect(element.querySelector("button")).toBeNull();
+      await patch({ label: "Resumed", archived: false, hasActiveRun: false });
+      const retained = button(element);
+      expectButton(element, "Review Resumed", false);
+      element.remove();
+      await patch({ label: "Detached", hasActiveRun: true });
+      expect([retained.textContent?.trim(), retained.disabled]).toEqual(["Review Resumed", false]);
+      retained.click();
+      expect(run).toHaveBeenCalledOnce();
+    }
+    expect(pending.current.signal.aborted).toBe(true);
+  },
+);
+
+it.each(["before click", "during resolution"])(
+  "rejects withdrawal %s before render",
+  async (when) => {
+    const { element, run, resolve, unregister } = await mountActions();
+    const retained = button(element);
+    if (when === "before click") {
+      unregister();
+    } else {
+      resolve.mockImplementationOnce(() => {
+        unregister();
+        return {};
+      });
+    }
+    retained.click();
+    expect(run.mock.calls.length).toBe(0);
     await element.updateComplete;
     expect(element.querySelector("button")).toBeNull();
+  },
+);
 
-    sessions.patchRowLocal(sessionKey, {
-      label: "Resumed",
-      archived: false,
-      hasActiveRun: false,
-    });
-    await element.updateComplete;
-    const retained = button(element);
-    expectButton(element, "Review Resumed", false);
-    expect(current.signal.aborted).toBe(true);
+it("rechecks eligibility and passes the current session before a pending render", async () => {
+  const { element, sessions, run, request, patch } = await mountActions();
+  // Click in the same turn as publication, before the old button updates.
+  sessions.patchRowLocal(sessionKey, { hasActiveRun: true });
+  button(element).click();
+  expect(run.mock.calls.length).toBe(0);
+  await element.updateComplete;
 
-    element.remove();
-    sessions.patchRowLocal(sessionKey, { label: "Detached", hasActiveRun: true });
-    await element.updateComplete;
-    expect([retained.textContent?.trim(), retained.disabled]).toEqual(["Review Resumed", false]);
-    retained.click();
-    expect(run.mock.calls.length).toBe(1);
+  await patch({ hasActiveRun: false });
+  sessions.patchRowLocal(sessionKey, { archived: true });
+  button(element).click();
+  expect(run.mock.calls.length).toBe(0);
+  await element.updateComplete;
+
+  await patch({ archived: false });
+  sessions.patchRowLocal(sessionKey, { label: "Latest" });
+  button(element).click();
+  expect(run.mock.calls.length).toBe(1);
+  const current = invocation(run);
+  expect(current).toMatchObject({
+    sessionKey,
+    session: { key: sessionKey, label: "Latest", hasActiveRun: false, archived: false },
   });
+  await current.host.request("fixture.current-action");
+  expect(request).toHaveBeenCalledWith("fixture.current-action", {});
+  await element.updateComplete;
 
-  it("rechecks eligibility and passes the current session before a pending render", async () => {
-    const { element, sessions, run, request } = await mountActions();
-    // Click in the same turn as publication, before the old button updates.
-    sessions.patchRowLocal(sessionKey, { hasActiveRun: true });
-    button(element).click();
-    expect(run.mock.calls.length).toBe(0);
-    await element.updateComplete;
-
-    sessions.patchRowLocal(sessionKey, { hasActiveRun: false });
-    await element.updateComplete;
-    sessions.patchRowLocal(sessionKey, { archived: true });
-    button(element).click();
-    expect(run.mock.calls.length).toBe(0);
-    await element.updateComplete;
-
-    sessions.patchRowLocal(sessionKey, { archived: false });
-    await element.updateComplete;
-    sessions.patchRowLocal(sessionKey, { label: "Latest" });
-    button(element).click();
-    expect(run.mock.calls.length).toBe(1);
-    const current = invocation(run);
-    expect(current.sessionKey).toBe(sessionKey);
-    expect(current.session).toMatchObject({
-      key: sessionKey,
-      label: "Latest",
-      hasActiveRun: false,
-      archived: false,
-    });
-    await current.host.request("fixture.current-action");
-    expect(request).toHaveBeenCalledWith("fixture.current-action", {});
-    await element.updateComplete;
-
-    element.remove();
-    const retiredRequest = current.host.request("fixture.retired-action");
-    expect(
-      request.mock.calls.filter(([method]) => method === "fixture.retired-action"),
-    ).toHaveLength(0);
-    await expect(retiredRequest).rejects.toThrow("view has ended");
-    await Promise.resolve();
-    expect(current.signal.aborted).toBe(true);
-  });
+  element.remove();
+  const retiredRequest = current.host.request("fixture.retired-action");
+  expect(request.mock.calls.filter(([method]) => method === "fixture.retired-action")).toHaveLength(
+    0,
+  );
+  await expect(retiredRequest).rejects.toThrow("view has ended");
+  await Promise.resolve();
+  expect(current.signal.aborted).toBe(true);
 });

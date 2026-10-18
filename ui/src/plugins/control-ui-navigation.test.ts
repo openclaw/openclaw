@@ -1,15 +1,14 @@
-import { createComponent, createRoot, onCleanup } from "solid-js";
+import { createRoot, onCleanup } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { iconData } from "../components/icon-data.ts";
 import type { SidebarMenusOwner } from "../components/sidebar-menus-types.ts";
 import { createSidebarMenus } from "../components/sidebar-menus.tsx";
-import { Icon } from "../components/solid/icon.tsx";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
-import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
 
 const originalLocation = window.location.href;
@@ -17,18 +16,40 @@ const pointer = (init: MouseEventInit = {}) =>
   new MouseEvent("contextmenu", { bubbles: true, ...init });
 const keyboard = (key: string, init: KeyboardEventInit = {}) =>
   new KeyboardEvent("keydown", { bubbles: true, key, ...init });
+function registrations(
+  navigation: Partial<ControlUiHost["navigation"]>,
+  signal = new AbortController().signal,
+) {
+  return (
+    id: string,
+    value: Partial<ControlUiNavigationItem> = {},
+    pluginId = "example",
+  ): ControlUiRegistration<ControlUiNavigationItem> => ({
+    key: `${pluginId}/${id}`,
+    pluginId,
+    signal,
+    host: { navigation } as unknown as ControlUiHost,
+    value: { id, label: id, page: { id: "boards" }, ...value },
+  });
+}
 const contribution = (key: string) =>
   Object.assign(document.createElement("openclaw-plugin-contributions"), {
     kind: "navigation",
-    navigationKey: key,
+    navigationKey: `example/${key}`,
   });
+function providerFor(
+  entries: ControlUiRegistration<ControlUiNavigationItem>[],
+  subscribe = (_listener: () => void) => () => {},
+) {
+  return createApplicationContextProvider({
+    plugins: { registrations: () => entries, subscribe },
+    router: { subscribe },
+  } as unknown as ApplicationContext);
+}
 function expectIcon(element: Element, name: "activity" | "layers") {
-  const expected = mountSolid(() => createComponent(Icon, { name }), {
-    container: document.createElement("div"),
-  }).container;
-  const paths = (node: Element) =>
-    [...node.querySelectorAll("svg path")].map((path) => path.getAttribute("d"));
-  expect(paths(element)).toEqual(paths(expected));
+  expect([...element.querySelectorAll("svg path")].map((path) => path.getAttribute("d"))).toEqual(
+    iconData[name].children.filter(([tag]) => tag === "path").map(([, attrs]) => attrs.d),
+  );
 }
 afterEach(() => {
   document.body.replaceChildren();
@@ -38,48 +59,26 @@ afterEach(() => {
 it("opens navigation actions through the sidebar menu owner for pointer and keyboard access", async () => {
   const run = vi.fn();
   const abort = new AbortController();
-  const host = {
-    navigation: { pageHref: () => "/boards" },
-  } as unknown as ControlUiHost;
-  const entries = ["boards", "child", "plain"].map((id) => ({
-    key: `example/${id}`,
-    pluginId: "example",
-    signal: abort.signal,
-    host,
-    value: {
-      id,
-      label: id,
-      page: { id: "boards" },
-      ...(id === "child" ? { parent: "boards" } : {}),
-      ...(id !== "plain"
-        ? {
-            actions: [
-              { id: "delete", label: "Delete board…", icon: "trash", destructive: true, run },
-            ],
-          }
-        : {}),
-    },
-  }));
-  const provider = createApplicationContextProvider({
-    plugins: { registrations: () => entries, subscribe: () => () => {} },
-    router: { subscribe: () => () => {} },
-  } as unknown as ApplicationContext);
+  const entry = registrations({ pageHref: () => "/boards" }, abort.signal);
+  const actions = [{ id: "delete", label: "Delete board…", icon: "trash", destructive: true, run }];
+  const entries = [
+    entry("boards", { actions }),
+    entry("child", { parent: "boards", actions }),
+    entry("plain"),
+  ];
   const menuRoot = document.createElement("div");
   const menuHost = {} as SidebarMenusOwner;
   const menus = createRoot((dispose) => {
     onTestFinished(dispose);
-    return createSidebarMenus({
-      host: menuHost,
-      element: menuRoot,
-      commit: () => Promise.resolve(true),
-    });
+    return createSidebarMenus({ host: menuHost, element: menuRoot, commit: async () => true });
   });
   await menus.preloadMenuRenderer();
-  const contributions = ["boards", "child", "plain"].map((id) =>
-    Object.assign(contribution(`example/${id}`), { navigationMenus: menus }),
+  const provider = providerFor(entries);
+  const contributions = entries.map(({ value }) =>
+    Object.assign(contribution(value.id), { navigationMenus: menus }),
   );
-  window.history.replaceState(null, "", "/boards");
   provider.append(...contributions, menuRoot);
+  window.history.replaceState(null, "", "/boards");
   document.body.append(provider);
   await Promise.all(contributions.map((element) => element.updateComplete));
   mountSolid(
@@ -100,38 +99,35 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
     flush();
     return menuRoot.querySelector<HTMLElement>(".sidebar-plugin-navigation-menu")!;
   };
-  for (const [index, link] of links.entries()) {
-    const menu = open(
-      link,
-      index === 0
-        ? pointer({ cancelable: true, clientX: 24, clientY: 32 })
-        : keyboard(index === 1 ? "F10" : "ContextMenu", {
-            cancelable: true,
-            shiftKey: index === 1,
-          }),
-    );
+  const currentMenu = () => menuRoot.querySelector(".sidebar-plugin-navigation-menu");
+  for (const [index, event] of [
+    pointer({ cancelable: true, clientX: 24, clientY: 32 }),
+    keyboard("F10", { cancelable: true, shiftKey: true }),
+    keyboard("ContextMenu", { cancelable: true }),
+  ].entries()) {
+    const menu = open(links[index]!, event);
     expect(menu).not.toBeNull();
     expect(menu.parentElement?.querySelector<HTMLElement>(".oc-menu-trigger")?.style.left).toBe(
       index === 0 ? "24px" : "8px",
     );
     const item = menu.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
     expect(item.textContent?.trim()).toBe("Delete board…");
+    expect(item).toMatchObject({ dataset: { variant: "danger" } });
     expect(item.classList.contains("session-menu__item--destructive")).toBe(true);
-    expect(item.getAttribute("data-variant")).toBe("danger");
     expect(item.querySelector("svg")).not.toBeNull();
     item.click();
     await waitForSolid(() => expect(run).toHaveBeenCalledTimes(index + 1));
     flush();
-    expect(menuRoot.querySelector(".sidebar-plugin-navigation-menu")).toBeNull();
+    expect(currentMenu()).toBeNull();
   }
   const menu = open(links[0]!, pointer());
   menu.dispatchEvent(keyboard("Escape"));
   flush();
-  expect(menuRoot.querySelector(".sidebar-plugin-navigation-menu")).toBeNull();
+  expect(currentMenu()).toBeNull();
   expect(document.activeElement).toBe(links[0]);
   open(links[0]!, pointer()).hidePopover();
   flush();
-  expect(menuRoot.querySelector(".sidebar-plugin-navigation-menu")).toBeNull();
+  expect(currentMenu()).toBeNull();
 
   for (const event of [
     pointer({ cancelable: true }),
@@ -150,60 +146,40 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
 it("shows the active plugin section's ordered children and leaves pinned children standalone", async () => {
   const listeners = new Set<() => void>();
   const openPage = vi.fn();
-  const host = {
-    navigation: {
-      openPage,
-      pageHref: (page: ControlUiNavigationItem["page"]) =>
-        page.id === "special"
-          ? "/special"
-          : `/boards${page.params ? `?${new URLSearchParams(page.params)}` : ""}`,
-    },
-  } as unknown as ControlUiHost;
-  const registration = (
-    value: ControlUiNavigationItem,
-    pluginId = "example",
-  ): ControlUiRegistration<ControlUiNavigationItem> => ({
-    key: `${pluginId}/${value.id}`,
-    pluginId,
-    signal: new AbortController().signal,
-    host,
-    value,
+  const registration = registrations({
+    openPage,
+    pageHref: (page) =>
+      page.id === "special"
+        ? "/special"
+        : `/boards${page.params ? `?${new URLSearchParams(page.params)}` : ""}`,
   });
   const childEntry = (
     id: string,
-    label: string,
     order: number,
     icon: string | undefined,
     page: ControlUiNavigationItem["page"] = { id: "boards", params: { board: id } },
-  ) => registration({ id, parent: "boards", label, order, icon, page });
+  ) => registration(id, { parent: "boards", order, icon, page });
   const entries = [
-    registration({ id: "boards", label: "Boards", icon: "layers", page: { id: "boards" } }),
-    childEntry("zulu", "Zulu", 2, undefined),
-    childEntry("beta", "Beta", 1, "toString", { id: "special" }),
-    childEntry("alpha", "Alpha", 1, "activity"),
-    registration(
-      { id: "foreign", parent: "boards", label: "Other plugin", page: { id: "boards" } },
-      "other",
-    ),
+    registration("boards", { icon: "layers" }),
+    childEntry("zulu", 2, undefined),
+    childEntry("beta", 1, "toString", { id: "special" }),
+    childEntry("alpha", 1, "activity"),
+    registration("foreign", { parent: "boards" }, "other"),
   ];
   const subscribe = (listener: () => void) => {
     listeners.add(listener);
     return () => listeners.delete(listener);
   };
-  const provider = createApplicationContextProvider({
-    plugins: { registrations: () => entries, subscribe },
-    router: { subscribe },
-  } as unknown as ApplicationContext);
-  const parent = contribution("example/boards");
-  const pinned = contribution("example/alpha");
+  const provider = providerFor(entries, subscribe);
+  const parent = contribution("boards");
+  const pinned = contribution("alpha");
   provider.append(parent, pinned);
   window.history.replaceState(null, "", "/boards?board=alpha&filter=mine");
   document.body.append(provider);
-  await parent.updateComplete;
-  await pinned.updateComplete;
+  await Promise.all([parent.updateComplete, pinned.updateComplete]);
 
   const children = [...parent.querySelectorAll<HTMLAnchorElement>(".nav-item--child")];
-  expect(children.map((child) => child.textContent?.trim())).toEqual(["Alpha", "Beta", "Zulu"]);
+  expect(children.map((child) => child.textContent?.trim())).toEqual(["alpha", "beta", "zulu"]);
   expect(children.map((child) => child.getAttribute("aria-current"))).toEqual(["page", null, null]);
   expectIcon(children[0]!, "activity");
   expectIcon(children[1]!, "layers");
@@ -214,7 +190,7 @@ it("shows the active plugin section's ordered children and leaves pinned childre
   expect(openPage).toHaveBeenCalledExactlyOnceWith({ id: "special" });
 
   for (const [location, activeChild, childCount] of [
-    ["/special?filter=mine", "Beta", 3],
+    ["/special?filter=mine", "beta", 3],
     ["/boards", undefined, 3],
     ["/elsewhere", undefined, 0],
   ] as const) {

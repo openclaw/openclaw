@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { AgentIdentityResult } from "../api/types.ts";
 import {
   createGatewayEvent,
@@ -63,11 +63,20 @@ function setup(identity?: () => AgentIdentityResult) {
   };
   const calls = (method: string) =>
     current().request.mock.calls.filter(([name]) => name === method);
-  return { element, requests, emit, current, shown, reply, calls };
+  const settled = async (count: number) => {
+    await element.updateComplete;
+    expect(requests).toHaveLength(count);
+  };
+  return { element, requests, emit, current, shown, reply, calls, settled };
 }
 
+const textBlock = (text: string, phase?: string) => ({
+  type: "text",
+  text,
+  ...(phase ? { textSignature: JSON.stringify({ v: 1, phase }) } : {}),
+});
 function history(text: string): ChatHistoryResult {
-  return { messages: [{ role: "assistant", content: [{ type: "text", text }] }] };
+  return { messages: [{ role: "assistant", content: [textBlock(text)] }] };
 }
 function useClock() {
   vi.useFakeTimers();
@@ -75,243 +84,228 @@ function useClock() {
 }
 const messages = (element: Element) => element.querySelectorAll(".plugin-session-summary__message");
 
-describe("plugin session summary freshness", () => {
-  it("refreshes visible message avatars from identity and stops hydrating while hidden", async () => {
-    let avatar = "data:image/png;base64,aWRlbnRpdHk=";
-    const { element, reply, calls } = setup(() => ({ agentId: "main", name: "Main", avatar }));
-    element.agents = [
-      { id: "main", identity: { avatarUrl: "data:image/png;base64,cm9zdGVy" } },
-      { id: "unused" },
-    ];
-    const avatarLoaded = () =>
-      vi.waitFor(() =>
-        expect(element.querySelector("openclaw-agent-avatar img")?.getAttribute("src")).toBe(
-          avatar,
-        ),
-      );
-    await reply(0, "Agent response");
-    await avatarLoaded();
-    const identityRequests = () => calls("agent.identity.get");
-    expect(identityRequests().map(([, params]) => params)).toEqual([{ agentId: "main" }]);
+it("refreshes visible message avatars from identity and stops hydrating while hidden", async () => {
+  let avatar = "data:image/png;base64,aWRlbnRpdHk=";
+  const { element, reply, calls } = setup(() => ({ agentId: "main", name: "Main", avatar }));
+  element.agents = [
+    { id: "main", identity: { avatarUrl: "data:image/png;base64,cm9zdGVy" } },
+    { id: "unused" },
+  ];
+  const avatarLoaded = () =>
+    vi.waitFor(() =>
+      expect(element.querySelector("openclaw-agent-avatar img")?.getAttribute("src")).toBe(avatar),
+    );
+  await reply(0, "Agent response");
+  await avatarLoaded();
+  const identityRequests = () => calls("agent.identity.get");
+  expect(identityRequests().map(([, params]) => params)).toEqual([{ agentId: "main" }]);
 
-    avatar = "data:image/png;base64,bmV3";
-    element.agentIdentity!.invalidate(["main"]);
-    await avatarLoaded();
+  avatar = "data:image/png;base64,bmV3";
+  element.agentIdentity!.invalidate(["main"]);
+  await avatarLoaded();
 
-    element.presented = false;
+  element.presented = false;
+  await element.updateComplete;
+  const beforeHiddenInvalidation = identityRequests().length;
+  element.agentIdentity!.invalidate(["main"]);
+  await Promise.resolve();
+  await element.updateComplete;
+  expect(element.querySelector("openclaw-agent-avatar")).toBeNull();
+  expect(identityRequests()).toHaveLength(beforeHiddenInvalidation);
+});
+
+it.each(["session", "agent", "connection", "gateway"] as const)(
+  "does not commit another owner's transcript when the %s changes",
+  async (change) => {
+    const { element, requests, current, reply, shown } = setup();
+    await reply(0, "Previous owner transcript");
     await element.updateComplete;
-    const beforeHiddenInvalidation = identityRequests().length;
-    element.agentIdentity!.invalidate(["main"]);
-    await Promise.resolve();
-    await element.updateComplete;
-    expect(element.querySelector("openclaw-agent-avatar")).toBeNull();
-    expect(identityRequests()).toHaveLength(beforeHiddenInvalidation);
+    const committedText: string[] = [];
+    const observer = new MutationObserver(() => committedText.push(element.textContent ?? ""));
+    observer.observe(element, { childList: true, characterData: true, subtree: true });
+    let nextRequests = requests;
+    if (change === "gateway") {
+      const replacement = setup();
+      await vi.waitFor(() => expect(replacement.requests).toHaveLength(1));
+      nextRequests = replacement.requests;
+      element.gateway = replacement.element.gateway;
+    } else if (change === "session") {
+      element.session = { sessionKey: "agent:main:two", agentId: "main" };
+    } else if (change === "agent") {
+      element.session = { sessionKey: "agent:main:one", agentId: "other" };
+    } else {
+      current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+      current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+    }
+    await vi.waitFor(() => expect(nextRequests).toHaveLength(2));
+    expect(committedText.length).toBeGreaterThan(0);
+    expect(committedText.every((text) => !text.includes("Previous owner transcript"))).toBe(true);
+    observer.disconnect();
+    nextRequests[1]!.resolve(history("Current owner transcript"));
+    await shown("Current owner transcript");
+  },
+);
+
+it("normalizes visible message text without reviving assistant commentary or tool output", async () => {
+  const { element, requests, shown } = setup();
+  await vi.waitFor(() => expect(requests).toHaveLength(1));
+  const context = 'Context: ⟦openclaw:ctx⟧\n{"internal": "hidden-envelope"}';
+  requests[0]!.resolve({
+    messages: [
+      { role: "user", content: `Visible request\n\n${context}` },
+      { role: "assistant", phase: "commentary", content: "Hidden commentary" },
+      { role: "toolResult", content: "Hidden tool output" },
+      {
+        role: "assistant",
+        senderLabel: "Reviewer",
+        content: [
+          textBlock("Hidden legacy text"),
+          textBlock("Hidden phased commentary", "commentary"),
+          textBlock(
+            `Visible **answer**\nMEDIA:https://example.com/proof.png\n\n${context}`,
+            "final_answer",
+          ),
+        ],
+      },
+      { role: "assistant", content: context },
+    ],
   });
+  await shown("Visible answer");
+  expect(element.textContent).toContain("Visible request");
+  expect(element.textContent).toContain("Reviewer");
+  expect(messages(element)).toHaveLength(2);
+  expect(element.querySelector(".sidebar-markdown strong")?.textContent).toBe("answer");
+  expect(element.textContent).not.toMatch(/Hidden|hidden-envelope|openclaw:ctx|MEDIA:|proof\.png/);
+});
 
-  it.each(["session", "agent", "connection", "gateway"] as const)(
-    "does not commit another owner's transcript when the %s changes",
-    async (change) => {
-      const { element, requests, current, reply, shown } = setup();
-      await reply(0, "Previous owner transcript");
-      await element.updateComplete;
-      const committedText: string[] = [];
-      const observer = new MutationObserver(() => committedText.push(element.textContent ?? ""));
-      observer.observe(element, { childList: true, characterData: true, subtree: true });
-      let nextRequests = requests;
-      if (change === "gateway") {
-        const replacement = setup();
-        await vi.waitFor(() => expect(replacement.requests).toHaveLength(1));
-        nextRequests = replacement.requests;
-        element.gateway = replacement.element.gateway;
-      } else if (change === "session") {
-        element.session = { sessionKey: "agent:main:two", agentId: "main" };
-      } else if (change === "agent") {
-        element.session = { sessionKey: "agent:main:one", agentId: "other" };
-      } else {
-        current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
-        current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
-      }
-      await vi.waitFor(() => expect(nextRequests).toHaveLength(2));
-      expect(committedText.length).toBeGreaterThan(0);
-      expect(committedText.every((text) => !text.includes("Previous owner transcript"))).toBe(true);
-      observer.disconnect();
-      nextRequests[1]!.resolve(history("Current owner transcript"));
-      await shown("Current owner transcript");
-    },
+it("paces durable events and retains one catch-up during a pending load", async () => {
+  useClock();
+  const { element, requests, emit, reply, settled } = setup();
+  await reply(0, "Initial reply");
+
+  emit("session.message", "agent:other:one", "other");
+  emit("chat");
+  await settled(1);
+
+  emit("session.message");
+  await vi.advanceTimersByTimeAsync(4_000);
+  expect(requests).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1_000);
+  await vi.waitFor(() => expect(requests).toHaveLength(2));
+  expect(element.textContent).toContain("Initial reply");
+  emit("sessions.changed");
+  emit("session.message");
+  await settled(2);
+  requests[1]!.resolve(history("Intermediate reply"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(requests).toHaveLength(2);
+  await vi.advanceTimersByTimeAsync(5_000);
+  await vi.waitFor(() => expect(requests).toHaveLength(3));
+  await reply(2, "Final reply");
+  expect(element.textContent).not.toContain("Initial reply");
+
+  element.presented = false;
+  await element.updateComplete;
+  emit("session.message");
+  await vi.advanceTimersByTimeAsync(10_000);
+  await element.updateComplete;
+  expect(requests).toHaveLength(3);
+  expect(element.textContent).toBe("");
+  element.presented = true;
+  await reply(3, "Reply received while hidden");
+});
+
+it("catches up with cursors, retains a bounded tail, and replaces it after a reset", async () => {
+  useClock();
+  const { element, requests, emit, shown } = setup();
+  const message = (seq: number) => ({
+    role: "assistant",
+    content: [textBlock(`Reply ${seq}.`)],
+    __openclaw: { id: `reply-${seq}`, seq },
+  });
+  const sessionInfo = { key: "agent:main:one", sessionId: "one", kind: "direct" as const };
+  await vi.waitFor(() => expect(requests).toHaveLength(1));
+  requests[0]!.resolve({
+    messages: Array.from({ length: 20 }, (_, index) => message(index + 1)),
+    deltaCursor: "cursor-20",
+    sessionInfo,
+  });
+  await shown("Reply 20.");
+
+  emit("session.message");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(requests[1]!.params).toMatchObject({ cursor: "cursor-20", maxChars: 12000 });
+  requests[1]!.resolve({
+    kind: "delta",
+    deltaCursor: "cursor-21",
+    sessionInfo,
+    messages: [20, 21].map((seq) => ({
+      sessionKey: sessionInfo.key,
+      messageId: `reply-${seq}`,
+      messageSeq: seq,
+      message: message(seq),
+    })),
+  });
+  await shown("Reply 21.");
+  expect(element.textContent).toContain("Reply 2.");
+  expect(element.textContent).not.toContain("Reply 1.");
+  expect(messages(element)).toHaveLength(20);
+
+  emit("sessions.changed");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(requests[2]!.params).toMatchObject({ cursor: "cursor-21" });
+  requests[2]!.resolve({ kind: "delta", deltaCursor: "unchanged", sessionInfo, messages: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(messages(element)).toHaveLength(20);
+
+  emit("sessions.changed");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(requests[3]!.params).toMatchObject({ cursor: "unchanged" });
+  requests[3]!.resolve({ kind: "reset" });
+  await vi.waitFor(() => expect(requests).toHaveLength(5));
+  expect(requests[4]!.params).not.toHaveProperty("cursor", "unchanged");
+  requests[4]!.resolve({ ...history("Replacement branch"), deltaCursor: "replacement" });
+  await shown("Replacement branch");
+  expect(element.textContent).not.toContain("Reply 21.");
+});
+
+it("does not resume progress requests after removal with an update queued", async () => {
+  const { element, current, reply, calls, settled } = setup();
+  await reply(0, "Initial reply");
+  await settled(1);
+  const progressRequests = () => calls("progressCard.get");
+  expect(progressRequests()).toHaveLength(1);
+
+  element.session = { ...element.session! };
+  element.remove();
+  await element.updateComplete;
+  current().opts.onEvent?.(
+    createGatewayEvent("progressCard.changed", { sessionKey: "agent:main:one", revision: 2 }),
   );
+  await settled(1);
+  expect(progressRequests()).toHaveLength(1);
 
-  it("normalizes visible message text without reviving assistant commentary or tool output", async () => {
-    const { element, requests, shown } = setup();
-    await vi.waitFor(() => expect(requests).toHaveLength(1));
-    const context = 'Context: ⟦openclaw:ctx⟧\n{"internal": "hidden-envelope"}';
-    requests[0]!.resolve({
-      messages: [
-        { role: "user", content: `Visible request\n\n${context}` },
-        { role: "assistant", phase: "commentary", content: "Hidden commentary" },
-        { role: "toolResult", content: "Hidden tool output" },
-        {
-          role: "assistant",
-          senderLabel: "Reviewer",
-          content: [
-            { type: "text", text: "Hidden legacy text" },
-            {
-              type: "text",
-              text: "Hidden phased commentary",
-              textSignature: '{"v":1,"phase":"commentary"}',
-            },
-            {
-              type: "text",
-              text: `Visible **answer**\nMEDIA:https://example.com/proof.png\n\n${context}`,
-              textSignature: '{"v":1,"phase":"final_answer"}',
-            },
-          ],
-        },
-        { role: "assistant", content: context },
-      ],
-    });
-    await shown("Visible answer");
-    expect(element.textContent).toContain("Visible request");
-    expect(element.textContent).toContain("Reviewer");
-    expect(messages(element)).toHaveLength(2);
-    expect(element.querySelector(".sidebar-markdown strong")?.textContent).toBe("answer");
-    expect(element.textContent).not.toMatch(
-      /Hidden|hidden-envelope|openclaw:ctx|MEDIA:|proof\.png/,
-    );
-  });
+  document.body.append(element);
+  element.session = { ...element.session! };
+  await element.updateComplete;
+  await vi.waitFor(() => expect(progressRequests()).toHaveLength(2));
+  await reply(1, "Reconnected reply");
+});
 
-  it("paces durable events and retains one catch-up during a pending load", async () => {
-    useClock();
-    const { element, requests, emit, reply } = setup();
-    await reply(0, "Initial reply");
+it("rejects an old session response and reloads after reconnect without a parent render", async () => {
+  const { element, requests, emit, current, reply, settled } = setup();
+  await vi.waitFor(() => expect(requests).toHaveLength(1));
+  element.session = { sessionKey: "agent:main:two", agentId: "main" };
+  await reply(1, "Second session");
+  requests[0]!.resolve(history("Stale first session"));
+  await Promise.resolve();
+  await element.updateComplete;
+  expect(element.textContent).not.toContain("Stale first session");
+  emit("session.message");
+  await settled(2);
 
-    emit("session.message", "agent:other:one", "other");
-    emit("chat");
-    await element.updateComplete;
-    expect(requests).toHaveLength(1);
-
-    emit("session.message");
-    await vi.advanceTimersByTimeAsync(4_000);
-    expect(requests).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.waitFor(() => expect(requests).toHaveLength(2));
-    expect(element.textContent).toContain("Initial reply");
-    emit("sessions.changed");
-    emit("session.message");
-    await element.updateComplete;
-    expect(requests).toHaveLength(2);
-    requests[1]!.resolve(history("Intermediate reply"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(requests).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(5_000);
-    await vi.waitFor(() => expect(requests).toHaveLength(3));
-    await reply(2, "Final reply");
-    expect(element.textContent).not.toContain("Initial reply");
-
-    element.presented = false;
-    await element.updateComplete;
-    emit("session.message");
-    await vi.advanceTimersByTimeAsync(10_000);
-    await element.updateComplete;
-    expect(requests).toHaveLength(3);
-    expect(element.textContent).toBe("");
-    element.presented = true;
-    await reply(3, "Reply received while hidden");
-  });
-
-  it("catches up with cursors, retains a bounded tail, and replaces it after a reset", async () => {
-    useClock();
-    const { element, requests, emit, shown } = setup();
-    const message = (seq: number) => ({
-      role: "assistant",
-      content: [{ type: "text", text: `Reply ${seq}.` }],
-      __openclaw: { id: `reply-${seq}`, seq },
-    });
-    const sessionInfo = { key: "agent:main:one", sessionId: "one", kind: "direct" as const };
-    await vi.waitFor(() => expect(requests).toHaveLength(1));
-    requests[0]!.resolve({
-      messages: Array.from({ length: 20 }, (_, index) => message(index + 1)),
-      deltaCursor: "cursor-20",
-      sessionInfo,
-    });
-    await shown("Reply 20.");
-
-    emit("session.message");
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests[1]!.params).toMatchObject({ cursor: "cursor-20", maxChars: 12000 });
-    requests[1]!.resolve({
-      kind: "delta",
-      deltaCursor: "cursor-21",
-      sessionInfo,
-      messages: [20, 21].map((seq) => ({
-        sessionKey: sessionInfo.key,
-        messageId: `reply-${seq}`,
-        messageSeq: seq,
-        message: message(seq),
-      })),
-    });
-    await shown("Reply 21.");
-    expect(element.textContent).toContain("Reply 2.");
-    expect(element.textContent).not.toContain("Reply 1.");
-    expect(messages(element)).toHaveLength(20);
-
-    emit("sessions.changed");
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests[2]!.params).toMatchObject({ cursor: "cursor-21" });
-    requests[2]!.resolve({ kind: "delta", deltaCursor: "unchanged", sessionInfo, messages: [] });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(messages(element)).toHaveLength(20);
-
-    emit("sessions.changed");
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests[3]!.params).toMatchObject({ cursor: "unchanged" });
-    requests[3]!.resolve({ kind: "reset" });
-    await vi.waitFor(() => expect(requests).toHaveLength(5));
-    expect(requests[4]!.params).not.toHaveProperty("cursor", "unchanged");
-    requests[4]!.resolve({ ...history("Replacement branch"), deltaCursor: "replacement" });
-    await shown("Replacement branch");
-    expect(element.textContent).not.toContain("Reply 21.");
-  });
-
-  it("does not resume progress requests after removal with an update queued", async () => {
-    const { element, requests, current, reply, calls } = setup();
-    await reply(0, "Initial reply");
-    await element.updateComplete;
-    const progressRequests = () => calls("progressCard.get");
-    expect(progressRequests()).toHaveLength(1);
-
-    element.session = { ...element.session! };
-    element.remove();
-    await element.updateComplete;
-    current().opts.onEvent?.(
-      createGatewayEvent("progressCard.changed", { sessionKey: "agent:main:one", revision: 2 }),
-    );
-    await element.updateComplete;
-    expect(progressRequests()).toHaveLength(1);
-    expect(requests).toHaveLength(1);
-
-    document.body.append(element);
-    element.session = { ...element.session! };
-    await element.updateComplete;
-    await vi.waitFor(() => expect(progressRequests()).toHaveLength(2));
-    await reply(1, "Reconnected reply");
-  });
-
-  it("rejects an old session response and reloads after reconnect without a parent render", async () => {
-    const { element, requests, emit, current, reply } = setup();
-    await vi.waitFor(() => expect(requests).toHaveLength(1));
-    element.session = { sessionKey: "agent:main:two", agentId: "main" };
-    await reply(1, "Second session");
-    requests[0]!.resolve(history("Stale first session"));
-    await Promise.resolve();
-    await element.updateComplete;
-    expect(element.textContent).not.toContain("Stale first session");
-    emit("session.message");
-    await element.updateComplete;
-    expect(requests).toHaveLength(2);
-
-    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
-    await element.updateComplete;
-    current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
-    await reply(2, "Reconnected session");
-  });
+  current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+  await element.updateComplete;
+  current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+  await reply(2, "Reconnected session");
 });
