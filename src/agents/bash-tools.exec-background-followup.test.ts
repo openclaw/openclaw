@@ -129,7 +129,8 @@ function nodeCommand(source: string): string {
 async function completion(signal: AbortSignal) {
   const receipt = expectDefined(receipts.at(-1), "ordinary completion receipt");
   expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
-  expect(await withinTest(receipt.settled, signal)).toMatchObject({
+  const outcome = await withinTest(receipt.settled, signal);
+  expect(outcome, outcome.error).toMatchObject({
     status: "completed",
     executionStarted: true,
   });
