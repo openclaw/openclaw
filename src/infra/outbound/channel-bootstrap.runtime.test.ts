@@ -60,15 +60,15 @@ const explicitFleetDiscordConfig = {
 } satisfies OpenClawConfig;
 
 function installDiscordSetupShell(): void {
+  setActivePluginRegistry(discordRegistry({}, "setup"));
+}
+
+function discordRegistry<T extends object>(fields: T, source = "runtime") {
   const registry = createEmptyPluginRegistry();
   registry.channels = [
-    {
-      pluginId: "discord",
-      plugin: { id: "discord", meta: {} },
-      source: "setup",
-    },
+    { pluginId: "discord", plugin: { id: "discord", meta: {}, ...fields }, source },
   ] as never;
-  setActivePluginRegistry(registry);
+  return registry;
 }
 
 describe("bootstrapOutboundChannelPlugin", () => {
@@ -81,21 +81,9 @@ describe("bootstrapOutboundChannelPlugin", () => {
 
   it("uses the admitted agent workspace during outbound preparation", async () => {
     installDiscordSetupShell();
-    const handle = createEmptyPluginRegistry();
-    handle.channels = [
-      {
-        pluginId: "discord",
-        plugin: {
-          id: "discord",
-          meta: {},
-          outbound: {
-            extractMarkdownImages: true,
-            sendText: async () => ({ messageId: "1" }),
-          },
-        },
-        source: "runtime",
-      },
-    ] as never;
+    const handle = discordRegistry({
+      outbound: { extractMarkdownImages: true, sendText: async () => ({ messageId: "1" }) },
+    });
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
     const handler = await createChannelHandler({
@@ -116,10 +104,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
 
     expect(() =>
-      bootstrapOutboundChannelPlugin({
-        channel: "discord",
-        cfg: explicitFleetDiscordConfig,
-      }),
+      bootstrapOutboundChannelPlugin({ channel: "discord", cfg: explicitFleetDiscordConfig }),
     ).not.toThrow(AgentSelectionRequiredError);
 
     expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
@@ -144,22 +129,10 @@ describe("bootstrapOutboundChannelPlugin", () => {
       from: "discord:channel:ops",
       to: "channel:ops",
     }));
-    const handle = createEmptyPluginRegistry();
-    handle.channels = [
-      {
-        pluginId: "discord",
-        plugin: {
-          id: "discord",
-          meta: {},
-          outbound: { sendText: async () => ({ messageId: "1" }) },
-          messaging: {
-            targetResolver: { resolveTarget },
-            resolveOutboundSessionRoute,
-          },
-        },
-        source: "runtime",
-      },
-    ] as never;
+    const handle = discordRegistry({
+      outbound: { sendText: async () => ({ messageId: "1" }) },
+      messaging: { targetResolver: { resolveTarget }, resolveOutboundSessionRoute },
+    });
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
     await expect(
@@ -184,33 +157,20 @@ describe("bootstrapOutboundChannelPlugin", () => {
   });
 
   it("skips bootstrap when the selected channel entry can already send", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.channels = [
-      {
-        pluginId: "discord",
-        plugin: {
-          id: "discord",
-          meta: {},
-          outbound: { sendText: async () => ({ messageId: "1" }) },
-        },
-        source: "runtime",
-      },
-    ] as never;
-    setActivePluginRegistry(registry);
+    setActivePluginRegistry(
+      discordRegistry({
+        outbound: { sendText: async () => ({ messageId: "1" }) },
+      }),
+    );
 
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: discordConfig,
-    });
+    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
 
     expect(loaderMocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 
   it("activates the scoped setup shell without borrowing a cached same-id root sender", () => {
     const base = createChannelTestPluginBase({ id: "discord" });
-    const root = {
-      ...base,
-    };
+    const root = { ...base };
     const activated = {
       ...base,
       outbound: { deliveryMode: "direct" as const, sendText: vi.fn() },
@@ -232,10 +192,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
 
     expect(
       withPluginRuntimeRegistryScope(setupRegistry, () =>
-        bootstrapOutboundChannelPlugin({
-          channel: "discord",
-          cfg: discordConfig,
-        }),
+        bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig }),
       ),
     ).toBe(runtimeRegistry);
     expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledOnce();
@@ -244,21 +201,12 @@ describe("bootstrapOutboundChannelPlugin", () => {
 
   it("resolves durable message capabilities inside the scoped handle", async () => {
     installDiscordSetupShell();
-    const handle = createEmptyPluginRegistry();
-    handle.channels = [
-      {
-        pluginId: "discord",
-        plugin: {
-          id: "discord",
-          meta: {},
-          message: {
-            durableFinal: { capabilities: { text: true, silent: true } },
-            send: { text: async () => ({ messageId: "1" }) },
-          },
-        },
-        source: "runtime",
+    const handle = discordRegistry({
+      message: {
+        durableFinal: { capabilities: { text: true, silent: true } },
+        send: { text: async () => ({ messageId: "1" }) },
       },
-    ] as never;
+    });
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
     await expect(

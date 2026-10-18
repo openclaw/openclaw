@@ -18,12 +18,7 @@ const repoRoot = path.resolve(thisDir, "../../..");
 const loadConfigPattern = /\b(?:getRuntimeConfig|config\.getRuntimeConfig)\s*\(/;
 
 function readRepoFile(relativePath: string): string {
-  const absolute = path.join(repoRoot, relativePath);
-  return readFileSync(absolute, "utf8");
-}
-
-function listGitFiles(pathspecs: string[]): string[] | null {
-  return listGitTrackedFiles({ repoRoot, pathspecs });
+  return readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
 
 function listFindFiles(args: string[]): string[] | null {
@@ -46,7 +41,7 @@ function listFindFiles(args: string[]): string[] | null {
 
 function listCoreOutboundEntryFiles(): string[] {
   const externalFiles =
-    listGitFiles(["src/channels/plugins/outbound/*.ts"]) ??
+    listGitTrackedFiles({ repoRoot, pathspecs: ["src/channels/plugins/outbound/*.ts"] }) ??
     listFindFiles([
       path.join(repoRoot, "src/channels/plugins/outbound"),
       "-maxdepth",
@@ -75,7 +70,10 @@ function listExtensionFiles(): {
   inlineChannelEntrypoints: string[];
 } {
   const externalFiles =
-    listGitFiles(["extensions/*/src/outbound.ts", "extensions/*/src/channel.ts"]) ??
+    listGitTrackedFiles({
+      repoRoot,
+      pathspecs: ["extensions/*/src/outbound.ts", "extensions/*/src/channel.ts"],
+    }) ??
     listFindFiles([
       path.join(repoRoot, "extensions"),
       "-path",
@@ -89,33 +87,17 @@ function listExtensionFiles(): {
   }
 
   const extensionsRoot = path.join(repoRoot, "extensions");
-  const adapterEntrypoints: string[] = [];
-  const inlineChannelEntrypoints: string[] = [];
-
-  for (const entry of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const srcDir = path.join(extensionsRoot, entry.name, "src");
-    const outboundPath = path.join(srcDir, "outbound.ts");
-    if (existsSync(outboundPath)) {
-      adapterEntrypoints.push(path.posix.join("extensions", entry.name, "src/outbound.ts"));
-    }
-
-    const channelPath = path.join(srcDir, "channel.ts");
-    if (!existsSync(channelPath)) {
-      continue;
-    }
-    const source = readFileSync(channelPath, "utf8");
-    if (/\boutbound\s*:\s*\{/.test(source)) {
-      inlineChannelEntrypoints.push(path.posix.join("extensions", entry.name, "src/channel.ts"));
-    }
-  }
-
-  return {
-    adapterEntrypoints: adapterEntrypoints.toSorted(),
-    inlineChannelEntrypoints: inlineChannelEntrypoints.toSorted(),
-  };
+  return partitionExtensionEntrypoints(
+    fs
+      .readdirSync(extensionsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .flatMap((entry) =>
+        ["outbound.ts", "channel.ts"].map((name) =>
+          path.posix.join("extensions", entry.name, "src", name),
+        ),
+      )
+      .filter((file) => existsSync(path.join(repoRoot, file))),
+  );
 }
 
 function partitionExtensionEntrypoints(files: string[]): {
@@ -179,32 +161,13 @@ function extractOutboundBlock(source: string, file: string): string {
       }
       continue;
     }
-    if (state === "single") {
+    if (state === "single" || state === "double" || state === "template") {
       if (current === "\\" && next) {
         i += 1;
         continue;
       }
-      if (current === "'") {
-        state = "code";
-      }
-      continue;
-    }
-    if (state === "double") {
-      if (current === "\\" && next) {
-        i += 1;
-        continue;
-      }
-      if (current === '"') {
-        state = "code";
-      }
-      continue;
-    }
-    if (state === "template") {
-      if (current === "\\" && next) {
-        i += 1;
-        continue;
-      }
-      if (current === "`") {
+      const quote = { single: "'", double: '"', template: "`" }[state];
+      if (current === quote) {
         state = "code";
       }
       continue;
@@ -220,16 +183,8 @@ function extractOutboundBlock(source: string, file: string): string {
       i += 1;
       continue;
     }
-    if (current === "'") {
-      state = "single";
-      continue;
-    }
-    if (current === '"') {
-      state = "double";
-      continue;
-    }
-    if (current === "`") {
-      state = "template";
+    if (current === "'" || current === '"' || current === "`") {
+      state = current === "'" ? "single" : current === '"' ? "double" : "template";
       continue;
     }
     if (current === "{") {

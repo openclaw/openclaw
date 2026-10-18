@@ -51,38 +51,27 @@ vi.mock("./runtime-visible-channels.js", () => ({
 
 vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
   resolveMissingOfficialExternalChannelPluginRepairHint: ({ channelId }: { channelId: string }) =>
-    mocks.missingOfficialExternalChannels.has(channelId)
-      ? {
-          pluginId: channelId,
-          channelId,
-          label: channelId === "whatsapp" ? "WhatsApp" : "Feishu",
-          installSpec: `@openclaw/${channelId}`,
-          installCommand: `openclaw plugins install @openclaw/${channelId}`,
-          doctorFixCommand: "openclaw doctor --fix",
-          repairHint: `Install the official external plugin with: openclaw plugins install @openclaw/${channelId}, or run: openclaw doctor --fix.`,
-        }
-      : null,
+    missingPluginHint(channelId),
   resolveMissingOfficialExternalChannelPluginRepairHints: ({
     channelIds,
   }: {
     channelIds: string[];
-  }) =>
-    channelIds.flatMap((channelId) =>
-      mocks.missingOfficialExternalChannels.has(channelId)
-        ? [
-            {
-              pluginId: channelId,
-              channelId,
-              label: channelId === "whatsapp" ? "WhatsApp" : "Feishu",
-              installSpec: `@openclaw/${channelId}`,
-              installCommand: `openclaw plugins install @openclaw/${channelId}`,
-              doctorFixCommand: "openclaw doctor --fix",
-              repairHint: `Install the official external plugin with: openclaw plugins install @openclaw/${channelId}, or run: openclaw doctor --fix.`,
-            },
-          ]
-        : [],
-    ),
+  }) => channelIds.flatMap((channelId) => missingPluginHint(channelId) ?? []),
 }));
+
+function missingPluginHint(channelId: string) {
+  return mocks.missingOfficialExternalChannels.has(channelId)
+    ? {
+        pluginId: channelId,
+        channelId,
+        label: channelId === "whatsapp" ? "WhatsApp" : "Feishu",
+        installSpec: `@openclaw/${channelId}`,
+        installCommand: `openclaw plugins install @openclaw/${channelId}`,
+        doctorFixCommand: "openclaw doctor --fix",
+        repairHint: `Install the official external plugin with: openclaw plugins install @openclaw/${channelId}, or run: openclaw doctor --fix.`,
+      }
+    : null;
+}
 
 type ChannelSelectionModule = typeof import("./channel-selection.js");
 
@@ -96,6 +85,12 @@ beforeAll(async () => {
 
 beforeEach(() => {
   mocks.scopedRegistryChannelIds.clear();
+  mocks.listChannelPlugins.mockReset().mockReturnValue([]);
+  mocks.listRuntimeVisibleChannelPlugins.mockReset();
+  mocks.resolveOutboundChannelPlugin
+    .mockReset()
+    .mockImplementation(resolveFixtureOutboundChannelPlugin);
+  mocks.missingOfficialExternalChannels.clear();
 });
 
 function resolveFixtureOutboundChannelPlugin({ channel }: { channel: string }) {
@@ -135,35 +130,24 @@ describe("listConfiguredMessageChannels", () => {
 
   beforeEach(() => {
     errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-    mocks.listChannelPlugins.mockReset();
-    mocks.listChannelPlugins.mockReturnValue([]);
-    mocks.listRuntimeVisibleChannelPlugins.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(resolveFixtureOutboundChannelPlugin);
   });
 
   afterEach(() => {
     errorSpy.mockRestore();
   });
 
-  it.each([
-    {
-      plugins: [
-        makePlugin({
-          id: "gamma",
-          accountIds: ["disabled", "enabled"],
-          resolveAccount: (accountId) =>
-            accountId === "disabled" ? { enabled: false } : { enabled: true },
-          isConfigured: (account) => (account as { enabled?: boolean }).enabled === true,
-        }),
-      ],
-      expected: ["gamma"],
-      expectedErrors: 0,
-    },
-  ])("lists configured channels for %j", async ({ plugins, expected, expectedErrors }) => {
-    mocks.listChannelPlugins.mockReturnValue(plugins);
-    await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual(expected);
-    expect(errorSpy).toHaveBeenCalledTimes(expectedErrors);
+  it("lists configured channels after a disabled account", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      makePlugin({
+        id: "gamma",
+        accountIds: ["disabled", "enabled"],
+        resolveAccount: (accountId) =>
+          accountId === "disabled" ? { enabled: false } : { enabled: true },
+        isConfigured: (account) => (account as { enabled?: boolean }).enabled === true,
+      }),
+    ]);
+    await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual(["gamma"]);
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 
   it("refreshes recent errors and re-logs errors evicted from the bounded dedupe", async () => {
@@ -196,15 +180,6 @@ describe("listConfiguredMessageChannels", () => {
 });
 
 describe("resolveMessageChannelSelection", () => {
-  beforeEach(() => {
-    mocks.listChannelPlugins.mockReset();
-    mocks.listChannelPlugins.mockReturnValue([]);
-    mocks.listRuntimeVisibleChannelPlugins.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(resolveFixtureOutboundChannelPlugin);
-    mocks.missingOfficialExternalChannels.clear();
-  });
-
   it("resolves the fallback channel", async () => {
     await expect(
       resolveMessageChannelSelection({ cfg: {} as never, fallbackChannel: "gamma" }),
@@ -214,12 +189,8 @@ describe("resolveMessageChannelSelection", () => {
   it.each([
     {
       name: "finds an inspected secondary account after a disabled default",
-      accountResolution: "read_only" as const,
       accountIds: ["default", "secondary"],
-      inspect: (accountId: string) => ({
-        enabled: accountId === "secondary",
-        configured: true,
-      }),
+      inspect: (accountId: string) => ({ enabled: accountId === "secondary", configured: true }),
       resolve: () => {
         throw new Error("strict resolution must not run");
       },
@@ -232,7 +203,6 @@ describe("resolveMessageChannelSelection", () => {
     },
     {
       name: "contains read-only inspector failures to their account",
-      accountResolution: "read_only" as const,
       accountIds: ["default"],
       inspect: () => {
         throw new Error("inspection failed");
@@ -247,7 +217,6 @@ describe("resolveMessageChannelSelection", () => {
     },
     {
       name: "retains strict callback fallback for plugins without an inspector",
-      accountResolution: "read_only" as const,
       accountIds: ["default"],
       inspect: undefined,
       resolve: () => ({ enabled: true, configured: false }),
@@ -271,7 +240,7 @@ describe("resolveMessageChannelSelection", () => {
     mocks.listChannelPlugins.mockReturnValue([plugin]);
     const params = {
       cfg: {} as never,
-      ...(scenario.accountResolution ? { accountResolution: scenario.accountResolution } : {}),
+      accountResolution: "read_only" as const,
     };
 
     if (scenario.expected) {
@@ -287,7 +256,7 @@ describe("resolveMessageChannelSelection", () => {
       scenario.inspectCalls,
     );
     expect(resolveAccount).toHaveBeenCalledTimes(scenario.resolveCalls);
-    if (scenario.accountResolution === "read_only" && scenario.inspect) {
+    if (scenario.inspect) {
       expect(isConfigured).not.toHaveBeenCalled();
     }
   });
@@ -345,14 +314,6 @@ describe("resolveMessageChannelSelection", () => {
 });
 
 describe("resolveMessageChannelSelection (registry-scoped channel plugins)", () => {
-  beforeEach(() => {
-    mocks.listChannelPlugins.mockReset();
-    mocks.listChannelPlugins.mockReturnValue([]);
-    mocks.listRuntimeVisibleChannelPlugins.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(resolveFixtureOutboundChannelPlugin);
-  });
-
   it("defaults to the single configured channel seen only through the runtime-visible list", async () => {
     mocks.scopedRegistryChannelIds.add("scopex");
     mocks.listRuntimeVisibleChannelPlugins.mockReturnValue([

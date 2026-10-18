@@ -39,19 +39,6 @@ function createRuntimeBinding(
   };
 }
 
-function registerRuntimeSessionBindings(
-  targetSessionKey: string,
-  bindings: SessionBindingRecord[],
-): void {
-  registerSessionBindingAdapter({
-    channel: "richchat",
-    accountId: "runtime",
-    listBySession: (requestedSessionKey) =>
-      requestedSessionKey === targetSessionKey ? bindings : [],
-    resolveByConversation: () => null,
-  });
-}
-
 describe("bound delivery router", () => {
   beforeEach(() => {
     testing.resetSessionBindingAdaptersForTests();
@@ -62,23 +49,26 @@ describe("bound delivery router", () => {
     bindings?: SessionBindingRecord[];
     requesterConversationId?: string;
   }) => {
-    if (params.bindings) {
-      registerRuntimeSessionBindings(
-        params.targetSessionKey ?? TARGET_SESSION_KEY,
-        params.bindings,
-      );
+    const { bindings } = params;
+    if (bindings) {
+      registerSessionBindingAdapter({
+        channel: "richchat",
+        accountId: "runtime",
+        listBySession: (key) =>
+          key === (params.targetSessionKey ?? TARGET_SESSION_KEY) ? bindings : [],
+        resolveByConversation: () => null,
+      });
     }
     return resolveBoundDeliveryDestination({
       targetSessionKey: params.targetSessionKey ?? TARGET_SESSION_KEY,
-      ...(params.requesterConversationId !== undefined
-        ? {
-            requester: {
+      requester:
+        params.requesterConversationId === undefined
+          ? undefined
+          : {
               channel: "richchat",
               accountId: "runtime",
               conversationId: params.requesterConversationId,
             },
-          }
-        : {}),
     });
   };
 
@@ -165,25 +155,15 @@ it("lists account and generic destinations and prunes expiry without host SQL", 
         targetKind: "session",
       });
       const service = getSessionBindingService();
-      const generic = await service.bind({
-        conversation: {
-          channel: INTERNAL_MESSAGE_CHANNEL,
-          accountId: "default",
-          conversationId: "generic-room",
-        },
-        targetSessionKey: TARGET_SESSION_KEY,
-        targetKind: "session",
-      });
-      const expired = await service.bind({
-        conversation: {
-          channel: INTERNAL_MESSAGE_CHANNEL,
-          accountId: "default",
-          conversationId: "expired-room",
-        },
-        targetSessionKey: TARGET_SESSION_KEY,
-        targetKind: "session",
-        ttlMs: 0,
-      });
+      const bind = (conversationId: string, ttlMs?: number) =>
+        service.bind({
+          conversation: { channel: INTERNAL_MESSAGE_CHANNEL, accountId: "default", conversationId },
+          targetSessionKey: TARGET_SESSION_KEY,
+          targetKind: "session",
+          ...(ttlMs === undefined ? {} : { ttlMs }),
+        });
+      const generic = await bind("generic-room");
+      const expired = await bind("expired-room", 0);
       const { db } = openOpenClawStateDatabase();
       const row = db.prepare(
         "SELECT record_json FROM current_conversation_bindings WHERE binding_id = ?",
@@ -196,9 +176,7 @@ it("lists account and generic destinations and prunes expiry without host SQL", 
           targetSessionKey: TARGET_SESSION_KEY,
           requester: { channel: "fixture", accountId: "owner", conversationId: "owned-room" },
         });
-        expect(route).toMatchObject({
-          bindingId: "owner:owned-room",
-        });
+        expect(route).toMatchObject({ bindingId: "owner:owned-room" });
         for (const call of hostSql.calls) {
           expect(call).not.toHaveBeenCalled();
         }
@@ -221,9 +199,7 @@ it("creates the binding store on the first destination lookup without host SQL",
     const hostSql = observeHostDataSql();
     try {
       expect(
-        await resolveBoundDeliveryDestination({
-          targetSessionKey: TARGET_SESSION_KEY,
-        }),
+        await resolveBoundDeliveryDestination({ targetSessionKey: TARGET_SESSION_KEY }),
       ).toBeNull();
       for (const call of hostSql.calls) {
         expect(call).not.toHaveBeenCalled();
@@ -234,9 +210,7 @@ it("creates the binding store on the first destination lookup without host SQL",
     expect((await fs.stat(databasePath)).isFile()).toBe(true);
     const { db } = openOpenClawStateDatabase();
     expect(db.prepare("SELECT COUNT(*) AS count FROM current_conversation_bindings").get()).toEqual(
-      {
-        count: 0,
-      },
+      { count: 0 },
     );
   });
 });

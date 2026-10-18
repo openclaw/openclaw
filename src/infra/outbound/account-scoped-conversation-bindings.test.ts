@@ -23,15 +23,27 @@ const baseCfg = {
   session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } },
 } satisfies OpenClawConfig;
 
-function createManager(params: { accountId?: string; cfg?: OpenClawConfig } = {}) {
-  return createAccountScopedConversationBindingManager<TestBindingKind>({
+function managerOptions(params: { accountId?: string; cfg?: OpenClawConfig } = {}) {
+  return {
     channel: "imessage",
     cfg: params.cfg ?? baseCfg,
     accountId: params.accountId ?? "ttl-owner",
     stateKey,
-    toStoredTargetKind: (kind) => (kind === "subagent" ? "subagent" : "acp"),
-    toSessionBindingTargetKind: (kind) => (kind === "subagent" ? "subagent" : "session"),
-  });
+    toStoredTargetKind: (kind: TestBindingKind) => kind,
+    toSessionBindingTargetKind: (kind: TestBindingKind): "subagent" | "session" =>
+      kind === "subagent" ? "subagent" : "session",
+  } as const;
+}
+
+function createManager(params: Parameters<typeof managerOptions>[0] = {}) {
+  return createAccountScopedConversationBindingManager<TestBindingKind>(managerOptions(params));
+}
+
+function conversationRef(
+  manager: AccountScopedConversationBindingManager<TestBindingKind>,
+  conversationId: string,
+) {
+  return { channel: "imessage", accountId: manager.accountId, conversationId };
 }
 
 function bindConversation(
@@ -55,13 +67,11 @@ function bindConversation(
 }
 
 describe("account-scoped conversation binding expiry", () => {
-  let previousStateDir: string | undefined;
   let testStateDir = "";
 
   beforeEach(async () => {
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
     testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-account-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = testStateDir;
+    vi.stubEnv("OPENCLAW_STATE_DIR", testStateDir);
     resetAccountScopedConversationBindingsForTests({ stateKey });
     currentConversationBindingTesting.clearPersistedCurrentConversationBindingsForTests();
   });
@@ -70,11 +80,7 @@ describe("account-scoped conversation binding expiry", () => {
     resetAccountScopedConversationBindingsForTests({ stateKey });
     currentConversationBindingTesting.clearPersistedCurrentConversationBindingsForTests();
     await closeStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
+    vi.unstubAllEnvs();
     await fs.rm(testStateDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
@@ -82,14 +88,8 @@ describe("account-scoped conversation binding expiry", () => {
   it("warns once for legacy construction and leaves V2 construction silent", () => {
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     withPluginRuntimePluginScope({ pluginId: "account-binding-factory-warning" }, () => {
-      const manager = createAccountScopedConversationBindingManagerV2<TestBindingKind>({
-        channel: "imessage",
-        cfg: baseCfg,
-        accountId: "ttl-owner",
-        stateKey,
-        toStoredTargetKind: (kind) => (kind === "subagent" ? "subagent" : "acp"),
-        toSessionBindingTargetKind: (kind) => (kind === "subagent" ? "subagent" : "session"),
-      });
+      const manager =
+        createAccountScopedConversationBindingManagerV2<TestBindingKind>(managerOptions());
       expect(manager.accountId).toBe("ttl-owner");
       expect(warning).not.toHaveBeenCalled();
       createManager();
@@ -122,11 +122,7 @@ describe("account-scoped conversation binding expiry", () => {
         pluginRoot: "/plugins/opaque-plugin",
         nested: { ownerEpoch: 7, capabilities: ["approve", "resume"] },
       };
-      const conversation = {
-        channel: "imessage",
-        accountId: manager.accountId,
-        conversationId: "chat:opaque-metadata",
-      };
+      const conversation = conversationRef(manager, "chat:opaque-metadata");
       const bound = await getSessionBindingService().bind({
         targetSessionKey:
           ownerKind === "agent"
@@ -194,11 +190,9 @@ describe("account-scoped conversation binding expiry", () => {
 
     expect(manager.getByConversationId(original.conversationId)).toEqual(original);
     expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "imessage",
-        accountId: manager.accountId,
-        conversationId: original.conversationId,
-      })?.targetSessionKey,
+      getSessionBindingService().resolveByConversation(
+        conversationRef(manager, original.conversationId),
+      )?.targetSessionKey,
     ).toBe(original.targetSessionKey);
   });
 
@@ -207,11 +201,7 @@ describe("account-scoped conversation binding expiry", () => {
     async (replace) => {
       const manager = createManager();
       const service = getSessionBindingService();
-      const conversation = {
-        channel: "imessage",
-        accountId: manager.accountId,
-        conversationId: "chat:replacement-owner",
-      };
+      const conversation = conversationRef(manager, "chat:replacement-owner");
       const metadata = {
         pluginBindingOwner: "plugin",
         pluginId: "owner-plugin",
@@ -241,10 +231,7 @@ describe("account-scoped conversation binding expiry", () => {
 
       expect(service.resolveByConversation(conversation)).toMatchObject({
         targetSessionKey,
-        metadata: {
-          agentId: replace ? "main" : "previous-agent",
-          label: "updated",
-        },
+        metadata: { agentId: replace ? "main" : "previous-agent", label: "updated" },
       });
       const resolvedMetadata = service.resolveByConversation(conversation)?.metadata;
       for (const key of [
@@ -271,11 +258,9 @@ describe("account-scoped conversation binding expiry", () => {
       startedAt + 30 * 60_000,
     );
     expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "imessage",
-        accountId: manager.accountId,
-        conversationId: binding.conversationId,
-      })?.expiresAt,
+      getSessionBindingService().resolveByConversation(
+        conversationRef(manager, binding.conversationId),
+      )?.expiresAt,
     ).toBe(startedAt + 60 * 60_000);
 
     now.mockReturnValue(startedAt + 60 * 60_000);
