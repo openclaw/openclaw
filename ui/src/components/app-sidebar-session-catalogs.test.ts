@@ -215,6 +215,24 @@ describe("catalogErrorMessages", () => {
     ).toEqual([]);
   });
 
+  it("treats a pending error replayed onto a host as a healthy in-flight discovery", () => {
+    expect(
+      catalogErrorMessages(
+        catalog({
+          hosts: [
+            host({
+              pending: true,
+              error: {
+                code: "catalog_pending",
+                message: "Catalog refresh is still pending; retry shortly.",
+              },
+            }),
+          ],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
   it("still reports a stale catalog", () => {
     expect(
       catalogErrorMessages(
