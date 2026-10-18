@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -14,13 +14,6 @@ import {
 } from "../../../../src/infra/device-identity.js";
 import { acquireGatewayTestClient } from "../../../helpers/gateway-client.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-
-const gatewayOwners: ReturnType<typeof createQaGatewayChild>[] = [];
-afterEach(async () => {
-  for (const owner of gatewayOwners.splice(0)) {
-    await stopQaGatewayFixture(owner);
-  }
-});
 
 const TEST_TIMEOUT_MS = 180_000;
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -52,145 +45,143 @@ const initialSnapshot = {
   rules: [{ pattern: "hostname", action: "allow", enabled: true }],
 } as const;
 
-describe("Gateway node exec approvals", () => {
-  it(
-    "relays exact policy snapshots and binds results to the current paired connection",
-    { timeout: TEST_TIMEOUT_MS },
-    async () => {
-      const gatewayOwner = createQaGatewayChild();
-      gatewayOwners.push(gatewayOwner);
-      const gateway = await gatewayOwner.start({
-        repoRoot: process.cwd(),
-        transportBaseUrl: "http://127.0.0.1",
-        controlUiEnabled: false,
-        runtimeEnvPatch: {
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        },
-        mutateConfig: (cfg) => {
-          const { plugins: _plugins, ...withoutPlugins } = cfg;
-          return {
-            ...withoutPlugins,
-            gateway: {
-              ...cfg.gateway,
-              nodes: {
-                ...cfg.gateway?.nodes,
-                commands: { allow: NODE_COMMANDS },
-              },
+it(
+  "relays exact policy snapshots and binds results to the current paired connection",
+  { timeout: TEST_TIMEOUT_MS },
+  async ({ onTestFinished }) => {
+    const gatewayOwner = createQaGatewayChild();
+    onTestFinished(() => stopQaGatewayFixture(gatewayOwner));
+    const gateway = await gatewayOwner.start({
+      repoRoot: process.cwd(),
+      transportBaseUrl: "http://127.0.0.1",
+      controlUiEnabled: false,
+      runtimeEnvPatch: {
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+      },
+      mutateConfig: (cfg) => {
+        const { plugins: _plugins, ...withoutPlugins } = cfg;
+        return {
+          ...withoutPlugins,
+          gateway: {
+            ...cfg.gateway,
+            nodes: {
+              ...cfg.gateway?.nodes,
+              commands: { allow: NODE_COMMANDS },
             },
-          };
-        },
-      });
-      const identity = loadOrCreateDeviceIdentity({
-        path: path.join(gateway.tempRoot, "node-exec-approvals.sqlite"),
-      });
-      const firstInbox = createInvokeInbox();
-      const replacementInbox = createInvokeInbox();
-      let operator: GatewayClient | undefined;
-      let firstNode: GatewayClient | undefined;
-      let replacementNode: GatewayClient | undefined;
-
-      try {
-        operator = await connectOperator(gateway);
-        firstNode = await connectPairedNode({
-          gateway,
-          identity,
-          operator,
-          onEvent: (event) => firstInbox.onEvent(event),
-        });
-
-        replacementNode = await connectNode({
-          gateway,
-          identity,
-          onEvent: (event) => replacementInbox.onEvent(event),
-        });
-        await waitForConnectedNode(operator, identity.deviceId, gateway.logs);
-
-        const getResultPromise = request<typeof initialSnapshot>(
-          operator,
-          "exec.approvals.node.get",
-          { nodeId: identity.deviceId },
-        );
-        const getFrame = await replacementInbox.next();
-        expect(getFrame).toMatchObject({
-          nodeId: identity.deviceId,
-          command: "system.execApprovals.get",
-        });
-        expect(parseParams(getFrame)).toEqual({});
-        expect(firstInbox.seen()).toEqual([]);
-
-        await expect(
-          request(firstNode, "node.invoke.result", {
-            id: getFrame.id,
-            nodeId: identity.deviceId,
-            ok: true,
-            payloadJSON: JSON.stringify({ enabled: false, message: "stale connection" }),
-          }),
-        ).rejects.toThrow("node pairing changed before request dispatch");
-
-        await respondToInvoke(replacementNode, getFrame, initialSnapshot);
-        await expect(getResultPromise).resolves.toEqual(initialSnapshot);
-
-        const nextPolicy = {
-          defaultAction: "prompt" as const,
-          rules: [
-            {
-              pattern: "git status",
-              action: "allow" as const,
-              shells: ["powershell"],
-              enabled: true,
-            },
-          ],
-        };
-        const setResultPromise = request<{ hash: string; updated: boolean }>(
-          operator,
-          "exec.approvals.node.set",
-          {
-            nodeId: identity.deviceId,
-            native: nextPolicy,
-            baseHash: initialSnapshot.baseHash,
           },
-        );
-        const setFrame = await replacementInbox.next();
-        expect(setFrame).toMatchObject({
-          nodeId: identity.deviceId,
-          command: "system.execApprovals.set",
-        });
-        expect(parseParams(setFrame)).toEqual({
-          ...nextPolicy,
-          baseHash: initialSnapshot.baseHash,
-        });
-        const updated = { updated: true, hash: "sha256:next" };
-        await respondToInvoke(replacementNode, setFrame, updated);
-        await expect(setResultPromise).resolves.toEqual(updated);
+        };
+      },
+    });
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(gateway.tempRoot, "node-exec-approvals.sqlite"),
+    });
+    const firstInbox = createInvokeInbox();
+    const replacementInbox = createInvokeInbox();
+    let operator: GatewayClient | undefined;
+    let firstNode: GatewayClient | undefined;
+    let replacementNode: GatewayClient | undefined;
 
-        const invalidGetPromise = request(operator, "exec.approvals.node.get", {
+    try {
+      operator = await connectOperator(gateway);
+      firstNode = await connectNode({
+        gateway,
+        identity,
+        operator,
+        onEvent: firstInbox.onEvent,
+      });
+
+      replacementNode = await connectNode({
+        gateway,
+        identity,
+        onEvent: replacementInbox.onEvent,
+      });
+      await waitForConnectedNode(operator, identity.deviceId, gateway.logs);
+
+      const getResultPromise = request<typeof initialSnapshot>(
+        operator,
+        "exec.approvals.node.get",
+        { nodeId: identity.deviceId },
+      );
+      const getFrame = await replacementInbox.next();
+      expect(getFrame).toMatchObject({
+        nodeId: identity.deviceId,
+        command: "system.execApprovals.get",
+      });
+      expect(parseParams(getFrame)).toEqual({});
+      expect(firstInbox.seen()).toEqual([]);
+
+      await expect(
+        request(firstNode, "node.invoke.result", {
+          id: getFrame.id,
           nodeId: identity.deviceId,
-        });
-        const invalidGetRejected = expect(invalidGetPromise).rejects.toThrow(
-          "node returned invalid exec approvals payload",
-        );
-        const invalidGetFrame = await replacementInbox.next();
-        await respondToInvoke(replacementNode, invalidGetFrame, {
-          enabled: true,
-          hash: "sha256:invalid",
-          rules: [],
-        });
-        await invalidGetRejected;
-      } finally {
-        await Promise.allSettled([
-          ...(replacementNode ? [replacementNode.stopAndWait({ timeoutMs: 1_000 })] : []),
-          ...(firstNode ? [firstNode.stopAndWait({ timeoutMs: 1_000 })] : []),
-          ...(operator ? [operator.stopAndWait({ timeoutMs: 1_000 })] : []),
-        ]);
-        const tempRoot = gateway.tempRoot;
-        await gateway.stop();
-        expect(existsSync(tempRoot)).toBe(false);
-      }
-    },
-  );
-});
+          ok: true,
+          payloadJSON: JSON.stringify({ enabled: false, message: "stale connection" }),
+        }),
+      ).rejects.toThrow("node pairing changed before request dispatch");
+
+      await respondToInvoke(replacementNode, getFrame, initialSnapshot);
+      await expect(getResultPromise).resolves.toEqual(initialSnapshot);
+
+      const nextPolicy = {
+        defaultAction: "prompt" as const,
+        rules: [
+          {
+            pattern: "git status",
+            action: "allow" as const,
+            shells: ["powershell"],
+            enabled: true,
+          },
+        ],
+      };
+      const setResultPromise = request<{ hash: string; updated: boolean }>(
+        operator,
+        "exec.approvals.node.set",
+        {
+          nodeId: identity.deviceId,
+          native: nextPolicy,
+          baseHash: initialSnapshot.baseHash,
+        },
+      );
+      const setFrame = await replacementInbox.next();
+      expect(setFrame).toMatchObject({
+        nodeId: identity.deviceId,
+        command: "system.execApprovals.set",
+      });
+      expect(parseParams(setFrame)).toEqual({
+        ...nextPolicy,
+        baseHash: initialSnapshot.baseHash,
+      });
+      const updated = { updated: true, hash: "sha256:next" };
+      await respondToInvoke(replacementNode, setFrame, updated);
+      await expect(setResultPromise).resolves.toEqual(updated);
+
+      const invalidGetPromise = request(operator, "exec.approvals.node.get", {
+        nodeId: identity.deviceId,
+      });
+      const invalidGetRejected = expect(invalidGetPromise).rejects.toThrow(
+        "node returned invalid exec approvals payload",
+      );
+      const invalidGetFrame = await replacementInbox.next();
+      await respondToInvoke(replacementNode, invalidGetFrame, {
+        enabled: true,
+        hash: "sha256:invalid",
+        rules: [],
+      });
+      await invalidGetRejected;
+    } finally {
+      await Promise.allSettled([
+        ...(replacementNode ? [replacementNode.stopAndWait({ timeoutMs: 1_000 })] : []),
+        ...(firstNode ? [firstNode.stopAndWait({ timeoutMs: 1_000 })] : []),
+        ...(operator ? [operator.stopAndWait({ timeoutMs: 1_000 })] : []),
+      ]);
+      const tempRoot = gateway.tempRoot;
+      await gateway.stop();
+      expect(existsSync(tempRoot)).toBe(false);
+    }
+  },
+);
 
 async function connectOperator(gateway: GatewayHandle): Promise<GatewayClient> {
   return await connectClient(gateway, {
@@ -203,41 +194,35 @@ async function connectOperator(gateway: GatewayHandle): Promise<GatewayClient> {
   });
 }
 
-async function connectPairedNode(params: {
-  gateway: GatewayHandle;
-  identity: DeviceIdentity;
-  operator: GatewayClient;
-  onEvent: (event: GatewayEvent) => void;
-}): Promise<GatewayClient> {
-  try {
-    return await connectNode(params);
-  } catch (error) {
-    if (!isPairingRequired(error)) {
-      throw error;
-    }
-    await approvePendingNodePairing(params.operator, params.identity.deviceId);
-    return await connectNode(params);
-  }
-}
-
 async function connectNode(params: {
   gateway: GatewayHandle;
   identity: DeviceIdentity;
+  operator?: GatewayClient;
   onEvent: (event: GatewayEvent) => void;
 }): Promise<GatewayClient> {
-  return await connectClient(params.gateway, {
-    role: "node",
-    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-    clientDisplayName: "Windows exec approval node",
-    mode: GATEWAY_CLIENT_MODES.NODE,
-    platform: "windows",
-    deviceFamily: "Windows",
-    scopes: [],
-    caps: ["system"],
-    commands: NODE_COMMANDS,
-    deviceIdentity: params.identity,
-    onEvent: params.onEvent,
-  });
+  const connect = () =>
+    connectClient(params.gateway, {
+      role: "node",
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientDisplayName: "Windows exec approval node",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      platform: "windows",
+      deviceFamily: "Windows",
+      scopes: [],
+      caps: ["system"],
+      commands: NODE_COMMANDS,
+      deviceIdentity: params.identity,
+      onEvent: params.onEvent,
+    });
+  try {
+    return await connect();
+  } catch (error) {
+    if (!params.operator || !isPairingRequired(error)) {
+      throw error;
+    }
+    await approvePendingNodePairing(params.operator, params.identity.deviceId);
+    return await connect();
+  }
 }
 
 async function connectClient(
@@ -291,18 +276,18 @@ async function approvePendingNodePairing(operator: GatewayClient, nodeId: string
   );
   await request(operator, "device.pair.approve", { requestId: deviceRequestId });
   const nodeRequestId = await waitPending("node.pair.list", (entry) => entry.nodeId === nodeId);
-  const approval = await request<{
-    requestId: string;
-    node: { nodeId: string; commands?: string[]; approvedAtMs?: number };
-  }>(operator, "node.pair.approve", { requestId: nodeRequestId });
-  expect(approval).toMatchObject({
-    requestId: nodeRequestId,
-    node: {
-      nodeId,
-      commands: NODE_COMMANDS,
-      approvedAtMs: expect.any(Number),
-    },
+  const approval = await approveNodeRequest(operator, nodeId, nodeRequestId);
+  expect(approval).toMatchObject({ requestId: nodeRequestId });
+}
+
+async function approveNodeRequest(operator: GatewayClient, nodeId: string, requestId?: string) {
+  const approval = await request<{ node: unknown }>(operator, "node.pair.approve", { requestId });
+  expect(approval.node).toMatchObject({
+    nodeId,
+    commands: NODE_COMMANDS,
+    approvedAtMs: expect.any(Number),
   });
+  return approval;
 }
 
 async function waitForConnectedNode(
@@ -343,14 +328,7 @@ async function approvePendingNodeSurface(operator: GatewayClient, nodeId: string
     if (pending.nodeId !== nodeId || !pending.requestId) {
       continue;
     }
-    const approval = await request<{
-      node: { nodeId: string; commands?: string[]; approvedAtMs?: number };
-    }>(operator, "node.pair.approve", { requestId: pending.requestId });
-    expect(approval.node).toMatchObject({
-      nodeId,
-      commands: NODE_COMMANDS,
-      approvedAtMs: expect.any(Number),
-    });
+    await approveNodeRequest(operator, nodeId, pending.requestId);
   }
 }
 

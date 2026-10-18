@@ -1,9 +1,5 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
-import { resetConfigOverrides } from "../../../../src/config/runtime-overrides.js";
-import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { createCronRunHandle, finishCronRun } from "../../../../src/cron/service/run-history.js";
 import { createCronServiceState } from "../../../../src/cron/service/state.js";
@@ -13,23 +9,12 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
-import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
-import { resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { createTestGatewayScheduler } from "../../../../src/test-utils/gateway-scheduler-clock.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { prepareRecoveryHome, resetGatewayState } from "./gateway-startup-routing.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function resetGatewayState(): void {
-  resetConfigOverrides();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest({ preserveListeners: true });
-  resetSystemEventsForTest();
-}
 
 function cronJob(params: {
   id: string;
@@ -61,33 +46,11 @@ describe("Gateway cron startup recovery", () => {
 
   it("reports lifecycle-owned retry and disable state through cron.list", async () => {
     const tempHome = tempDirs.make("openclaw-gateway-cron-recovery-");
-    const stateDir = path.join(tempHome, ".openclaw");
-    const bundledPluginsDir = path.join(tempHome, "empty-bundled-plugins");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await Promise.all([
-      fs.mkdir(stateDir, { recursive: true }),
-      fs.mkdir(bundledPluginsDir, { recursive: true }),
-    ]);
-
     const token = `gateway-cron-recovery-${process.pid}`;
-    const env = {
-      HOME: tempHome,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_GATEWAY_TOKEN: token,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "0",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
-    const envSnapshot = captureEnv([...Object.keys(env), "OPENCLAW_CONFIG_PATH"]);
-    for (const [key, value] of Object.entries(env)) {
-      setTestEnvValue(key, value);
-    }
-    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+    const { stateDir, configPath, workspaceDir, envSnapshot } = await prepareRecoveryHome(
+      tempHome,
+      token,
+    );
     closeOpenClawStateDatabaseForTest();
 
     const startedAtMs = Date.now() - 30_000;
@@ -142,7 +105,7 @@ describe("Gateway cron startup recovery", () => {
 
     const config = {
       agents: {
-        defaults: { workspace: path.join(tempHome, "workspace"), skipBootstrap: true },
+        defaults: { workspace: workspaceDir, skipBootstrap: true },
         entries: { main: {} },
       },
       gateway: { auth: { mode: "token", token } },
@@ -189,8 +152,11 @@ describe("Gateway cron startup recovery", () => {
       ] as const) {
         expect(recovered.get(id)).toMatchObject({ enabled: true, state: { nextRunAtMs } });
       }
-      expect(recovered.get("persisted-disable")?.enabled).toBe(false);
-      expect(recovered.get("persisted-disable")?.state.nextRunAtMs).toBeUndefined();
+      const disabled = recovered.get("persisted-disable");
+      expect({ enabled: disabled?.enabled, nextRunAtMs: disabled?.state.nextRunAtMs }).toEqual({
+        enabled: false,
+        nextRunAtMs: undefined,
+      });
     } finally {
       if (gateway) {
         await disconnectGatewayClient(gateway.client);
