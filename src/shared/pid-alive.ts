@@ -68,7 +68,7 @@ function isValidPid(pid: number): boolean {
 }
 
 /**
- * Check whether a Linux task is terminal and has no live sibling threads.
+ * Reject recycled worker TIDs and terminal leaders without live sibling threads.
  * Missing or reaped procfs snapshots require a fresh existence probe.
  */
 function isExitedLinuxProcess(pid: number): boolean {
@@ -80,9 +80,14 @@ function isExitedLinuxProcess(pid: number): boolean {
     const state = status.match(/^State:\s+(\S)/m)?.[1];
     const threads = status.match(/^Threads:[ \t]+(\d+)[ \t]*$/m)?.[1];
     if (threads !== "0") {
+      // process.pid records a leader; kill(pid, 0) also accepts recycled worker TIDs.
+      const tgid = status.match(/^Tgid:[ \t]+(\d+)[ \t]*$/m)?.[1];
       // pthread_exit can leave a terminal leader with live workers. Reaping also
       // moves the last retained task from Z to X before removing its PID.
-      return (state === "Z" || state === "X") && threads === "1";
+      return (
+        (tgid !== undefined && Number(tgid) !== pid) ||
+        ((state === "Z" || state === "X") && threads === "1")
+      );
     }
   } catch {
     // Reaping can remove procfs after the caller's existence probe.

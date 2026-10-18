@@ -107,6 +107,11 @@ export function classifyGatewayOwnerProcessNamespace(
   const owner = GatewayProcessNamespaceSchema.safeParse(value).data;
   const ownerHost = owner?.host ?? options.ownerHost;
   const foreignHost = ownerHost !== undefined && ownerHost !== os.hostname();
+  // Windows boot observations can disagree within one boot. Local Windows owners
+  // use PID and absolute process-start identity; heartbeat age cannot revoke them.
+  if (!foreignHost && process.platform === "win32" && owner?.platform === "win32") {
+    return "same";
+  }
   if (value === undefined && !foreignHost) {
     return "same";
   }
