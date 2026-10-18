@@ -89,7 +89,13 @@ class ToastOwner {
   connect() {
     connectedHosts.add(this.host);
     if (!this.host.closest("openclaw-modal-dialog")) {
-      this.homeLayer = this.host.parentElement ?? undefined;
+      const parent = this.host.parentElement;
+      // Document roots survive app teardown and must not resurrect removed hosts.
+      this.homeLayer =
+        parent !== this.host.ownerDocument.body &&
+        parent !== this.host.ownerDocument.documentElement
+          ? (parent ?? undefined)
+          : undefined;
     }
     this.host.style.display = "contents";
     this.host.dataset.toastPlacement = this.host.parentElement?.matches(".shell")
