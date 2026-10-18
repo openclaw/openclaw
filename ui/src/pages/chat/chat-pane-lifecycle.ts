@@ -285,7 +285,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       {
         sessionKey: this.sessionKey,
         dispatchEvent: (event) => this.element.dispatchEvent(event),
-        querySelector: (selector) => this.element.querySelector(selector),
+        transcriptLoadingChanged: this.synchronizeForegroundTranscript,
       },
       this.chatMessagesBySession,
     );

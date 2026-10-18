@@ -203,6 +203,8 @@ export type ChatThreadProps = ChatSendStatusActions &
     mediaOwner?: object;
     onChatScroll?: (event: Event) => void;
     onHistoryIntent?: (event: Event) => void;
+    onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
+    onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);
     onDraftChange: (next: string) => void;
     onSend: () => void;
     onPermissionRetry?: (message: string) => void;

@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, onCleanup, Show } from "solid-js";
 import "../../components/resizable-divider.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
@@ -12,6 +12,7 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import type { DropIndicator } from "./chat-page-drop-indicator.ts";
+import { registerUnboundPane } from "./chat-pane-elements.ts";
 import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import { ChatPaneView } from "./chat-pane.tsx";
 import type { RouteDraftComposerFocus } from "./route-draft-focus-handoff.ts";
@@ -241,6 +242,32 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
   );
 }
 
+function UnboundPane(props: { options: ChatPagePaneRenderOptions }) {
+  let unregister: (() => void) | undefined;
+  onCleanup(() => unregister?.());
+  return (
+    <div
+      ref={(node) => {
+        // Parent commit work needs this destination before settled callbacks run.
+        unregister = registerUnboundPane(node);
+      }}
+      class="chat-split-view__unbound"
+      data-unbound-pane-id={props.options.pane.id}
+      tabindex={0}
+      role="region"
+      aria-label={t("chat.splitView.chooseConversation")}
+    >
+      <strong>{t("chat.splitView.chooseConversation")}</strong>
+      <p>{t("chat.splitView.missingOwner")}</p>
+      <Show when={props.options.onClosePane}>
+        <button class="btn" onClick={() => props.options.onClosePane?.(props.options.pane.id)}>
+          {t("chat.splitView.closePane")}
+        </button>
+      </Show>
+    </div>
+  );
+}
+
 function ChatPagePaneCell(props: { options: ChatPagePaneRenderOptions }) {
   return (
     <div
@@ -258,24 +285,7 @@ function ChatPagePaneCell(props: { options: ChatPagePaneRenderOptions }) {
     >
       <div class="chat-pane-cache">
         <Show when={props.options.unbound}>
-          <div
-            class="chat-split-view__unbound"
-            data-unbound-pane-id={props.options.pane.id}
-            tabindex={0}
-            role="region"
-            aria-label={t("chat.splitView.chooseConversation")}
-          >
-            <strong>{t("chat.splitView.chooseConversation")}</strong>
-            <p>{t("chat.splitView.missingOwner")}</p>
-            <Show when={props.options.onClosePane}>
-              <button
-                class="btn"
-                onClick={() => props.options.onClosePane?.(props.options.pane.id)}
-              >
-                {t("chat.splitView.closePane")}
-              </button>
-            </Show>
-          </div>
+          <UnboundPane options={props.options} />
         </Show>
         <For each={props.options.sessionSlots} keyed={false}>
           {(session) => (

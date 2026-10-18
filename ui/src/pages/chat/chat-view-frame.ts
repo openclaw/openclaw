@@ -134,7 +134,10 @@ const placementQueues = new WeakMap<
   { initialTurn: ChatQueueItem; queue: ChatQueueItem[] }
 >();
 
-export function createChatViewFrame(props: ChatProps, getRoot: () => HTMLElement | undefined) {
+export function createChatViewFrame(
+  props: ChatProps,
+  focusComposer: (replacement?: boolean) => void,
+) {
   // The request session hosts the card; only sourceSessionKey names the requester.
   const approvalSourceSessionKey = props.inlineApproval?.sourceSessionKey;
   const approvalSourceSession = approvalSourceSessionKey
@@ -146,9 +149,6 @@ export function createChatViewFrame(props: ChatProps, getRoot: () => HTMLElement
   const displayedPendingInputs = pendingInputs
     ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
     : undefined;
-  // Focus crosses the transcript boundary into either the native or plugin-owned composer.
-  const focusComposer = (selector = ".agent-chat__composer-combobox > textarea") =>
-    getRoot()?.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
   const openSelectionComment = (
     selection: ChatSelectionSource,
     anchorRect: DOMRect,
@@ -302,10 +302,7 @@ export function createChatViewFrame(props: ChatProps, getRoot: () => HTMLElement
         : undefined,
     onOpenSession: props.onSessionSelect,
     // Portaled menus can outlive a render; resolve focus from the current session owner.
-    onFocusComposer: () =>
-      focusComposer(
-        "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > textarea",
-      ),
+    onFocusComposer: () => focusComposer(true),
   };
   questionState.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
   questionState.transcriptRenderContext.onAsyncQuestionDiscard = asyncQuestions.discard;

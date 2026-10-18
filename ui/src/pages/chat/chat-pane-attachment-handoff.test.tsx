@@ -26,6 +26,7 @@ import {
   preparePaneStagedAttachments,
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
+import { registerChatPane } from "./chat-pane-elements.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 import { enqueueChatMessage } from "./chat-queue.ts";
 import {
@@ -578,6 +579,9 @@ describe("staged chat attachment pane handoff", () => {
   function retainedSessions(context: ApplicationContext, ...panes: HTMLElement[]) {
     const host = document.createElement("div");
     host.append(...panes);
+    for (const pane of panes) {
+      disposals.push(registerChatPane(pane));
+    }
     return new ChatPageRetainedSessions(host, {
       context: () => context,
       presented: () => true,

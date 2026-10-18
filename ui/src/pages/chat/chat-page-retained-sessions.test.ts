@@ -90,6 +90,7 @@ function composer(pane: HTMLElement) {
   const textarea = document.createElement("textarea");
   combobox.append(textarea);
   pane.append(combobox);
+  Object.defineProperty(pane, "composerElement", { configurable: true, value: textarea });
   return textarea;
 }
 function unknownLayout(key: string) {
