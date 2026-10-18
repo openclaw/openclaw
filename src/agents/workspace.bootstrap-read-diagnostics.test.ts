@@ -151,6 +151,83 @@ describe("workspace bootstrap read diagnostics", () => {
     }
   });
 
+  it("skips one remote directory past the page budget and still loads its sibling", async () => {
+    const workspace = tempDirs.make("bootstrap-page-budget-");
+    const remote = tempDirs.make("bootstrap-page-budget-remote-");
+    await fs.mkdir(path.join(remote, "keep"), { recursive: true });
+    await fs.writeFile(path.join(remote, "keep/AGENTS.md"), "kept instructions");
+    const readDirectory = vi.fn(async ({ filePath }: { filePath: string }) => {
+      if (filePath === "." || filePath === "") {
+        return [
+          { name: "fat", isDirectory: true },
+          { name: "keep", isDirectory: true },
+        ];
+      }
+      if (filePath === "fat") {
+        throw Object.assign(new Error("Directory listing exceeded 32 pages"), {
+          code: "DIRECTORY_LISTING_TOO_LARGE",
+        });
+      }
+      if (filePath === "keep") {
+        return [{ name: "AGENTS.md", isDirectory: false }];
+      }
+      throw new Error(`unexpected directory ${filePath}`);
+    });
+    const bridge: AgentWorkspaceAccess["bridge"] = {
+      writeFile: vi.fn(),
+      stat: async ({ filePath }) => {
+        const stat = await fs.stat(path.join(remote, filePath));
+        return {
+          type: stat.isDirectory() ? "directory" : "file",
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+        };
+      },
+      readFile: async ({ filePath }) => fs.readFile(path.join(remote, filePath)),
+      readFileWithSource: async ({ filePath }) => ({
+        data: await fs.readFile(path.join(remote, filePath)),
+        canonicalPath: path.join(remote, filePath),
+      }),
+      readDirectory,
+    };
+    const release = registerAgentWorkspaceAccess(workspace, { bridge });
+    try {
+      const kept = await loadExtraBootstrapFilesWithDiagnostics(workspace, ["*/AGENTS.md"]);
+      expect(kept.diagnostics).toEqual([]);
+      expect(kept.files.map((file) => file.content)).toEqual(["kept instructions"]);
+      expect(readDirectory.mock.calls.map(([params]) => params.filePath).toSorted()).toEqual([
+        ".",
+        "fat",
+        "keep",
+      ]);
+    } finally {
+      release();
+    }
+
+    readDirectory.mockImplementation(async ({ filePath }: { filePath: string }) => {
+      if (filePath === "." || filePath === "") {
+        return [
+          { name: "fat", isDirectory: true },
+          { name: "keep", isDirectory: true },
+        ];
+      }
+      throw new Error("Invalid dir.list response");
+    });
+    const releaseInvalid = registerAgentWorkspaceAccess(workspace, { bridge });
+    try {
+      const failed = await loadExtraBootstrapFilesWithDiagnostics(workspace, ["*/AGENTS.md"]);
+      expect(failed.files).toEqual([]);
+      expect(failed.diagnostics).toEqual([
+        expect.objectContaining({
+          reason: "io",
+          detail: "Invalid dir.list response",
+        }),
+      ]);
+    } finally {
+      releaseInvalid();
+    }
+  });
+
   it("omits missing remote MEMORY.md and USER.md even when Gateway copies exist", async () => {
     const workspace = tempDirs.make("bootstrap-missing-remote-");
     const names = [DEFAULT_MEMORY_FILENAME, DEFAULT_USER_FILENAME] as const;
