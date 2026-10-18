@@ -242,8 +242,12 @@ async function readSessionFileReference(
   path: string,
 ): Promise<{ result: SessionWorkspaceGetResult; actionPath: string } | null> {
   try {
+    const result = await state.sessions.getFile(sessionKey, path, { agentId });
+    if (!result) {
+      return null;
+    }
     return {
-      result: await state.sessions.getFile(sessionKey, path, { agentId }),
+      result,
       actionPath: path,
     };
   } catch (error) {
@@ -274,8 +278,12 @@ async function readSessionFileReference(
     // follow-up actions cannot be resolved against a nested session cwd.
     const actionPath = workspaceBrowserFilePath(listing.root, match.path);
     try {
+      const result = await state.sessions.getFile(sessionKey, actionPath, { agentId });
+      if (!result) {
+        return null;
+      }
       return {
-        result: await state.sessions.getFile(sessionKey, actionPath, { agentId }),
+        result,
         actionPath,
       };
     } catch (resolvedError) {

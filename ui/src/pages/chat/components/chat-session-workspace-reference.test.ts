@@ -21,6 +21,34 @@ vi.mock("../../../api/session-file-download.ts", async (importOriginal) => {
 });
 
 describe("session workspace file reference resolution", () => {
+  it("preserves a null file-capability result as an unavailable preview", async () => {
+    const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async () => null);
+    const listFiles = vi.fn();
+    const state: SessionWorkspaceHost = {
+      client: createGatewayBrowserClientFixture(),
+      connected: true,
+      connectionEpoch: 1,
+      handleOpenSidebar: createSidebarContentRecorder(),
+      hello: gatewayHelloForMethods([]),
+      sessionKey: "agent:main:current",
+      sidebarContent: null,
+      sessions: createSessionCapabilityFixture({ getFile, listFiles }),
+    };
+
+    openSessionWorkspaceFile(state, { path: "REPORT.md" });
+
+    await vi.waitFor(() =>
+      expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
+        kind: "unavailable",
+        message: "Failed to load REPORT.md",
+      }),
+    );
+    expect(getFile).toHaveBeenCalledExactlyOnceWith("agent:main:current", "REPORT.md", {
+      agentId: "main",
+    });
+    expect(listFiles).not.toHaveBeenCalled();
+  });
+
   it("resolves a bare filename to the nested workspace file that search finds once", async () => {
     const nestedPath = "labs/file-organizer/output/sorted-copy-001/ORGANIZATION_REPORT.md";
     const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey, path) => {
