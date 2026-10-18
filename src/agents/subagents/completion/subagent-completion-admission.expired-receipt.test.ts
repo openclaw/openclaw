@@ -17,6 +17,7 @@ import {
 } from "./subagent-completion-admission.store.js";
 import {
   currentCompletionRun,
+  readCompletionSystemEvents,
   armRequesterWake,
   reopenCompletionFixtureOwners,
   records,
@@ -146,18 +147,48 @@ describe("requester receipts after completion expiry", () => {
     },
   );
 
-  it.each([
-    { reason: "expiry" as const, delivered: false },
-    { reason: "permanent_failure" as const, delivered: true },
-  ])(
-    "does not recover $reason without an eligible successful receipt",
-    async ({ reason, delivered }) => {
-      const input = await suspend({ reason });
-      await settle(input, delivered);
-      database = await reopenCompletionFixtureOwners();
-      expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
+  it.each([undefined, "parent"] as const)(
+    "records failed requester settlement after expiry without losing the result (target=%s)",
+    async (completionTarget) => {
+      const input = await suspend({ completionTarget });
+      const before = structuredClone(input.subagent);
+      const notices = readCompletionSystemEvents(database);
+      expect(notices).toHaveLength(1);
+      const driver = requesterWakeDriver([input]);
+      driver.wake.mockImplementation(async (params) => {
+        await params.completeBatch([input.subagent], 1, {
+          delivered: false,
+          path: "none",
+          error: "requester failed",
+        });
+        return false;
+      });
+      try {
+        await driver.run();
+        database = await reopenCompletionFixtureOwners();
+        const stored = subagentRuns.get(input.subagent.runId)!;
+        expect(stored.delivery).toMatchObject({
+          status: "failed",
+          disposition: "permanent_failure",
+          lastError: "requester failed",
+        });
+        expect(stored.delivery?.payload).toEqual(before.delivery?.payload);
+        expect(stored.completion).toEqual(before.completion);
+        expect(stored.requesterSettleWake).toBeUndefined();
+        expect(stored.suppressCompletionDelivery).toBe(true);
+        expect(readCompletionSystemEvents(database)).toEqual(notices);
+      } finally {
+        driver.controller.clearScheduledResumeTimers();
+      }
     },
   );
+
+  it("does not recover a permanent suspension from a successful receipt", async () => {
+    const input = await suspend({ reason: "permanent_failure" });
+    await settle(input, true);
+    database = await reopenCompletionFixtureOwners();
+    expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
+  });
 
   it.each([
     "run",
@@ -165,6 +196,7 @@ describe("requester receipts after completion expiry", () => {
     "host incarnation",
     "delivery generation",
     "registry write",
+    "failed settlement write",
   ] as const)(
     "preserves the suspended delivery and wake when %s rejects the receipt",
     async (cut) => {
@@ -181,26 +213,27 @@ describe("requester receipts after completion expiry", () => {
       } else if (cut === "delivery generation") {
         changed.delivery!.generation = 2;
       }
-      if (cut !== "host incarnation" && cut !== "registry write") {
+      const rejectWrite = cut === "registry write" || cut === "failed settlement write";
+      if (cut !== "host incarnation" && !rejectWrite) {
         await mutateSubagentRuns(
           [changed.runId],
           () => ({ value: undefined, postimages: new Map([[changed.runId, changed]]) }),
           { runs: subagentRuns },
         );
       }
-      if (cut === "registry write") {
+      if (rejectWrite) {
         database.db.exec(
           "CREATE TRIGGER reject_ack AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'ack write cut'); END",
         );
       }
       try {
-        await expect(settle(input, true)).rejects.toThrow(
-          cut === "registry write" ? "ack write cut" : /(owner|cohort) changed before mutation/,
+        await expect(settle(input, cut !== "failed settlement write")).rejects.toThrow(
+          rejectWrite ? "ack write cut" : /(owner|cohort) changed before mutation/,
         );
         expect(isDeliverySuspended(input.subagent)).toBe(true);
         expect(currentCompletionRun(input).requesterSettleWake).toBeDefined();
       } finally {
-        if (cut === "registry write") {
+        if (rejectWrite) {
           database.db.exec("DROP TRIGGER reject_ack");
         }
       }

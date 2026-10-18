@@ -76,6 +76,11 @@ chunks were sent, OpenClaw records an incomplete delivery. It stops automatic
 retries to avoid duplicating chunks the recipient already received. A successful
 child's result remains available for recovery.
 
+If direct delivery expires and the requester recovery wake also exhausts its
+retries, the completion records the final delivery failure before clearing that
+wake. The child's result is retained, and an existing blocked-delivery warning
+is not queued again.
+
 ### Private parent completion
 
 Set `completionTarget: "parent"` on `sessions_spawn` to return the result in a
