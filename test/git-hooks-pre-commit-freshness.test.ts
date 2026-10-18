@@ -57,6 +57,21 @@ function freshnessFixture() {
 }
 
 describe("pre-commit freshness checks", () => {
+  it("runs compound package scripts through the pinned pnpm CLI", () => {
+    const dir = freshnessFixture();
+    writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify({ scripts: { "lint:docs": "node lint-docs.cjs && node lint-docs.cjs" } }),
+    );
+    writeFileSync(path.join(dir, "lint-docs.cjs"), "process.exit(0);\n");
+    run(dir, "git", ["add", "package.json", "lint-docs.cjs"]);
+    stage(dir, "docs/page.md", "# Updated page\n");
+
+    run(dir, "git", commitArgs);
+
+    expect(run(dir, "git", ["show", "HEAD:docs/page.md"])).toBe("# Updated page");
+  });
+
   it("skips a check whose staged input also has unstaged edits", () => {
     const dir = freshnessFixture();
     stage(dir, "docs/page.md", "# Page\n\nClean line.\n");

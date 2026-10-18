@@ -15,6 +15,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/model-catalog.process.test.ts",
   "extensions/codex/src/app-server/trajectory.test.ts",
   "extensions/codex/src/app-server/run-attempt.plugin-steering.test.ts",
+  "extensions/codex/src/app-server/run-attempt.native-authority.test.ts",
   "extensions/codex/src/app-server/transcript-mirror.user-idempotency.test.ts",
   "extensions/slack/src/conversation-bindings.test.ts",
   "extensions/a2a/src/inbound.test.ts",

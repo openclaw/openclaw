@@ -329,12 +329,12 @@ function mergeExtensionSchemas(
         continue;
       }
       for (const models of modelMaps) {
-        const modelEntry = asSchemaObject(models.additionalProperties);
+        const modelEntry = structuredClone(asSchemaObject(models.additionalProperties));
         models.patternProperties ??= {};
         models.patternProperties[`^${escapeRegExp(provider)}/.+$`] = {
-          ...structuredClone(modelEntry),
+          ...modelEntry,
           properties: {
-            ...structuredClone(modelEntry?.properties),
+            ...modelEntry?.properties,
             params: structuredClone(policy.modelParamsSchema),
           },
         };
