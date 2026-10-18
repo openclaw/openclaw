@@ -28,123 +28,82 @@ describe("inline tool execution ownership", () => {
     handleCommandsMock.mockReset().mockResolvedValue({ shouldContinue: true, reply: undefined });
   });
 
-  it.each(["settled", "failed", "authority revoked"] as const)(
-    "waits for workspace attribution before command dispatch (%s)",
-    async (outcome) => {
-      const entered = createDeferred();
-      const baseline = createDeferred();
-      let active = true;
-      const result = runTestInlineActions({
-        ctx: buildTestCtx({ Body: "/export-session", CommandBody: "/export-session" }),
-        typing: createTypingController(),
-        cleanedBody: "/export-session",
-        command: {
-          isAuthorizedSender: true,
-          senderIsOwner: true,
-          assertOwnerCurrent: () => {
-            if (!active) {
-              throw new Error("command authority ended");
-            }
+  it.each([
+    ["command", "settled"],
+    ["command", "failed"],
+    ["command", "authority revoked"],
+    ["skill", "settled"],
+    ["skill", "failed"],
+    ["skill", "authority revoked"],
+  ] as const)("waits for workspace attribution before %s dispatch (%s)", async (kind, outcome) => {
+    const entered = createDeferred();
+    const baseline = createDeferred();
+    let active = true;
+    const body = kind === "command" ? "/export-session" : "/send_status hello";
+    const fixture =
+      kind === "skill"
+        ? createInlineToolDispatchFixture({
+            body,
+            toolName: "message",
+            execute: async () => ({ content: "sent" }),
+            skill: { name: "send_status", skillName: "send-status", description: "Send status" },
+            sourceFilePath: "/tmp/plugin/commands/send-status.md",
+          })
+        : undefined;
+    const effect = fixture?.toolExecute ?? handleCommandsMock;
+    const result = runTestInlineActions({
+      ctx: fixture?.ctx ?? buildTestCtx({ Body: body, CommandBody: body }),
+      typing: fixture?.typing ?? createTypingController(),
+      cleanedBody: body,
+      command: {
+        isAuthorizedSender: true,
+        senderIsOwner: true,
+        assertOwnerCurrent: () => {
+          if (!active) {
+            throw new Error("command authority ended");
+          }
+        },
+      },
+      overrides: {
+        cfg: { commands: { text: true } },
+        allowTextCommands: true,
+        skillCommands: fixture?.skillCommands,
+        opts: {
+          awaitSessionDiffBaseline: async () => {
+            entered.resolve();
+            await baseline.promise;
           },
         },
-        overrides: {
-          cfg: { commands: { text: true } },
-          allowTextCommands: true,
-          opts: {
-            awaitSessionDiffBaseline: async () => {
-              entered.resolve();
-              await baseline.promise;
-            },
-          },
-        },
-      });
-      try {
-        await awaitGateBeforeSettlement(entered.promise, result, "Command bypassed attribution");
-        expect(handleCommandsMock).not.toHaveBeenCalled();
-        if (outcome === "failed") {
-          baseline.reject(new Error("attribution failed"));
-          await expect(result).rejects.toThrow("attribution failed");
-        } else if (outcome === "authority revoked") {
-          active = false;
-          baseline.resolve();
-          await expect(result).rejects.toThrow("command authority ended");
-        } else {
-          baseline.resolve();
-          await expect(result).resolves.toMatchObject({ kind: "continue" });
-        }
-        expect(handleCommandsMock).toHaveBeenCalledTimes(outcome === "settled" ? 1 : 0);
-      } finally {
+      },
+    });
+    try {
+      await awaitGateBeforeSettlement(entered.promise, result, "Dispatch bypassed attribution");
+      expect(effect).not.toHaveBeenCalled();
+      if (outcome === "failed") {
+        baseline.reject(new Error("attribution failed"));
+      } else {
+        active = outcome !== "authority revoked";
         baseline.resolve();
-        await result.catch(() => undefined);
       }
-    },
-  );
-
-  it.each(["settled", "failed", "authority revoked"] as const)(
-    "waits for workspace attribution before direct skill effects (%s)",
-    async (outcome) => {
-      const entered = createDeferred();
-      const baseline = createDeferred();
-      let active = true;
-      const { typing, toolExecute, ctx, skillCommands } = createInlineToolDispatchFixture({
-        body: "/send_status hello",
-        toolName: "message",
-        execute: async () => ({ content: "sent" }),
-        skill: { name: "send_status", skillName: "send-status", description: "Send status" },
-        sourceFilePath: "/tmp/plugin/commands/send-status.md",
-      });
-      const result = runTestInlineActions({
-        ctx,
-        typing,
-        cleanedBody: "/send_status hello",
-        command: {
-          isAuthorizedSender: true,
-          senderIsOwner: true,
-          assertOwnerCurrent: () => {
-            if (!active) {
-              throw new Error("command authority ended");
-            }
-          },
-        },
-        overrides: {
-          cfg: { commands: { text: true } },
-          allowTextCommands: true,
-          skillCommands,
-          opts: {
-            awaitSessionDiffBaseline: async () => {
-              entered.resolve();
-              await baseline.promise;
-            },
-          },
-        },
-      });
-      try {
-        await awaitGateBeforeSettlement(entered.promise, result, "Skill bypassed attribution");
-        expect(toolExecute).not.toHaveBeenCalled();
-        if (outcome === "failed") {
-          baseline.reject(new Error("attribution failed"));
+      const error = outcome === "failed" ? "attribution failed" : "command authority ended";
+      if (kind === "command") {
+        if (outcome === "settled") {
+          await expect(result).resolves.toMatchObject({ kind: "continue" });
         } else {
-          active = outcome !== "authority revoked";
-          baseline.resolve();
+          await expect(result).rejects.toThrow(error);
         }
+      } else {
         await expect(result).resolves.toMatchObject({
           kind: "reply",
-          reply: {
-            text:
-              outcome === "settled"
-                ? "sent"
-                : expect.stringContaining(
-                    outcome === "failed" ? "attribution failed" : "command authority ended",
-                  ),
-          },
+          reply: { text: outcome === "settled" ? "sent" : expect.stringContaining(error) },
         });
-        expect(toolExecute).toHaveBeenCalledTimes(outcome === "settled" ? 1 : 0);
-      } finally {
-        baseline.resolve();
-        await result;
       }
-    },
-  );
+      expect(effect).toHaveBeenCalledTimes(outcome === "settled" ? 1 : 0);
+    } finally {
+      baseline.resolve();
+      await result.catch(() => undefined);
+    }
+  });
 
   it.each(["before start", "at start", "during execution", "successful completion"] as const)(
     "preserves admitted inline tool ownership (%s)",
