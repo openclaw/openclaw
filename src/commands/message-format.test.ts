@@ -422,3 +422,101 @@ describe("formatMessageCliText broadcast results", () => {
     expect(output).toContain("second payload failed");
   });
 });
+
+describe("formatMessageCliText delivery and action terminal safety", () => {
+  // Channel APIs author these strings: a hostile or compromised server must not
+  // be able to move the operator's cursor, clear the screen, or recolor output.
+  const hostile = "\u001b[2J\u001b[31mPWNED";
+
+  it("strips control sequences from a failed send error and its message id", () => {
+    const result = {
+      kind: "send",
+      action: "send",
+      channel: "mattermost",
+      to: "channel:testchan",
+      handledBy: "core",
+      payload: {},
+      dryRun: false,
+      sendResult: {
+        channel: "mattermost",
+        to: "channel:testchan",
+        via: "direct",
+        mediaUrl: null,
+        deliveryStatus: "failed",
+        error: `Mattermost API 400 Bad Request: ${hostile}`,
+        result: { messageId: hostile },
+      },
+    } satisfies MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+
+    expect(output).not.toContain("\u001b");
+    expect(output).toContain("Mattermost API 400 Bad Request: PWNED");
+  });
+
+  it("strips control sequences from a broadcast error column", () => {
+    const result = {
+      kind: "broadcast",
+      action: "broadcast",
+      channel: "mattermost",
+      handledBy: "core",
+      payload: {
+        results: [
+          {
+            channel: "mattermost" as const,
+            to: "channel:testchan",
+            ok: false,
+            error: `Mattermost API 400 Bad Request: ${hostile}`,
+          },
+        ],
+      },
+      dryRun: false,
+    } satisfies MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+
+    expect(output).not.toContain("\u001b");
+    expect(output).toContain("Mattermost API 400 Bad Request: PWNED");
+  });
+
+  it("strips control sequences from reaction payload text", () => {
+    const added = {
+      kind: "action",
+      action: "react",
+      channel: "matrix",
+      handledBy: "plugin",
+      payload: { ok: true, added: hostile },
+      dryRun: false,
+    } satisfies MessageActionResult;
+    expect(textJoined(formatMessageCliText(added))).toBe("✅ Reaction added: PWNED");
+
+    const removed = {
+      kind: "action",
+      action: "react",
+      channel: "matrix",
+      handledBy: "plugin",
+      payload: { ok: true, removed: [hostile, "👍"] },
+      dryRun: false,
+    } satisfies MessageActionResult;
+    const removedOutput = textJoined(formatMessageCliText(removed));
+    expect(removedOutput).not.toContain("\u001b");
+    expect(removedOutput).toContain("PWNED");
+  });
+
+  it("strips control sequences from the fallback object summary", () => {
+    const result = {
+      kind: "action",
+      action: "thread-create",
+      channel: "matrix",
+      handledBy: "plugin",
+      payload: { threadId: hostile, ok: true },
+      dryRun: false,
+    } satisfies MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+
+    expect(output).not.toContain("\u001b");
+    expect(output).toContain("threadId");
+    expect(output).toContain("PWNED");
+  });
+});

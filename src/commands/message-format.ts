@@ -1,8 +1,8 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   getTerminalTableWidth,
-  renderTable,
   renderTerminalSafeTable,
 } from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -73,7 +73,7 @@ function renderObjectSummary(payload: unknown, opts: FormatOpts): string {
     const value = renderSummaryValue(obj[k]);
     return { Key: k, Value: shortenText(value, 96) };
   });
-  return renderTable({
+  return renderTerminalSafeTable({
     width: opts.width,
     columns: [
       { key: "Key", header: "Key", minWidth: 16 },
@@ -262,7 +262,7 @@ export function formatMessageCliText(
     );
     return [
       headingLine,
-      renderTable({
+      renderTerminalSafeTable({
         width: formatOpts.width,
         columns: [
           { key: "Channel", header: "Channel", minWidth: 10 },
@@ -277,7 +277,10 @@ export function formatMessageCliText(
 
   if (!outcome.ok) {
     const messageId = result.kind === "send" ? result.sendResult?.result?.messageId : undefined;
-    return [fail(`❌ ${outcome.error}${messageId ? ` Message ID: ${messageId}` : ""}`)];
+    const detail = sanitizeTerminalText(outcome.error);
+    return [
+      fail(`❌ ${detail}${messageId ? ` Message ID: ${sanitizeTerminalText(messageId)}` : ""}`),
+    ];
   }
 
   if (result.kind === "send" || result.kind === "poll") {
@@ -300,14 +303,15 @@ export function formatMessageCliText(
             });
       const lines = [ok(summary)];
       if (pollId) {
-        lines.push(ok(`Poll id: ${pollId}`));
+        lines.push(ok(`Poll id: ${sanitizeTerminalText(pollId)}`));
       }
       return lines;
     }
 
     const label = resolveChannelLabel(result.channel);
     const msgId = resolveMessageActionMessageId(result.payload);
-    return [ok(`✅ ${action} via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`)];
+    const safeMsgId = msgId ? sanitizeTerminalText(msgId) : "";
+    return [ok(`✅ ${action} via ${label}.${safeMsgId ? ` Message ID: ${safeMsgId}` : ""}`)];
   }
 
   // Channel actions share the generic plugin-action payload shape, so format
@@ -317,13 +321,13 @@ export function formatMessageCliText(
     const added = (payload as { added?: unknown }).added;
     const removed = (payload as { removed?: unknown }).removed;
     if (typeof added === "string" && added.trim()) {
-      return [ok(`✅ Reaction added: ${added.trim()}`)];
+      return [ok(`✅ Reaction added: ${sanitizeTerminalText(added.trim())}`)];
     }
     if (typeof removed === "string" && removed.trim()) {
-      return [ok(`✅ Reaction removed: ${removed.trim()}`)];
+      return [ok(`✅ Reaction removed: ${sanitizeTerminalText(removed.trim())}`)];
     }
     if (Array.isArray(removed)) {
-      const list = normalizeStringEntries(removed).join(", ");
+      const list = normalizeStringEntries(removed).map(sanitizeTerminalText).join(", ");
       return [ok(`✅ Reactions removed${list ? `: ${list}` : ""}`)];
     }
     return [ok("✅ Reaction updated.")];

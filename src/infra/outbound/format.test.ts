@@ -55,3 +55,21 @@ describe("formatGatewaySummary", () => {
     expect(formatGatewaySummary(input)).toBe(expected);
   });
 });
+
+describe("outbound summary terminal safety", () => {
+  it("strips control sequences from channel-supplied ids", () => {
+    expect(
+      formatOutboundDeliverySummary("alpha", {
+        channel: "alpha",
+        messageId: "\u001b[2J\u001b[31mPWNED",
+        target: { kind: "chat", id: "\u001b]0;title\u0007c1" },
+      }),
+    ).toBe("✅ Sent via Alpha. Message ID: PWNED (chat c1)");
+  });
+
+  it("strips control sequences from a gateway message id", () => {
+    expect(formatGatewaySummary({ channel: "alpha", messageId: "\u001b[2Jp1" })).toBe(
+      "✅ Sent via gateway (alpha). Message ID: p1",
+    );
+  });
+});
