@@ -49,90 +49,18 @@ export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobile
         return null;
       }}
     </Show>,
-    <section class="chat-environment-mobile" aria-label={t("chat.sessionDetails.environment")}>
-      <h3>{t("chat.sessionDetails.environment")}</h3>
-      <div class="chat-environment-mobile__group">
-        <Show when={host()}>
-          <div class="chat-environment-mobile__row" aria-label={host()}>
-            <Show
-              when={props.onOpenMachine}
-              fallback={
-                <>
-                  <Icon name={machine()?.machineIcon === "cloud" ? "server" : "monitor"} />
-                  <span>{host()}</span>
-                </>
-              }
-            >
-              <button
-                class="chat-environment__action"
-                type="button"
-                onClick={() => {
-                  if (props.presented) {
-                    props.onOpenMachine?.();
-                  }
-                }}
-              >
-                <Icon name={machine()?.machineIcon === "cloud" ? "server" : "monitor"} />
-                <span>{host()}</span>
-                <Icon name="chevronRight" />
-              </button>
-            </Show>
-          </div>
-        </Show>
-        <Show when={project() && !workspace()?.branch}>
-          <div class="chat-environment-mobile__row" aria-label={project()}>
-            <Show
-              when={props.onOpenProject}
-              fallback={
-                <>
-                  <Icon name="folder" />
-                  <span>{project()}</span>
-                </>
-              }
-            >
-              <button
-                class="chat-environment__action"
-                type="button"
-                onClick={() => {
-                  if (props.presented) {
-                    props.onOpenProject?.();
-                  }
-                }}
-              >
-                <Icon name="folder" />
-                <span>{project()}</span>
-                <Icon name="chevronRight" />
-              </button>
-            </Show>
-          </div>
-        </Show>
-        <Show when={workspace()?.branch}>
-          {(branch) => (
-            <div class="chat-environment-mobile__row" aria-label={branch()}>
-              <Icon name="gitBranch" />
-              <span>{branch()}</span>
-              <Show when={session()?.worktree}>
-                <small>{t("chat.sessionDetails.worktree")}</small>
-              </Show>
-            </div>
-          )}
-        </Show>
-        <Show when={session()?.worktree && !workspace()?.branch}>
-          <div class="chat-environment-mobile__row">
-            <Icon name="folder" />
-            <span>{t("chat.sessionDetails.worktree")}</span>
-          </div>
-        </Show>
-        <Show when={changes()}>
-          {(result) => (
-            <div class="chat-environment-mobile__row">
+    <Show when={host() || project() || workspace()?.branch || session()?.worktree || changes()}>
+      <section class="chat-environment-mobile" aria-label={t("chat.sessionDetails.environment")}>
+        <h3>{t("chat.sessionDetails.environment")}</h3>
+        <div class="chat-environment-mobile__group">
+          <Show when={host()}>
+            <div class="chat-environment-mobile__row" aria-label={host()}>
               <Show
-                when={props.onOpenUncommitted}
+                when={props.onOpenMachine}
                 fallback={
                   <>
-                    <Icon name="diff" />
-                    <span>{t("chat.sessionDetails.changes")}</span>
-                    <EnvironmentChangeCounts result={result()} mobile />
+                    <Icon name={machine()?.machineIcon === "cloud" ? "server" : "monitor"} />
+                    <span>{host()}</span>
                   </>
                 }
               >
@@ -141,20 +69,94 @@ export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobile
                   type="button"
                   onClick={() => {
                     if (props.presented) {
-                      props.onOpenUncommitted?.();
+                      props.onOpenMachine?.();
                     }
                   }}
                 >
-                  <Icon name="diff" />
-                  <span>{t("chat.sessionDetails.changes")}</span>
-                  <EnvironmentChangeCounts result={result()} mobile />
+                  <Icon name={machine()?.machineIcon === "cloud" ? "server" : "monitor"} />
+                  <span>{host()}</span>
                   <Icon name="chevronRight" />
                 </button>
               </Show>
             </div>
-          )}
-        </Show>
-      </div>
-    </section>,
+          </Show>
+          <Show when={project() && !workspace()?.branch}>
+            <div class="chat-environment-mobile__row" aria-label={project()}>
+              <Show
+                when={props.onOpenProject}
+                fallback={
+                  <>
+                    <Icon name="folder" />
+                    <span>{project()}</span>
+                  </>
+                }
+              >
+                <button
+                  class="chat-environment__action"
+                  type="button"
+                  onClick={() => {
+                    if (props.presented) {
+                      props.onOpenProject?.();
+                    }
+                  }}
+                >
+                  <Icon name="folder" />
+                  <span>{project()}</span>
+                  <Icon name="chevronRight" />
+                </button>
+              </Show>
+            </div>
+          </Show>
+          <Show when={workspace()?.branch}>
+            {(branch) => (
+              <div class="chat-environment-mobile__row" aria-label={branch()}>
+                <Icon name="gitBranch" />
+                <span>{branch()}</span>
+                <Show when={session()?.worktree}>
+                  <small>{t("chat.sessionDetails.worktree")}</small>
+                </Show>
+              </div>
+            )}
+          </Show>
+          <Show when={session()?.worktree && !workspace()?.branch}>
+            <div class="chat-environment-mobile__row">
+              <Icon name="folder" />
+              <span>{t("chat.sessionDetails.worktree")}</span>
+            </div>
+          </Show>
+          <Show when={changes()}>
+            {(result) => (
+              <div class="chat-environment-mobile__row">
+                <Show
+                  when={props.onOpenUncommitted}
+                  fallback={
+                    <>
+                      <Icon name="diff" />
+                      <span>{t("chat.sessionDetails.changes")}</span>
+                      <EnvironmentChangeCounts result={result()} mobile />
+                    </>
+                  }
+                >
+                  <button
+                    class="chat-environment__action"
+                    type="button"
+                    onClick={() => {
+                      if (props.presented) {
+                        props.onOpenUncommitted?.();
+                      }
+                    }}
+                  >
+                    <Icon name="diff" />
+                    <span>{t("chat.sessionDetails.changes")}</span>
+                    <EnvironmentChangeCounts result={result()} mobile />
+                    <Icon name="chevronRight" />
+                  </button>
+                </Show>
+              </div>
+            )}
+          </Show>
+        </div>
+      </section>
+    </Show>,
   ];
 }
