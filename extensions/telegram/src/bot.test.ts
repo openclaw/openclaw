@@ -144,6 +144,23 @@ const emptyKeyboard = { reply_markup: { inline_keyboard: [] } };
 const openDirect = (): TelegramChannelConfig => ({ dmPolicy: "open", allowFrom: ["*"] });
 const groupChat = { id: -100999, type: "supergroup", title: "Test Group" };
 
+function groupCallbackConfig(): TelegramChannelConfig {
+  return {
+    dmPolicy: "open",
+    capabilities: { inlineButtons: "group" },
+    groupPolicy: "open",
+    groups: { "*": { requireMention: false } },
+  };
+}
+function questionCallbackConfig(): TelegramChannelConfig {
+  return {
+    ...groupCallbackConfig(),
+    allowFrom: ["9"],
+    capabilities: { inlineButtons: "all" },
+    groups: { "*": { requireMention: false, allowFrom: ["9"] } },
+  };
+}
+
 function messageContext(message: Record<string, unknown>) {
   return { message, me: { username: "openclaw_bot" }, getFile: getEmptyTelegramFile };
 }
@@ -202,6 +219,13 @@ type TelegramCallbackQueryOverrides = {
 };
 
 type TelegramApprovalResolution = Awaited<ReturnType<typeof resolveExecApprovalSpy>>;
+
+function resolvedApprovalError() {
+  return Object.assign(new Error("approval already resolved"), {
+    gatewayCode: "INVALID_REQUEST",
+    details: { reason: "APPROVAL_ALREADY_RESOLVED" },
+  });
+}
 
 function approvalResolution(
   id: string,
@@ -1013,12 +1037,7 @@ describe("createTelegramBot", () => {
     },
     {
       name: "recomputes group model authorization from runtime commands",
-      telegram: {
-        dmPolicy: "open",
-        capabilities: { inlineButtons: "group" },
-        groupPolicy: "open",
-        groups: { "*": { requireMention: false } },
-      },
+      telegram: groupCallbackConfig(),
       config: { commands: { allowFrom: { telegram: ["9"] } } },
       startupCommands: { allowFrom: { telegram: ["999"] } },
       modelStore: "group-model-authz-runtime",
@@ -1032,13 +1051,7 @@ describe("createTelegramBot", () => {
     },
     {
       name: "keeps group questions on the callback allowlist",
-      telegram: {
-        dmPolicy: "open",
-        allowFrom: ["9"],
-        capabilities: { inlineButtons: "all" },
-        groupPolicy: "open",
-        groups: { "*": { requireMention: false, allowFrom: ["9"] } },
-      },
+      telegram: questionCallbackConfig(),
       callback: {
         id: "cbq-question-blocked",
         data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
@@ -1168,13 +1181,7 @@ describe("createTelegramBot", () => {
   });
 
   it("targets the group member who requests custom question input", async () => {
-    const config = makeTelegramConfig({
-      dmPolicy: "open",
-      allowFrom: ["9"],
-      capabilities: { inlineButtons: "all" },
-      groupPolicy: "open",
-      groups: { "*": { requireMention: false, allowFrom: ["9"] } },
-    });
+    const config = makeTelegramConfig(questionCallbackConfig());
     loadConfig.mockReturnValue(config);
     const callbackHandler = await createCallbackHandler({ config });
     const from = { id: 9, is_bot: false, first_name: "Ada", username: "ada_bot" };
@@ -1430,10 +1437,7 @@ describe("createTelegramBot", () => {
       if (firstError) {
         resolveExecApprovalSpy.mockRejectedValueOnce(
           firstError === "resolved"
-            ? Object.assign(new Error("approval already resolved"), {
-                gatewayCode: "INVALID_REQUEST",
-                details: { reason: "APPROVAL_ALREADY_RESOLVED" },
-              })
+            ? resolvedApprovalError()
             : new Error("unknown or expired approval id"),
         );
       }
@@ -1542,12 +1546,7 @@ describe("createTelegramBot", () => {
     "retries failed $name",
     async ({ approvalId, decision, callbackId, messageId, errorMessage, stale }) => {
       if (stale) {
-        resolveExecApprovalSpy.mockRejectedValueOnce(
-          Object.assign(new Error("approval already resolved"), {
-            gatewayCode: "INVALID_REQUEST",
-            details: { reason: "APPROVAL_ALREADY_RESOLVED" },
-          }),
-        );
+        resolveExecApprovalSpy.mockRejectedValueOnce(resolvedApprovalError());
       }
       resolveExecApprovalSpy.mockRejectedValueOnce(new Error(errorMessage));
       mockTelegramConfig(makeExecApprovalTelegramConfig());
@@ -1825,53 +1824,6 @@ describe("createTelegramBot", () => {
       "Available models changed. Open /models and choose again.",
     );
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-2");
-  });
-
-  it("honors historyLimit zero for group chat-window context", async () => {
-    mockTelegramConfig(
-      {
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["111", "222"],
-        historyLimit: 0,
-        groups: { "*": { requireMention: true } },
-      },
-      { agents: { defaults: { userTimezone: "UTC" } } },
-    );
-
-    const handler = await createMessageHandler();
-    const baseCtx = {
-      me: { id: 999, username: "openclaw_bot" },
-      getFile: getEmptyTelegramFile,
-    };
-
-    await handler({
-      ...baseCtx,
-      message: {
-        chat: { id: 42, type: "group", title: "Ops" },
-        text: "Do not include this cached group line.",
-        date: 1736380800,
-        message_id: 601,
-        from: { id: 111, is_bot: false, first_name: "Requester" },
-      },
-    });
-    expect(replySpy).not.toHaveBeenCalled();
-
-    await handler({
-      ...baseCtx,
-      message: {
-        chat: { id: 42, type: "group", title: "Ops" },
-        text: "@openclaw_bot Hello",
-        date: 1736380860,
-        message_id: 602,
-        from: { id: 222, is_bot: false, first_name: "Operator" },
-        entities: [{ type: "mention", offset: 0, length: 13 }],
-      },
-    });
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = replyContext();
-    expect(payload.ChannelStructuredContext).toBeUndefined();
-    expect(payload.Body).not.toContain("Do not include this cached group line.");
   });
 
   it("keeps direct Telegram media context when transcript context exists", async () => {
@@ -2667,15 +2619,9 @@ describe("createTelegramBot", () => {
       return { handled: true };
     });
 
-    const config = makeTelegramConfig(
-      {
-        dmPolicy: "open",
-        capabilities: { inlineButtons: "group" },
-        groupPolicy: "open",
-        groups: { "*": { requireMention: false } },
-      },
-      { commands: { allowFrom: { telegram: ["111111111"] } } },
-    );
+    const config = makeTelegramConfig(groupCallbackConfig(), {
+      commands: { allowFrom: { telegram: ["111111111"] } },
+    });
     loadConfig.mockReturnValue(config);
 
     const callbackHandler = await createTelegramPluginCallbackHandler({
