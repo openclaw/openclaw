@@ -100,14 +100,7 @@ it.each(["current", "replaced target", "retired Gateway"] as const)(
             failure = error;
           },
         );
-        await Promise.race([
-          entered.promise,
-          stop.then(() => {
-            if (failure) {
-              throw failure;
-            }
-          }),
-        ]);
+        await Promise.race([entered.promise, stop.then(() => expect(failure).toBeUndefined())]);
         await vi.advanceTimersByTimeAsync(5_000);
         expect(failure).toBeUndefined();
         expect(result?.details).toMatchObject({ status: "settling", abortedRunId: null });
