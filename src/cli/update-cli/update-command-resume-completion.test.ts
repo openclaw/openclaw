@@ -286,6 +286,7 @@ describe("update completion ownership", () => {
       gateway: { mode: "local", auth: { mode: "none" } },
       agents: { entries: { main: {} } },
       plugins: { enabled: false },
+      messages: { queue: { allowCollaborativeSteering: false } },
     });
     const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
     expect(snapshot.valid).toBe(true);
