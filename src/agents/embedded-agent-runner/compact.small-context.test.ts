@@ -35,9 +35,7 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
 
 const sessionKey = "agent:main:small-window";
 const fixture = useCompactHooksSessionFixture(sessionKey);
-let compact: Awaited<
-  ReturnType<typeof loadCompactHooksHarness>
->["compactEmbeddedAgentSessionDirect"];
+let compact: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let storePath: string;
 let prepared: Awaited<ReturnType<typeof fixture.prepareSession>>;
 let manager: SessionManager;
@@ -73,13 +71,8 @@ beforeEach(async () => {
   resolveModelMock.mockImplementation(() => ({ ...createCompactHooksResolvedModel(), model }));
   limitHistoryTurnsMock.mockImplementation((messages) => messages);
   vi.mocked(guardSessionManager).mockImplementation(() => manager);
-  vi.mocked(createAgentSession).mockImplementation((options) =>
-    createTestSession({
-      model: options.model,
-      systemPrompt,
-      sessionManager: manager,
-      settingsManager,
-    }),
+  vi.mocked(createAgentSession).mockImplementation(({ model: target }) =>
+    createTestSession({ model: target, systemPrompt, sessionManager: manager, settingsManager }),
   );
   vi.mocked(resolveEmbeddedAgentStream).mockReturnValue({
     streamFn: summaryStream,

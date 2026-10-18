@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   buildConfiguredAgentSystemPromptMock,
   loadCompactHooksHarness,
@@ -11,8 +12,7 @@ let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbe
 let TEST_WORKSPACE_DIR: string;
 let sessionTarget: { agentId: string; sessionId: string; sessionKey: string; storePath: string };
 let reporting: Awaited<ReturnType<typeof loadSandboxReporting>>;
-const TEST_SESSION_ID = "session-1";
-const TEST_SESSION_KEY = "agent:main:session-1";
+const session = { agentId: "main", sessionId: "session-1", sessionKey: "agent:main:session-1" };
 let tempDirs: ReturnType<
   typeof import("../../test-utils/session-state-cleanup.js").useSessionStoreTempDirs
 >;
@@ -38,13 +38,11 @@ beforeEach(async () => {
   reporting.policyRead.mockClear();
   reporting.buildInfo.mockClear();
   sessionTarget = {
-    agentId: "main",
-    sessionId: TEST_SESSION_ID,
-    sessionKey: TEST_SESSION_KEY,
+    ...session,
     storePath: join(TEST_WORKSPACE_DIR, "sessions.json"),
   };
   const { upsertSessionEntryCore } = await import("../../config/sessions/session-accessor.js");
-  await upsertSessionEntryCore(sessionTarget, { sessionId: TEST_SESSION_ID, updatedAt: 1 });
+  await upsertSessionEntryCore(sessionTarget, { sessionId: session.sessionId, updatedAt: 1 });
 });
 
 async function loadSandboxReporting() {
@@ -61,24 +59,21 @@ async function loadSandboxReporting() {
   };
 }
 
-async function prepareSandboxReporting(required = false) {
+async function compactionParams(required = false) {
   const { createSandboxTestContext } = await import("../sandbox/test-fixtures.js");
   resolveSandboxContextMock.mockResolvedValue(
     createSandboxTestContext({
       overrides: {
-        sessionKey: TEST_SESSION_KEY,
+        sessionKey: session.sessionKey,
         workspaceDir: TEST_WORKSPACE_DIR,
         agentWorkspaceDir: TEST_WORKSPACE_DIR,
-        ...(required ? { required } : {}),
+        ...(required ? { required: true as const } : {}),
       },
     }),
   );
-}
-
-function compactionParams() {
-  const { storePath, ...session } = sessionTarget;
+  const { storePath, ...target } = sessionTarget;
   return {
-    ...session,
+    ...target,
     sessionTarget,
     workspaceDir: TEST_WORKSPACE_DIR,
     config: {
@@ -94,53 +89,48 @@ it.each([
   { name: "enabled but disallowed", enabled: true, allowed: false, required: false },
   { name: "required and enabled", enabled: true, allowed: true, required: true },
 ])("reads compaction elevation policy only when configured ($name)", async (testCase) => {
-  await prepareSandboxReporting(testCase.required);
+  const params = await compactionParams(testCase.required);
   const { policyRead } = reporting;
   const approvalStore = await import("../../infra/exec-approvals-store.js");
   const { patchSessionEntryCore } = await import("../../config/sessions/session-accessor.js");
   const approvalRead = vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync");
-  try {
-    const params = compactionParams();
-    if (testCase.required) {
-      const { sessionId: _sessionId, ...scope } = params.sessionTarget;
-      await patchSessionEntryCore(scope, () => ({ sandbox: "required" }));
+  onTestFinished(() => approvalRead.mockRestore());
+  if (testCase.required) {
+    const { sessionId: _sessionId, ...scope } = params.sessionTarget;
+    await patchSessionEntryCore(scope, () => ({ sandbox: "required" }));
+  }
+  const result = await compactEmbeddedAgentSessionDirect({
+    ...params,
+    bashElevated: {
+      enabled: testCase.enabled,
+      allowed: testCase.allowed,
+      defaultLevel: "off",
+    },
+  });
+  const info = buildConfiguredAgentSystemPromptMock.mock.calls.at(-1)?.[0]?.sandboxInfo;
+  expect(result.ok).toBe(true);
+  expect(info).toMatchObject({ enabled: true, workspaceDir: TEST_WORKSPACE_DIR });
+  if (testCase.enabled) {
+    expect(policyRead).toHaveBeenCalled();
+    if (!testCase.required) {
+      expect(approvalRead).toHaveBeenCalled();
     }
-    const result = await compactEmbeddedAgentSessionDirect({
-      ...params,
-      bashElevated: {
-        enabled: testCase.enabled,
-        allowed: testCase.allowed,
-        defaultLevel: "off",
-      },
+    expect(info?.elevated).toMatchObject({
+      allowed: false,
+      fullAccessAvailable: false,
+      fullAccessBlockedReason: "host-policy",
     });
-    const info = buildConfiguredAgentSystemPromptMock.mock.calls.at(-1)?.[0]?.sandboxInfo;
-    expect(result.ok).toBe(true);
-    expect(info).toMatchObject({ enabled: true, workspaceDir: TEST_WORKSPACE_DIR });
-    if (testCase.enabled) {
-      expect(policyRead).toHaveBeenCalled();
-      if (!testCase.required) {
-        expect(approvalRead).toHaveBeenCalled();
-      }
-      expect(info?.elevated).toMatchObject({
-        allowed: false,
-        fullAccessAvailable: false,
-        fullAccessBlockedReason: "host-policy",
-      });
-    } else {
-      expect(policyRead).not.toHaveBeenCalled();
-      expect(approvalRead).not.toHaveBeenCalled();
-      expect(info?.elevated).toBeUndefined();
-    }
-  } finally {
-    approvalRead.mockRestore();
+  } else {
+    expect(policyRead).not.toHaveBeenCalled();
+    expect(approvalRead).not.toHaveBeenCalled();
+    expect(info?.elevated).toBeUndefined();
   }
 });
 
 it("refuses sandbox metadata publication after cancellation during machine-name preparation", async () => {
-  const { createDeferred } = await import("../../../test/helpers/promise.js");
   const { AsyncWorkScope } = await import("../../shared/async-work-scope.js");
   const machineNames = await import("../../infra/machine-name.js");
-  await prepareSandboxReporting();
+  const params = await compactionParams();
   const machineName = vi.mocked(machineNames.getMachineDisplayName);
   const originalMachineName = machineName.getMockImplementation();
   if (!originalMachineName) {
@@ -162,17 +152,16 @@ it("refuses sandbox metadata publication after cancellation during machine-name 
   try {
     pending = owner.track(() =>
       compactEmbeddedAgentSessionDirect({
-        ...compactionParams(),
+        ...params,
         bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
         abortSignal: controller.signal,
       }),
     );
-    await Promise.race([
+    await awaitGateBeforeSettlement(
       reached.promise,
-      pending.then(() => {
-        throw new Error("Compaction finished before reaching the machine-name barrier");
-      }),
-    ]);
+      pending,
+      "Compaction finished before reaching the machine-name barrier",
+    );
     controller.abort(reason);
     released.resolve();
     const result = await pending;

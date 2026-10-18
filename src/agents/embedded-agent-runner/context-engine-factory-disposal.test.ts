@@ -37,18 +37,13 @@ it.for([
     const failure = new Error("fixture resource release failed");
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const completedCleanup = new Set<string>();
-    const releaseFacts: Array<{
-      index: number;
-      factorySettled: boolean;
-      cleanupFinished: boolean;
-    }> = [];
+    const releaseFacts: [number, boolean, boolean][] = [];
     const sessionKey = "agent:main:factory-disposal";
     const disposals: string[] = [];
-    const factoryValues: unknown[] = [];
-    const cleanupValues: unknown[] = [];
+    const values: { factory: unknown[]; cleanup: unknown[] } = { factory: [], cleanup: [] };
     const callbacks: Array<{ closed: Promise<void>; force: () => Promise<void> }> = [];
     const background: Promise<unknown>[] = [];
-    const closings: Array<{ context: boolean; afterDispose: boolean }> = [];
+    const closings: [boolean, boolean][] = [];
     const engines = new Map<
       string,
       { engine: ContextEngine; stop: () => void; signals: AbortSignal[]; wait: Promise<void> }
@@ -77,7 +72,6 @@ it.for([
             ingest: async () => ({ ingested: false }),
             async dispose() {
               disposals.push(id);
-              // The actual disposer starts before any of its captured factories close.
               await Promise.all(signals.map((signal) => signal.aborted || once(signal, "abort")));
               stop.resolve();
               const signal = getAsyncWorkSignal();
@@ -87,7 +81,7 @@ it.for([
               const tail = trackAsyncWork(async () => {
                 await stop.promise;
                 signal.throwIfAborted();
-                cleanupValues.push(db.prepare("SELECT value FROM answer").get()?.value);
+                values.cleanup.push(db.prepare("SELECT value FROM answer").get()?.value);
                 completedCleanup.add(id);
               });
               background.push(tail);
@@ -109,10 +103,10 @@ it.for([
       work.signal.addEventListener(
         "abort",
         () => {
-          closings.push({
-            context: context.getStore() === label && getAsyncWorkSignal() === work.signal,
-            afterDispose: disposals.includes(id),
-          });
+          closings.push([
+            context.getStore() === label && getAsyncWorkSignal() === work.signal,
+            disposals.includes(id),
+          ]);
           closed.resolve();
         },
         { once: true },
@@ -122,7 +116,7 @@ it.for([
       const service = captured(() =>
         trackAsyncWork(async () => {
           await item.wait;
-          factoryValues.push(db.prepare("SELECT value FROM answer").get()?.value);
+          values.factory.push(db.prepare("SELECT value FROM answer").get()?.value);
           factorySettled = true;
         }),
       );
@@ -140,7 +134,7 @@ it.for([
         factoryResources: {
           closeFactoryWork,
           release: async () => {
-            releaseFacts.push({ index, factorySettled, cleanupFinished: completedCleanup.has(id) });
+            releaseFacts.push([index, factorySettled, completedCleanup.has(id)]);
             releaseEntered.resolve();
             await finishReleases.promise;
             if (releaseFailure && index === 1) {
@@ -170,23 +164,18 @@ it.for([
         Promise.all(callbacks.map(({ closed }) => closed)),
         ctx.signal,
       );
-      expect(closings).toEqual(
-        Array.from({ length: 3 }, () => ({ context: true, afterDispose: true })),
-      );
+      expect(closings).toEqual(Array.from({ length: 3 }, () => [true, true]));
       await waitForSessionMaintenance(sessionKey);
       await Promise.all(pending);
-      expect(factoryValues).toEqual([42, 42, 42]);
-      expect(cleanupValues).toEqual(Array(new Set(ids).size).fill(42));
+      expect(values).toEqual({ factory: [42, 42, 42], cleanup: Array(new Set(ids).size).fill(42) });
       expect(disposals.toSorted()).toEqual([...new Set(ids)].toSorted());
-      expect(releaseFacts.toSorted((left, right) => left.index - right.index)).toEqual(
-        [0, 1, 2].map((index) => ({ index, factorySettled: true, cleanupFinished: true })),
+      expect(releaseFacts.toSorted(([left], [right]) => left - right)).toEqual(
+        [0, 1, 2].map((index) => [index, true, true]),
       );
       if (releaseFailure) {
         expect(warn).toHaveBeenCalledWith(
           "context engine dispose failed after deferred maintenance",
-          {
-            errorMessage: failure.message,
-          },
+          { errorMessage: failure.message },
         );
       }
     } finally {

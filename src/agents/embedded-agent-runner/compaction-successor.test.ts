@@ -90,29 +90,33 @@ async function withAcceptanceFixture(
         cwd: state.workspaceDir,
         message: { role: "user", content: "Preserved predecessor history", timestamp: 1 },
       });
-      const runId = randomUUID();
-      const admission = prepareSystemAgentRunAdmission({}, runId, target.agentId, "successor-test");
-      const admissions: PreparedAgentRunAdmission[] = [admission];
+      const admissions: PreparedAgentRunAdmission[] = [];
       const unsubscriptions: Array<() => void> = [];
       const facts: AcceptedCompactionSuccessor[] = [];
       const controller = new AbortController();
       const callerError = new Error("caller stopped successor acceptance");
       try {
-        const admittedRunContext = await admission.admit("embedded");
-        const runParams = {
-          ...target,
-          sessionFile: target.sessionKey,
-          sessionTarget: target,
-          runId,
-          admittedRunContext,
-          workspaceDir: state.workspaceDir,
-          prompt: "continue",
-          timeoutMs: 30_000,
-        };
-        if (options.claimWriter !== false) {
-          await claimAgentSessionWriter(runParams);
+        async function beginRun(claimWriter = true, source = "successor-test") {
+          const runId = randomUUID();
+          const admission = prepareSystemAgentRunAdmission({}, runId, target.agentId, source);
+          admissions.push(admission);
+          const admittedRunContext = await admission.admit("embedded");
+          if (claimWriter) {
+            await claimAgentSessionWriter({
+              ...target,
+              sessionFile: target.sessionKey,
+              sessionTarget: target,
+              runId,
+              admittedRunContext,
+              workspaceDir: state.workspaceDir,
+              prompt: "continue",
+              timeoutMs: 30_000,
+            });
+          }
+          return { admission, admittedRunContext };
         }
-        const entry: InternalSessionEntry | undefined = loadSessionEntry(target);
+        const { admission, admittedRunContext } = await beginRun(options.claimWriter);
+        const entry = loadSessionEntry(target);
         if (!entry) {
           throw new Error("fixture must own an existing durable session");
         }
@@ -129,20 +133,6 @@ async function withAcceptanceFixture(
           controller.abort(callerError);
         };
         const successorId = randomUUID();
-        const input: AcceptanceInput = {
-          currentTarget: target,
-          expectedEntry: entry,
-          assertActive,
-          config,
-          result: {
-            ok: true,
-            compacted: true,
-            result: {
-              tokensBefore: 4_097,
-              sessionTarget: { sessionId: successorId, threadId: "thread-hint" },
-            },
-          },
-        };
         await body({
           target,
           entry,
@@ -153,7 +143,18 @@ async function withAcceptanceFixture(
           facts,
           accept: (overrides = {}) =>
             acceptCompactionSuccessor({
-              ...input,
+              currentTarget: target,
+              expectedEntry: entry,
+              assertActive,
+              config,
+              result: {
+                ok: true,
+                compacted: true,
+                result: {
+                  tokensBefore: 4_097,
+                  sessionTarget: { sessionId: successorId, threadId: "thread-hint" },
+                },
+              },
               ...overrides,
               onCommitted: (accepted) => {
                 facts.push(accepted);
@@ -162,20 +163,7 @@ async function withAcceptanceFixture(
             }),
           loadEntry: () => loadSessionEntry(target),
           replaceWriter: async () => {
-            const nextRunId = randomUUID();
-            const next = prepareSystemAgentRunAdmission(
-              {},
-              nextRunId,
-              target.agentId,
-              "replacement-successor-test",
-            );
-            admissions.push(next);
-            const nextContext = await next.admit("embedded");
-            await claimAgentSessionWriter({
-              ...runParams,
-              runId: nextRunId,
-              admittedRunContext: nextContext,
-            });
+            await beginRun(true, "replacement-successor-test");
           },
           replaceEntry: (patch) => replaceSessionEntry(target, { ...entry, ...patch }),
           deleteEntry: () =>
@@ -328,18 +316,20 @@ describe("acceptCompactionSuccessor", () => {
     async (claimWriter) => {
       await withAcceptanceFixture({ claimWriter }, async (fixture) => {
         const accepted = await fixture.accept();
-        expect(accepted.sessionTarget).toMatchObject({
-          ...fixture.target,
-          sessionId: fixture.successorId,
-          threadId: "thread-hint",
-        });
-        expect(accepted.previousSessionId).toBe(fixture.target.sessionId);
-        expect(accepted.entry).toMatchObject({
-          sessionId: fixture.successorId,
-          lifecycleRevision: fixture.entry.lifecycleRevision,
-          compactionCount: 7,
-          usageFamilyKey: fixture.target.sessionKey,
-          usageFamilySessionIds: [fixture.target.sessionId, fixture.successorId],
+        expect(accepted).toMatchObject({
+          sessionTarget: {
+            ...fixture.target,
+            sessionId: fixture.successorId,
+            threadId: "thread-hint",
+          },
+          previousSessionId: fixture.target.sessionId,
+          entry: {
+            sessionId: fixture.successorId,
+            lifecycleRevision: fixture.entry.lifecycleRevision,
+            compactionCount: 7,
+            usageFamilyKey: fixture.target.sessionKey,
+            usageFamilySessionIds: [fixture.target.sessionId, fixture.successorId],
+          },
         });
         expect(accepted.entry.activeWriterRunId).toBe(fixture.entry.activeWriterRunId);
         expect(fixture.loadEntry()).toEqual(accepted.entry);
@@ -494,11 +484,13 @@ describe("accepted successor lifecycle notifications", () => {
           sessionKey: fixture.target.sessionKey,
           resumedFrom: fixture.target.sessionId,
         });
-        expect(endContext).toEqual({
-          sessionId: fixture.target.sessionId,
-          sessionKey: fixture.target.sessionKey,
-          agentId: "main",
-        });
+        expect([endContext, startContext]).toEqual(
+          [fixture.target.sessionId, fixture.successorId].map((sessionId) => ({
+            sessionId,
+            sessionKey: fixture.target.sessionKey,
+            agentId: "main",
+          })),
+        );
         const source = readAttachedSessionEndTranscriptSourceForTest(endContext);
         expect(source.available).toBe(true);
         if (source.available) {
@@ -510,11 +502,6 @@ describe("accepted successor lifecycle notifications", () => {
             truncated: false,
           });
         }
-        expect(startContext).toEqual({
-          sessionId: fixture.successorId,
-          sessionKey: fixture.target.sessionKey,
-          agentId: "main",
-        });
         await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       });
     },
