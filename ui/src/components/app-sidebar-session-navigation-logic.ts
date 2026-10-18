@@ -48,7 +48,7 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
-import type { SidebarSessionRowProjection } from "./sidebar-projection-memo.ts";
+import type { SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
 import { restoreSnapshotSession, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];

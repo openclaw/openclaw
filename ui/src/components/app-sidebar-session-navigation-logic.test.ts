@@ -17,7 +17,7 @@ import {
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
-import { SidebarSessionRowProjection } from "./sidebar-projection-memo.ts";
+import { SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
 import { TeamSessionSlots } from "./solid/session-presentation.tsx";
 
 it("does not manufacture personal pins from plugin defaults", () => {

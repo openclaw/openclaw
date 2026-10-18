@@ -2,7 +2,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import { buildSidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { SidebarSessionRowProjection } from "./sidebar-projection-memo.ts";
+import { SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
 
 export function projectSidebarSession(
   row: Partial<GatewaySessionRow>,
