@@ -83,7 +83,7 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         if (!isRecord(manifest) || !pluginId) {
           throw new Error(`Invalid packaged plugin manifest for ${id}: missing plugin id`);
         }
-        const result = normalizeManifestControlUi(manifest.controlUi);
+        const result = normalizeManifestControlUi(manifest.controlUi, manifest.channels);
         if (!result.ok) {
           throw new Error(`Invalid packaged plugin manifest for ${id}: ${result.error}`);
         }

@@ -49,6 +49,7 @@ export function createChannelsViewProps(
     presentation: {
       pluginCatalog: null,
       pluginIconUrls: {},
+      details: { has: () => false, sync: () => {}, reset: () => {}, attach: () => () => {} },
       ...presentation,
     },
     wizardHost: {
@@ -71,8 +72,6 @@ export function createChannelsViewProps(
     canManagePairing: true,
     canAdmin: true,
     showAdvancedSettings: false,
-    nostrProfileFormState: null,
-    nostrProfileAccountId: null,
     selectedChannel: null,
     onShowDetail: () => {},
     onCloseDetail: () => {},
@@ -94,12 +93,6 @@ export function createChannelsViewProps(
     onConfigPatch: () => {},
     onConfigSave: () => {},
     onConfigReload: () => {},
-    onNostrProfileEdit: () => {},
-    onNostrProfileCancel: () => {},
-    onNostrProfileFieldChange: () => {},
-    onNostrProfileSave: () => {},
-    onNostrProfileImport: () => {},
-    onNostrProfileToggleAdvanced: () => {},
     ...props,
   };
 }

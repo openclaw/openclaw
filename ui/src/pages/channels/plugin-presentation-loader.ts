@@ -5,9 +5,13 @@ import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
+import {
+  createChannelSettingsPresentation,
+  type ChannelSettingsHooks,
+} from "./channel-settings-presentation.tsx";
 import { resolveChannelIconOwner } from "./plugin-presentation.ts";
 
-type PluginPresentationHooks = {
+type PluginPresentationHooks = ChannelSettingsHooks & {
   getContext: () => ApplicationContext;
   getChannelIds: () => readonly string[];
   isConnected: () => boolean;
@@ -16,6 +20,7 @@ type PluginPresentationHooks = {
 export type ChannelPluginPresentation = ReturnType<typeof createChannelPluginPresentation>;
 
 export function createChannelPluginPresentation(hooks: PluginPresentationHooks) {
+  const details = createChannelSettingsPresentation(hooks);
   let catalog: PluginListResult | null = null;
   let iconUrls: Record<string, string> = {};
   let publish = () => {};
@@ -112,6 +117,7 @@ export function createChannelPluginPresentation(hooks: PluginPresentationHooks) 
   }
 
   function reset() {
+    details.reset();
     invalidateRequests();
     catalog = null;
     icons.reset();
@@ -121,6 +127,7 @@ export function createChannelPluginPresentation(hooks: PluginPresentationHooks) 
     reset();
   });
   return {
+    details,
     ensure,
     invalidateRequests,
     reset,
