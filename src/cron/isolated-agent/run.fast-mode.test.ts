@@ -8,6 +8,7 @@ import {
   claimAgentRunContext,
   clearAgentRunContext,
   getAgentRunContext,
+  recordCronNextCheckProposal,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
@@ -45,7 +46,7 @@ function expectCronInvocationContext(runParams: {
     sessionId: runParams.sessionId,
     sessionKey: runParams.sessionKey,
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    cronRunsByJobId: new Map([["test-job", { pacingEnabled: false }]]),
+    cronRunsByJobId: new Map([["test-job", { nextCheckEnabled: false }]]),
   });
   return runParams.runId;
 }
@@ -53,6 +54,44 @@ function expectCronInvocationContext(runParams: {
 describe("runCronIsolatedAgentTurn invocation ownership", () => {
   setupRunCronIsolatedAgentTurnSuite();
   beforeEach(() => h.mockRunCronFallbackPassthrough());
+
+  it.each([
+    { schedule: "at", target: "session:agent:default:main", eligible: true },
+    { schedule: "at", target: "isolated", eligible: false },
+    { schedule: "at", target: "current", eligible: false },
+    { schedule: "cron", target: "session:agent:default:main", eligible: false },
+  ])(
+    "accepts next_check only for an explicit one-shot continuation ($schedule, $target)",
+    async ({ schedule, target, eligible }) => {
+      let invocationRunId = "";
+      h.runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
+        invocationRunId = runParams.runId;
+        const propose = () => recordCronNextCheckProposal(runParams.runId, "test-job", 60_000);
+        if (eligible) {
+          propose();
+        } else {
+          expect(propose).toThrow("cron next_check requires");
+        }
+        return { payloads: [{ text: "CI is still pending." }], meta: { agentMeta: {} } };
+      });
+      const result = await runJob(
+        {
+          sessionTarget: target,
+          schedule:
+            schedule === "at"
+              ? { kind: "at", at: "2026-07-27T12:00:00.000Z" }
+              : { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+          delivery: { mode: "none" },
+        },
+        target.startsWith("session:") ? { sessionKey: target.slice(8) } : {},
+      );
+      expect(result.status, result.error).toBe("ok");
+      expect(result.nextCheck).toEqual(eligible ? { delayMs: 60_000 } : undefined);
+      expect(() => recordCronNextCheckProposal(invocationRunId, "test-job", 60_000)).toThrow(
+        "cron next_check is only available to the currently running job",
+      );
+    },
+  );
 
   it("retains the selected owner while reusing a global session", async () => {
     h.resolveCronSessionMock.mockReturnValue(h.makeCronSession({ isNewSession: false }));

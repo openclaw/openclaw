@@ -1,5 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { Show, Loading, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { Loading, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { Icon } from "../components/solid/icon.tsx";
 import {
@@ -27,9 +27,9 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
   const boardView = createMemo(() => {
     viewAttempt();
     return import("../components/board/board-view.tsx").then(
-      (module) => ({ component: module.BoardView, error: null }),
+      (module) => ({ view: module.BoardView, error: null }),
       (error: unknown) => ({
-        component: undefined,
+        view: null,
         error: error instanceof Error ? error.message : String(error),
       }),
     );
@@ -166,7 +166,7 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
               }
             >
               {(current) => (
-                <Show when={boardView().component} keyed>
+                <Show when={boardView().view} keyed>
                   {(BoardView) => (
                     <BoardView
                       active={presentation().expanded && props.presented}

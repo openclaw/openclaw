@@ -549,43 +549,54 @@ describe("assistant panel", () => {
     }
   });
 
-  it("restores Home only after the selected transcript has rendered, preserving dock geometry", async () => {
-    const { panel, provider } = await restoreHomePanel();
-    expect(panel.assistantPanelOpen).toBe(true);
-    expect(reserveRight()).toBe("440px");
-    expect(home(panel)).toBeNull();
+  it.each(["route replacement", "context replacement"] as const)(
+    "restores Home after the selected transcript renders across %s, preserving dock geometry",
+    async (replacement) => {
+      const { panel, provider, context } = await restoreHomePanel();
+      expect(panel.assistantPanelOpen).toBe(true);
+      expect(reserveRight()).toBe("440px");
+      expect(home(panel)).toBeNull();
 
-    let finishRender!: () => void;
-    const pane = Object.assign(document.createElement("openclaw-chat-pane"), {
-      sessionKey: "agent:main:task",
-      presented: true,
-      transcriptReady: false,
-      updateComplete: new Promise<void>((resolve) => {
-        finishRender = resolve;
-      }),
-    });
-    pane.classList.add("chat-pane-cache__pane--active");
-    provider.prepend(pane);
-    pane.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true }));
-    await panel.updateComplete;
-    expect(home(panel)).toBeNull();
-    pane.transcriptReady = true;
-    pane.dispatchEvent(new Event(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, { bubbles: true }));
-    await panel.updateComplete;
-    expect(home(panel)).toBeNull();
-    // A superseded route must not release Home from the old pane's late commit.
-    await update(panel, { pageSessionKey: "agent:main:next-task" });
-    finishRender();
-    await pane.updateComplete;
-    await panel.updateComplete;
-    expect(home(panel)).toBeNull();
-    await update(panel, { pageSessionKey: "agent:main:task" });
-    await vi.waitFor(() => expect(home(panel)).not.toBeNull());
-    expect(reserveRight()).toBe("440px");
+      let finishRender!: () => void;
+      const pane = Object.assign(document.createElement("openclaw-chat-pane"), {
+        sessionKey: "agent:main:task",
+        presented: true,
+        transcriptReady: false,
+        updateComplete: new Promise<void>((resolve) => {
+          finishRender = resolve;
+        }),
+      });
+      pane.classList.add("chat-pane-cache__pane--active");
+      provider.prepend(pane);
+      pane.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true }));
+      await panel.updateComplete;
+      expect(home(panel)).toBeNull();
+      pane.transcriptReady = true;
+      pane.dispatchEvent(new Event(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, { bubbles: true }));
+      await panel.updateComplete;
+      expect(home(panel)).toBeNull();
+      if (replacement === "route replacement") {
+        // A superseded route must not release Home from the old pane's late commit.
+        await update(panel, { pageSessionKey: "agent:main:next-task" });
+      } else {
+        provider.setContext({ ...context });
+        await panel.updateComplete;
+        expect(home(panel)).toBeNull();
+      }
+      finishRender();
+      await pane.updateComplete;
+      await panel.updateComplete;
+      if (replacement === "route replacement") {
+        expect(home(panel)).toBeNull();
+        await update(panel, { pageSessionKey: "agent:main:task" });
+      }
+      await vi.waitFor(() => expect(home(panel)).not.toBeNull());
+      expect(reserveRight()).toBe("440px");
 
-    await update(panel, { pageSessionKey: "agent:main:next-task" });
-    expect(home(panel)).not.toBeNull();
-  });
+      await update(panel, { pageSessionKey: "agent:main:next-task" });
+      expect(home(panel)).not.toBeNull();
+    },
+  );
 
   it.each(["explicit", "non-chat", "failed"] as const)(
     "releases restored Home without a primary transcript for %s navigation",
@@ -736,22 +747,46 @@ describe("assistant panel", () => {
     expect(panel.assistantPanelOpen).toBe(false);
   });
 
-  it("updates the panel mascot mood with shared sending state", async () => {
-    const { panel, store } = await mountPanel();
-    store.messages = [
-      { id: 1, role: "user", text: "Check this system", at: 1, question: null, step: null },
-    ];
-    panel.custodianSuppressed = false;
-    panel.minimizeRequestId = 1;
-    await panel.updateComplete;
+  it.each([false, true])(
+    "updates mascot and dock ownership after source replacement=%s",
+    async (replace) => {
+      const { panel, store, context } = await mountPanel();
+      const currentStore = replace ? new CustodianSessionStore() : store;
+      const currentContext = replace ? { ...context, assistantDock: new AssistantDock() } : context;
+      if (replace) {
+        panel.context = currentContext;
+        panel.store = currentStore;
+      }
+      currentStore.messages = [
+        { id: 1, role: "user", text: "Check this system", at: 1, question: null, step: null },
+      ];
+      panel.custodianSuppressed = false;
+      panel.minimizeRequestId = 1;
+      await panel.updateComplete;
 
-    store.sending = true;
-    store.setInput("status");
-    await panel.updateComplete;
+      currentStore.sending = true;
+      currentStore.setInput("status");
+      await panel.updateComplete;
 
-    expect(
-      panel.querySelector<HTMLElement & { mood: string }>(".assistant-panel-title openclaw-mascot")
-        ?.mood,
-    ).toBe("thinking");
-  });
+      expect(
+        panel.querySelector<HTMLElement & { mood: string }>(
+          ".assistant-panel-title openclaw-mascot",
+        )?.mood,
+      ).toBe("thinking");
+      if (replace) {
+        expect(() =>
+          context.assistantDock.openSession(
+            { sessionKey: "stale", agentId: "main", label: "Stale" },
+            {},
+          ),
+        ).toThrow("conversation dock is unavailable");
+        currentContext.assistantDock.openSession(
+          { sessionKey: "agent:research:review", agentId: "research", label: "Review" },
+          {},
+        );
+        await panel.updateComplete;
+        expect(home(panel)?.sessionKey).toBe("agent:research:review");
+      }
+    },
+  );
 });

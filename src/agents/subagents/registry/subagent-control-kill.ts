@@ -116,6 +116,7 @@ async function settleSubagentKill(
 async function killLatestSubagentRun(params: {
   tree: KillTree;
   scope: KillScope;
+  exactRunSelection?: boolean;
   suppressTaskDelivery?: boolean;
   beforeSessionKill?: () => boolean | Promise<boolean>;
   requiredSessionId?: string;
@@ -257,6 +258,7 @@ function collectKillErrors(trees: KillTree[], unlabeledRoot?: KillTree) {
 
 type KillTraversal = {
   scope: KillScope;
+  exactRunSelection?: boolean;
   /** A requester-wide Stop or reset cancels the tree; that requester needs no report. */
   suppressTaskDelivery?: boolean;
   stopRequestCommands?: boolean;
@@ -421,6 +423,7 @@ async function killSubagentRoot(params: Parameters<typeof killLatestSubagentRun>
     if (!stopped.result.superseded && !stopped.result.declined && params.tree.canTraverse()) {
       // Exact admin constraints belong only to its selected root, not each descendant.
       cascade = await killSubagentRunTree({
+        exactRunSelection: params.exactRunSelection,
         suppressTaskDelivery: params.suppressTaskDelivery,
         suppressCompletedWakes: !stopped.result.error && !stopped.result.completedCleanupError,
         scope: params.scope,
@@ -599,13 +602,13 @@ export async function killSubagentRunAdmin(
     return publish({ found: false as const, killed: false as const });
   }
   const expectedRunId = params.expectedRunId?.trim();
+  const exactRunSelection = Boolean(expectedRunId) && !control?.beforeSessionKill;
   const selected = expectedRunId ? subagentRuns.get(expectedRunId) : undefined;
-  const entry =
-    selected &&
-    selected.childSessionKey === targetSessionKey &&
-    resolveSubagentChildAuthority(selected).status !== "verified"
+  const entry = expectedRunId
+    ? selected?.childSessionKey === targetSessionKey
       ? selected
-      : getLatestOwnedSubagentRun(targetSessionKey, params.agentId, params.cfg);
+      : undefined
+    : getLatestOwnedSubagentRun(targetSessionKey, params.agentId, params.cfg);
   if (!entry) {
     return publish({ found: false as const, killed: false as const });
   }
@@ -637,10 +640,11 @@ export async function killSubagentRunAdmin(
     {
       cfg: params.cfg,
       runs: [entry],
+      exactRunSelection,
       assertCurrent: control?.assertCurrent,
       prepareRead: control?.prepareRead,
       ownsRoot:
-        params.expectedGeneration === undefined
+        params.expectedGeneration === undefined || exactRunSelection
           ? undefined
           : (candidate) => {
               const current = getLatestOwnedSubagentRun(
@@ -658,6 +662,7 @@ export async function killSubagentRunAdmin(
       const stopped = await killSubagentRoot({
         tree,
         scope,
+        exactRunSelection,
         beforeSessionKill: control?.beforeSessionKill,
         requiredSessionId: control?.requiredSessionId,
         expectedGeneration: params.expectedGeneration,

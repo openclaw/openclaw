@@ -48,7 +48,6 @@ type SummaryScope = {
 };
 
 function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
-  // The keyed parent replaces this entire history lifetime when its scope changes.
   const [history, setHistory] = createSignal<ChatHistoryResult | null>(null);
   const [error, setError] = createSignal(false);
   let alive = true;

@@ -74,9 +74,7 @@ export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplicati
 }
 
 function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.Element {
-  // The bootstrap epoch and its DOM host stay fixed until this root is disposed.
   const context = runtime.context;
-  const initialDocumentMode = runtime.documentMode;
   const rootOwner = getOwner();
   let readiness: ControlUiReadiness | undefined;
   let readinessLoad: Promise<void> | undefined;
@@ -572,7 +570,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
           <Match when={showLoginGate()}>
             <Login />
           </Match>
-          <Match when={initialDocumentMode} keyed>
+          <Match when={runtime.documentMode} keyed>
             {(documentMode) => {
               const element =
                 documentMode.kind === "approval" ? APPROVAL_PAGE_ELEMENT : QUESTION_PAGE_ELEMENT;

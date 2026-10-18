@@ -16,6 +16,7 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -131,8 +132,9 @@ describe("public yielded settle replay with real Gateway admission", () => {
     persistChild();
   });
 
-  afterEach(() => {
-    subagentRuns.delete(child.runId);
+  afterEach(async () => {
+    // Real restart activation arms a sweeper; retire it before seeding the next synthetic cohort.
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   function persistChild(entry = child) {

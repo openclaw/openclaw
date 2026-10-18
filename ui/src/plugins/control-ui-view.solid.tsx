@@ -4,7 +4,6 @@ import {
   createEffect,
   createRoot,
   createSignal,
-  For,
   getOwner,
   onCleanup,
   onSettled,
@@ -78,14 +77,13 @@ export function observePluginProperties<P extends object>(
 
 function MountedContent(props: { mount?: (target: HTMLElement) => () => void }) {
   return (
-    <For each={[props.mount]}>
+    <Show when={props.mount} keyed>
       {(mount) => {
         let container!: HTMLDivElement;
-        // Replacing the mount retires its foreign DOM island and its cleanup together.
-        onSettled(() => mount?.(container));
+        onSettled(() => mount(container));
         return <div style={{ display: "contents" }} ref={(element) => (container = element)} />;
       }}
-    </For>
+    </Show>
   );
 }
 

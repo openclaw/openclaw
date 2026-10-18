@@ -29,7 +29,7 @@ function PdfPreview(props: PdfPreviewProps) {
   const [preview, setPreview] = createSignal<{
     status: "loading" | "ready" | "error";
     url?: string;
-  }>({ status: "loading" }, { ownedWrite: true });
+  }>({ status: "loading" });
   let previewUrl: string | undefined;
   let previewBytes: Uint8Array | undefined;
   let previous: { sourceIdentity: string; sizeBytes?: number } | undefined;

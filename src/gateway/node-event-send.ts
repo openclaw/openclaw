@@ -25,7 +25,7 @@ export function sendNodeWebSocketEvent(
   try {
     const frame = Buffer.from(serialize());
     socket.send(frame, { binary: false });
-    socket.recordEventSent?.(event, frame.byteLength);
+    socket.recordEventSent?.(event, frame);
     return true;
   } catch {
     return false;
