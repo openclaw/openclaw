@@ -86,6 +86,7 @@ it("retains the header across row updates and clears optional details without st
   const initial: SidebarSessionHovercardRow = {
     label: "Synthetic session",
     hasActiveRun: false,
+    hasAutomation: false,
     color: "blue",
     channelPresentation: { channel: "slack", channelLabel: "Slack", kind: "group" },
     createdActor: {
@@ -111,7 +112,7 @@ it("retains the header across row updates and clears optional details without st
       "session-color-purple",
     );
   });
-  setRow({ label: "Plain synthetic session", hasActiveRun: false });
+  setRow({ label: "Plain synthetic session", hasActiveRun: false, hasAutomation: false });
   await waitForSolid(() => {
     expect(view.container.querySelector(".session-hovercard__header")).toBe(header);
     expect(view.container.querySelector(".session-color-dot")).toBeNull();

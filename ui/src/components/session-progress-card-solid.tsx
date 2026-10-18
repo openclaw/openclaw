@@ -182,6 +182,8 @@ function CardAction(props: { card: ProgressCard; onAction?: (card: ProgressCard)
 
 function CardMenu(props: CardProps) {
   const id = createUniqueId();
+  // Resolve presentation props before Menu reads open during lifecycle setup.
+  const disabled = createMemo(() => props.menuOptions?.disabled);
   const pending = () => props.refreshAction?.state === "pending";
   const retry = () =>
     props.refreshAction?.state === "failed" || props.refreshAction?.state === "timeout";
@@ -266,8 +268,8 @@ function CardMenu(props: CardProps) {
             "aria-busy": pending() ? "true" : "false",
           }}
           items={items()}
-          disabled={props.menuOptions?.disabled}
-          open={props.menuOptions?.disabled ? false : undefined}
+          disabled={disabled()}
+          open={disabled() ? false : undefined}
           ref={(value) => props.menuRef?.(value)}
           onSelect={(item, event) => {
             if (props.menuOptions?.disabled) {
