@@ -21,6 +21,12 @@ type IconGridFinding = {
 const geometry =
   /^(?:display|box-sizing|(?:min-|max-)?(?:width|height)|padding(?:-.+)?|border(?:-.+)?|(?:place|align|justify)-(?:items|content|self)|grid(?:-.+)?|gap|position|transform|margin(?:-.+)?)$/u;
 
+// Takes unknown: narrowing selectorParser.Node (which includes Selector) makes
+// TypeScript 7.1 report TS5115 on the library's self-referential Selector type.
+function isCompoundEdge(node: unknown): boolean {
+  return node === undefined || selectorParser.isCombinator(node);
+}
+
 function px(value: string): number | undefined {
   if (value === "0" || value === "0px") {
     return 0;
@@ -86,11 +92,9 @@ function geometryRules(root: Root): GeometryRule[] {
               const parsed = selectorParser((tree) =>
                 tree.walkNesting((node) => {
                   nested = true;
-                  node.replaceWith(
-                    ...selectorParser()
-                      .astSync(prefix)
-                      .nodes[0]!.nodes.map((part) => part.clone()),
-                  );
+                  // The result is only printed and reparsed: print the parent
+                  // selector in place of `&`.
+                  node.value = prefix;
                 }),
               ).processSync(child);
               return nested ? parsed : prefix + " " + child;
@@ -171,13 +175,10 @@ function matchesRule(
           [...rule.attributes].some((name) => dynamicAttributes.has(name)))
       ) {
         const tree = selectorParser().astSync(selector);
-        const removeUnknown = (node: selectorParser.Node) => {
-          const previous = node.prev(),
-            next = node.next();
-          if (
-            (!previous || previous.type === "combinator") &&
-            (!next || next.type === "combinator")
-          ) {
+        const removeUnknown = (
+          node: selectorParser.Attribute | selectorParser.Identifier | selectorParser.Pseudo,
+        ) => {
+          if (isCompoundEdge(node.prev()) && isCompoundEdge(node.next())) {
             node.replaceWith(selectorParser.universal({ value: "*" }));
           } else {
             node.remove();
