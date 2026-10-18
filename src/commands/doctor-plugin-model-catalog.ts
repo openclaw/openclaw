@@ -1,4 +1,3 @@
-/** Doctor-owned migration and repair of persisted generated provider catalogs. */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";

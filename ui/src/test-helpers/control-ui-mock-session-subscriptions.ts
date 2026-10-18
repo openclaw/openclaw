@@ -31,8 +31,9 @@ export function createControlUiMockSessionSubscriptions(
       stopRepeatingEvents: () => void;
     }) {
       const keys = new Set<string>();
-      let scoped = false;
+      let capabilities: readonly unknown[] = [];
       let observesSessions = false;
+      const hasCapability = (capability: string) => capabilities.includes(capability);
       const hasSubscription = (payload: unknown): boolean => {
         const source = isRecord(payload)
           ? [payload, payload.suggestion, payload.request].find(
@@ -49,6 +50,7 @@ export function createControlUiMockSessionSubscriptions(
         );
       };
       return {
+        hasCapability,
         hasSubscription,
         get size() {
           return keys.size;
@@ -62,7 +64,7 @@ export function createControlUiMockSessionSubscriptions(
             return;
           }
           if (method === "connect") {
-            scoped = Array.isArray(params.caps) && params.caps.includes("session-scoped-events");
+            capabilities = Array.isArray(params.caps) ? params.caps : [];
           } else if (method === "sessions.subscribe") {
             observesSessions = isRecord(result) && result.subscribed === true;
           } else if (typeof params.key === "string" && params.key.trim()) {
@@ -84,7 +86,10 @@ export function createControlUiMockSessionSubscriptions(
           if (event === "session.observer" && observesSessions) {
             return true;
           }
-          if (event !== "session.typing" && !(scoped && scopedEvents.has(event))) {
+          if (
+            event !== "session.typing" &&
+            !(hasCapability("session-scoped-events") && scopedEvents.has(event))
+          ) {
             return true;
           }
           return hasSubscription(payload);

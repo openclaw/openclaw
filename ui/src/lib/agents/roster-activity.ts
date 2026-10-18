@@ -40,6 +40,14 @@ export function agentRosterCards(
       (latest, row) => (!latest || (row.updatedAt ?? 0) > (latest.updatedAt ?? 0) ? row : latest),
       undefined,
     );
+    const lastAssistantMessage = sessions.reduce<GatewaySessionRow["lastAssistantMessage"]>(
+      (latest, row) =>
+        row.lastAssistantMessage &&
+        (!latest || row.lastAssistantMessage.timestamp > latest.timestamp)
+          ? row.lastAssistantMessage
+          : latest,
+      undefined,
+    );
     const main = sessions.find((row) => row.key === mainKey) ?? sessions.find((row) => row.isMain);
     return {
       id: agent.id,
@@ -50,9 +58,11 @@ export function agentRosterCards(
       textAvatar: resolveAgentTextAvatar(agent, identity),
       mainKey,
       activeNow: sessions.some(isSessionRunActive),
+      sessionCount: sessions.length,
       unreadCount: sessions.filter((row) => row.unread && !row.archived).length,
       lastActiveAt: recent?.updatedAt ?? 0,
       preview: (main ?? recent)?.lastMessagePreview,
+      assistantPreview: lastAssistantMessage?.text,
     };
   });
 }

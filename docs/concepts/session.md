@@ -57,6 +57,11 @@ Renaming, pinning, or editing session metadata retains the existing message
 preview without rereading the transcript. New messages, transcript replacements,
 completed transcript repairs, and cold-storage restoration refresh previews; changes to model selection
 or fallback state refresh the relevant model facts.
+When `sessions.list` requests `includeLastMessage`, rows can also include
+`lastAssistantMessage` with the latest visible assistant text and its timestamp.
+This field uses the same bounded recent transcript window as other previews;
+it is absent when no timestamped assistant text is available in that window.
+The general `lastMessagePreview` can still contain a user message.
 Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
 the selected conversation. Another agent's active turn and queued messages are
 preserved even when the agents use the same session key.

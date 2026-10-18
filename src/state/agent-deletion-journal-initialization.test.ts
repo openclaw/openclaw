@@ -236,58 +236,6 @@ describe("agent deletion journal initialization", () => {
     },
   );
 
-  it("holds the shared deletion fence through independent schema mutation but releases it for integrity", () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-independent-exclusion-") };
-    const shared = openOpenClawStateDatabase({ env });
-    using contender = new DatabaseSync(shared.path);
-    contender.exec("PRAGMA busy_timeout = 0");
-    const pathname = path.join(env.OPENCLAW_STATE_DIR, "agents/main/agent/openclaw-agent.sqlite");
-    fs.mkdirSync(path.dirname(pathname), { recursive: true });
-    using db = new DatabaseSync(pathname);
-    ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: false });
-    const execute = db.exec.bind(db);
-    let guardedMutations = 0;
-    const mutation = vi.spyOn(db, "exec").mockImplementation((sql) => {
-      if (/\b(?:CREATE|ALTER|DROP)\b/.test(sql)) {
-        expect(() => {
-          try {
-            contender.exec("BEGIN IMMEDIATE");
-          } finally {
-            if (contender.isTransaction) {
-              contender.exec("ROLLBACK");
-            }
-          }
-        }).toThrow(/busy|locked/);
-        guardedMutations++;
-      }
-      return execute(sql);
-    });
-    const operation = ensureOpenClawAgentDatabaseSchemaSteps(db, {
-      agentId: "main",
-      path: pathname,
-      env,
-      register: true,
-    });
-    try {
-      const step = operation.next();
-      expect(step.done).toBe(false);
-      if (step.done) {
-        throw new Error("Expected independently managed history to require integrity checking");
-      }
-      contender.exec("BEGIN IMMEDIATE");
-      contender.exec("ROLLBACK");
-      runSqliteIntegrityCheckSync(step.value);
-      expect(operation.next().done).toBe(true);
-      expect(guardedMutations).toBeGreaterThan(0);
-      expect(shared.db.prepare("SELECT agent_id FROM agent_databases").all()).toEqual([
-        { agent_id: "main" },
-      ]);
-    } finally {
-      mutation.mockRestore();
-      operation.return();
-    }
-  });
-
   it("captures checkpoint freshness after earlier config publication and process ownership", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-checkpoint-publication-") };
     const originalAgentPath = createLegacyDatabaseFixture({

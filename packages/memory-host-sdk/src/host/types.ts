@@ -444,7 +444,7 @@ export interface MemorySearchManager {
     limit?: number;
   }): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
-  /** @deprecated Prefer statusAsync when available to keep storage reads off the caller thread. */
+  /** @deprecated Prefer statusAsync when available to keep storage reads off the caller thread. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   status(): MemoryProviderStatus;
   /** Set includeCounts to false for query-path facts without database diagnostics. */
   statusAsync?(options?: { includeCounts?: boolean }): Promise<MemoryProviderStatus>;

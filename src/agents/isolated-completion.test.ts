@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
@@ -47,10 +48,12 @@ it.each([undefined, "session-activity-summary", "conversation-label", "session-o
         isolatedCompletion: true,
         disableTools: true,
         disableCliLiveSession: true,
-        timeoutMs: 1_000,
+        timeoutMs: expect.any(Number),
         model: "gpt-test",
       }),
     );
+    expect(mocks.runCliAgent.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(0);
+    expect(mocks.runCliAgent.mock.calls[0]?.[0].timeoutMs).toBeLessThanOrEqual(1_000);
     expect(mocks.runCliAgent.mock.calls[0]?.[0].trigger).toBeUndefined();
   },
 );
@@ -214,7 +217,7 @@ describe("runIsolatedCompletion", () => {
     "rotates quota failures within one deadline: $errorMessage ($elapsedMs ms)",
     async ({ errorMessage, elapsedMs }) => {
       prepareQuotaProfiles();
-      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
       const dispatch = vi
         .fn()
         .mockImplementationOnce(async () => {

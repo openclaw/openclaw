@@ -441,7 +441,6 @@ async function uploadImageBlock(
   }: Extract<FeishuDocParams, { action: "upload_image" }>,
   upload: DocxUpload,
 ) {
-  // Create an empty image block (block_type 27).
   // Per Feishu FAQ: image token cannot be set at block creation time.
   const insertRes = await client.docx.documentBlockChildren.create({
     path: { document_id: docToken, block_id: parentBlockId ?? docToken },

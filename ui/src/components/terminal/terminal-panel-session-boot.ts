@@ -1,5 +1,10 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
-import type { TerminalConnection } from "./terminal-connection.ts";
+import { t } from "../../i18n/index.ts";
+import type {
+  TerminalConnection,
+  TerminalGatewayClient,
+  TerminalOpenResult,
+} from "./terminal-connection.ts";
 import {
   disposeTerminalController,
   replaceTerminalController,
@@ -7,13 +12,76 @@ import {
 import { updateTerminalFont } from "./terminal-fonts.ts";
 import {
   TERMINAL_OUTPUT_ENCODER,
-  type TerminalPanelSessionControllerHost,
+  shellBasename,
+  type TerminalPanelSessionHost,
+  type TerminalPanelSessionState,
   type TerminalPanelSessionTab,
 } from "./terminal-panel-session-types.ts";
 import { createTerminalStartupInput } from "./terminal-startup-input.ts";
+import type { createTerminalTabReadiness } from "./terminal-tab-readiness.ts";
 import { terminalDynamicColors, terminalTheme } from "./terminal-theme.ts";
 
 type TerminalSink = Parameters<TerminalConnection["open"]>[1];
+
+export function captureTerminalDeliveryError(
+  host: TerminalPanelSessionHost,
+  state: TerminalPanelSessionState,
+  client: TerminalGatewayClient | null,
+  tab: TerminalPanelSessionTab,
+  setError: (text: string) => void,
+): () => void {
+  // Delivery uncertainty belongs to the retained tab and identity, not the transport epoch.
+  const recoveryScope = client?.recoveryScope;
+  return () => {
+    if (
+      host.isConnected &&
+      host.inputs.client === client &&
+      client?.recoveryScope === recoveryScope &&
+      !client?.offlineRecoveryRetired &&
+      state.tabs.includes(tab)
+    ) {
+      setError(t("terminal.deliveryFailed"));
+    }
+  };
+}
+
+export function adoptTerminalPanelSession(params: {
+  tab: TerminalPanelSessionTab;
+  result: TerminalOpenResult;
+  agentOwned: boolean;
+  connection: TerminalConnection | null;
+  readiness: ReturnType<typeof createTerminalTabReadiness<TerminalPanelSessionTab>>;
+  onDeliveryError: () => void;
+}): void {
+  const { tab, result } = params;
+  delete tab.cancelPendingIntent;
+  tab.gatewaySessionId = result.sessionId;
+  tab.shellName = result.title ?? shellBasename(result.shell);
+  tab.shell = result.shell;
+  tab.agentId = result.agentId;
+  tab.cwd = result.cwd;
+  tab.agentOwned =
+    result.owner !== undefined ? result.owner.startsWith("agent:") : params.agentOwned;
+  // Libterminal observes layout before the Gateway session exists. Resync the
+  // current grid now so a resize during the open/attach RPC is not lost.
+  const pendingInput = tab.pendingInput.drain();
+  if (tab.status !== "exited") {
+    const { cols, rows } = tab.controller.terminal;
+    void params.connection
+      ?.resize(result.sessionId, cols || 80, rows || 24)
+      .catch(params.onDeliveryError);
+    for (const data of pendingInput) {
+      void params.connection?.input(result.sessionId, data).catch(params.onDeliveryError);
+    }
+  }
+  if (tab.status === "connecting") {
+    if (tab.awaitFirstOutput) {
+      params.readiness.arm(tab);
+    } else {
+      params.readiness.markReady(tab);
+    }
+  }
+}
 
 /** Restore is passive once the user gives the document newer pointer or keyboard intent. */
 export function observeTerminalRestoreInput(document: Document, signal: AbortSignal) {
@@ -34,7 +102,10 @@ export function observeTerminalRestoreInput(document: Document, signal: AbortSig
 
 /** Creates the emulator and stream sink; the session controller owns tab adoption. */
 export async function bootTerminalPanelSession(params: {
-  panel: TerminalPanelSessionControllerHost;
+  panel: Pick<
+    TerminalPanelSessionHost,
+    "inputs" | "updateComplete" | "terminalFontFamily" | "findTerminalPanelViewport"
+  >;
   connection: TerminalConnection;
   sequence: number;
   awaitFirstOutput: boolean;
@@ -42,6 +113,7 @@ export async function bootTerminalPanelSession(params: {
   shouldFocusOnOpen?: () => boolean;
   onReady: (tab: TerminalPanelSessionTab) => void;
   onExit: (tab: TerminalPanelSessionTab, info: Parameters<TerminalSink["onExit"]>[0]) => void;
+  captureDeliveryError: (tab: TerminalPanelSessionTab) => (error: unknown) => void;
 }) {
   const { panel, connection } = params;
   const host = document.createElement("div");
@@ -57,8 +129,17 @@ export async function bootTerminalPanelSession(params: {
   }
   viewport.append(host);
   const tabReference: { current?: TerminalPanelSessionTab } = {};
-  const startupInput = createTerminalStartupInput(connection, () =>
-    tabReference.current?.status === "exited" ? undefined : tabReference.current?.gatewaySessionId,
+  const startupInput = createTerminalStartupInput(
+    connection,
+    () =>
+      tabReference.current?.status === "exited"
+        ? undefined
+        : tabReference.current?.gatewaySessionId,
+    () => (tabReference.current ? params.captureDeliveryError(tabReference.current) : () => {}),
+    () =>
+      panel.inputs.gatewayConnected &&
+      panel.inputs.available &&
+      !tabReference.current?.controller.readOnly,
   );
   const { createTerminalDefaultColorQueryResponder } =
     await import("@openclaw/libterminal/browser");
@@ -67,7 +148,7 @@ export async function bootTerminalPanelSession(params: {
     reply: (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
   });
   const createController = (parent: HTMLElement, controllerOptions?: { readOnly?: boolean }) =>
-    panel.createTerminalController(
+    panel.inputs.createTerminalController(
       {
         parent,
         readOnly: controllerOptions?.readOnly ?? false,
@@ -75,7 +156,7 @@ export async function bootTerminalPanelSession(params: {
           fontSize: 11,
           fontFamily: panel.terminalFontFamily,
           cursorBlink: true,
-          theme: terminalTheme(panel.themeMode),
+          theme: terminalTheme(panel.inputs.themeMode),
           scrollback: 5000,
         },
         // The session owner explicitly disposes adopted views. A completed view
@@ -135,6 +216,14 @@ export async function bootTerminalPanelSession(params: {
       // Suppress historical queries, then answer only the recovered suffix, including split queries.
       tab.defaultColorQueries.primeFromReplay(data.slice(0, newlyObservedFrom));
       tab.defaultColorQueries.observe(data.slice(newlyObservedFrom));
+      if (mode === "resume") {
+        const suffix = data.slice(newlyObservedFrom);
+        if (suffix) {
+          tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(suffix));
+          params.onReady(tab);
+        }
+        return undefined;
+      }
       if (mode === "recovery") {
         return replaceTerminalController(tab, createController, data, signal).then((replaced) => {
           if (replaced && !tab.cancelled && !signal.aborted) {

@@ -8,6 +8,7 @@ import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
+import { sendJson as sendJsonResponse } from "../infra/http-json.js";
 import { createHttpRequestAbortSignal } from "../infra/http-request-lifecycle.js";
 import {
   replacePlaybackFileExtension,
@@ -91,6 +92,7 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { readControlUiRootAsset, type ControlUiRootState } from "./server-control-ui-root.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -115,10 +117,8 @@ type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(JSON.stringify(body));
+  sendJsonResponse(res, status, body);
 }
 
 function respondControlUiAssetsUnavailable(res: ServerResponse, root?: ControlUiRootState) {
@@ -583,6 +583,7 @@ async function prepareControlUiBootstrapConfig(
     res,
     cfg: opts?.cfg ?? opts?.config,
     replyOnFailure,
+    requiredOperatorMethod: "sessions.list",
     onPluginFrameGrants: (grants) => {
       pluginFrameGrants = grants;
     },
@@ -611,13 +612,15 @@ async function prepareControlUiBootstrapConfig(
           : { avatar: identity.avatar, resolution: null };
       return { identity, agentId: resolvedIdentity?.agentId, avatarProjection };
     })(),
-    import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
-      listControlUiPluginCatalog().then(
-        ({ plugins }) => plugins,
-        // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
-        () => [],
-      ),
-    ),
+    authorizeOperatorScopesForMethod("plugins.controlUi.list", requestAuth.operatorScopes).allowed
+      ? import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
+          listControlUiPluginCatalog().then(
+            ({ plugins }) => plugins,
+            // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
+            () => [],
+          ),
+        )
+      : [],
     resolveDevInstallGitBranch(),
     import("./control-ui-bootstrap-preferences.js").then(
       ({ prepareControlUiBootstrapPreferences }) =>

@@ -12,7 +12,10 @@ export function resolveCurrentDiagnosticOwner(
   assertCurrent?: () => void,
 ): DiagnosticOwnerRegistration | undefined {
   const registration = activeDiagnosticOwners.get(owner.generation);
-  if (registration?.owner !== owner) {
+  if (
+    registration?.owner !== owner ||
+    registration.activity.activeEmbeddedRuns.get(owner.workKey)?.generation !== owner.generation
+  ) {
     return undefined;
   }
   try {
@@ -20,11 +23,7 @@ export function resolveCurrentDiagnosticOwner(
   } catch {
     return undefined;
   }
-  // The caller assertion may synchronously retire or replace the registration.
-  return activeDiagnosticOwners.get(owner.generation) === registration &&
-    registration.activity.activeEmbeddedRuns.get(owner.workKey)?.generation === owner.generation
-    ? registration
-    : undefined;
+  return registration;
 }
 
 /** Retains a provider wait only while its logical run still owns this attempt. */

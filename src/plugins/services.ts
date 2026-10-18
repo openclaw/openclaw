@@ -19,6 +19,7 @@ import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
 import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
+import { pluginRuntimeLoaderLogger } from "./runtime/load-context.js";
 import { createPluginServiceAutomationCapabilities } from "./service-automation-capabilities.js";
 import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
 import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
@@ -184,16 +185,19 @@ async function startPreparedPluginServices({
     }
     return undefined;
   };
+  const beginServiceStop = (entry: OwnedPluginService) => {
+    entry.stopRequested = true;
+    entry.scheduling.scheduler.beginClose();
+    entry.stopNodeInvocations?.();
+    void entry.stopControlUiIngress?.();
+  };
   const stopService = async (
     entry: OwnedPluginService,
     failures?: unknown[],
     deadline?: number,
     beforeStop?: Promise<unknown>,
   ) => {
-    entry.stopRequested = true;
-    entry.scheduling.scheduler.beginClose();
-    entry.stopNodeInvocations?.();
-    void entry.stopControlUiIngress?.();
+    beginServiceStop(entry);
     const recordFailure = (error: unknown) => {
       if (!failures) {
         return;
@@ -413,10 +417,7 @@ async function startPreparedPluginServices({
         for (const entry of selected) {
           entry.reloading = reloading;
           entry.pendingReload = config;
-          entry.stopRequested = true;
-          entry.scheduling.scheduler.beginClose();
-          entry.stopNodeInvocations?.();
-          void entry.stopControlUiIngress?.();
+          beginServiceStop(entry);
         }
         try {
           await stopServices(
@@ -458,10 +459,7 @@ async function startPreparedPluginServices({
       );
       for (const entry of selected) {
         delete entry.pendingReload;
-        entry.stopRequested = true;
-        entry.scheduling.scheduler.beginClose();
-        entry.stopNodeInvocations?.();
-        void entry.stopControlUiIngress?.();
+        beginServiceStop(entry);
       }
       const strict = options?.strict === true;
       const deadline = strict ? options.deadlineAtMs : undefined;
@@ -540,12 +538,7 @@ async function startPreparedPluginServices({
       config,
       workspaceDir,
       stateDir: STATE_DIR,
-      logger: {
-        info: (msg) => log.info(msg),
-        warn: (msg) => log.warn(msg),
-        error: (msg) => log.error(msg),
-        debug: (msg) => log.debug(msg),
-      },
+      logger: pluginRuntimeLoaderLogger,
       serviceHealth: health,
       ...(getCron ? { getCron } : {}),
       ...(mcpEvents ? { mcpEvents } : {}),

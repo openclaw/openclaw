@@ -497,7 +497,7 @@ async function ensureSandboxContainerLifecycle(
   let running = state.running;
   let currentHash: string | null = null;
   let hashMismatch = false;
-  const registryEntry = existingRegistryEntry ?? undefined;
+  const registryEntry = existingRegistryEntry;
   if (hasContainer) {
     if (registryEntry?.runtimeState === "pending") {
       throw new Error(

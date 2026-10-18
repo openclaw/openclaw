@@ -1,6 +1,7 @@
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { writeQaDockerHarnessFiles } from "./docker-harness.js";
 import {
   execCommand,
@@ -10,16 +11,14 @@ import {
   waitForDockerServiceHealth,
   waitForHealth,
   type FetchLike,
-  type RunCommand,
 } from "./docker-runtime.js";
-import { shellQuote } from "./shell-quote.js";
 
 const QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 
-async function isQaLabDockerHealthReachable(url: string, fetchImpl: FetchLike) {
+async function isQaLabDockerHealthReachable(url: string) {
   let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
-    response = await fetchImpl(url, {
+    response = await fetchHealthUrl(url, {
       signal: AbortSignal.timeout(QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS),
     });
     return response.ok;
@@ -51,55 +50,42 @@ function isMissingCommandError(error: unknown, command: string): boolean {
   return isMissingCommandError(candidate.cause, command);
 }
 
-async function runQaLabBuild(repoRoot: string, runCommand: RunCommand) {
+async function runQaLabBuild(repoRoot: string) {
   try {
-    await runCommand("pnpm", ["qa:lab:build"], repoRoot);
+    await execCommand("pnpm", ["qa:lab:build"], repoRoot);
   } catch (error) {
     if (!isMissingCommandError(error, "pnpm")) {
       throw error;
     }
-    await runCommand("corepack", ["pnpm", "qa:lab:build"], repoRoot);
+    await execCommand("corepack", ["pnpm", "qa:lab:build"], repoRoot);
   }
 }
 
-export async function runQaDockerUp(
-  params: {
-    repoRoot?: string;
-    outputDir?: string;
-    gatewayPort?: number;
-    qaLabPort?: number;
-    providerBaseUrl?: string;
-    image?: string;
-    usePrebuiltImage?: boolean;
-    bindUiDist?: boolean;
-    skipUiBuild?: boolean;
-  },
-  deps?: {
-    runCommand?: RunCommand;
-    fetchImpl?: FetchLike;
-    sleepImpl?: (ms: number) => Promise<unknown>;
-    resolveHostPortImpl?: typeof resolveHostPort;
-  },
-) {
+export async function runQaDockerUp(params: {
+  repoRoot?: string;
+  outputDir?: string;
+  gatewayPort?: number;
+  qaLabPort?: number;
+  providerBaseUrl?: string;
+  image?: string;
+  usePrebuiltImage?: boolean;
+  bindUiDist?: boolean;
+  skipUiBuild?: boolean;
+}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const resolveHostPortImpl = deps?.resolveHostPortImpl ?? resolveHostPort;
   const outputDir = path.resolve(params.outputDir ?? path.join(repoRoot, ".artifacts/qa-docker"));
-  const gatewayPort = await resolveHostPortImpl(
+  const gatewayPort = await resolveHostPort(
     params.gatewayPort ?? 18789,
     params.gatewayPort != null,
   );
-  const qaLabPort = await resolveHostPortImpl(params.qaLabPort ?? 43124, params.qaLabPort != null);
+  const qaLabPort = await resolveHostPort(params.qaLabPort ?? 43124, params.qaLabPort != null);
   if (gatewayPort === qaLabPort) {
     throw new Error(
       `QA Lab gateway and UI host ports must be different. Both resolved to ${gatewayPort}.`,
     );
   }
-  const runCommand = deps?.runCommand ?? execCommand;
-  const fetchImpl = deps?.fetchImpl ?? fetchHealthUrl;
-  const sleepImpl = deps?.sleepImpl ?? sleep;
-
   if (!params.skipUiBuild) {
-    await runQaLabBuild(repoRoot, runCommand);
+    await runQaLabBuild(repoRoot);
   }
 
   await writeQaDockerHarnessFiles({
@@ -118,7 +104,7 @@ export async function runQaDockerUp(
   // Tear down any previous stack from this compose file so ports are freed
   // and we get a clean restart every time.
   try {
-    await runCommand(
+    await execCommand(
       "docker",
       ["compose", "-f", composeFile, "down", "--remove-orphans"],
       repoRoot,
@@ -133,36 +119,36 @@ export async function runQaDockerUp(
   }
   composeArgs.push("-d");
 
-  await runCommand("docker", composeArgs, repoRoot);
+  await execCommand("docker", composeArgs, repoRoot);
 
   // Brief settle delay so Docker Desktop finishes port-forwarding setup.
-  await sleepImpl(3_000);
+  await sleep(3_000);
 
   const qaLabUrl = `http://127.0.0.1:${qaLabPort}`;
   const hostGatewayUrl = `http://127.0.0.1:${gatewayPort}/`;
 
   await waitForHealth(`${qaLabUrl}/healthz`, {
     label: "QA Lab",
-    fetchImpl,
-    sleepImpl,
+    fetchImpl: fetchHealthUrl,
+    sleepImpl: sleep,
     composeFile,
   });
   await waitForDockerServiceHealth(
     "openclaw-qa-gateway",
     composeFile,
     repoRoot,
-    runCommand,
-    sleepImpl,
+    execCommand,
+    sleep,
   );
   let gatewayUrl = hostGatewayUrl;
-  if (!(await isQaLabDockerHealthReachable(`${hostGatewayUrl}healthz`, fetchImpl))) {
+  if (!(await isQaLabDockerHealthReachable(`${hostGatewayUrl}healthz`))) {
     const containerGatewayUrl = await resolveComposeServiceUrl(
       "openclaw-qa-gateway",
       18789,
       composeFile,
       repoRoot,
-      runCommand,
-      fetchImpl,
+      execCommand,
+      fetchHealthUrl,
     );
     if (containerGatewayUrl) {
       gatewayUrl = containerGatewayUrl;

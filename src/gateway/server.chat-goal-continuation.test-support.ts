@@ -53,7 +53,10 @@ export function registerGoalAutomaticContinuationCases(
     expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toContain("Advance");
     expect(runEmbeddedAgent.mock.calls[2]?.[0].prompt).toContain("Advance");
     expect(userMessages()).toHaveLength(1);
-    expect(loadSessionEntry(scope())?.goal?.status).toBe("complete");
+    expect(loadSessionEntry(scope())?.goal).toMatchObject({
+      status: "complete",
+      continuationTurns: 2,
+    });
   });
 
   it("stops automatic goal pursuit when the operator stops a continuation", async () => {

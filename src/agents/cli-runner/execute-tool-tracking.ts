@@ -656,14 +656,13 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     finalizeCapture,
     withExecutionEvidence(output: CliOutput): CliOutput {
       const current = evidence();
+      current.messagingToolSourceReplyPayloads = current.messagingToolSourceReplyPayloads.slice();
       return {
         ...output,
         ...(yielded ? { yielded: true as const } : {}),
         ...(yieldAcknowledgment ? { yieldAcknowledgment } : {}),
-        ...projectCliMessagingDeliveryEvidence(current, true),
-        ...(current.toolMediaUrls.length > 0
-          ? { toolMediaUrls: current.toolMediaUrls.slice() }
-          : {}),
+        ...projectCliMessagingDeliveryEvidence(current),
+        ...(current.toolMediaUrls.length > 0 ? { toolMediaUrls: current.toolMediaUrls } : {}),
         ...(current.toolAudioAsVoice ? { toolAudioAsVoice: true } : {}),
         ...(current.toolTrustedLocalMedia ? { toolTrustedLocalMedia: true } : {}),
         ...(current.acceptedSessionSpawns.length > 0

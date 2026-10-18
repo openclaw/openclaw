@@ -329,8 +329,12 @@ vi.mock("../agents/simple-completion-runtime.js", () => ({
   completeWithPreparedSimpleCompletionModel: mocks.completeWithPreparedSimpleCompletionModel,
 }));
 
+// mock-isolation: Capability routing uses fixture profiles, never operator credential discovery.
 vi.mock("../agents/auth-profiles.js", () => ({
   loadAuthProfileStoreForRuntime: mocks.loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync: async (
+    ...args: Parameters<typeof mocks.loadAuthProfileStoreForRuntime>
+  ) => mocks.loadAuthProfileStoreForRuntime(...args),
   listProfilesForProvider: mocks.listProfilesForProvider,
 }));
 
@@ -444,6 +448,11 @@ vi.mock("../web-fetch/runtime.js", () => ({
   listWebFetchProviders: vi.fn(() => []),
   isWebFetchProviderConfigured: mocks.isWebFetchProviderConfigured,
   resolveWebFetchDefinition: vi.fn(),
+}));
+
+// mock-isolation: CLI routing uses fixture fetch results without the network, cache, and secret-owner runtime.
+vi.mock("../agents/tools/web-fetch.js", () => ({
+  createWebFetchTool: vi.fn(),
 }));
 
 describe("capability cli", () => {
@@ -1817,12 +1826,16 @@ describe("capability cli", () => {
       },
     },
     {
-      name: "channel direct provider",
-      config: { channels: { discord: { tts: { openai: { speakerVoice: "nova" } } } } },
+      name: "channel provider",
+      config: {
+        channels: { discord: { tts: { providers: { openai: { speakerVoice: "nova" } } } } },
+      },
       args: ["--channel", "discord"],
       expected: {
         channels: {
-          discord: { tts: { openai: { speakerVoice: "nova", apiKey: "profile-openai-key" } } },
+          discord: {
+            tts: { providers: { openai: { speakerVoice: "nova", apiKey: "profile-openai-key" } } },
+          },
         },
       },
     },
@@ -1862,8 +1875,8 @@ describe("capability cli", () => {
       resolved: { providerConfigs: { openai: { apiKey: "config-key", speakerVoice: "nova" } } },
     },
     {
-      name: "direct provider",
-      config: { tts: { openai: { apiKey: "config-key" } } },
+      name: "provider map",
+      config: { tts: { providers: { openai: { apiKey: "config-key" } } } },
       args: ["--model", "openai/gpt-4o-mini-tts"],
       resolved: { providerConfigs: {} },
     },
@@ -1934,15 +1947,18 @@ describe("capability cli", () => {
       voiceCompatible: false,
     } as never);
 
-    const copyFile = fs.copyFile.bind(fs);
-    const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
-      const [source, destination] = args;
-      if (source === sourcePath) {
-        const bytes = await fs.readFile(source);
-        await fs.writeFile(destination, bytes.subarray(0, 17));
+    const writeFile = fs.writeFile.bind(fs);
+    const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      const [destination, data] = args;
+      if (
+        typeof destination === "string" &&
+        destination.startsWith(outputDir) &&
+        Buffer.isBuffer(data)
+      ) {
+        await writeFile(destination, data.subarray(0, 17));
         throw new Error("injected TTS copy failure");
       }
-      await copyFile(...args);
+      await writeFile(...args);
     });
 
     try {
@@ -1962,8 +1978,31 @@ describe("capability cli", () => {
       }
       expect(await fs.readdir(outputDir)).toEqual(["speech.mp3"]);
     } finally {
-      copyFileSpy.mockRestore();
+      writeFileSpy.mockRestore();
     }
+  });
+
+  it("names TTS output after the audio format the provider returned", async () => {
+    const tempDir = tempDirs.make("openclaw-tts-output-ext-");
+    const sourcePath = path.join(tempDir, "source.wav");
+    const wav = Buffer.alloc(64);
+    wav.write("RIFF", 0, "ascii");
+    wav.writeUInt32LE(56, 4);
+    wav.write("WAVEfmt ", 8, "ascii");
+    await fs.writeFile(sourcePath, wav);
+    mocks.callGateway.mockResolvedValueOnce({
+      audioPath: sourcePath,
+      provider: "google",
+      outputFormat: "wav",
+      voiceCompatible: false,
+    } as never);
+
+    await convertTts("--gateway", "--output", path.join(tempDir, "speech.mp3"));
+
+    const written = path.join(tempDir, "speech.wav");
+    expect(firstJsonOutput()).toMatchObject({ outputs: [{ path: written, format: "wav" }] });
+    expect(await fs.readFile(written)).toEqual(wav);
+    await expect(fs.access(path.join(tempDir, "speech.mp3"))).rejects.toThrow();
   });
 
   registerEmbeddingCapabilityCliTests({
@@ -2208,6 +2247,74 @@ describe("capability cli", () => {
       }),
     );
   });
+
+  it.each([
+    { format: undefined, provider: undefined },
+    { format: "text", provider: "firecrawl" },
+  ])("fetches through the default tool with $format output", async ({ format, provider }) => {
+    const config = { tools: { web: { fetch: { maxChars: 1200 } } } };
+    const resolvedConfig = { ...config, resolved: true };
+    mocks.loadConfig.mockReturnValue(config);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    });
+    const result = {
+      title: "Example Domain",
+      text: "Example content",
+      externalContent: { untrusted: true, source: "web_fetch", wrapped: true, provider },
+    };
+    const execute = vi.fn(async () => ({ content: [], details: result }));
+    const { createWebFetchTool } = await import("../agents/tools/web-fetch.js");
+    vi.mocked(createWebFetchTool).mockReturnValueOnce({ execute } as never);
+
+    await runCap(
+      "infer",
+      "web",
+      "fetch",
+      "--url",
+      "https://example.com",
+      ...(format ? ["--format", format] : []),
+      "--json",
+    );
+
+    expect(createWebFetchTool).toHaveBeenCalledWith({ config: resolvedConfig });
+    expect(execute).toHaveBeenCalledExactlyOnceWith("infer-web-fetch", {
+      url: "https://example.com",
+      extractMode: format,
+    });
+    expect(firstJsonOutput()).toEqual({
+      ok: true,
+      capability: "web.fetch",
+      transport: "local",
+      provider: provider ?? "direct",
+      attempts: [],
+      outputs: [{ result }],
+    });
+  });
+
+  it.each([undefined, "firecrawl"])(
+    "rejects disabled web fetch with provider %s",
+    async (provider) => {
+      mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled: false } } } });
+
+      await expect(
+        runCap(
+          "infer",
+          "web",
+          "fetch",
+          "--url",
+          "https://example.com",
+          ...(provider ? ["--provider", provider] : []),
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expect(runtimeErrorMessages().join("\n")).toContain("tools.web.fetch.enabled");
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

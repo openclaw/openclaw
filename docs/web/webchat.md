@@ -25,6 +25,8 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 
 - The UI connects to the Gateway WebSocket and uses the `chat.history`, `chat.send`, `chat.inject`, and `chat.message.get` RPC methods.
 - Control UI opens a chat with a small recent-history page through `chat.startup`. Short chat links resolve their session in that same request. Short-reference startup also subscribes the connection to authorized session events before reading history, so updates arriving before the chat pane mounts are not missed. Scroll upward to load older messages. A restored Home pane waits for the selected chat to finish loading, while explicitly opening Home loads it immediately.
+- Startup metadata contains commands, swarm availability, and required worker policy. The model picker loads its catalog and account selection through `models.list`; `chat.startup` does not duplicate them. Session model and runtime details remain in `sessionInfo` and `defaults`.
+- Clients retaining the command catalog can send its `stateRevision.commands` as `knownState.commands` on later `chat.startup` requests. Matching revisions omit `metadata.commands`; other metadata stays current. Cold clients and changed catalogs receive the full list. The revision comes from the same prepared command owner as compact `chat.metadata`, including config, plugin, and skill invalidation.
 - `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`. History pages skip hidden and tool-only transcript entries while filling the requested visible-message window from the existing indexed transcript. A byte-full window can finish before the requested message count, with older content available through pagination. API clients can send a per-request `maxChars` to override the default limit for one call.
 - Paginated `chat.history` and `chat.startup` requests accept a `maxBytes` page target, defaulting to 512 KiB with a 6 MiB hard ceiling for messages and their activity. The Control UI requests up to 80 messages within 256 KiB for the initial tail, then up to 1,000 older messages within 1 MiB and follows `nextOffset` to continue. Messages and indivisible groups projected from one transcript row that exceed the page budget use fetchable references rather than exceeding the budget. Anchored `messageId` reads retain the same default page budget. Bound Claude CLI transcripts use the same page budget and back-scroll pagination, including messages that exist only in the native transcript.
 - If history changes during a page read, the Gateway returns a coherent page from the current history. A `windowReset: true` response contains a replacement tail; clients replace their loaded history and continue with its `deltaCursor` and pagination fields. A stale delta cursor returns `{ kind: "reset" }`, prompting a fresh tail request. Reads racing a projection rebuild wait briefly before returning a retryable rebuilding error.
@@ -96,6 +98,10 @@ synthesized by the Gateway using the configured TTS provider, voice, and endpoin
 **Stop reading** cancels browser playback. Long replies play in ordered chunks
 within `tts.maxTextLength`. Starting another Read aloud or Talk action stops the
 previous playback. The control does not use browser speech synthesis. The former `messages.tts` configuration is migrated to `tts` by Doctor.
+
+Already-downloaded speech keeps playing through a Gateway connection blip, and
+**Stop reading** remains available. New synthesis requires a live connection;
+changing Gateway or losing speech access stops the old playback.
 
 Hold the microphone button for dictation. Explicit audio models in
 `tools.media.models` use the same transcription owner as uploaded voice notes,

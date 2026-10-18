@@ -244,7 +244,7 @@ afterEach(async () => {
 });
 
 describe("ordinary source reply across deferred plugin refresh", () => {
-  it.for(["confirmed", "not-dispatched"] as const)(
+  it.for(["confirmed", "not-dispatched", "ambiguous"] as const)(
     "preserves the real %s receipt when the runner rebuilds its message tool",
     async (outcome, context) => {
       const sourceTurnId = `source-${outcome}`;
@@ -319,13 +319,21 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         if (transport.mock.calls.length === 1) {
           firstCallId = current?.restartRecoveryDeliveryToolCallId;
           expect(firstCallId).toBeTypeOf("string");
-          // A confirmed send holds only its ACK; refusal never dispatches an effect.
-          const reply = outcome === "confirmed" ? physicalSend() : undefined;
+          // Hold the response after the effect; only a definite refusal never sends.
+          const reply = outcome !== "not-dispatched" ? physicalSend() : undefined;
           started.resolve();
           await release.promise;
           if (outcome === "not-dispatched") {
             events.push("transport:refused");
             throw new OutboundHandoffRejectedError(new Error("fixture refused before dispatch"));
+          }
+          if (outcome === "ambiguous") {
+            events.push("transport:unknown");
+            // An unstructured provider failure cannot prove whether dispatch happened.
+            throw Object.assign(new Error("fixture lost the reply after dispatch"), {
+              name: "GatewayClientRequestError",
+              gatewayCode: "UNAVAILABLE",
+            });
           }
           events.push("transport:acknowledged");
           return reply;
@@ -355,6 +363,14 @@ describe("ordinary source reply across deferred plugin refresh", () => {
           expect(current?.restartRecoveryDeliveryReceiptState).toBe("delivered-terminal");
           expect(current?.restartRecoveryDeliveryToolCallId).toBe(firstCallId);
           expect(attemptResults[0]?.didSendViaMessagingTool).toBe(true);
+        } else if (outcome === "ambiguous") {
+          expect(current).toMatchObject({
+            restartRecoveryDeliveryRunId: identity.runId,
+            restartRecoveryDeliveryReceiptState: "terminal-pending",
+            restartRecoveryDeliveryToolCallId: firstCallId,
+          });
+          expect(events).toContain("transport:unknown");
+          expect(attemptResults[0]?.didSendViaMessagingTool).toBe(false);
         } else {
           expect(current?.restartRecoveryDeliveryReceiptState).toBeUndefined();
           expect(current?.restartRecoveryDeliveryToolCallId).toBeUndefined();
@@ -552,7 +568,7 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         expect(attemptResults).toHaveLength(0);
         expect(refreshOwner?.isRequested()).toBe(true);
         expect(refreshOwner?.isPending()).toBe(false);
-        expect(physicalSend).toHaveBeenCalledTimes(outcome === "confirmed" ? 1 : 0);
+        expect(physicalSend).toHaveBeenCalledTimes(outcome !== "not-dispatched" ? 1 : 0);
         release.resolve();
         const result = await withinTest(running, context.signal);
         expect(result.meta.error).toBeUndefined();
@@ -570,16 +586,46 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         const successorResult = await messageExecutions[1]?.mock.results[0]?.value;
         if (outcome === "confirmed") {
           expect(successorResult).toMatchObject({ details: { status: "already_delivered" } });
+        } else if (outcome === "ambiguous") {
+          expect(successorResult).toMatchObject({
+            details: { status: "delivery_ambiguous", delivered: false },
+          });
         }
         expect(events.indexOf("message:2:built")).toBeGreaterThan(
           events.indexOf("attempt:1:settled"),
         );
         expect(physicalSend).toHaveBeenCalledOnce();
-        expect(transport).toHaveBeenCalledTimes(outcome === "confirmed" ? 1 : 2);
-        expect(loadSessionEntry(scope)?.restartRecoveryDeliveryReceiptState).toBe(
-          "delivered-terminal",
-        );
-        expect(result.didSendViaMessagingTool).toBe(true);
+        expect(transport).toHaveBeenCalledTimes(outcome === "not-dispatched" ? 2 : 1);
+        if (outcome === "ambiguous") {
+          expect(loadSessionEntry(scope)).toMatchObject({
+            restartRecoveryDeliveryRunId: identity.runId,
+            restartRecoveryDeliverySourceRunId: sourceTurnId,
+            restartRecoveryDeliveryReceiptState: "terminal-pending",
+            restartRecoveryDeliveryToolCallId: firstCallId,
+          });
+          expect(result.didSendViaMessagingTool).toBe(false);
+          expect(result.didDeliverSourceReplyViaMessageTool).not.toBe(true);
+          expect(result.sourceReplyDelivered).not.toBe(true);
+          expect(result.sourceReplyDeliveryState).not.toBe("delivered");
+          expect(result.meta.agentMeta?.terminalReceipt?.sourceReplyDelivered).not.toBe(true);
+          expect(operation.sourceReplyDelivered).not.toBe(true);
+          for (const input of attemptInputs) {
+            expect(input.settled, settlementDiagnostics).toBeDefined();
+            expect(input.settled?.terminal, settlementDiagnostics).toBe("ok");
+            expect(input.settled?.didSendViaMessagingTool).not.toBe(true);
+            expect(input.settled?.didDeliverSourceReplyViaMessageTool).not.toBe(true);
+            expect(input.settled?.sourceReplyDelivered).not.toBe(true);
+            expect(input.settled?.sourceReplyDeliveryState).not.toBe("delivered");
+            expect(input.settled?.finalTargets).toBe(0);
+            expect(input.settled?.finalPayloads).toBe(0);
+            expect(input.settled?.operationSourceReplyDelivered).not.toBe(true);
+          }
+        } else {
+          expect(loadSessionEntry(scope)?.restartRecoveryDeliveryReceiptState).toBe(
+            "delivered-terminal",
+          );
+          expect(result.didSendViaMessagingTool).toBe(true);
+        }
         expect(
           loadTranscriptEventsSync(scope).filter((event) => {
             const message = asOptionalRecord(asOptionalRecord(event)?.message);
@@ -587,10 +633,12 @@ describe("ordinary source reply across deferred plugin refresh", () => {
           }),
         ).toHaveLength(1);
         expect(testing.activeRuns.size).toBe(0);
-        expect(
-          attemptResults.map((attempt) => attempt.terminal.kind),
-          settlementDiagnostics,
-        ).toEqual(["ok", "ok"]);
+        if (outcome !== "ambiguous") {
+          expect(
+            attemptResults.map((attempt) => attempt.terminal.kind),
+            settlementDiagnostics,
+          ).toEqual(["ok", "ok"]);
+        }
       } finally {
         release.resolve();
         abort.abort();

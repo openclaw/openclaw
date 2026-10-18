@@ -1,9 +1,9 @@
-import { createSignal, lazy, Loading, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createSignal, lazy, Loading, Show, omit } from "solid-js";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import type { ToolRenderOptions } from "./chat-tool-render-model.ts";
 
 const ExpandedContent = lazy(() => import("./chat-tool-expanded.solid.tsx"), {
@@ -70,37 +70,39 @@ export function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number
   return <div class="chat-tool-card__outcome">{label()}</div>;
 }
 
-export const ChatToolContent = defineSolidBridge<{
-  card: ToolCard | null;
-  options: ToolRenderOptions;
-}>(
-  "openclaw-chat-tool-content",
-  (props) => (
-    <Show when={props.card}>
-      {(card) => <ExpandedToolCardContent card={card()} options={props.options} />}
-    </Show>
-  ),
-  {
-    properties: {
-      card: { default: null, attribute: false },
-      options: { default: { messageKey: "" }, attribute: false },
-    },
-  },
-);
-export const ChatToolRawOutput = defineSolidBridge<{ text: string }>(
-  "openclaw-chat-tool-raw",
-  RawOutputToggle,
-  {
-    properties: { text: { default: "", attribute: false } },
-  },
-);
-export const ChatToolOutcome = defineSolidBridge<{ outcome: ToolCardOutcome; exitCode?: number }>(
-  "openclaw-chat-tool-outcome",
-  ToolOutcome,
-  {
-    properties: {
-      outcome: { default: "unknown", attribute: false },
-      exitCode: { default: undefined, attribute: false },
-    },
-  },
-);
+export function ChatToolContent(
+  props: {
+    card: ToolCard;
+    options: ToolRenderOptions;
+  } & JSX.HTMLAttributes<HTMLElement>,
+) {
+  const attributes = omit(props, "card", "options", "children");
+  return (
+    <openclaw-chat-tool-content {...attributes}>
+      <ExpandedToolCardContent card={props.card} options={props.options} />
+    </openclaw-chat-tool-content>
+  );
+}
+
+export function ChatToolRawOutput(props: { text: string } & JSX.HTMLAttributes<HTMLElement>) {
+  const attributes = omit(props, "text", "children");
+  return (
+    <openclaw-chat-tool-raw {...attributes}>
+      <RawOutputToggle text={props.text} />
+    </openclaw-chat-tool-raw>
+  );
+}
+
+export function ChatToolOutcome(
+  props: {
+    outcome: ToolCardOutcome;
+    exitCode?: number;
+  } & JSX.HTMLAttributes<HTMLElement>,
+) {
+  const attributes = omit(props, "outcome", "exitCode", "children");
+  return (
+    <openclaw-chat-tool-outcome {...attributes}>
+      <ToolOutcome outcome={props.outcome} exitCode={props.exitCode} />
+    </openclaw-chat-tool-outcome>
+  );
+}

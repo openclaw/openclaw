@@ -231,9 +231,12 @@ export async function executeConfigExternalMutation<T>(
     if (!refreshed.ok) {
       return refreshFailure(refreshed.error);
     }
-    if (receipt?.noop === true) {
-      // A no-op has no write revision. Reconcile only the source admitted by
-      // the read owner, without invalidating its successors as a new write.
+    if (
+      receipt?.noop === true ||
+      (!receipt && state.configFormMode === "form" && state.configFormDirty)
+    ) {
+      // Refresh-only mutations have no write receipt. Reconcile Form edits
+      // against the admitted source; overlapping changes still conflict.
       const snapshot = state.configSnapshot;
       const config = resolveEditableSnapshotConfig(snapshot);
       if (!config || !snapshot?.hash) {

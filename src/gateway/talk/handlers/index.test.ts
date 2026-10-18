@@ -748,6 +748,17 @@ describe("talk.catalog handler", () => {
         outputAudioFormats: [],
         voices: ["marin", "cedar"],
         voiceSelectionPolicy: "allowlist-default",
+        modelFamilySettings: {
+          family: "gpt-live",
+          unlistedModelVoices: "active",
+          unsupportedTransports: ["provider-websocket"],
+          gatewayRelayHandlesAgentConsult: true,
+          hint: {
+            titleKey: "talkPage.gptLive.title",
+            descriptionKey: "talkPage.gptLive.hint",
+            readyKey: "talkPage.gptLive.ready",
+          },
+        },
       },
     } as never);
 
@@ -777,6 +788,17 @@ describe("talk.catalog handler", () => {
       voices: ["alloy", "marin"],
       activeVoices: ["marin", "cedar"],
       activeVoiceSelectionPolicy: "allowlist-default",
+      modelFamilySettings: {
+        family: "gpt-live",
+        unlistedModelVoices: "active",
+        unsupportedTransports: ["provider-websocket"],
+        gatewayRelayHandlesAgentConsult: true,
+        hint: {
+          titleKey: "talkPage.gptLive.title",
+          descriptionKey: "talkPage.gptLive.hint",
+          readyKey: "talkPage.gptLive.ready",
+        },
+      },
     });
     expect(JSON.stringify(catalog)).not.toContain("gpt-live-test-canary");
     // Catalog readiness must mirror talk.client.create: top-level

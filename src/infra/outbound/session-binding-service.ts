@@ -128,8 +128,7 @@ type NativeCapableSessionBindingAdapter = (SessionBindingAdapter | SessionBindin
   NativeSessionBindingReads;
 
 type SessionBindingAdapterRegistration = {
-  adapter: SessionBindingAdapter;
-  normalizedAdapter: NativeCapableSessionBindingAdapter;
+  adapter: NativeCapableSessionBindingAdapter;
 };
 
 const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalMap<string, SessionBindingAdapterRegistration[]>(
@@ -148,19 +147,11 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
 }
 
 function registerAdapter(adapter: SessionBindingAdapter | SessionBindingAdapterV2): void {
-  const normalizedAdapter: NativeCapableSessionBindingAdapter = {
-    ...adapter,
-    ...normalizeConversationRef({
-      channel: adapter.channel,
-      accountId: adapter.accountId,
-      conversationId: "unused",
-    }),
-  };
-  const key = buildChannelAccountKey(normalizedAdapter);
+  const key = buildChannelAccountKey(adapter);
   // Registrations are stacked so duplicate module graphs can temporarily
   // coexist and unregister without tearing down the active replacement.
   const registrations = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key) ?? [];
-  registrations.push({ adapter, normalizedAdapter });
+  registrations.push({ adapter });
   ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, registrations);
 }
 
@@ -194,16 +185,13 @@ export function unregisterSessionBindingAdapter(params: {
 function resolveAdapterForChannelAccount(
   params: SessionBindingScope,
 ): NativeCapableSessionBindingAdapter | null {
-  return (
-    ADAPTERS_BY_CHANNEL_ACCOUNT.get(buildChannelAccountKey(params))?.at(-1)?.normalizedAdapter ??
-    null
-  );
+  return ADAPTERS_BY_CHANNEL_ACCOUNT.get(buildChannelAccountKey(params))?.at(-1)?.adapter ?? null;
 }
 
 /** Revalidates the exact registration, including its original adapter's retained callbacks. */
 export function isSessionBindingAdapterCurrent(adapter: SessionBindingAdapter): boolean {
   const registration = ADAPTERS_BY_CHANNEL_ACCOUNT.get(buildChannelAccountKey(adapter))?.at(-1);
-  return registration?.adapter === adapter || registration?.normalizedAdapter === adapter;
+  return registration?.adapter === adapter;
 }
 
 function assertAdapterSelectionCurrent(
@@ -250,7 +238,7 @@ function getActiveRegisteredAdapters(
     return adapter ? [adapter] : [];
   }
   return [...ADAPTERS_BY_CHANNEL_ACCOUNT.values()].flatMap(
-    (registrations) => registrations.at(-1)?.normalizedAdapter ?? [],
+    (registrations) => registrations.at(-1)?.adapter ?? [],
   );
 }
 

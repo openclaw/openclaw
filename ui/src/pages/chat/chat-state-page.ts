@@ -1,4 +1,3 @@
-import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import {
   dispatchCommandClientPresentation,
   type CommandClientPresentationAction,
@@ -14,28 +13,26 @@ import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/se
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
-import {
-  canonicalUiSessionKeyForPersistence,
-  isUiSelectedGlobalSessionKey,
-} from "../../lib/sessions/session-key.ts";
+import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
-import { requestChatAbort } from "./chat-abort-request.ts";
+import { loadPageAssistantIdentity } from "./chat-assistant-identity.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
-import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
+import { projectChatErrors } from "./chat-error-projection.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
+import { cancelPendingQueuedChatInput } from "./chat-history-actions.ts";
 import {
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
   CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
 } from "./chat-history-events.ts";
-import { setChatError } from "./chat-history-state.ts";
-import { loadChatHistory } from "./chat-history.ts";
-import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
+import { projectChatOutboxQueue } from "./chat-outbox-projection.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
+import { projectChatRun } from "./chat-run-projection.ts";
 import {
   moveQueuedChatMessage,
   resumeStoredChatOutboxes,
@@ -45,7 +42,7 @@ import {
 import { requestChatSend, resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import { retireChatModelSelectionOwnership } from "./chat-session.ts";
+import { projectChatSessionPresentation } from "./chat-session-presentation-projection.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
@@ -54,7 +51,6 @@ import {
   getSessionWorkspace,
   clearSessionWorkspacePreviews,
 } from "./components/chat-session-workspace-state.ts";
-import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -90,39 +86,6 @@ import {
 import type { RunOutputUsage } from "./tool-stream-contract.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
-function cancelPendingQueuedChatInput(state: ChatPageHost, id: string): boolean {
-  const view = getChatPendingInputs(state);
-  const input = view?.queuedInputs.find(
-    (item) => `pending-input:${item.id}` === id && item.queued && item.state === "queued",
-  );
-  const client = state.client;
-  if (!view || !input?.runId) {
-    return false;
-  }
-  if (!client || !state.connected) {
-    return true;
-  }
-  const connectionIsCurrent = captureChatConnectionOwner(state);
-  const current = () => getChatPendingInputs(state) === view && connectionIsCurrent();
-  void requestChatAbort(client, {
-    sessionKey: view.sessionKey,
-    agentId: view.agentId,
-    runId: input.runId,
-    ...(isIncognitoComposerScope(state, view) ? {} : { discardPendingInput: true }),
-  }).then(async (result) => {
-    if (!current()) {
-      return;
-    }
-    if (!result.ok) {
-      state.chatError = formatUiError(result.error);
-      state.requestUpdate?.();
-      return;
-    }
-    await loadChatHistory(state, { supersedeInFlight: true });
-  });
-  return true;
-}
-
 type ChatPageElement = {
   sessionKey?: string;
   dispatchEvent: (event: Event) => boolean;
@@ -138,58 +101,12 @@ export function invalidateImageLightbox(state: ChatPageHost) {
   return state.imageLightboxRequestVersion;
 }
 
-async function loadPageAssistantIdentity(state: ChatPageHost) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  const client = state.client;
-  const sessionKey = state.sessionKey.trim();
-  const agentId = resolveAgentIdForSession({
-    sessionKey,
-    assistantAgentId: state.assistantAgentId,
-    agentsList: state.agentsList,
-    hello: state.hello,
-  });
-  if (!agentId) {
-    return;
-  }
-  const requestVersion = ++state.assistantIdentityRequestVersion;
-  try {
-    const identity = await fetchAssistantIdentity(client, agentId);
-    if (
-      state.client !== client ||
-      !state.connected ||
-      state.assistantIdentityRequestVersion !== requestVersion ||
-      state.sessionKey.trim() !== sessionKey ||
-      resolveAgentIdForSession(state) !== agentId ||
-      !identity
-    ) {
-      return;
-    }
-    if (
-      state.assistantAgentId !== (identity.agentId ?? null) &&
-      isUiSelectedGlobalSessionKey(state, state.sessionKey)
-    ) {
-      retireChatModelSelectionOwnership(state);
-    }
-    state.assistantName = identity.name;
-    state.assistantAvatar = identity.avatar;
-    state.assistantAvatarStatus = identity.avatarStatus ?? null;
-    state.assistantAvatarReason = identity.avatarReason ?? null;
-    state.assistantAgentId = identity.agentId ?? null;
-    state.requestUpdate?.();
-  } catch {
-    // Keep the last known identity when the Gateway cannot answer.
-  }
-}
-
 export function createPageState(
   context: ApplicationContext,
-  renderLifecycle: RenderLifecycle,
+  renderLifecycle: Pick<RenderLifecycle, "afterCommit">,
   page: ChatPageElement,
   chatMessagesBySession: ChatMessageCache = new Map(),
 ): ChatPageHost {
-  const invalidate = () => renderLifecycle.invalidate();
   const settings = loadSettings();
   const initialSessionKey = page.sessionKey?.trim() || settings.sessionKey;
   const sidebarSessionKey = canonicalUiSessionKeyForPersistence(
@@ -244,6 +161,7 @@ export function createPageState(
     browserPanelAvailable: false,
     assistantAgentId: context.agentSelection.state.selectedId,
     sessionKey: initialSessionKey,
+    currentSessionId: undefined,
     chatLoading: false,
     chatHistoryPagination: { hasMore: false },
     chatSending: false,
@@ -267,6 +185,7 @@ export function createPageState(
     chatStreamStartedAt: null,
     chatRunStartup: null,
     chatRunError: null,
+    chatReplyTarget: null,
     agentsError: null,
     chatStreamSegments: [],
     chatReasoning: null,
@@ -277,6 +196,7 @@ export function createPageState(
     knownAgentRunIds: new Set(),
     waitingApprovalStatuses: new Map(),
     waitingApprovalResolvedIds: new Set(),
+    senderAgentAvatars: undefined,
     chatAvatarUrl: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
@@ -290,6 +210,8 @@ export function createPageState(
     chatModelSelectionPolicy: undefined,
     chatModelCatalogRetired: false,
     chatModelCatalogError: null,
+    chatModelCatalogRefreshFailed: undefined,
+    chatModelCatalogPendingProviders: undefined,
     chatAccountSelection: null,
     modelAuthStatusRequestVersion: 0,
     modelAuthStatusResult: null,
@@ -309,6 +231,7 @@ export function createPageState(
     chatSubmitGuards: new Set<string>(),
     chatGoalDraftMode: null,
     chatQueue: [],
+    chatSessionApprovalQueue: [],
     chatComposerFallbackByScope: {},
     chatSendingScopeKey: null,
     chatMessagesBySession,
@@ -341,7 +264,6 @@ export function createPageState(
     toolStreamSyncTimer: null,
     ...createInitialChatRealtimeState(),
     renderLifecycle,
-    requestUpdate: invalidate,
     // Background warming gates on these edges. Session-event reloads never
     // re-render the page, so no update can carry the fact to it.
     transcriptLoadingChanged: () =>
@@ -375,7 +297,6 @@ export function createPageState(
       chatBubbleSessionKeys: next.chatBubbleSessionKeys,
       chatBubbleDisabledSessionKeys: next.chatBubbleDisabledSessionKeys,
     });
-    renderLifecycle.invalidate();
   };
   attachChatRealtimeActions(
     state,
@@ -416,20 +337,13 @@ export function createPageState(
     }
     return handleSendChat(state, messageOverride, options, submissionAction);
   };
-  const runAndInvalidate =
-    <Arg>(action: (host: ChatPageHost, argument: Arg) => Promise<unknown>) =>
-    async (argument: Arg) => {
-      await action(state, argument);
-      renderLifecycle.invalidate();
-    };
-  state.handleAbortChat = runAndInvalidate(handleAbortChat);
+  state.handleAbortChat = (options) => handleAbortChat(state, options);
   state.removeQueuedMessage = (id) => {
     if (cancelPendingQueuedChatInput(state, id)) {
       return;
     }
     if (isQueuedMessageBeingEdited(state, id)) {
       setChatError(state, QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR);
-      renderLifecycle.invalidate();
       return;
     }
     const outcome = removeQueuedMessage(state, id, { discard: true });
@@ -439,13 +353,11 @@ export function createPageState(
     } else if (outcome === "rejected") {
       setChatError(state, OFFLINE_QUEUE_STORAGE_ERROR);
     }
-    renderLifecycle.invalidate();
   };
-  state.retryQueuedChatMessage = runAndInvalidate(retryQueuedChatMessage);
-  state.steerQueuedChatMessage = runAndInvalidate(steerQueuedChatMessage);
+  state.retryQueuedChatMessage = (id) => retryQueuedChatMessage(state, id);
+  state.steerQueuedChatMessage = (id) => steerQueuedChatMessage(state, id);
   state.moveQueuedChatMessage = (id, targetId) => {
     moveQueuedChatMessage(state, id, targetId);
-    renderLifecycle.invalidate();
   };
   state.editQueuedChatMessage = (id) => {
     if (beginQueuedMessageEdit(state, id) === "unavailable") {
@@ -457,11 +369,9 @@ export function createPageState(
         }
       }
     }
-    renderLifecycle.invalidate();
   };
   state.updateQueuedChatMessageEdit = (draftText, mentions) => {
     updateQueuedMessageEdit(state, draftText, mentions);
-    renderLifecycle.invalidate();
   };
   state.submitQueuedChatMessageEdit = () => {
     const edit = activeQueuedMessageEdit(state);
@@ -474,16 +384,15 @@ export function createPageState(
         mentionsOverride: edit.mentions,
         resumeQueuedMessageEditId: edit.id,
       })
-      .then(invalidate, invalidate);
+      .catch(() => undefined);
   };
   state.cancelQueuedChatMessageEdit = () => {
     if (cancelQueuedMessageEdit(state)) {
       // Reconnect may have parked the drain on this local hold; Cancel does not write storage.
       void resumeStoredChatOutboxes(state);
     }
-    renderLifecycle.invalidate();
   };
-  const transientResources = new Set<"desktop" | "browser">();
+  const transientResources = new Set<"desktop">();
   let transientResourceScope = "";
   state.updateSidebarLayout = (layout, options) => {
     const layoutKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
@@ -508,7 +417,7 @@ export function createPageState(
         .flatMap((column) => column.panels)
         .find((entry) => entry.slot === resource);
       // Explicit targets are saved choices, even when discovery first opened the tab.
-      if (!panel || (resource === "desktop" && panel.environmentId !== undefined)) {
+      if (!panel || panel.environmentId !== undefined) {
         transientResources.delete(resource);
       }
     }
@@ -540,7 +449,6 @@ export function createPageState(
     }
     state.sidebarLayout = normalized;
     if (options?.persist === false) {
-      renderLifecycle.invalidate();
       return;
     }
     // Other layout edits cannot persist an automatically discovered target before
@@ -564,7 +472,6 @@ export function createPageState(
     });
     normalized.dashboardPresentationOverride =
       state.settings.sidebarSessionLayouts?.[layoutKey]?.dashboardPresentationOverride;
-    renderLifecycle.invalidate();
   };
   state.updateSidebarActivePanel = (panelId) => {
     const normalizedPanelId = panelId.trim();
@@ -576,8 +483,7 @@ export function createPageState(
     const selected = state.sidebarLayout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.id === normalizedPanelId)?.slot;
-    if ((selected === "desktop" || selected === "browser") && transientResources.has(selected)) {
-      renderLifecycle.invalidate();
+    if (selected === "desktop" && transientResources.has(selected)) {
       return;
     }
     state.settings = patchSettings({
@@ -587,7 +493,6 @@ export function createPageState(
         normalizedPanelId,
       ),
     });
-    renderLifecycle.invalidate();
   };
   state.handleOpenSidebar = (content) => {
     const fileTab =
@@ -636,20 +541,15 @@ export function createPageState(
     }
     state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
   };
-  state.beginImageOpen = () => {
-    const requestVersion = invalidateImageLightbox(state);
-    renderLifecycle.invalidate();
-    return requestVersion;
-  };
+  state.beginImageOpen = () => invalidateImageLightbox(state);
   state.handleOpenImage = (item, requestVersion) => {
     const activeRequestVersion = requestVersion ?? state.beginImageOpen();
     if (activeRequestVersion !== state.imageLightboxRequestVersion) {
       item.release?.();
       return;
     }
-    const video = item.kind === "video";
     const resolveSrc = (src: string) =>
-      video
+      item.kind === "video"
         ? safeMediaAttachmentHref(src, "video")
         : resolveSafeExternalUrl(src, window.location.href, { allowDataImage: true });
     const safeSrc = resolveSrc(item.src);
@@ -663,11 +563,79 @@ export function createPageState(
       src: safeSrc,
       ...(safeOriginalSrc ? { originalSrc: safeOriginalSrc } : {}),
     };
-    renderLifecycle.invalidate();
   };
   state.handleCloseImage = () => {
     invalidateImageLightbox(state);
-    renderLifecycle.invalidate();
   };
-  return state;
+  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
+  return projectChatFields(
+    projectChatSessionPresentation(
+      projectChatErrors(projectChatRun(projectChatOutboxQueue(state))),
+      context,
+    ),
+    [
+      "settings",
+      "sessionKey",
+      "mediaPolicyEpoch",
+      "sessionsLoading",
+      "sessionsError",
+      "client",
+      "connected",
+      "connectionEpoch",
+      "hello",
+      "selfUser",
+      "canvasPluginSurfaceUrl",
+      "terminalAvailable",
+      "browserPanelAvailable",
+      "embedSandboxMode",
+      "allowExternalEmbedUrls",
+      "automaticallyFetchFavicons",
+      "sidebarLayout",
+      "sidebarFocusPanelId",
+      "sidebarFocusVersion",
+      "agentsList",
+      "assistantAgentId",
+      "assistantName",
+      "chatAvatarUrl",
+      "chatAvatarStatus",
+      "chatAvatarReason",
+      "modelAuthStatusResult",
+      "assistantAvatar",
+      "assistantAvatarStatus",
+      "assistantAvatarReason",
+      "chatSessionApprovalQueue",
+      "senderAgentAvatars",
+      "chatModelSwitchPromises",
+      "chatModelPickerOpenSessionKey",
+      "chatModelsLoading",
+      "chatModelCatalog",
+      "chatModelCatalogInitialized",
+      "chatModelSelectionPolicy",
+      "chatModelCatalogRetired",
+      "chatModelCatalogError",
+      "chatModelCatalogRefreshFailed",
+      "chatModelCatalogPendingProviders",
+      "chatAccountSelection",
+      "chatThinkingLevel",
+      "chatSending",
+      "chatLoading",
+      "chatHistoryPagination",
+      "chatDisplayedLeafEntryId",
+      "chatBranches",
+      "chatBranchesSessionKey",
+      "chatBranchesConnectionEpoch",
+      "currentSessionId",
+      "chatGoalDraftMode",
+      "chatReplyTarget",
+      "selectedChatSessionArchived",
+      "selectedChatSessionIncognito",
+      "pendingAbort",
+      "chatNewMessagesBelow",
+      "chatReadingHistory",
+      "chatFollowLocked",
+      "chatUserNearBottom",
+      "sidebarContent",
+      "imageLightbox",
+    ],
+  );
 }

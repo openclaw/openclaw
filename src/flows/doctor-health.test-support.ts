@@ -173,6 +173,20 @@ vi.mock("../gateway/call.js", async (original) => {
   };
 });
 
+vi.mock("../infra/restart-stale-pids.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/restart-stale-pids.js")>();
+  return {
+    ...actual,
+    // Synthetic Gateway PIDs must not collide with the test worker's real ancestors.
+    inspectSelfAndAncestorPidsSync: (
+      ...args: Parameters<typeof actual.inspectSelfAndAncestorPidsSync>
+    ) =>
+      mocks.emulateNativeInstall
+        ? { pids: new Set([process.pid, 1]), complete: true }
+        : actual.inspectSelfAndAncestorPidsSync(...args),
+  };
+});
+
 vi.mock("../daemon/service-process-membership.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../daemon/service-process-membership.js")>();
   return {

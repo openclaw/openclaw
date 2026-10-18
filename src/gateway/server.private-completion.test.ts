@@ -1,5 +1,6 @@
 // Real Gateway admission and SQLite receipts with a controlled agent command.
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -21,12 +22,15 @@ import {
   writeSubagentSessionEntry,
   settleSubagentRegistryPersistenceWork,
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-handoff.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import * as sessionLifecycle from "../sessions/session-lifecycle-admission.js";
 import {
   runExclusiveSessionLifecycleMutation,
@@ -65,6 +69,8 @@ import {
   agentCommandMock,
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
+  onceMessage,
+  rpcReq,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
@@ -160,6 +166,77 @@ describe("private subagent completion processing receipts", () => {
       meta: { durationMs: 1, terminalReply: { disposition: "silent" } },
     } satisfies EmbeddedAgentRunResult;
   }
+
+  it("keeps private completion streams and retained followups private before the next public turn", async () => {
+    const { ws } = await harness.openClient({ scopes: ["operator.admin"] });
+    onTestFinished(() => ws.close());
+    expect((await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey })).ok).toBe(true);
+    const frames: unknown[] = [];
+    const followupDelivery: Array<boolean | undefined> = [];
+    ws.on("message", (frame) => frames.push(JSON.parse(rawDataToString(frame))));
+    const privateText = "Internal review note after the permitted message-tool update";
+    const publicText = "The next ordinary answer is visible";
+    agentCommandMock.mockImplementation(async (input) => {
+      const command = input as AgentCommandOpts;
+      await command.userTurnTranscriptRecorder?.persistApproved();
+      await command.onExecutionStarted?.();
+      const text = command.privateCompletion ? privateText : publicText;
+      const currentRunId = expectDefined(command.runId, "Expected admitted run id");
+      const operationalRunInstance = expectDefined(
+        command.operationalRunInstance,
+        "Expected admitted operational instance",
+      );
+      const followupTarget = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey,
+          operationalRunInstance,
+          receiptAuthority: () =>
+            kernel.gatewayRequestContext.chatAbortControllers.get(currentRunId)
+              ?.operationalRunInstance === operationalRunInstance && !command.abortSignal?.aborted,
+        },
+        () => captureSessionEventTargetForHost("main", sessionKey),
+      );
+      followupDelivery.push(followupTarget.deliver);
+      emitAgentEvent({ runId: currentRunId, stream: "lifecycle", data: { phase: "start" } });
+      emitAgentEvent({
+        runId: currentRunId,
+        stream: "assistant",
+        data: { text, delta: text },
+      });
+      emitAgentEvent({ runId: currentRunId, stream: "lifecycle", data: { phase: "end" } });
+      return {
+        payloads: [{ text, mediaUrl: null }],
+        meta: { durationMs: 1, terminalReply: { disposition: "visible", text } },
+      } satisfies Awaited<ReturnType<typeof agentCommandMock>>;
+    });
+    expect(await dispatch()).toMatchObject({ status: "ok" });
+    const nextRunId = `ordinary-after-${runId}`;
+    const visible = onceMessage(
+      ws,
+      (event) => event.type === "event" && JSON.stringify(event).includes(publicText),
+    );
+    expect(
+      await dispatchGatewayMethodInProcess(
+        "agent",
+        {
+          sessionKey,
+          idempotencyKey: nextRunId,
+          message: "What is the current result?",
+          deliver: false,
+        },
+        {
+          expectFinal: true,
+          forceSyntheticClient: true,
+          operatorRoleActor: { kind: "system" },
+          resolveGatewayContext: () => kernel.gatewayRequestContext,
+        },
+      ),
+    ).toMatchObject({ status: "ok" });
+    await visible;
+    expect(JSON.stringify(frames)).not.toContain(privateText);
+    expect(followupDelivery).toEqual([false, undefined]);
+  });
 
   it("binds a settle handoff to the source accepted by pending-input replay", async () => {
     const sourceSessionKeys = ["agent:main:subagent:first", "agent:main:subagent:second"] as const;

@@ -54,7 +54,9 @@ export function readSessionTranscriptJsonlBytesInDatabase(
       .select([
         "session_id",
         /* kysely-allow-raw: exact JSONL bytes bound maintenance worker batches. */
-        sql<number | bigint>`SUM(${transcriptEventReadBytesSql()} + 1)`.as("jsonl_bytes"),
+        sql<number | bigint>`CAST(SUM(${transcriptEventReadBytesSql()} + 1) AS BIGINT)`.as(
+          "jsonl_bytes",
+        ),
       ])
       .where("session_id", "in", sessionIds)
       .groupBy("session_id"),

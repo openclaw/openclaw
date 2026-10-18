@@ -165,7 +165,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   }
   const unsubscribePrivateAuditEvents = onAgentAuditEvent(auditRecorder.record);
   const unsubscribeToolAuditEvents = onTrustedToolExecutionEvent(auditRecorder.recordTool);
-  const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner(params.scheduler);
+  const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner();
   const agentEventDispatches = new Set<Promise<void>>();
   const eventRowOwners = new WeakMap<
     AgentEventRuntimePayload,
@@ -307,13 +307,13 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
             getSessionRowProjection: params.getSessionRowProjection,
             loadGatewaySessionLifecycleSnapshotForEvent: (key, options) => {
               // Tool progress must not wait for optional row enrichment before reply capture.
-              const owner = options?.ownerEvent
-                ? eventRowOwners.get(options.ownerEvent)
-                : undefined;
+              const event = options?.ownerEvent;
+              const owner = event ? eventRowOwners.get(event) : undefined;
+              const projection = params.getSessionRowProjection?.();
               if (
-                options?.ownerEvent
+                event
                   ? !owner?.record || !owner.projection.isCurrent(owner.record)
-                  : params.getSessionRowProjection?.()?.needsMaterialization
+                  : projection?.needsMaterialization
               ) {
                 return { row: null };
               }
@@ -322,19 +322,22 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
                 key,
                 options?.agentId,
               );
+              if (!scope?.[1]) {
+                return { row: null };
+              }
+              const query = { key, agentId: scope[1] };
               const read = options?.sessionRows;
-              const prepared = scope?.[1] ? read?.describe({ key, agentId: scope[1] }) : undefined;
-              const snapshot = scope?.[1]
-                ? read
-                  ? prepared
-                    ? { row: read.present(prepared), lifecycleRunId: prepared.entry.lifecycleRunId }
-                    : { row: null }
-                  : (params.getSessionRowProjection?.()?.snapshot({ key, agentId: scope[1] }) ?? {
-                      row: null,
-                    })
-                : { row: null };
-              return options?.ownerEvent?.sessionId &&
-                snapshot.row?.sessionId !== options.ownerEvent.sessionId
+              const row = !read && !event ? projection?.capture(query) : undefined;
+              if (row && !row.materialized && !row.privateSource) {
+                return { row: null };
+              }
+              const prepared = read?.describe(query);
+              const snapshot = read
+                ? prepared
+                  ? { row: read.present(prepared), lifecycleRunId: prepared.entry.lifecycleRunId }
+                  : { row: null }
+                : (projection?.snapshot(query) ?? { row: null });
+              return event?.sessionId && snapshot.row?.sessionId !== event.sessionId
                 ? { row: null }
                 : snapshot;
             },

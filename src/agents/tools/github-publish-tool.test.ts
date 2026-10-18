@@ -10,9 +10,19 @@ import { createGitHubPublishTool } from "./github-publish-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 describe("github_publish tool", () => {
-  it("offers current-PR metadata editing to publication callers without privileged actions", () => {
+  it("offers current-PR editing and readiness without privileged actions", () => {
     const tool = createGitHubPublishTool();
     expect(Value.Check(tool.parameters, { action: "edit" })).toBe(true);
+    expect(
+      Value.Check(tool.parameters, {
+        action: "request_review",
+        requestId: "a1111111-1111-4111-8111-111111111111",
+        expectedHeadCommit: "a".repeat(40),
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(tool.parameters, { action: "request_review", focus: "extra instructions" }),
+    ).toBe(false);
     expect(
       Value.Check(tool.parameters, {
         action: "edit",
@@ -20,7 +30,11 @@ describe("github_publish tool", () => {
         expectedTitle: "Old title",
       }),
     ).toBe(true);
-    for (const action of ["inspect", "ready", "merge", "close"]) {
+    expect(Value.Check(tool.parameters, { action: "ready" })).toBe(true);
+    expect(Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "another" })).toBe(
+      false,
+    );
+    for (const action of ["inspect", "merge", "close"]) {
       expect(Value.Check(tool.parameters, { action })).toBe(false);
     }
     expect(Value.Check(tool.parameters, { action: "edit", publishingSessionKey: "another" })).toBe(

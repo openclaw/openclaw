@@ -70,6 +70,7 @@ export function connectControlUiFavicon(
     synchronizeScope();
     const snapshot = context.gateway.snapshot;
     let working = false;
+    // Chat owns these live panes; the favicon adapter aggregates their reported run activity.
     for (const pane of shell.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")) {
       const activity = pane.runActivity;
       const completion = activity?.completion;

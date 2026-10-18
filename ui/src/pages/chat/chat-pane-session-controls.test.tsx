@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, Show } from "solid-js";
+import { createComponent, createMemo, Show } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ChatAccountSelection,
@@ -26,6 +26,7 @@ import {
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
@@ -41,7 +42,6 @@ import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 type ComposerControlsParams = Parameters<typeof renderChatPaneComposerControls>[0];
-type AccountSection = NonNullable<ReturnType<typeof renderChatModelAccountControl>>;
 
 function renderControls(
   state: ChatPageHost,
@@ -68,16 +68,26 @@ describe("chat account selection", () => {
   ) {
     const container = document.createElement("div");
     let current = true;
-    const state: Pick<ChatPageHost, "client" | "chatAccountSelection" | "requestUpdate"> = {
+    const state = projectChatFields<Pick<ChatPageHost, "client" | "chatAccountSelection">>({
       client: createTestGatewayClient(request),
       chatAccountSelection: selection,
-      requestUpdate: () => draw(),
-    };
-    let updateSection!: (section: AccountSection | undefined) => void;
+    });
+    const onSelect = vi.fn(async () => true);
+    const onManage = vi.fn();
     mountSolid(
       () => {
-        const [section, setSection] = createSignal<AccountSection>();
-        updateSection = setSection;
+        const section = createMemo(() =>
+          renderChatModelAccountControl({
+            owner: state,
+            client: state.client,
+            selection: state.chatAccountSelection,
+            model: "openai/gpt-5.5",
+            disabled: false,
+            ownsSelection: () => current,
+            onSelect,
+            onManage,
+          }),
+        );
         return (
           <Show when={section()}>
             {(activeSection) => <ChatModelAccountSectionView {...activeSection().viewProps(0)} />}
@@ -86,29 +96,10 @@ describe("chat account selection", () => {
       },
       { container },
     );
-    const onSelect = vi.fn(async () => true);
-    const onManage = vi.fn();
-    const draw = () => {
-      updateSection(
-        renderChatModelAccountControl({
-          owner: state,
-          client: state.client,
-          selection: state.chatAccountSelection,
-          model: "openai/gpt-5.5",
-          disabled: false,
-          ownsSelection: () => current,
-          onSelect,
-          onManage,
-          onRequestUpdate: () => draw(),
-        }),
-      );
-      flush();
-    };
-    draw();
+    flush();
     return {
       container,
       state,
-      draw,
       onSelect,
       onManage,
       retire: () => {
@@ -186,7 +177,7 @@ describe("chat account selection", () => {
       authProfileId: "openai:work",
       source: "user",
     };
-    view.draw();
+    flush();
     expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
       "Work workspace",
     );
@@ -252,7 +243,7 @@ describe("chat account selection", () => {
       ],
     });
     await pending.promise;
-    view.draw();
+    flush();
     expect(view.container.textContent).not.toContain("Old connection account");
     view.select("account:openai:old");
     expect(view.onSelect).not.toHaveBeenCalled();
@@ -319,7 +310,8 @@ describe("chat pane composer controls", () => {
   ])(
     "renders separate footer inputs with a $label catalog",
     ({ cached, connected = true, error, message }) => {
-      const container = document.createElement("div");
+      const container = document.body.appendChild(document.createElement("div"));
+      onTestFinished(() => container.remove());
       const state = makeChatHost({
         connected,
         requestHandlers: {},
@@ -336,9 +328,11 @@ describe("chat pane composer controls", () => {
         agentDefaultPermissionMode: "guarded",
         onModelSetup,
       });
+      controls.composerControls.model.modelPickerOpen = true;
       mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
         container,
       });
+      flush();
 
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
@@ -474,11 +468,20 @@ describe("chat pane composer controls", () => {
       },
       chatModelSwitchPromises: {},
     }) as unknown as ChatPageHost;
+    projectChatFields(state, ["sessionsResult"]);
     const patch = vi.spyOn(state.sessions, "patch").mockImplementation(() => patchResult.promise);
     const controls = renderControls(state);
+    const { container } = mountSolid(() => {
+      const current = createMemo(() => renderControls(state).permissionPicker);
+      return <ChatPermissionPicker {...current()} />;
+    });
 
     expect(controls.permissionPicker.disabled).toBe(false);
     const selection = controls.permissionPicker.onSelect("workspace");
+    flush();
+    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    expect(trigger.disabled).toBe(true);
+    expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Workspace");
     await vi.waitFor(() =>
       expect(patch).toHaveBeenCalledWith(
         key,
@@ -492,8 +495,11 @@ describe("chat pane composer controls", () => {
     } as ChatPageHost["sessionsResult"];
     patchResult.resolve({ ok: true, path: "", key, entry: { sessionId: "materialized" } });
     await selection;
+    flush();
 
     expect(state.chatError).toBeNull();
+    expect(trigger.disabled).toBe(false);
+    expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Workspace");
   });
 
   it.each([
@@ -548,7 +554,6 @@ describe("chat pane composer controls", () => {
       chatModelSwitchPromises: {},
       sessionKey,
       sessionsResult: { ...createSessionsListResult(), sessions: [selectedSession] },
-      requestUpdate: vi.fn(),
     }) as unknown as ChatPageHost;
     const patch = vi.spyOn(state.sessions, "patch").mockImplementation(() => pending.promise);
     const controls = renderControls(state);

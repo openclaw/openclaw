@@ -3,6 +3,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openEditor } from "../../../lib/editor-links.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -11,6 +13,7 @@ import "./chat-detail-panel.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { setFileDraft } from "./chat-file-drafts.ts";
 import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
+import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
@@ -506,11 +509,55 @@ describe("markdown sidebar", () => {
     },
   );
 
+  it("releases pending preview requests when the source changes and the panel closes", async () => {
+    const requests: AbortSignal[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input, init?: RequestInit) => {
+        const signal = init!.signal!;
+        requests.push(signal);
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      }),
+    );
+    const contentFor = (source: string): SidebarContent => ({
+      kind: "attachment",
+      attachmentKind: "image",
+      title: "Pending preview",
+      sourceIdentity: source,
+      resolveSource: (onSourceChange, runtime) => {
+        const availability = resolveAssistantAttachmentAvailability(source, {
+          ...runtime,
+          onMediaChange: onSourceChange,
+        });
+        return availability.status === "available"
+          ? { status: "ready", src: source }
+          : { status: "pending" };
+      },
+    });
+    const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+    panel.content = contentFor(`/tmp/sidebar-first-${crypto.randomUUID()}.png`);
+    container.append(panel);
+    await waitForSolid(() => expect(requests).toHaveLength(1));
+    panel.content = contentFor(`/tmp/sidebar-next-${crypto.randomUUID()}.png`);
+    await waitForSolid(() => expect(requests).toHaveLength(2));
+    expect(requests[0]!.aborted).toBe(true);
+    expect(requests[1]!.aborted).toBe(false);
+    panel.remove();
+    await waitForSolid(() => expect(requests[1]!.aborted).toBe(true));
+  });
+
   it.each(["error"] as const)(
     "keeps the image placeholder through metadata until the image emits %s",
     async (outcome) => {
       let pending = true;
       let src = "/diagram.png";
+      let sourceChanged: () => void;
       const content = {
         kind: "attachment",
         attachmentKind: "image",
@@ -518,7 +565,10 @@ describe("markdown sidebar", () => {
         mimeType: "image/png",
         width: 600,
         height: 400,
-        resolveSource: () => (pending ? { status: "pending" } : { status: "ready", src }),
+        resolveSource: (onSourceChange) => {
+          sourceChanged = onSourceChange;
+          return pending ? { status: "pending" } : { status: "ready", src };
+        },
       } satisfies SidebarContent;
       const panel = Object.assign(document.createElement("openclaw-chat-detail-panel"), {
         content,
@@ -528,7 +578,7 @@ describe("markdown sidebar", () => {
       const presentation = panel.querySelector('[role="status"]');
       const header = panel.querySelector(".chat-assistant-attachment-card__header");
       pending = false;
-      panel.content = { ...panel.content };
+      sourceChanged!();
       const image = await vi.waitFor(() =>
         expectDefined(panel.querySelector(".sidebar-attachment-preview__image"), "Preview image"),
       );
@@ -537,7 +587,7 @@ describe("markdown sidebar", () => {
       image.dispatchEvent(new Event(outcome));
       expect(image.getAttribute("data-preview")).toBe("error");
       src = "/next.png";
-      panel.content = { ...panel.content };
+      sourceChanged!();
       const next = await vi.waitFor(() => {
         const current = expectDefined(
           panel.querySelector(".sidebar-attachment-preview__image"),
@@ -589,6 +639,23 @@ describe("markdown sidebar", () => {
   );
 
   it("keeps a canvas scripts ceiling under a trusted global sandbox", async () => {
+    const gateway = createApplicationGateway();
+    gateway.publish({
+      ...gateway.gateway.snapshot,
+      client: createTestGatewayClient(vi.fn()),
+      phase: "connected",
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          recoveryScope: "test-recovery-scope",
+        },
+      },
+    });
+    const canvasContainer = createChatSidebarContainer(gateway.gateway);
+    container.append(canvasContainer);
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
     panel.embedSandboxMode = "trusted";
     panel.canvasPluginSurfaceUrl = "https://canvas.example";
@@ -600,7 +667,7 @@ describe("markdown sidebar", () => {
       sandbox: "scripts",
     } satisfies SidebarContent;
     panel.content = content;
-    container.append(panel);
+    canvasContainer.append(panel);
     await panel.updateComplete;
 
     const frame = panel.querySelector("iframe");

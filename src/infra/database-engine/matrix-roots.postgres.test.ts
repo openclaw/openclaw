@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./database-suite-workers.test-support.js";
 import * as terminal from "../../../packages/terminal-core/src/note.js";
 import { createBackupResourcePlan } from "../../commands/backup-resource-inventory.js";
@@ -40,6 +40,7 @@ import * as snapshots from "../sqlite-snapshot.js";
 import { runPluginDoctorStateMigrationPlans } from "../state-migrations.plugin-doctor.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { withDatabaseEngineSelection } from "./context.js";
+import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -65,6 +66,8 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
   const client = new Client({ connectionString: connection });
   const namespaces = new Set<string>();
   let matrix: MatrixPaths;
+
+  beforeEach(resetDatabaseEngineSelectionForTest);
 
   beforeAll(async () => {
     await client.connect();
@@ -217,6 +220,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
     return roots;
   }
 
+  // Green CI runs 39068774273/39071119824 measured p95 at 310s across the real root round trip.
   it("ports every retained token/account root with the state family and restores fresh namespaces", async () => {
     await withRoots(async (state, files, config) => {
       const expected = files.map(sqliteEntries);
@@ -375,7 +379,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       expect(files.map(sqliteEntries)).toEqual(expected);
       expect(readBackupEngine(agentPath)).toEqual({ engine: "sqlite" });
     });
-  }, 300_000);
+  }, 650_000);
 
   it.each(["resume", "rollback"] as const)(
     "%s recovers a partially published multi-root port and blocks ordinary startup meanwhile",
@@ -425,6 +429,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         expect(files.map(sqliteEntries)).toEqual(expected);
       });
     },
-    300_000,
+    // Green CI runs 39068774273/39071119824 measured p95 at 190s for interrupted-root recovery.
+    400_000,
   );
 });

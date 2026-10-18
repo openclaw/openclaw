@@ -802,7 +802,10 @@ export async function createQuotaResetFixture(
   const alternateProfileId = "openai:quota-alternate";
   const alternateAccess = syntheticAccessToken(expires, "quota-alternate-account");
   const { saveAuthProfileStoreWithPreparedOwner } = createAuthProfileStoreRuntime(
-    createExternalAuthRuntime(() => []),
+    createExternalAuthRuntime(
+      () => [],
+      async (_params, run) => run(),
+    ),
   );
   // Quota recovery uses shared auth, including the external saved-block writer.
   // Bind the fresh fixture's owner explicitly; an agent-local seed is not equivalent.

@@ -1027,49 +1027,81 @@ describe("Telegram durable ingress coalescing", () => {
     }
   });
 
-  it("bounds repeated session-start conflicts and drains the next Telegram update", async () => {
-    const poison = textUpdate({ updateId: 801, messageId: 1, text: "poison" });
-    const after = textUpdate({ updateId: 802, messageId: 2, text: "after" });
-    const poisonId = telegramQueueEventId(poison.update_id);
-    const sessionError = Object.assign(
-      new Error('Session "agent:main:telegram:direct:111" changed while starting work. Retry.'),
-      { code: "SESSION_WORK_START_CHANGED" },
-    );
-    downstreamTurns.mockImplementation(async (turn) => {
-      if ((turn.BodyForAgent ?? turn.Body ?? "").includes("poison")) {
-        throw sessionError;
-      }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
-    await writeTelegramSpooledUpdate({ stateDir, update: poison });
-    await writeTelegramSpooledUpdate({ stateDir, update: after });
-    const queue = openTelegramIngressQueue({ stateDir });
-    for (let attempt = 1; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
-      const claim = await queue.claim(poisonId, { ownerId: `proof:${attempt}` });
-      if (!claim) {
-        throw new Error(`Expected setup claim ${attempt}`);
-      }
-      await queue.release(claim, {
-        lastError: sessionError.message,
-        releasedAt: Date.now() - 60 * 60 * 1_000,
+  it.each(["young", "aged"] as const)(
+    "preserves retry policy and ordering for a %s session-start conflict",
+    async (age) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const poison = textUpdate({ updateId: 801, messageId: 1, text: "poison" });
+      const after = textUpdate({ updateId: 802, messageId: 2, text: "after" });
+      const poisonId = telegramQueueEventId(poison.update_id);
+      const sessionError = Object.assign(
+        new Error('Session "agent:main:telegram:direct:111" changed while starting work. Retry.'),
+        { code: "SESSION_WORK_START_CHANGED" },
+      );
+      let conflictPending = true;
+      downstreamTurns.mockImplementation(async (turn) => {
+        if (conflictPending && (turn.BodyForAgent ?? turn.Body ?? "").includes("poison")) {
+          throw sessionError;
+        }
+        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
       });
-    }
-    const runtimeError = vi.fn();
-    const { monitor, telegramTransport } = await createMonitor({ onRuntimeError: runtimeError });
+      await writeTelegramSpooledUpdate({
+        stateDir,
+        update: poison,
+        now: Date.now() - (age === "aged" ? 24 * 60 * 60 * 1_000 : 0),
+      });
+      await writeTelegramSpooledUpdate({ stateDir, update: after });
+      const queue = openTelegramIngressQueue({ stateDir });
+      for (let attempt = 1; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        const claim = await queue.claim(poisonId, { ownerId: `proof:${attempt}` });
+        if (!claim) {
+          throw new Error(`Expected setup claim ${attempt}`);
+        }
+        await queue.release(claim, {
+          lastError: sessionError.message,
+          releasedAt: Date.now() - 60 * 60 * 1_000,
+        });
+      }
+      const runtimeError = vi.fn();
+      const { monitor, telegramTransport } = await createMonitor({ onRuntimeError: runtimeError });
 
-    monitor.start();
-    await monitor.waitForIdle();
-    expect(await queue.listFailed?.({ limit: "all" })).toEqual([
-      expect.objectContaining({ id: poisonId, reason: "session-start-conflict-retry-limit" }),
-    ]);
-    expect(await queue.listPending({ limit: "all" })).toEqual([]);
-    expect(
-      downstreamTurns.mock.calls.some(([turn]) =>
-        (turn.BodyForAgent ?? turn.Body ?? "").includes("after"),
-      ),
-    ).toBe(true);
+      monitor.start();
+      await monitor.waitForIdle();
+      if (age === "young") {
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([
+          { id: poisonId, attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS },
+          { id: telegramQueueEventId(after.update_id), attempts: 0 },
+        ]);
+        expect(downstreamTurns).toHaveBeenCalledOnce();
 
-    await monitor.stop();
-    await telegramTransport.close();
-  });
+        conflictPending = false;
+        vi.setSystemTime(Date.now() + 3 * 60 * 1_000);
+        monitor.requestDrain();
+        await monitor.waitForIdle();
+        await assertSpoolTombstoned({ stateDir, updateIds: [801, 802] });
+        expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
+          "poison",
+          "poison",
+          "after",
+        ]);
+        await monitor.admit(poison);
+        await monitor.waitForIdle();
+        expect(downstreamTurns).toHaveBeenCalledTimes(3);
+      } else {
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([
+          expect.objectContaining({ id: poisonId, reason: "retry-limit-exceeded" }),
+        ]);
+      }
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      expect(
+        downstreamTurns.mock.calls.some(([turn]) =>
+          (turn.BodyForAgent ?? turn.Body ?? "").includes("after"),
+        ),
+      ).toBe(true);
+
+      await monitor.stop();
+      await telegramTransport.close();
+    },
+  );
 });

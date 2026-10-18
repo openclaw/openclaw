@@ -229,15 +229,21 @@ The host retains the request until physical provider cleanup settles, even when
 cancellation or plugin reload has already revoked dispatch authority. It validates
 and snapshots accepted output before returning it. Auth facts, headers and
 transport overrides do not enter public results. Cost recording is a separate
-consumer of accepted outcomes. V2 SDK calls record validated usage only after
-provider and caller lifetime checks pass; rejected, retired or cancelled results
-produce no usage event. Accounting uses the selected provider/model, excluding
-auth profile suffixes, and the host-owned calling plugin identity. Reported USD
-costs, including zero, win over prepared token rates. Unknown route pricing stays
+consumer of accepted outcomes. V1 and V2 SDK calls, core calls, the explicit tool,
+and the tool prefilter record validated usage once after their final caller
+checks pass. Rejected, retired or cancelled results produce no usage event.
+Accounting uses the selected provider/model without auth profile suffixes and
+the explicit operation agent. Only plugin calls carry a calling-plugin identity.
+Reported USD costs, including zero, win over prepared token rates. Unknown route pricing stays
 unknown. Estimates enter accounting only; returned usage keeps provider facts.
+Missing usage and native-unit-only usage do not emit token/cost events.
 
-The core `decision_evaluate` tool also uses V2 execution while retaining its bounded
-Boolean/Choice/Score input shape. It exposes accepted native answers, abstention,
+The core `decision_evaluate` tool also uses V2 execution. Omit `contractVersion`
+for the existing Boolean/Choice/Score input shape, or set `contractVersion: 2` for
+tagged text, JSON, image or list state and the provider's declared native question
+types. Box questions require image state and return normalized `top`, `bottom`,
+`left`, and `right` edges; use a separate Boolean question to check presence.
+The tool exposes accepted native answers, abstention,
 per-question errors, metadata and usage without V1 result narrowing. Existing V1
 providers continue through the lossless input/result bridge. Automatic consumers
 that still use V1 retain their own fallback behavior when a native result cannot
@@ -245,7 +251,7 @@ be represented without loss.
 
 V1 and V2 callers can use either provider version when the pure SDK codecs can
 represent the entire batch and result without loss. Native abstention, images,
-sort/tag questions or other unrepresentable data return `unsupported-input`
+sort/tag/box questions or other unrepresentable data return `unsupported-input`
 across the V1 boundary. They never become fabricated probabilities or labels.
 Existing V1 providers retain their documented execution contract. External
 plugins adopt V2 only after a host release exports the required V2 SDK surface.

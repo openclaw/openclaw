@@ -10,7 +10,7 @@ import {
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import { startLinkReaderRouting } from "./link-reader-routing.ts";
+import { availableLinkReaders, startLinkReaderRouting } from "./link-reader-routing.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 
 const reader: ControlUiLinkReaderDescriptor = {
@@ -73,6 +73,33 @@ function setup(shouldOpenExternally?: () => boolean) {
 }
 
 describe("Plugin reader link routing", () => {
+  it("retains discovered readers offline and retires them on client or fresh access changes", () => {
+    const { snapshot } = setup();
+    expect(availableLinkReaders(snapshot)).toEqual([reader]);
+    snapshot.phase = "reconnecting";
+    snapshot.pluginCapabilities = null;
+    expect(availableLinkReaders(snapshot)).toEqual([reader]);
+    snapshot.phase = "connected";
+    snapshot.pluginCapabilities = {
+      ok: true,
+      descriptors: [],
+      methods: ["forge.item"],
+      controlUiLinkReaders: [structuredClone(reader)],
+    };
+    expect(availableLinkReaders(snapshot)[0]).toBe(reader);
+    snapshot.phase = "reconnecting";
+    snapshot.client = createTestGatewayClient(vi.fn());
+    expect(availableLinkReaders(snapshot)).toEqual([]);
+    snapshot.phase = "connected";
+    snapshot.pluginCapabilities = {
+      ok: true,
+      descriptors: [],
+      methods: ["forge.item"],
+      controlUiLinkReaders: [reader],
+    };
+    snapshot.hello = gatewayHelloForMethods(["forge.item"], []);
+    expect(availableLinkReaders(snapshot)).toEqual([]);
+  });
   it.each([false, true])(
     "honors the external preference before readers and browser panels (native: %s)",
     (native) => {

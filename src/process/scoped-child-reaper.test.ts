@@ -51,6 +51,7 @@ function trackedRoot(exited = false, pid = ROOT): ChildProcess {
 
 type ProcessRow = { pid: number; ppid: number; pgid: number; state: string };
 let processRows: ProcessRow[] = [];
+let initialSigchldListeners: ReturnType<typeof process.listeners>;
 
 function setProcesses(rows: ProcessRow[]) {
   processRows = rows;
@@ -81,6 +82,7 @@ function setProcesses(rows: ProcessRow[]) {
 }
 
 beforeEach(() => {
+  initialSigchldListeners = process.listeners("SIGCHLD");
   vi.useFakeTimers();
   vi.clearAllMocks();
   Object.defineProperty(process, "platform", { value: "linux" });
@@ -102,7 +104,7 @@ beforeEach(() => {
 afterEach(async () => {
   setProcesses([]);
   await vi.advanceTimersByTimeAsync(60_000);
-  expect(process.listenerCount("SIGCHLD")).toBe(0);
+  expect(process.listeners("SIGCHLD")).toEqual(initialSigchldListeners);
   vi.restoreAllMocks();
   vi.useRealTimers();
   Object.defineProperty(process, "platform", { value: originalPlatform });
@@ -123,7 +125,7 @@ describe("adopted process-group cleanup", () => {
     }
     await vi.advanceTimersByTimeAsync(1_000);
     expect(proc.stat.mock.calls.length).toBeLessThanOrEqual(60);
-    expect(process.listenerCount("SIGCHLD")).toBe(1);
+    expect(process.listenerCount("SIGCHLD")).toBe(initialSigchldListeners.length + 1);
 
     for (const row of processRows) {
       row.state = "Z";
@@ -136,7 +138,7 @@ describe("adopted process-group cleanup", () => {
     expect(proc.wait).toHaveBeenCalledTimes(50);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(vi.getTimerCount()).toBe(0);
-    expect(process.listenerCount("SIGCHLD")).toBe(0);
+    expect(process.listeners("SIGCHLD")).toEqual(initialSigchldListeners);
   });
 
   it("retains groups across a failed enumeration until adoption is visible", async () => {

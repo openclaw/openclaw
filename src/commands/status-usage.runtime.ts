@@ -7,7 +7,6 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelAuthLabelAsync } from "../agents/model-auth-label.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -44,11 +43,6 @@ async function shouldUseConfiguredCodexSyntheticUsage(params: {
   }
   const authLabel = await resolveModelAuthLabelAsync({
     provider: configuredDefault.provider,
-    acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
-      provider: configuredDefault.provider,
-      harnessRuntime: policy.runtime,
-      config: params.config,
-    }),
     cfg: params.config,
     agentDir: params.agentDir,
     includeExternalProfiles: false,

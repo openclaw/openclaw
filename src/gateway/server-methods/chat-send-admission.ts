@@ -43,6 +43,7 @@ import {
 } from "./chat-send-admission-cleanup.js";
 import { prepareChatSendAdmissionContext } from "./chat-send-admission-context.js";
 import { respondChatSessionRoutingChanged } from "./chat-send-admission-errors.js";
+import { isWorkerGoalChatAdmission } from "./chat-send-goal-admission.js";
 import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import {
   resolveChatSendRequestConflict,
@@ -154,6 +155,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
+  let workerGoalAdmission = false;
   let initialSessionEntry: SessionEntry | undefined;
   let admittedSessionEntry: SessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
@@ -266,15 +268,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
         }
         if (p.queueMode !== "steer" && expectedLeafEntryId !== undefined) {
-          assertExpectedLeafActive(
-            latestSession,
-            agentId,
-            expectedLeafEntryId,
-            requestedSessionId,
-            {
-              allowEmptyAncestor: true,
-            },
-          );
+          assertExpectedLeafActive(latestSession, expectedLeafEntryId, requestedSessionId, {
+            allowEmptyAncestor: true,
+          });
         }
         // Check the leaf first for typed errors; a reset must never redirect this request.
         if (backingSessionId && latestSessionId && latestSessionId !== backingSessionId) {
@@ -359,9 +355,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           sessionKey: latestSession.canonicalKey,
           storePath: latestSession.storePath,
         });
-        if (request.goalOperation && !restartSafeAdmission) {
+        workerGoalAdmission = isWorkerGoalChatAdmission(params, latestSession, placement, acpMeta);
+        if (request.goalOperation && !restartSafeAdmission && !workerGoalAdmission) {
           throw new Error(
-            "Goal start or resume requires the built-in OpenClaw runtime and an idle local session with recoverable history. This action is unavailable for native Codex and other external runtimes.",
+            "Goal start or resume requires an idle built-in local session with recoverable history or a supported Codex cloud-worker session.",
           );
         }
         if (retryableClaim && !restartSafeAdmission) {
@@ -560,6 +557,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         session.releaseSessionStorage?.();
       }
     };
+    if (workerGoalAdmission && !capturedOperator.authority) {
+      throw new Error("Worker Goals require a current authenticated operator request.");
+    }
     // Authority stays fresh per segment; effects check cancellation themselves.
     // A cancelled admission callback must still reach the handler's abort settlement.
     const consumeCurrent = <T>(consume: () => T): Promise<T> =>
@@ -714,6 +714,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           queued: context.chatQueuedTurns.get(clientRunId),
         }),
       restartSafeAdmission,
+      workerGoalAdmission,
       setDiscardAbandonedPreparedMedia: setDiscardPreparedMedia,
     },
   };

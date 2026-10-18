@@ -13,6 +13,10 @@ The session control RPC family: session listing and filtering, message send and 
 
 `chat.send` rejects malformed session keys, conflicting `agentId` and agent-qualified keys, and ambiguous unqualified targets with `INVALID_REQUEST`. Select an agent explicitly when the key does not identify one.
 
+`chat.send.timeoutMs` overrides the agent run deadline. Omit it to use
+`agents.defaults.timeoutSeconds`; keep a client's acknowledgment or reply wait
+budget separate. Ending a client-side wait does not abort accepted work.
+
 Session rows include `snapshotAt`, the Gateway's sampling time in milliseconds since the Unix epoch. Cached rows retain their original sampling time. Clients use it to order read snapshots, including runtime-only changes that do not advance persisted `updatedAt`; request order breaks equal-time ties. Read observations without sampling metadata retain request-order reconciliation. This read timestamp does not replace event ordering or session-identity checks.
 
 Once session stores are admitted, authorization for direct session targets prepares only the requested rows. A dirty target must pass stored-data validation before authorization; unrelated rows continue validating in the background. Method scopes, profile bindings, and startup availability are checked again after preparation. `sessions.list` authorizes the caller's scope first and leaves row validity and visibility filtering to the session reader.
@@ -30,6 +34,11 @@ Project and session-catalog listings consume committed session metadata without
 waiting for unrelated runtime-ownership or display-row preparation. Uncertain
 session metadata and membership still reconcile before selection, and responses
 recheck the current caller and contributing session identities before delivery.
+
+Session member listing and recipient selection also use committed metadata and
+the resident creator index. Adding a member does not wait for unrelated session
+display or worker-placement refreshes; sharing management permissions are still
+checked after preparation and at the write boundary.
 
 GitHub publication options read independent account status and publication receipts concurrently. The response still checks current session access and personal account authority after those reads settle.
 

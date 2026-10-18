@@ -7,11 +7,12 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type {
-  MemoryProviderStatus,
-  MemorySearchManager,
-  MemorySyncParams,
-  MemoryWorkspaceFiles,
+import {
+  warnPluginSdkDeprecation,
+  type MemoryProviderStatus,
+  type MemorySearchManager,
+  type MemorySyncParams,
+  type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
@@ -525,8 +526,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     return this.syncing;
   }
 
-  /** @deprecated Compatibility for released synchronous callers; use statusAsync. */
+  /** @deprecated Use statusAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   status(): MemoryProviderStatus {
+    warnPluginSdkDeprecation({
+      family: "memory-status",
+      method: "MemorySearchManager.status",
+      replacement: "MemorySearchManager.statusAsync",
+    });
     if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
     }
@@ -549,14 +555,11 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       if (options?.includeCounts === false) {
         return this.publishedStatus();
       }
-      const target = this.publishedDatabase.writeOptions;
-      if (!target?.agentId || !target.path) {
+      const { agentId, path: databasePath } = this.publishedDatabase.writeOptions ?? {};
+      if (!agentId || !databasePath) {
         throw new Error("Memory status requires its captured database target");
       }
-      const snapshot = await runMemoryStatus(
-        { agentId: target.agentId, databasePath: target.path },
-        this.statusQuery(),
-      );
+      const snapshot = await runMemoryStatus({ agentId, databasePath }, this.statusQuery());
       return this.publishedStatus(snapshot);
     });
   }

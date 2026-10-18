@@ -1,4 +1,3 @@
-/** Platform storage diagnostics for Doctor state directories. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -171,7 +170,6 @@ export function detectLinuxSdBackedStateDir(stateDir: string): LinuxSdBackedStat
   return stateMount;
 }
 
-/** Formats the warning for state stored on SD/eMMC media. */
 export function formatLinuxSdBackedStateDirWarning(
   displayStateDir: string,
   linuxSdBackedStateDir: LinuxSdBackedStateDir,
@@ -208,7 +206,6 @@ export function detectLinuxVolatileStateDir(stateDir: string): LinuxVolatileStat
   return volatileStateMount;
 }
 
-/** Formats the warning for state stored on a volatile Linux filesystem. */
 export function formatLinuxVolatileStateDirWarning(
   displayStateDir: string,
   volatileDir: LinuxVolatileStateDir,
@@ -297,7 +294,6 @@ export function detectWindowsCloudSyncedStateDir(
 
 type WindowsCloudSyncedStateDir = NonNullable<ReturnType<typeof detectWindowsCloudSyncedStateDir>>;
 
-/** Formats the warning for state stored under a OneDrive sync root. */
 export function formatWindowsCloudSyncedStateDirWarning(
   displayStateDir: string,
   windowsCloudSyncedStateDir: WindowsCloudSyncedStateDir,

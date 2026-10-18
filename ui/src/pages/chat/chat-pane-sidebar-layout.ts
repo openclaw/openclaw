@@ -32,7 +32,6 @@ import {
 const DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
 type LazyPanelRuntime = {
   error?: Parameters<typeof LazyViewError>[0];
-  listeners: Set<() => void>;
   pending?: Promise<void>;
 };
 
@@ -40,6 +39,7 @@ type LazyElementKey = "region" | "detail-panel" | SidebarSlotId;
 type LazyElement = readonly [tagName: string, loadModule: () => Promise<unknown>];
 
 const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
+  dashboard: ["openclaw-board-view", () => import("../../components/board/board-view.ts")],
   region: [
     "openclaw-chat-sidebar-region",
     () => import("./components/chat-sidebar-region.runtime.tsx"),
@@ -56,7 +56,7 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
   ],
   "link-reader": [
     "openclaw-link-reader-panel",
-    () => import("../../components/link-reader-panel.ts"),
+    () => import("../../components/link-reader-panel.tsx"),
   ],
   browser: ["openclaw-browser-panel", () => import("../../components/browser/browser-panel.ts")],
   desktop: ["openclaw-desktop-panel", () => import("../../components/desktop/desktop-panel.ts")],
@@ -77,8 +77,19 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
 };
 
 const lazyRuntimes = new Map<LazyElementKey, LazyPanelRuntime>();
+const lazyListeners = new Set<() => void>();
 
-export function ensureLazySidebarElement(key: LazyElementKey, requestUpdate: () => void) {
+export const lazySidebarElements = {
+  get snapshot(): ReadonlyMap<LazyElementKey, LazyPanelRuntime> {
+    return lazyRuntimes;
+  },
+  subscribe(listener: () => void) {
+    lazyListeners.add(listener);
+    return () => lazyListeners.delete(listener);
+  },
+};
+
+export function ensureLazySidebarElement(key: LazyElementKey) {
   const element = LAZY_SIDEBAR_ELEMENTS[key];
   if (!element) {
     return undefined;
@@ -88,12 +99,11 @@ export function ensureLazySidebarElement(key: LazyElementKey, requestUpdate: () 
     lazyRuntimes.delete(key);
     return undefined;
   }
-  const runtime = lazyRuntimes.get(key) ?? { listeners: new Set() };
+  const runtime = lazyRuntimes.get(key) ?? {};
   lazyRuntimes.set(key, runtime);
   if (runtime.error !== undefined) {
     return runtime.error;
   }
-  runtime.listeners.add(requestUpdate);
   if (runtime.pending) {
     return null;
   }
@@ -107,8 +117,7 @@ export function ensureLazySidebarElement(key: LazyElementKey, requestUpdate: () 
     })
     .finally(() => {
       delete runtime.pending;
-      runtime.listeners.forEach((listener) => listener());
-      runtime.listeners.clear();
+      lazyListeners.forEach((listener) => listener());
     });
   return null;
 }
@@ -166,11 +175,13 @@ export function renderSidebarRegion(params: SidebarRegionParams) {
   const panelIdPrefix = `chat-panel-${encodeURIComponent(params.presentationId)}`;
   let panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
   const hasPanels = params.layout.columns.length > 0;
-  const regionError = hasPanels
-    ? ensureLazySidebarElement("region", params.requestUpdate)
-    : undefined;
+  const regionError = hasPanels ? ensureLazySidebarElement("region") : undefined;
   for (const panel of params.layout.columns[0]?.panels ?? []) {
-    const lazyState = ensureLazySidebarElement(panel.slot, params.requestUpdate);
+    // A saved dashboard stays cold until its pane actually presents it.
+    if (panel.slot === "dashboard" && !isSidebarSlotVisible(params.layout, "dashboard")) {
+      continue;
+    }
+    const lazyState = ensureLazySidebarElement(panel.slot);
     if (lazyState !== undefined) {
       panelDefinitions = panelDefinitions.map((definition) =>
         definition.slot === panel.slot
@@ -254,7 +265,7 @@ export function createSidebarFullMessageLoader(
     }
     const client = state.client;
     const generation = state.connectionEpoch;
-    const scope = { ...readScope() };
+    const scope = readScope();
     const sameScope = (other: FullMessageScope) =>
       scope.owner === other.owner &&
       scope.sessionKey === other.sessionKey &&

@@ -1,7 +1,6 @@
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { formatUiError } from "../format-error.ts";
-import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { readSessionMethodAccess } from "../session-method-access.ts";
 import {
   readSessionCustomGroups,
@@ -138,12 +137,10 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
           // The gateway catalog is canonical even when browser cleanup fails.
         }
       }
-      const defaultsAllowed =
-        isGatewayMethodAdvertised(host.snapshot(), GROUPS_DEFAULTS_METHOD) === true &&
-        readSessionMethodAccess(host.snapshot(), {
-          method: GROUPS_DEFAULTS_METHOD,
-          requiredScope: "operator.write",
-        }).allowed;
+      const defaultsAllowed = readSessionMethodAccess(host.snapshot(), {
+        method: GROUPS_DEFAULTS_METHOD,
+        requiredScope: "operator.write",
+      }).allowed;
       if (!defaultsAllowed) {
         publishCatalog(settings, sectionOrder, "ready");
         return settings;
@@ -163,7 +160,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
   };
 
-  /** Share catalog loads per connection; explicitly absent features never request it. */
+  /** Share catalog loads per connection. */
   const load = async (): Promise<readonly SessionGroupSettings[] | null> => {
     const scope = host.connection.capture();
     if (!scope) {
@@ -172,16 +169,11 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     if (loadedEpoch === scope.epoch) {
       return pendingLoad ?? host.readState().groupSettings;
     }
-    const advertised = isGatewayMethodAdvertised(host.snapshot(), GROUPS_LIST_METHOD);
     clearRetry();
     loadedEpoch = scope.epoch;
     if (defaultsStatus !== "loading") {
       defaultsStatus = "loading";
       host.publish({ ...host.readState() });
-    }
-    if (advertised === false) {
-      publishCatalog([], [], "ready");
-      return [];
     }
     // Concurrent catalog edits settle best effort until the next refresh or reconnect.
     const promise: Promise<readonly SessionGroupSettings[] | null> = loadAttempt(

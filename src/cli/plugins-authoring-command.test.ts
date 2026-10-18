@@ -338,7 +338,19 @@ describe("plugin authoring commands", () => {
       path.join(rootDir, "node_modules/esbuild"),
       "dir",
     );
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        channels: ["custom"],
+        controlUi: {
+          entry: "dist/control-ui/authored/index.js",
+          activation: "settings-only",
+          settingsViews: [{ section: "channels", panel: "detail", channelId: "custom" }],
+        },
+      }),
+    );
     await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
+    await runPluginsBuildCommand({ root: rootDir, entry: entryPath, check: true });
     const generatedPath = path.join(rootDir, "dist/openclaw.plugin.json");
     fs.writeFileSync(
       generatedPath,

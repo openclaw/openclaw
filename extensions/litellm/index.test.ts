@@ -21,6 +21,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
 
+vi.mock("openclaw/plugin-sdk/provider-setup", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-setup")>();
+  return {
+    ...actual,
+    discoverOpenAICompatibleLocalModels: async () => ({
+      kind: "success",
+      health: "unknown",
+      rows: [{ model: { id: "custom-model" } }],
+      fetchedAt: Date.now(),
+    }),
+  };
+});
+
 const LITELLM_DEFAULT_MODEL = {
   id: "claude-opus-4-6",
   name: "Claude Opus 4.6",
@@ -154,19 +167,19 @@ describe("litellm plugin", () => {
       name: "records the URL the operator enters",
       answer: "https://litellm.example/v1//",
       expectedBaseUrl: "https://litellm.example/v1",
-      expectedModels: [],
+      expectedModels: [expect.objectContaining({ id: "custom-model" })],
     },
     {
-      name: "keeps the seeded default model when the prefilled default is accepted",
+      name: "selects a served model when the default URL is accepted",
       answer: "http://localhost:4000",
       expectedBaseUrl: "http://localhost:4000",
-      expectedModels: [LITELLM_DEFAULT_MODEL],
+      expectedModels: [expect.objectContaining({ id: "custom-model" })],
     },
     {
-      name: "leaves fresh setup untouched when the prompt is skipped",
+      name: "selects a served model when the URL prompt is left blank",
       answer: "",
       expectedBaseUrl: "http://localhost:4000",
-      expectedModels: [LITELLM_DEFAULT_MODEL],
+      expectedModels: [expect.objectContaining({ id: "custom-model" })],
     },
   ])("interactive setup $name", async ({ answer, expectedBaseUrl, expectedModels }) => {
     const prompter = createTestWizardPrompter({

@@ -61,8 +61,7 @@ export async function withPluginGenerationSourceCustody<T>(run: () => Promise<T>
   }
 }
 
-/** A preparation worker retains this same owner across its sequential loader tasks. */
-export function createPluginGenerationSourceCustody() {
+function createPluginGenerationSourceCustody() {
   const scope = {
     sources: new Map<string, SourceCustody>(),
     async disposeAsync() {
@@ -158,7 +157,7 @@ export function createPluginSourceFacts(
     resolveDependency: createPluginDependencyResolver(dependencyLookupBoundary),
     captureCustody: (capture: () => PluginRecoverySource): SourceCustody => ({
       source: capture(),
-      files: structuredClone(files),
+      files,
     }),
   };
 }

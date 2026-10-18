@@ -70,7 +70,11 @@ suite.define(() => {
           ),
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, first));
-        await page.locator(`[data-session-key="${keys[1]}"]`).first().waitFor();
+        if (mode === "roster") {
+          await page.locator(".sidebar-agent-roster__row").first().waitFor();
+        } else {
+          await page.locator(`[data-session-key="${keys[1]}"]`).first().waitFor();
+        }
         await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: first } });
         if (mode === "roster") {
           const subscriptions = await gateway.getRequests("sessions.messages.subscribe");

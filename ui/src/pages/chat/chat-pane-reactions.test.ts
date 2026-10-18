@@ -20,7 +20,6 @@ type ReactionsPane = {
   syncSessionReactions(): void;
   handleSessionReactionEvent(event: SessionReactionEvent): void;
   setMessageReaction(messageId: string, emoji: string, remove: boolean): Promise<void>;
-  messageReactions: Map<string, MessageReactionSummary[]>;
 };
 
 function fixture(
@@ -97,7 +96,7 @@ describe("pane reaction ownership", () => {
           ? ["session.reactions.list", "session.reactions.set"]
           : ["session.reactions.list"],
       );
-      expect(pane.messageReactions.get("message-1")).toEqual(peerReaction);
+      expect(pane.collaboration.reactions.get("message-1")).toEqual(peerReaction);
     },
   );
 
@@ -114,6 +113,6 @@ describe("pane reaction ownership", () => {
     list.resolve({ sessionId: "session-1", reactions: { "message-1": peerReaction } });
     set.resolve({ messageId: "message-1", reactions: peerReaction });
     await write;
-    expect(pane.messageReactions.size).toBe(0);
+    expect(pane.collaboration.reactions.size).toBe(0);
   });
 });

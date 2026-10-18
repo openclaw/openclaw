@@ -403,18 +403,35 @@ With no managed identity selected, native Code Mode and shell defaults are uncha
 Ordinary paired-node exec keeps node-local authentication: a Gateway GitHub
 selection and command approval never export that credential to the node.
 
+`openclaw agent exec` also uses host-owned tools so its one-shot cleanup can
+join every command it starts. The generic `--code-mode` setting does not enable
+Codex native Code Mode; `codeModeEngaged` reports OpenClaw Code Mode, not the
+Codex harness's native surface.
+
+For one-shot runs without native commands, cleanup closes app-server stdin and
+waits for normal exit before resorting to process termination. Confirmed forced
+termination produces a warning without replacing a completed answer with an
+error. Unconfirmed process cleanup or native commands whose descendants cannot
+be accounted for still fail cleanup and retain state ownership until exit.
+
 When sandboxing disables the native surface, allowed shell commands remain available
 through `sandbox_exec`. Denying `process` removes `sandbox_process` and background
 continuation, while `sandbox_exec` runs to completion under the existing timeout,
 sandbox backend, and workspace-access policy.
 
-When deferred tools or native delegation are available, normal threads receive
-guidance to call listed tools directly and use `tool_search` for unlisted tools.
-They keep an `exec` / `ALL_TOOLS` fallback for the case where `tool_search` is
-not directly callable (for example a model whose metadata selects code-mode-only
-execution), but are told never to use `exec` to look up a listed tool or to
-repeat a completed call. Configured code-mode-only threads receive the original
-`exec` / `ALL_TOOLS` discovery guidance.
+When native Code Mode is available, normal threads call listed tools by their
+exact qualified names and use `tool_search` for deferred tools when supplied.
+The fallback is Codex's native JavaScript `exec`, where `ALL_TOOLS` and `tools`
+are JavaScript globals. Code-mode-only threads use that JavaScript discovery
+path. These globals are not shell environment variables, and OpenClaw shell
+command tools are separate from the native JavaScript runner.
+
+When the native surface is disabled, OpenClaw publishes its allowed dynamic
+tools directly instead of requiring deferred discovery. This includes managed
+GitHub identity and sandbox-backed execution paths. The current tool policy,
+argument validation, session authority, and effect owners still apply. Dashboard
+and widget actions use those session-bound tools; a shell CLI connection and
+its device pairing do not replace them.
 
 Sandbox turns also use these tools when Codex allows only managed hooks and cannot
 install the native process-admission hook. OpenClaw selects this existing execution

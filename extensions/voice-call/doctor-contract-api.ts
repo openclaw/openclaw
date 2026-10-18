@@ -1,4 +1,3 @@
-// Voice Call API module exposes the plugin public contract.
 import { existsSync } from "node:fs";
 // Doctor enumeration cold-loads this closure; the state-DB helpers stay behind a
 // lazy doctor-repair-runtime import so enumeration never pulls the kysely/state-db graph.
@@ -66,6 +65,7 @@ const schemaMigrationDescriptions = {
   "portable-identity-columns-v22": "ACP resume keys and receipt cursors -> portable columns",
   "task-run-indexes-v24": "retained task indexes -> ordered cron history and runtime/run lookup",
   "session-state-head-layout-v26": "session state heads -> primary-key table layout",
+  "state-write-indexes-v27": "replay, skill usage, and lease writes -> smaller index maintenance",
   "subagent-operator-recovery-v25": "subagent recovery -> original operator authority required",
   "meeting-transcript-start-time": "meeting transcript start times -> persisted chronology",
   "predicate-columns-v21":

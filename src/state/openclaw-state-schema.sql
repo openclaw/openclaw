@@ -36,9 +36,6 @@ CREATE TABLE IF NOT EXISTS skill_usage (
   last_agent_id TEXT
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_skill_usage_key
-  ON skill_usage(skill_key, skill_file);
-
 -- Profile-owned skill library: additive, absent until first publication/import.
 CREATE TABLE IF NOT EXISTS skill_library_entries (
   skill_id TEXT NOT NULL PRIMARY KEY,
@@ -354,7 +351,7 @@ CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
   WHERE expires_at IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_state_leases_owner
-  ON state_leases(owner, updated_at DESC);
+  ON state_leases(owner);
 
 CREATE TABLE IF NOT EXISTS exec_approvals_config (
   config_key TEXT NOT NULL PRIMARY KEY,
@@ -1215,9 +1212,6 @@ CREATE TABLE IF NOT EXISTS acp_replay_events (
   PRIMARY KEY (session_id, seq),
   FOREIGN KEY (session_id) REFERENCES acp_replay_sessions(session_id) ON DELETE CASCADE
 ) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_acp_replay_events_session_seq
-  ON acp_replay_events(session_id, seq);
 
 CREATE TABLE IF NOT EXISTS agent_databases (
   agent_id TEXT NOT NULL,

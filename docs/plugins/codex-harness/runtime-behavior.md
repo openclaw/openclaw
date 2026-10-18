@@ -20,7 +20,12 @@ turn's dynamic-tool output budget cannot hold them. These tools do not change
 Codex's native `skills` namespace or install marketplace skills. See
 [installed skill search](/tools/skills#search-installed-skills).
 
-Codex dynamic tools default to `searchable` loading. OpenClaw normally does
+Codex dynamic tools default to `searchable` loading when the native surface is
+enabled. When it is disabled, OpenClaw publishes allowed dynamic tools directly,
+including session UI tools and managed shell paths. Tool policy, argument
+validation, session authority, and effect ownership still apply. Dashboard and
+widget actions use these session-bound tools; a shell CLI connection and device
+pairing do not replace them. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
 `get_goal`, `create_goal`, `update_goal`, `dispatch_action`, `tool_describe`,
@@ -61,10 +66,12 @@ before the next turn; transient per-turn restrictions use a temporary
 restricted thread and preserve the existing binding for later resume.
 
 `sessions_yield`, `sessions_spawn`, and message-tool-only source replies stay
-direct because they are turn-control or delegation contracts. Guidance still
-prefers Codex's native `spawn_agent` as the primary Codex subagent surface,
-while explicit OpenClaw or ACP delegation remains directly callable through
-`sessions_spawn`. In Codex Code Mode, generic OpenClaw
+direct because they are turn-control or delegation contracts. Guidance uses
+Codex's native `spawn_agent` for work using only Codex-native tools. New work
+requiring OpenClaw tools goes through the available managed `sessions_spawn`
+route from the start; existing native children stay with native collaboration.
+See [dynamic tools](/plugins/codex-harness-reference/dynamic-tools) for runtime
+selection. In Codex Code Mode, generic OpenClaw
 dynamic-tool results are JSON text rather than JavaScript objects, so parse
 JSON-looking results before reading fields. Codex also serializes nested
 dynamic calls; submit several `sessions_spawn` calls in a bounded loop rather

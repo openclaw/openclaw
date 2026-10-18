@@ -1,8 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { Value } from "typebox/value";
 // Chat abort tests protect in-flight run tracking, stop-command parsing, provider
 // abort fanout, history snapshots, and cleanup of buffered streaming state.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  ChatEventSchema,
+  type ChatEvent,
+} from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import {
   isAgentRunDirectAbortReason,
@@ -12,6 +16,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
+  getAgentRunContext,
   registerAgentRunContext,
   releaseAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
@@ -133,6 +138,32 @@ function expectRunAborted(params: {
   expect(params.entry.controller.signal.aborted).toBe(true);
   expect(params.ops.chatAbortControllers.has(params.runId)).toBe(false);
 }
+
+it.each([true, false])(
+  "captures the live local wait before abort listeners clear it (%s)",
+  (waiting) => {
+    const { runId, sessionKey, entry, ops } = createAbortRunFixture({});
+    const context = waiting ? { localModelWait: { requestId: "call-1" } } : {};
+    registerAgentRunContext(runId, {});
+    Object.assign(expectDefined(getAgentRunContext(runId), "registered run"), context);
+    entry.controller.signal.addEventListener("abort", () => {
+      clearAgentRunContext(runId);
+    });
+    try {
+      const result = abortChatRunById(ops, { runId, sessionKey });
+      expectRunAborted({ result, entry, ops, runId });
+      expect(firstBroadcastPayload(ops)).toMatchObject({ state: "aborted" });
+      expect(Value.Check(ChatEventSchema, firstBroadcastPayload(ops))).toBe(true);
+      if (waiting) {
+        expect(firstBroadcastPayload(ops)).toHaveProperty("localModelMayStillBeFinishing", true);
+      } else {
+        expect(firstBroadcastPayload(ops)).not.toHaveProperty("localModelMayStillBeFinishing");
+      }
+    } finally {
+      clearAgentRunContext(runId);
+    }
+  },
+);
 
 describe("registerChatAbortController", () => {
   it.each([

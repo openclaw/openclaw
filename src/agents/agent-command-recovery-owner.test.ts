@@ -479,7 +479,15 @@ describe("agent command restart recovery ownership", () => {
           sessionId: target.sessionId,
           target: { sessionKey, storePath: target.storePath },
         }),
-      ).resolves.toEqual({ kind: "invalidated", reason: "state_changed" });
+      ).resolves.toEqual({
+        kind: "invalidated",
+        reason: "recovery_pending",
+        sessionKey,
+        entry: expect.objectContaining({
+          sessionId: target.sessionId,
+          ...runningRecovery(lifecycleGeneration),
+        }),
+      });
       let owner: Awaited<ReturnType<typeof startOwner>> | undefined;
       const ownerStarted = createDeferred();
       if (timing === "before preparation") {

@@ -49,8 +49,7 @@ it.skipIf(process.platform === "win32")(
       "lib",
       "node_modules",
       "openclaw",
-      "dist",
-      "index.js",
+      "openclaw.mjs",
     );
     expect(plan.programArguments[1]).toBe(expectedEntrypoint);
     expect(plan.installationMessage).toContain(

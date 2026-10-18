@@ -3,7 +3,6 @@ import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { bindClawPluginBeforeCommit } from "../claws/package-plugin-before-commit.js";
 import { inspectClawPluginCapabilities } from "../claws/plugin-capability-probe.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -377,7 +376,7 @@ describe("Claw-managed plugin capability consent", () => {
     });
   });
 
-  it("does not mark a failed final-stage update as an external mutation", async () => {
+  it("rejects final-stage capability drift without replacing the installed plugin", async () => {
     const root = dirs.make("openclaw-claw-plugin-final-update-");
     const sourceDir = await writePluginSource(root, "audit.read");
     const env = {
@@ -406,10 +405,13 @@ describe("Claw-managed plugin capability consent", () => {
       )?.["claw-audit"];
 
       await writePluginSource(root, "audit.write");
-      const onExternalMutation = vi.fn();
-      const pluginCommit = bindClawPluginBeforeCommit(
-        {
-          assertPluginOwnerCurrent: async () => {
+      await expect(
+        installManagedPlugin({
+          request: { source: "local", path: sourceDir, mode: "update" },
+          env,
+          clawManaged: true,
+          onCapabilityConsent,
+          beforePersistentEffect: async () => {
             const stagedArtifactDir = await findStagedPluginArtifactDir(env);
             await fs.writeFile(
               path.join(stagedArtifactDir, "openclaw.plugin.json"),
@@ -420,24 +422,9 @@ describe("Claw-managed plugin capability consent", () => {
               }),
             );
           },
-          onExternalMutation,
-        },
-        { kind: "plugin", source: "clawhub", ref: "@example/claw-audit", version: "1.0.1" },
-        () => {},
-      );
-      await expect(
-        installManagedPlugin({
-          request: { source: "local", path: sourceDir, mode: "update" },
-          env,
-          clawManaged: true,
-          onCapabilityConsent,
-          onBeforePluginArtifactCommit: async () => pluginCommit.artifactReviewed(),
-          beforePersistentEffect: pluginCommit.beforePersistentEffect,
-          beforePersistentApply: pluginCommit.beforePersistentApply,
         }),
       ).rejects.toMatchObject({ capabilityConsent: { pluginId: "claw-audit" } });
 
-      expect(onExternalMutation).not.toHaveBeenCalled();
       expect(await fs.readFile(path.join(artifactDir, "openclaw.plugin.json"))).toEqual(
         originalArtifact,
       );
@@ -445,22 +432,12 @@ describe("Claw-managed plugin capability consent", () => {
         (await readPersistedInstalledPluginIndexInstallRecordsAsync({ env }))?.["claw-audit"],
       ).toEqual(originalRecord);
 
-      const successfulMutation = vi.fn();
-      const successfulCommit = bindClawPluginBeforeCommit(
-        { onExternalMutation: successfulMutation },
-        { kind: "plugin", source: "clawhub", ref: "@example/claw-audit", version: "1.0.1" },
-        () => {},
-      );
       await installManagedPlugin({
         request: { source: "local", path: sourceDir, mode: "update" },
         env,
         clawManaged: true,
         onCapabilityConsent,
-        onBeforePluginArtifactCommit: async () => successfulCommit.artifactReviewed(),
-        beforePersistentEffect: successfulCommit.beforePersistentEffect,
-        beforePersistentApply: successfulCommit.beforePersistentApply,
       });
-      expect(successfulMutation).toHaveBeenCalledOnce();
       expect(
         (await readPersistedInstalledPluginIndexInstallRecordsAsync({ env }))?.["claw-audit"]
           ?.acceptedSurface?.tools,

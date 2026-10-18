@@ -80,9 +80,6 @@ type RawTranscriptReseedReason =
   | "stateless";
 
 export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {
-  if (!Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
-    return MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
-  }
   const contextShareChars = Math.floor(
     contextWindowTokens * CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE * CHARS_PER_TOKEN_ESTIMATE,
   );
@@ -395,7 +392,7 @@ export async function loadCliSessionHistoryMessages({
 /** Loads canonical replay messages for context-engine updates. */
 export async function loadCliSessionContextEngineMessages(
   params: CliSessionHistoryParams,
-): Promise<unknown[]> {
+): Promise<ReturnType<typeof buildSessionContext>["messages"]> {
   const entries = await loadCliSessionEntries(params);
   const messages = buildSessionContext(entries).messages;
   const boundary = entries.findLast(

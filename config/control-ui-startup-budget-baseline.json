@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 340000,
-  "reason": "Cron copy now loads with its lazy page; startup measured 337805 B gzip, retaining about 2 KB headroom.",
+  "startupJsGzipBytes": 338803,
+  "reason": "Integrated main after schema and syntax-highlighting deferrals measures 338803 B at startup; cap at 338900 B with the existing 64 B build-variance allowance.",
   "updatedAt": "2026-10-17"
 }

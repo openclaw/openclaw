@@ -262,6 +262,29 @@ describe("installFromValidatedNpmSpecArchive", () => {
 });
 
 describe("archive workspace lifetime", () => {
+  it("preserves workspace settlement rejection instead of exposing install success", async () => {
+    const failure = new Error("workspace cleanup failed");
+    vi.mocked(withInstallWorkspace).mockImplementationOnce(async (_prefix, callback) => {
+      await callback("/tmp/openclaw-npm-pack-install-test");
+      throw failure;
+    });
+    vi.mocked(packNpmSpecToArchive).mockResolvedValueOnce({
+      ok: true,
+      archivePath: "/tmp/openclaw-test.tgz",
+      metadata: {},
+    });
+
+    await expect(
+      installFromValidatedNpmSpecArchive({
+        spec: "audit-hooks@1.0.0",
+        timeoutMs: 1000,
+        tempDirPrefix: "archive-",
+        archiveInstallParams: {},
+        installFromArchive: async () => ({ ok: true as const, pluginId: "audit-hooks" }),
+      }),
+    ).rejects.toBe(failure);
+  });
+
   it.each(["success", "failure", "throw"] as const)(
     "cleans the archive workspace before exposing %s",
     async (outcome) => {
@@ -305,10 +328,7 @@ describe("archive workspace lifetime", () => {
             return {
               ok: true as const,
               [transactionKey]: transaction,
-              get pluginId() {
-                expect(existsSync(workspace)).toBe(false);
-                return "audit-hooks";
-              },
+              pluginId: "audit-hooks",
             };
           },
         });

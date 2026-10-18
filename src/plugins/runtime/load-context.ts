@@ -152,19 +152,18 @@ type PluginRuntimeResolvedLoadValues = Pick<
   | "env"
   | "logger"
   | "manifestRegistry"
+  | "metadataSnapshot"
   | "installRecords"
   | "preferBuiltPluginArtifacts"
   | "expectedSourceDigests"
 >;
 
-export function createPluginRuntimeLoaderLogger(): PluginLogger {
-  return {
-    info: (message) => log.info(message),
-    warn: (message) => log.warn(message),
-    error: (message) => log.error(message),
-    debug: (message) => log.debug(message),
-  };
-}
+export const pluginRuntimeLoaderLogger: PluginLogger = {
+  info: (message) => log.info(message),
+  warn: (message) => log.warn(message),
+  error: (message) => log.error(message),
+  debug: (message) => log.debug(message),
+};
 
 export function buildPluginRuntimeLoadOptions(
   values: PluginRuntimeResolvedLoadValues,
@@ -178,6 +177,7 @@ export function buildPluginRuntimeLoadOptions(
     env: values.env,
     logger: values.logger,
     manifestRegistry: values.manifestRegistry,
+    metadataSnapshot: values.metadataSnapshot,
     installRecords: values.installRecords,
     preferBuiltPluginArtifacts: values.preferBuiltPluginArtifacts,
     expectedSourceDigests: values.expectedSourceDigests,

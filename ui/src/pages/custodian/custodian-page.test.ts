@@ -44,7 +44,7 @@ async function element<T extends HTMLElement>(page: HTMLElement, selector: strin
     return found!;
   });
 }
-async function mount(request: ReturnType<typeof vi.fn>) {
+async function mount(request: Parameters<typeof createContext>[0]) {
   const harness = createContext(request);
   return { ...harness, ...(await mountPage(harness.context)) };
 }
@@ -366,7 +366,7 @@ describe("custodian page", () => {
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
     setGatewayToken("new-operator-token");
     setGatewaySnapshot({
-      client: { request: replacementRequest } as unknown as GatewayBrowserClient,
+      client: createContext(replacementRequest).context.gateway.snapshot.client,
     });
     await waitForFast(() => expect(replacementRequest).toHaveBeenCalledTimes(2));
     await waitForFast(() => expect(page.textContent).toContain("Fresh safe welcome."));
@@ -593,6 +593,7 @@ describe("custodian page", () => {
     Object.assign(context, { channels });
     await channels.refresh();
     await channels.refresh();
+    const previousSnapshot = channels.state.channelsSnapshot;
     expect(channels.state.channelsSnapshot).not.toBeNull();
     expect(channels.state.channelsError).toBe("status unavailable");
     const { page } = await mountPage(context, { onboarding: true });
@@ -601,7 +602,7 @@ describe("custodian page", () => {
     setGatewaySnapshot({ phase: "connected" });
 
     await waitForFast(() => expect(statusRequestCount).toBe(3));
-    expect(channels.state.channelsSnapshot).toBeNull();
+    expect(channels.state.channelsSnapshot).toBe(previousSnapshot);
     expect(channels.state.channelsLoading).toBe(true);
     expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
 
@@ -895,7 +896,7 @@ describe("custodian page session lifecycle", () => {
       details: buildSystemAgentSessionInvalidatedErrorDetails(),
     });
 
-  async function mountReady(request: ReturnType<typeof vi.fn>) {
+  async function mountReady(request: Parameters<typeof createContext>[0]) {
     const { page } = await mount(request);
     await waitForFast(() => expect(page.textContent).toContain("Ready."));
     return page;

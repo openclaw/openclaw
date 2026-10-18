@@ -7,7 +7,7 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { managedSource, ticketResponse } from "./chat-message-media.test-helpers.ts";
 import {
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type AttachmentItem,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
@@ -48,7 +48,7 @@ afterEach(() => {
     view.container.remove();
   }
   for (const subscriber of subscribers) {
-    releaseChatMediaResourceSubscriber(subscriber);
+    releaseChatMediaResourceOwner(subscriber);
   }
   views.clear();
   subscribers.clear();
@@ -73,7 +73,7 @@ function mount(
   let current = item;
   let setProps: (props: { item: AttachmentItem; options: ImageRenderOptions }) => void;
   const update = () => {
-    setProps({ item: current, options: { ...options, onRequestUpdate: update } });
+    setProps({ item: current, options: { ...options, mediaOwner: update } });
     if (!getOwner()) {
       flush();
     }
@@ -83,7 +83,7 @@ function mount(
       const [props, setCurrent] = createSignal<{
         item: AttachmentItem;
         options: ImageRenderOptions;
-      }>({ item: current, options: { ...options, onRequestUpdate: update } }, { ownedWrite: true });
+      }>({ item: current, options: { ...options, mediaOwner: update } }, { ownedWrite: true });
       setProps = setCurrent;
       return createComponent(MessageAttachment, {
         get item() {
@@ -318,7 +318,7 @@ function mountText(item: AttachmentItem | AttachmentItem[], options: ImageRender
       },
       get options() {
         revision();
-        return { ...options, onRequestUpdate: update };
+        return { ...options, mediaOwner: update };
       },
       onOpenSidebar: open,
       inlinePlayback: false,

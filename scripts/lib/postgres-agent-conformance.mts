@@ -65,7 +65,7 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
       `${label}: PostgreSQL accepted row`,
     );
   };
-  const transaction = async (action: "BEGIN" | "ROLLBACK") => {
+  const transaction = async (action: "BEGIN" | "COMMIT" | "ROLLBACK") => {
     sqlite.exec(action);
     await client.query(action);
   };
@@ -298,27 +298,17 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
       { primary_conversation_id: null },
     ]);
 
-    const memoryRevision = (revision: number) =>
-      rows("memory per-row revision", "SELECT revision FROM memory_index_state WHERE id = 1", [
-        { revision },
-      ]);
     await execute(
       "INSERT INTO memory_index_sources(id, path, hash, mtime, size) VALUES (1, 'a', 'hash', 0, 0), (2, 'b', 'hash', 0, 0)",
     );
-    await memoryRevision(2);
     await execute(
       "INSERT INTO memory_index_chunks(chunk_rowid, id, path, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (1, 'chunk-1', 'a', 1, 2, 'hash', 'test', 'synthetic', ?, 1), (2, 'chunk-2', 'a', 1, 2, 'hash', 'test', 'synthetic', ?, 1), (3, 'chunk-3', 'a', 1, 2, 'hash', 'test', 'synthetic', ?, 1)",
       [Buffer.from([1]), Buffer.from([1]), Buffer.from([1])],
     );
-    await memoryRevision(5);
     await execute("UPDATE memory_index_sources SET hash = hash");
-    await memoryRevision(7);
     await execute("UPDATE memory_index_chunks SET text = text");
-    await memoryRevision(10);
     await execute("UPDATE memory_index_sources SET id = 3, path = 'moved' WHERE id = 2");
-    await memoryRevision(11);
     await execute("DELETE FROM memory_index_sources WHERE id = 1");
-    await memoryRevision(12);
     await insert("memory_index_chunk_recall_metadata", { chunk_id: "chunk-1", importance: 5 });
     await insert("memory_index_chunk_provenance", {
       chunk_id: "chunk-1",
@@ -327,16 +317,13 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
       observed_at: 1,
     });
     await execute("DELETE FROM memory_index_chunks WHERE id = 'chunk-1'");
-    await memoryRevision(13);
     for (const table of ["memory_index_chunk_recall_metadata", "memory_index_chunk_provenance"]) {
       await rows("chunk child cascade", `SELECT count(*) AS count FROM ${table}`, [{ count: 0 }]);
     }
     await transaction("BEGIN");
     await execute("UPDATE memory_index_sources SET size = 4");
     await execute("DELETE FROM memory_index_chunks");
-    await memoryRevision(16);
     await transaction("ROLLBACK");
-    await memoryRevision(13);
     await rows(
       "memory rollback restored chunks",
       "SELECT count(*) AS count FROM memory_index_chunks",
@@ -344,7 +331,11 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     );
     await execute("DELETE FROM memory_index_sources");
     await execute("DELETE FROM memory_index_chunks");
-    await memoryRevision(16);
+    await rows(
+      "memory revisions belong to the batch writer",
+      "SELECT revision FROM memory_index_state WHERE id = 1",
+      [{ revision: 0 }],
+    );
 
     const conversation = (id: string, parent: SQLInputValue, thread: SQLInputValue) => [
       id,
@@ -400,9 +391,24 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     const navigationSql =
       "INSERT INTO transcript_events(session_id, seq, event_json, created_at, navigation_json) VALUES ('route-window', ?, '{}', 1, ?)";
     let seq = 0;
+    await transaction("BEGIN");
+    await client.query("SET LOCAL track_functions = 'all'");
+    const navigationCalls = async () =>
+      (
+        await client.query<{ calls: number }>(
+          "SELECT coalesce(sum(calls), 0)::integer AS calls FROM pg_stat_xact_user_functions WHERE funcid = 'openclaw_transcript_navigation_check(text)'::regprocedure",
+        )
+      ).rows[0]!.calls;
+    await execute(navigationSql, [++seq, null]);
+    assert.equal(await navigationCalls(), 0, "absent navigation must not invoke JSON validation");
+    await execute(navigationSql, [++seq, JSON.stringify(navigation)]);
+    assert.equal(
+      await navigationCalls(),
+      1,
+      "present navigation must still invoke JSON validation",
+    );
+    await transaction("COMMIT");
     for (const value of [
-      null,
-      JSON.stringify(navigation),
       JSON.stringify({ ...navigation, report: { kind: "leaf" } }),
       JSON.stringify(navigation).replace('"version":1', '"version":1,"version":2'),
       JSON.stringify(navigation).replace(
@@ -574,7 +580,7 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
       `SELECT ${byteExpression} AS bytes FROM trajectory_runtime_events`,
     );
     console.log(
-      "agent: SQLite/PostgreSQL trigger parity (10 triggers, no-op/key move/bulk/cascade/rollback) and translated index/CHECK behavior verified",
+      "agent: SQLite/PostgreSQL trigger parity (4 triggers, no-op/key move/bulk/cascade/rollback) and translated index/CHECK behavior verified",
     );
   } finally {
     sqlite.close();

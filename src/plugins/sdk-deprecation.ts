@@ -31,6 +31,7 @@ const sqliteRemovalFamilies = new Set([
   "github-publication",
   "memory-session",
   "memory-session-sync-inventory",
+  "memory-status",
   "model-account-connect",
   "model-registry-native-read",
   "native-command-menu",

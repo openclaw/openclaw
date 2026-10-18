@@ -606,18 +606,12 @@ describe("Control UI service-worker production update E2E", () => {
       const assetB = await findBuildAsset(buildB, nextOutDir);
       expect(assetB).toEqual(assetA);
 
-      await page.evaluate(() => {
-        localStorage.setItem(
-          "openclaw.terminal.panel.v1",
-          JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
-        );
-      });
       await gateway.setOnline(false);
       await page.waitForFunction(() => {
         const panel = document.querySelector("openclaw-terminal-panel") as
-          | (HTMLElement & { available: boolean })
+          | (HTMLElement & { available: boolean; gatewayConnected: boolean })
           | null;
-        return panel?.available === false;
+        return panel?.available === true && !panel.gatewayConnected;
       });
       await server.replaceBuild(nextOutDir, previousOutDir);
       await rm(previousOutDir, { force: true, recursive: true });
@@ -636,9 +630,9 @@ describe("Control UI service-worker production update E2E", () => {
       });
       await page.waitForFunction(() => {
         const panel = document.querySelector("openclaw-terminal-panel") as
-          | (HTMLElement & { available: boolean; terminalPanelOpen: boolean })
+          | (HTMLElement & { available: boolean; gatewayConnected: boolean })
           | null;
-        return panel?.available === true && panel.terminalPanelOpen;
+        return panel?.available === true && panel.gatewayConnected;
       });
       await page.evaluate(() => {
         window.dispatchEvent(

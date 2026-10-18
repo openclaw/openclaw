@@ -33,9 +33,10 @@ vi.mock("../../../plugins/plugin-peer-link.js", async (importOriginal) => {
     relinkOpenClawPeerDependenciesInManagedNpmRoot: mocks.relinkPeers,
   };
 });
-vi.mock("../../../plugins/npm-project-roots.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../plugins/npm-project-roots.js")>();
-  return { ...actual, listManagedPluginNpmRoots: mocks.managedRoots };
+vi.mock("../../../plugins/installed-plugin-npm-roots.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../plugins/installed-plugin-npm-roots.js")>();
+  return { ...actual, listManagedPluginNpmRootsForInstallRecords: mocks.managedRoots };
 });
 // mock-isolation: Script payload checks without launching installed plugin code.
 vi.mock("../../../plugins/payload-verification.js", () => ({
@@ -51,6 +52,7 @@ import {
 } from "../../../plugins/installed-plugin-index-records.js";
 import type { PluginPayloadSmokeFailure } from "../../../plugins/payload-verification.js";
 import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
+import { writeManagedNpmPlugin } from "../../../plugins/test-helpers/managed-npm-plugin.js";
 import { VERSION } from "../../../version.js";
 import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
@@ -135,7 +137,7 @@ describe("runPostCorePluginConvergence", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.managedRoots.mockImplementation((npmRoot: string) => Promise.resolve([npmRoot]));
+    mocks.managedRoots.mockImplementation(({ npmRoot }: { npmRoot: string }) => [npmRoot]);
     mocks.repairBundled.mockReturnValue(null);
     mockRepairs();
     mocks.relinkPeers.mockResolvedValue(peerResult);
@@ -166,7 +168,7 @@ describe("runPostCorePluginConvergence", () => {
       let refuse = false;
       let completed = false;
       let siblingSettled = false;
-      mocks.managedRoots.mockResolvedValue(["first-root", "second-root"]);
+      mocks.managedRoots.mockReturnValue(["first-root", "second-root"]);
       mocks.relinkPeers.mockImplementation(
         async (params: { npmRoot: string; beforePersistentApply?: () => void }) => {
           if (params.npmRoot === "first-root") {
@@ -267,7 +269,7 @@ describe("runPostCorePluginConvergence", () => {
     const stateDir = makeTempDir();
     mockRepairs({ codex: { source: "npm", installPath: "/p/codex" } });
     const roots = [path.join(stateDir, "npm"), path.join(stateDir, "npm", "projects", "codex")];
-    mocks.managedRoots.mockResolvedValue(roots);
+    mocks.managedRoots.mockReturnValue(roots);
     mocks.relinkPeers
       .mockResolvedValueOnce(peerResult)
       .mockResolvedValueOnce({ checked: 1, attempted: 1, repaired: 1, skipped: 0 });
@@ -290,6 +292,67 @@ describe("runPostCorePluginConvergence", () => {
     expect(mocks.relinkPeers.mock.invocationCallOrder[0]).toBeLessThan(
       expectDefined(mocks.smokeCheck.mock.invocationCallOrder[0], "smoke check called"),
     );
+  });
+
+  it("repairs the selected generation before smoke checks without walking stale roots", async () => {
+    const stateDir = makeTempDir();
+    const packageName = "@fixture/selected";
+    const packages: string[] = [];
+    for (const generationKey of ["active", "stale-1", "stale-2"]) {
+      const flatPackage = writeManagedNpmPlugin({
+        stateDir,
+        packageName,
+        pluginId: "selected",
+        version: "1.0.0",
+      });
+      const root = resolvePluginNpmGenerationProjectDir({
+        npmDir: path.join(stateDir, "npm"),
+        packageName,
+        generationKey,
+      });
+      fs.renameSync(path.dirname(path.dirname(path.dirname(flatPackage))), root);
+      const packageDir = path.join(root, "node_modules", ...packageName.split("/"));
+      writeJson(path.join(packageDir, "package.json"), {
+        name: packageName,
+        version: "1.0.0",
+        peerDependencies: { openclaw: "*" },
+      });
+      packages.push(packageDir);
+    }
+    const active = expectDefined(packages[0], "active package");
+    mockRepairs({ selected: { source: "npm", installPath: active } });
+    const roots = await vi.importActual<
+      typeof import("../../../plugins/installed-plugin-npm-roots.js")
+    >("../../../plugins/installed-plugin-npm-roots.js");
+    const peers = await vi.importActual<typeof import("../../../plugins/plugin-peer-link.js")>(
+      "../../../plugins/plugin-peer-link.js",
+    );
+    mocks.managedRoots.mockImplementation(roots.listManagedPluginNpmRootsForInstallRecords);
+    mocks.relinkPeers.mockImplementation(peers.relinkOpenClawPeerDependenciesInManagedNpmRoot);
+    mocks.smokeCheck.mockImplementation(async () => {
+      expect(fs.realpathSync(path.join(active, "node_modules", "openclaw"))).toBe(
+        fs.realpathSync(process.cwd()),
+      );
+      return { checked: ["selected"], failures: [] };
+    });
+    const reads = vi.spyOn(fs.promises, "readdir");
+    try {
+      const result = await converge(configured("selected"), {
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      expect(result.errored).toBe(false);
+      expect(mocks.smokeCheck).toHaveBeenCalledOnce();
+      for (const stale of packages.slice(1)) {
+        expect(fs.existsSync(path.join(stale, "node_modules", "openclaw"))).toBe(false);
+        expect(
+          reads.mock.calls.some(([dir]) =>
+            String(dir).startsWith(path.dirname(path.dirname(stale))),
+          ),
+        ).toBe(false);
+      }
+    } finally {
+      reads.mockRestore();
+    }
   });
 
   it.each(["peerDependencies", "dependencies"] as const)(

@@ -15,7 +15,7 @@ import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-s
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-state.js";
 import {
   buildPluginRuntimeLoadOptions,
-  createPluginRuntimeLoaderLogger,
+  pluginRuntimeLoaderLogger,
 } from "./runtime/load-context.js";
 import { getCurrentPluginToolInspection, samePluginToolSource } from "./tool-inspection-state.js";
 
@@ -135,7 +135,7 @@ export function resolvePluginWebProviders<TEntry>(
           autoEnabledReasons: {},
           workspaceDir,
           env,
-          logger: createPluginRuntimeLoaderLogger(),
+          logger: pluginRuntimeLoaderLogger,
           ...(params.manifestRecords
             ? { manifestRegistry: { plugins: [...params.manifestRecords], diagnostics: [] } }
             : {}),
@@ -195,7 +195,7 @@ export function resolvePluginWebProviders<TEntry>(
       autoEnabledReasons,
       workspaceDir,
       env,
-      logger: createPluginRuntimeLoaderLogger(),
+      logger: pluginRuntimeLoaderLogger,
       manifestRegistry: params.manifestRecords
         ? { plugins: [...params.manifestRecords], diagnostics: [] }
         : undefined,

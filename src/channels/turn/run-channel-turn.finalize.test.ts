@@ -16,7 +16,7 @@ import {
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import { recordOutboundMessageIdentity } from "../message/outbound-echo.js";
 import {
-  hasVisibleChannelTurnDispatchFromReceipt,
+  hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
 } from "./dispatch-result.js";
 import { runPreparedChannelTurn } from "./execution.js";
@@ -309,7 +309,7 @@ describe("channel turn finalize", () => {
       }),
     );
     expect(deliver).not.toHaveBeenCalled();
-    expect(hasVisibleChannelTurnDispatchFromReceipt(result.dispatchResult)).toBe(false);
+    expect(hasVisibleChannelTurnDispatch(result.dispatchResult)).toBe(false);
     expect(resolveChannelTurnDispatchCounts(result.dispatchResult)).toEqual({
       tool: 0,
       block: 0,

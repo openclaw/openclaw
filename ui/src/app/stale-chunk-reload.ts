@@ -11,6 +11,7 @@ import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
@@ -298,9 +299,9 @@ function waitForRecoverySignal(delayMs: number, signal?: AbortSignal): Promise<v
   return new Promise((resolve) => {
     const finish = () => {
       clearTimeout(timer);
-      window.removeEventListener("online", finish);
-      document.removeEventListener("visibilitychange", onVisibility);
-      signal?.removeEventListener("abort", finish);
+      stopOnline();
+      stopVisibility();
+      stopAbort?.();
       resolve();
     };
     const onVisibility = () => {
@@ -309,9 +310,9 @@ function waitForRecoverySignal(delayMs: number, signal?: AbortSignal): Promise<v
       }
     };
     const timer = setTimeout(finish, delayMs);
-    window.addEventListener("online", finish);
-    document.addEventListener("visibilitychange", onVisibility);
-    signal?.addEventListener("abort", finish, { once: true });
+    const stopOnline = listen(window, "online", finish);
+    const stopVisibility = listen(document, "visibilitychange", onVisibility);
+    const stopAbort = signal && listen(signal, "abort", finish, { once: true });
     if (signal?.aborted) {
       finish();
     }
@@ -387,9 +388,9 @@ export function installStaleChunkReloadListener(): () => void {
     }, 0);
     pending.add(timer);
   };
-  window.addEventListener("vite:preloadError", onPreloadError);
+  const stopPreloadError = listen(window, "vite:preloadError", onPreloadError);
   return () => {
-    window.removeEventListener("vite:preloadError", onPreloadError);
+    stopPreloadError();
     for (const timer of pending) {
       clearTimeout(timer);
     }
@@ -401,14 +402,14 @@ export function installMissingStylesheetRecovery(): () => void {
   let uninstalled = false;
   let banner: HTMLDivElement | null = null;
 
-  const removeListeners = () => {
-    window.removeEventListener("load", checkStylesheet);
-  };
+  let stopLoad: (() => void) | undefined;
 
-  const showBanner = () => {
-    if (uninstalled || banner) {
+  const detectMissingStylesheet = async () => {
+    if (detected || uninstalled) {
       return;
     }
+    detected = true;
+    stopLoad?.();
     banner = document.createElement("div");
     banner.role = "alert";
     // All styles are inline because the entry stylesheet is broken by definition.
@@ -416,21 +417,9 @@ export function installMissingStylesheetRecovery(): () => void {
       "position:fixed;inset:0 0 auto;z-index:2147483647;padding:12px;text-align:center;background:#1f2937;color:#fff;font:14px system-ui";
     const reloadButton = document.createElement("button");
     reloadButton.textContent = t("common.reload");
-    reloadButton.addEventListener(
-      "click",
-      () => void retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }),
-    );
+    listen(reloadButton, "click", () => void retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }));
     banner.append(t("lazyView.stylesFailed"), " ", reloadButton);
     document.body.append(banner);
-  };
-
-  const detectMissingStylesheet = async () => {
-    if (detected || uninstalled) {
-      return;
-    }
-    detected = true;
-    removeListeners();
-    showBanner();
     await scheduleStaleChunkReload();
   };
 
@@ -439,7 +428,7 @@ export function installMissingStylesheetRecovery(): () => void {
       getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
       "1"
     ) {
-      removeListeners();
+      stopLoad?.();
       return;
     }
     void detectMissingStylesheet();
@@ -450,12 +439,12 @@ export function installMissingStylesheetRecovery(): () => void {
   if (document.readyState === "complete") {
     checkStylesheet();
   } else {
-    window.addEventListener("load", checkStylesheet, { once: true });
+    stopLoad = listen(window, "load", checkStylesheet, { once: true });
   }
 
   return () => {
     uninstalled = true;
-    removeListeners();
+    stopLoad?.();
     banner?.remove();
     banner = null;
   };

@@ -43,7 +43,7 @@ function isTranscriptMessageRecord(entry: unknown): boolean {
 export function readSessionCleanupSnapshotInDatabase(
   database: Parameters<typeof listSqliteSessionEntriesFromDatabase>[0],
   request: Pick<SessionCleanupReadInput, "env" | "fixMissing" | "continuation">,
-): SessionCleanupReadResult {
+): Omit<SessionCleanupReadResult, "retainedArtifactPaths"> {
   const read = () => {
     const entries = listSqliteSessionEntriesFromDatabase(
       database,

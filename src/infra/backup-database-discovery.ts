@@ -1,3 +1,4 @@
+import path from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import {
   resolveActivatedPluginBackupInventory,
@@ -8,6 +9,7 @@ import { discoverBackupDatabasePaths } from "./backup-sqlite-snapshot.js";
 import { resolveDatabaseEngineSelection } from "./database-engine/config.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
+import { listDatabaseEngineStores } from "./database-engine/registry.js";
 import { statePortProvider } from "./database-engine/state-port.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
@@ -20,6 +22,7 @@ type Reply = {
   stateRoots: readonly string[];
   pluginOwners: DatabasePortPluginOwners;
   pluginInventory: ActivatedPluginBackupInventory;
+  resources: Array<{ path: string; family: string; pluginId: string }>;
 };
 
 /** Plugin discovery may read shared state, so PostgreSQL discovery belongs in a worker. */
@@ -49,6 +52,11 @@ if (parentPort && workerData?.databaseDiscovery === true) {
     return withDatabaseEngineSelection(selected, async () => {
       const paths = await discoverBackupDatabasePaths(input);
       const plugins = resolvePluginMetadataSnapshot(input);
+      const families = new Set<string>(
+        listDatabaseEngineStores()
+          .filter((store) => store.postgres)
+          .map((store) => store.id),
+      );
       const pluginOwners = Object.fromEntries(
         plugins.plugins.map(({ id, rootDir, source, origin }) => [
           id,
@@ -57,6 +65,22 @@ if (parentPort && workerData?.databaseDiscovery === true) {
       );
       return {
         paths,
+        resources: plugins.plugins.flatMap((plugin) =>
+          (plugin.backupResources ?? []).flatMap((resource) => {
+            const family = resource.databaseFamily ?? plugin.id;
+            return resource.scope === "state" &&
+              resource.disposition === "include" &&
+              families.has(family)
+              ? [
+                  {
+                    path: path.resolve(input.stateDir, resource.relativePath),
+                    family,
+                    pluginId: plugin.id,
+                  },
+                ]
+              : [];
+          }),
+        ),
         stateRoots: await statePortProvider.resolveRoots({
           ...input,
           env: input.env ?? process.env,

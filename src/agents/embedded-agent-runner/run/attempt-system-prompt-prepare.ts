@@ -1,5 +1,6 @@
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
+import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import {
   resolveProviderSystemPromptContribution,
@@ -34,6 +35,7 @@ import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepar
 import { resolvePromptModeForSession } from "./attempt-prompt-helpers.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import { buildAttemptSystemPrompt, type SystemPromptRefresh } from "./attempt-system-prompt.js";
+import { resolveSessionPromptDelivery } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedBootstrap = Awaited<ReturnType<typeof prepareEmbeddedAttemptBootstrap>>;
@@ -71,7 +73,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   toolSchemaDirectoryPrompt?: () => string | undefined;
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
-  requireExplicitMessageTarget?: boolean;
   effectiveTools: PromptTools;
   isRawModelRun: boolean;
   modelToolsEnabled: boolean;
@@ -171,11 +172,18 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
 
   const toolSchemaDirectoryPrompt = resolveToolSchemaDirectoryPrompt();
 
+  // Only externally publishable origins need the admitted session's sharing facts.
+  const preparedSessionEntry = resolveControlUiLinkLocation(attempt.config)?.origin.startsWith(
+    "https://",
+  )
+    ? (await policyPreparation.reader?.readEntry(assertPreparationCurrent))?.entry
+    : undefined;
   const { runtimeChannel, runtimeCapabilities, ...runtimePrompt } = await resolveAgentRuntimePrompt(
     {
       remoteWorkspace: params.remoteWorkspace,
       config: attempt.config,
       preparedGitCoauthorPrompt: attempt.gitCoauthorPrompt,
+      preparedSessionEntry,
       agentId: params.setup.sessionAgentId,
       workspaceDir: params.setup.effectiveWorkspace,
       cwd: params.setup.effectiveCwd,
@@ -214,7 +222,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       cwd: params.setup.effectiveCwd,
       moduleUrl: import.meta.url,
     }));
-  const providerPromptContext = Object.freeze({
+  const providerPromptContext = {
     config: attempt.config,
     agentDir: attempt.agentDir,
     workspaceDir: params.setup.effectiveWorkspace,
@@ -224,7 +232,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     runtimeChannel,
     runtimeCapabilities,
     agentId: params.setup.sessionAgentId,
-  });
+  };
   const promptContributionContext = { ...providerPromptContext, trigger: attempt.trigger };
   const promptContribution =
     attempt.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
@@ -331,8 +339,14 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         ? params.bootstrap.workspaceNotes
         : undefined,
       promptMode: effectivePromptMode,
-      sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
-      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+      // The cached prompt uses session delivery facts; a turn that differs gets
+      // its delivery rules in the turn's runtime context instead.
+      ...resolveSessionPromptDelivery({
+        config: attempt.config,
+        sessionKey: attempt.sessionKey,
+        chatType: attempt.chatType,
+        channel: runtimeChannel,
+      }),
       silentReplyPromptMode: attempt.silentReplyPromptMode,
       proactiveSubagentOrchestration: params.setup.proactiveSubagentOrchestration,
       acpEnabled: isAcpRuntimeSpawnAvailable({

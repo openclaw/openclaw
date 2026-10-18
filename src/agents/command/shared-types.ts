@@ -173,6 +173,8 @@ export type AgentRunInputContext = {
 };
 
 export type AgentRunTranscriptContext = {
+  /** Host-admitted private completion; retain its transcript without user-facing projection. */
+  privateCompletion?: true;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
   sessionId: string;

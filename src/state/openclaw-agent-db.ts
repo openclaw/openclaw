@@ -32,6 +32,7 @@ import {
   registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -185,6 +186,10 @@ function* openOpenClawAgentDatabaseSteps(
   repairAdmission?: OpenClawAgentDatabaseRepairAdmission,
 ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
   const engineInput = agentEngineInput();
+  const integrityCheck = engineInput
+    ? undefined
+    : (repairAdmission?.integrityCheck ??
+      getOpenClawDatabaseMaintenanceScope()?.sqliteIntegrityCheck);
   if (engineInput) {
     assertEngineStoreExecutionAllowed();
   }
@@ -308,6 +313,17 @@ function* openOpenClawAgentDatabaseSteps(
   let releaseCreationAdmission: (() => void) | undefined;
   try {
     assertCurrent();
+    if (preparedLease && !isMainThread) {
+      try {
+        // Capture proof after stale-lease cleanup, but refuse before opening a native writer.
+        requestSqliteWorkerOperationAdmission({
+          stage: "prepare",
+          facts: { kind: "agent-validation-start", lease: preparedLease.receipt },
+        });
+      } catch (error) {
+        throw new SqliteWorkerOpenRefusedError(error);
+      }
+    }
     if (!repairAdmission?.expectedIdentity) {
       ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
       prepareSqliteDatabaseDirectory(pathname);
@@ -357,12 +373,6 @@ function* openOpenClawAgentDatabaseSteps(
             },
           );
         }
-        if (preparedLease && !isMainThread) {
-          requestSqliteWorkerOperationAdmission({
-            stage: "prepare",
-            facts: { kind: "agent-validation-start", lease: preparedLease.receipt },
-          });
-        }
         selected = openAgentEngineStore(db, agentId, pathname, false, (connection, error) => {
           selected = openedDb = connection;
           throw error;
@@ -403,12 +413,6 @@ function* openOpenClawAgentDatabaseSteps(
             },
           );
         }
-        if (preparedLease && !isMainThread) {
-          requestSqliteWorkerOperationAdmission({
-            stage: "prepare",
-            facts: { kind: "agent-validation-start", lease: preparedLease.receipt },
-          });
-        }
         // The host grant can revoke transferred proof; decide reuse after it returns.
         diagnostics.integrityGateReason = resolveAgentDatabaseIntegrityGateReason(
           validationDatabase,
@@ -436,6 +440,8 @@ function* openOpenClawAgentDatabaseSteps(
           verification,
           isValidatedReopen && reuseAdmittedIntegrity,
           reusedSchema,
+          integrityCheck,
+          repairAdmission?.integrityTables ?? [],
         );
         assertCurrent(validationDatabase);
         if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {
@@ -465,7 +471,16 @@ function* openOpenClawAgentDatabaseSteps(
         finishPhase("configuration");
         assertCurrent(validationDatabase);
         if (!isValidatedReopen) {
-          ensureOpenClawAgentSchema(db, agentId, pathname);
+          ensureOpenClawAgentSchema(
+            db,
+            agentId,
+            pathname,
+            undefined,
+            undefined,
+            undefined,
+            false,
+            integrityCheck,
+          );
         }
         finishPhase("schema");
         selected = openAgentEngineStore(db, agentId, pathname);
@@ -518,7 +533,13 @@ function* openOpenClawAgentDatabaseSteps(
     ) {
       assertCurrent(database);
       registerOpenClawAgentDatabase(
-        { agentId, path: pathname, env: options.env, admittedDb: selected },
+        {
+          agentId,
+          path: pathname,
+          env: options.env,
+          // A temporary QUICK repair handle must not publish FULL runtime admission.
+          admittedDb: integrityCheck === "quick" ? undefined : selected,
+        },
         registrationObserver,
       );
     } else if (!reusedSchema) {
@@ -597,11 +618,12 @@ function* openOpenClawAgentDatabaseSteps(
       );
       cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
     } else {
+      const closeOutcome = error instanceof SqliteWorkerOpenRefusedError ? "read-only" : undefined;
       try {
-        releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions);
+        releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions, closeOutcome);
       } catch (releaseError) {
         retainFailedAgentDatabaseClose(agentId, pathname, () =>
-          releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions),
+          releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions, closeOutcome),
         );
         throw releaseError;
       }

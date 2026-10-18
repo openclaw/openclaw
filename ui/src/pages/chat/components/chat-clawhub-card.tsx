@@ -219,6 +219,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
     () => void load(),
   );
   onSettled(() => {
+    // Connection edges retire request generations and icon URLs before later replies arrive.
     const stop = context.gateway.subscribe(() => void load());
     const activate = () => {
       if (

@@ -54,7 +54,7 @@ import {
   subscribeSessionDataGatewayEvents,
   subscribeSessionCatalogBrowserEvents,
 } from "./session-data-events.ts";
-import { SessionLineageController } from "./session-lineage-controller.ts";
+import { SessionLineageOwner } from "./session-lineage.ts";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
 
 /** Gateway-backed session-list and external-catalog data ownership. */
@@ -112,7 +112,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   // Retiring the epoch aborts it so a dialog open across a reconnect dismisses
   // itself instead of confirming into a mutation scope that no longer applies.
   private sessionMutationAbortController = new AbortController();
-  private readonly lineage = new SessionLineageController(
+  private readonly lineage = new SessionLineageOwner(
     this,
     () => ({ routeId: this.inputs.activeRouteId, key: this.inputs.getRouteSessionKey() }),
     () => this.childSessionScope,
@@ -186,6 +186,10 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.inputs.sessionCatalogIdsWithoutVisibleRows();
 
   readonly requestSessionDataUpdate = () => {
+    const roster = this.roster?.snapshot;
+    if (roster) {
+      publishSidebarSessionList(this, { ...roster, agentId: null });
+    }
     if (!this.active || !this.inputs.navigationVisible || this.renderFrame !== undefined) {
       return;
     }
@@ -242,6 +246,9 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.stopRoster?.();
       this.roster = roster;
       this.stopRoster = roster?.subscribe(this.requestSessionDataUpdate);
+      this.updateSessions(this.context.sessions);
+      this.requestSessionDataUpdate();
+      void this.scheduleSidebarSessions();
     }
     this.lineage.synchronize();
     const scope = this.readPresentationScope();
@@ -387,6 +394,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
     if (
       agentChanged &&
+      this.inputs.sidebarAgentsMode !== "roster" &&
       context?.gateway.snapshot.phase === "connected" &&
       hasSidebarListFilter(this.inputs)
     ) {
@@ -447,7 +455,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.lineage.reset(true);
       this.requestSessionDataUpdate();
     }
-    if (hasSidebarListFilter(this.inputs)) {
+    if (this.roster || hasSidebarListFilter(this.inputs)) {
       return;
     }
     const presentation = sessions.presentation;
@@ -455,7 +463,6 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.clearSessionCache();
     }
     publishSidebarSessionList(this, { ...snapshot, ...presentation });
-    this.sessionsLoading = snapshot.loading;
     this.requestSessionDataUpdate();
   };
 
@@ -551,7 +558,11 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
   private bindFilteredSessions(): void {
     const sessions = this.context?.sessions;
-    if (!sessions || !hasSidebarListFilter(this.inputs)) {
+    if (
+      !sessions ||
+      this.inputs.sidebarAgentsMode === "roster" ||
+      !hasSidebarListFilter(this.inputs)
+    ) {
       this.retireFilteredSessions();
       return;
     }
@@ -576,6 +587,9 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   }
 
   refreshSidebarSessions(affectedAgentId?: string): Promise<void> {
+    if (this.inputs.sidebarAgentsMode === "roster") {
+      return rosterActivityStore(this.context).refresh();
+    }
     this.bindFilteredSessions();
     return refreshSidebarSessionList(this, { affectedAgentId });
   }

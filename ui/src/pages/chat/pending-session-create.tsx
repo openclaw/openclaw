@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-j
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
+import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -25,6 +26,7 @@ type PendingSessionCreateProps = {
   narrow: boolean;
   mergedChrome: boolean;
   navDrawerOpen: boolean;
+  gatewayStatus?: GatewayStatusProps | null;
 };
 
 /** Draft-owned input stays local; real pane controllers mount after acceptance. */
@@ -134,6 +136,7 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
         narrow: props.narrow,
         mergedChrome: props.mergedChrome,
         navDrawerOpen: props.navDrawerOpen,
+        gatewayStatus: props.gatewayStatus,
         title: submissions.readCreate()?.displayName ?? t("newSession.title"),
         titlePending: submitting && !submissions.readCreate()?.displayName,
         session: undefined,
@@ -262,6 +265,7 @@ export const PendingSessionCreate = defineSolidBridge<PendingSessionCreateProps>
       narrow: { default: false },
       mergedChrome: { default: false },
       navDrawerOpen: { default: false },
+      gatewayStatus: { default: null },
     },
   },
 );

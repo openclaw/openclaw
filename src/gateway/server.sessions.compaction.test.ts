@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
-import type { QueuedCompactionHostOptions } from "../agents/embedded-agent-runner/compact.queued-execution.js";
-import type { CompactEmbeddedAgentSessionParams } from "../agents/embedded-agent-runner/compact.types.js";
+import type {
+  CompactEmbeddedAgentSessionParams,
+  QueuedCompactionHostOptions,
+} from "../agents/embedded-agent-runner/compact.types.js";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
+import { withSessionCompactionPersistenceAsync } from "../agents/sessions/session-compaction-persistence.js";
 import { enqueueFollowupRun, type FollowupRun } from "../auto-reply/reply/queue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions.js";
@@ -143,7 +146,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     message: { role: "user", content: "follow-up", timestamp: 2 },
     now: Date.parse("2026-06-19T12:00:02.000Z"),
   });
-  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (params) => {
+  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (params, hostInput) => {
     const call = params as CompactEmbeddedAgentSessionParams;
     if (
       !call.sessionTarget?.agentId ||
@@ -153,24 +156,24 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     ) {
       throw new Error("expected SQLite session target");
     }
-    const targetScope = {
-      agentId: call.sessionTarget.agentId,
-      sessionId: call.sessionTarget.sessionId,
-      sessionKey: call.sessionTarget.sessionKey,
-      storePath: call.sessionTarget.storePath,
-    };
-    const rows = await loadTranscriptEvents(targetScope);
-    expect(rows).toHaveLength(3);
-    await appendTranscriptEvent(targetScope, {
-      type: "compaction",
-      id: "compact-1",
-      parentId: seedMessage.messageId,
-      timestamp: "2026-06-19T12:00:02.000Z",
-      summary: "summary",
-      firstKeptEntryId: seedMessage.messageId,
-      tokensBefore: 120,
-      tokensAfter: 80,
-    });
+    const host = hostInput as QueuedCompactionHostOptions;
+    const manager = host.preparedSession?.sessionManager;
+    if (!manager || !host.withCompactionPersistenceAsync) {
+      throw new Error("expected prepared Gateway compaction persistence");
+    }
+    expect(manager.getEntries()).toHaveLength(2);
+    await withSessionCompactionPersistenceAsync(manager, host.withCompactionPersistenceAsync, () =>
+      manager.appendCompactionAsync(
+        "summary",
+        seedMessage.messageId,
+        120,
+        undefined,
+        undefined,
+        undefined,
+        80,
+      ),
+    );
+    expect(loadSessionEntry(sessionScope)).toMatchObject({ compactionCount: 1, totalTokens: 80 });
     return {
       ok: true,
       compacted: true,

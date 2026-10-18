@@ -203,36 +203,41 @@ function CardMenu(props: CardProps) {
           ? "sessionProgressCard.refresh.retry"
           : "sessionProgressCard.refresh.label",
     );
-  const items = (): MenuEntry[] => [
-    ...(props.refreshAction
-      ? [
-          {
-            id: "refresh",
-            label: label(),
-            disabled: pending(),
-            class: "session-progress-card__refresh",
-            icon: (
-              <Icon
-                name={
-                  pending()
-                    ? "loader"
-                    : props.refreshAction?.state === "updated"
-                      ? "check"
-                      : "refresh"
-                }
-              />
-            ),
-            attributes: {
-              "data-state": props.refreshAction?.state ?? "idle",
-              "aria-busy": pending() ? ("true" as const) : ("false" as const),
-            },
-          },
-        ]
-      : []),
-    ...(props.onDismiss ? [{ id: "dismiss", label: t("sessionProgressCard.hide") }] : []),
-    ...(props.onClearSaved ? [{ id: "clear", label: t("sessionProgressCard.clearSaved") }] : []),
-    ...(props.menuOptions?.items ?? []),
-  ];
+  const refreshItem = createMemo<MenuEntry>(
+    () => ({
+      id: "refresh",
+      get label() {
+        return label();
+      },
+      get disabled() {
+        return pending();
+      },
+      class: "session-progress-card__refresh",
+      icon: (
+        <Icon
+          name={
+            pending() ? "loader" : props.refreshAction?.state === "updated" ? "check" : "refresh"
+          }
+        />
+      ),
+      get attributes() {
+        return {
+          "data-state": props.refreshAction?.state ?? "idle",
+          "aria-busy": pending() ? ("true" as const) : ("false" as const),
+        };
+      },
+    }),
+    { lazy: true },
+  );
+  const items = createMemo<MenuEntry[]>(
+    () => [
+      ...(props.refreshAction ? [refreshItem()] : []),
+      ...(props.onDismiss ? [{ id: "dismiss", label: t("sessionProgressCard.hide") }] : []),
+      ...(props.onClearSaved ? [{ id: "clear", label: t("sessionProgressCard.clearSaved") }] : []),
+      ...(props.menuOptions?.items ?? []),
+    ],
+    { lazy: true },
+  );
   createEffect(
     () => props.menuOptions?.disabled,
     (disabled) => {
@@ -242,7 +247,14 @@ function CardMenu(props: CardProps) {
     },
   );
   return (
-    <Show when={items().length > 0}>
+    <Show
+      when={
+        props.refreshAction ||
+        props.onDismiss ||
+        props.onClearSaved ||
+        props.menuOptions?.items.length
+      }
+    >
       <div
         onClick={(event) => {
           event.preventDefault();
@@ -250,6 +262,7 @@ function CardMenu(props: CardProps) {
         }}
       >
         <Menu
+          lazy="while-open"
           id={id}
           class={props.menuOptions?.class}
           triggerClass="session-progress-card__options"

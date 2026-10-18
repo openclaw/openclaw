@@ -1542,6 +1542,30 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
+  it.each([
+    ["with", "requester-revision"],
+    ["without", undefined],
+  ] as const)(
+    "hands a quiet interrupted child to a requester %s a lifecycle revision",
+    async (_label, completionRequesterLifecycleRevision) => {
+      const entry = createRunEntry({
+        expectsCompletionMessage: false,
+        completionRequesterSessionId: "requester-session",
+        completionRequesterLifecycleRevision,
+      });
+      const controller = createLifecycleController({ entry });
+
+      await controller.completeSubagentRun(makeInterruptedSubagentCompletion(entry));
+
+      expect(readLifecycleRun(entry)).toMatchObject({
+        terminalOwner: "interrupted-recovery",
+        completionTarget: "parent",
+        cleanup: "keep",
+        execution: { interruptionReason: "gateway-restart" },
+      });
+    },
+  );
+
   it("persists interrupted recovery before task projection and rejects late provider or yield", async () => {
     const entry = createRunEntry();
     const beforeWrite = vi.fn();
@@ -5213,6 +5237,9 @@ describe("requester settle wake trigger", () => {
       entry,
       maybeWakeRequesterAfterAllChildrenSettled: settleWake,
     });
+
+    // Seed durable fixture storage before its maintenance timers can enter the fake clock.
+    await mutateLifecycleRun(entry, () => {});
 
     vi.useFakeTimers();
     vi.setSystemTime(0);

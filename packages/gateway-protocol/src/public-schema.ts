@@ -447,6 +447,8 @@ export {
   AgentsCreateResultSchema,
   AgentsUpdateParamsSchema,
   AgentsUpdateResultSchema,
+  AgentsAvatarGenerateParamsSchema,
+  AgentsAvatarGenerateResultSchema,
   AgentsDeleteParamsSchema,
   AgentsDeleteResultSchema,
   AgentsFilesListParamsSchema,

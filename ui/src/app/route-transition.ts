@@ -24,6 +24,7 @@ const SESSION_ROUTE_ENTER_OPTIONS: KeyframeAnimationOptions = {
   easing: "cubic-bezier(0.16, 1, 0.3, 1)",
 };
 
+// Route transitions observe Chat's nodes across page lifetimes; they do not render those nodes.
 function waitForChatRouteReady(document: Document) {
   if (document.querySelector(".agent-chat__composer-combobox")) {
     return { cancel: () => undefined, ready: Promise.resolve() };

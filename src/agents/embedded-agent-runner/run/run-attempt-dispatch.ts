@@ -679,6 +679,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       sessionPromptState.activePrompt.persisted = false;
     },
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+    privateCompletion: params.privateCompletion,
     ...continuationRetryCount.capability,
   };
   let rawAttempt: EmbeddedRunAttemptResult;

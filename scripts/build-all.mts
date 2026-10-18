@@ -364,9 +364,7 @@ export function resolveBuildAllEnvironment(
     readGitCommit,
   });
   // Older installed updaters already send this marker to candidate builds.
-  // Updates need runtime artifacts; explicit declaration/package builds still win.
   if (buildEnv.OPENCLAW_UPDATE_IN_PROGRESS === "1") {
-    buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ??= "1";
     // Published updaters can still pass the serving checkout's source root.
     // Rebind before plugin asset hooks resolve SDK aliases in this candidate.
     buildEnv.OPENCLAW_DEV_SOURCE_ROOT = process.cwd();
@@ -573,12 +571,14 @@ export async function runBuildAllSteps(
         status: await runManagedCommand({
           bin: invocation.command,
           args:
-            script === "scripts/tsdown-build.mts" ||
-            script === "scripts/write-unified-entry-dts.ts" ||
-            script === "scripts/write-plugin-sdk-entry-dts.ts" ||
-            script === "scripts/runtime-postbuild.mts"
-              ? distArtifactEntryArgs(script, invocation.args.slice(3))
-              : invocation.args,
+            invocation.args[0] === "scripts/ui.js"
+              ? distArtifactEntryArgs("scripts/ui.js", invocation.args.slice(1), { native: true })
+              : script === "scripts/tsdown-build.mts" ||
+                  script === "scripts/write-unified-entry-dts.ts" ||
+                  script === "scripts/write-plugin-sdk-entry-dts.ts" ||
+                  script === "scripts/runtime-postbuild.mts"
+                ? distArtifactEntryArgs(script, invocation.args.slice(3))
+                : invocation.args,
           ...invocation.options,
           signal: params.signal,
           requireProcessTreeExit: process.platform !== "win32",

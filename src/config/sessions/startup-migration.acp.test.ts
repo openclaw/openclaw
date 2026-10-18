@@ -25,7 +25,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
-import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
 
 it.each([false, true])(
@@ -251,7 +251,9 @@ it("startup requires offline ACP repair before handing restored stores to runtim
       if (shape === "unsettled-embedded") {
         const database = openOpenClawAgentDatabase({ agentId, env });
         const { db } = database;
-        runSqliteImmediateTransactionSync(db, () => seedCanonicalSessionValidation(database));
+        runSqliteImmediateTransactionSync(db, () =>
+          markCanonicalSessionValidationPending(database),
+        );
         const raw = `${JSON.stringify(currentEntry).slice(0, -1)},"acp":null,"acp":${JSON.stringify(meta)}}`;
         db.prepare(
           "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",

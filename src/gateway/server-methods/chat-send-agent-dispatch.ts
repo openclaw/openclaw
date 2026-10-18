@@ -60,7 +60,7 @@ import {
 import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionWorkspace } from "./session-create-project.js";
 
-export function startChatDispatch(params: StartChatDispatchParams): void {
+export function startChatDispatch(params: StartChatDispatchParams): Promise<void> {
   const {
     replyAdmissionTicket,
     diagnostics,
@@ -680,7 +680,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       return dispatchErrorLifecycle.handleError(error);
     })
     .finally(() => replyAdmissionTicket?.release());
-  void (async () => {
+  return (async () => {
     try {
       await dispatch;
     } finally {

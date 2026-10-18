@@ -16,6 +16,7 @@ export type InputDialogOptions = {
    * rename that would change nothing cannot be submitted.
    */
   requireChange?: boolean;
+  canSubmit?: () => boolean;
   /**
    * Runs the operation the dialog was opened for. `null` resolves the dialog; a
    * message keeps it open with the typed value, so a rejected attempt stays

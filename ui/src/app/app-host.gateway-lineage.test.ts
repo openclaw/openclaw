@@ -180,6 +180,8 @@ describe("Control UI Gateway target lineage", () => {
           pathname,
           pendingGatewayUrl,
         );
+        await vi.dynamicImportSettled();
+        await draw();
         const confirmations = container.querySelectorAll("openclaw-gateway-url-confirmation");
         expect(confirmations).toHaveLength(1);
         const confirmation = confirmations[0] as HTMLElement & {

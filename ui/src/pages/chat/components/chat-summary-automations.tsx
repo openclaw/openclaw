@@ -7,6 +7,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { loadCompactCronJobsPage } from "../../../lib/cron/jobs.ts";
 import { createInitialCronState } from "../../../lib/cron/state.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { formatCronSchedule } from "../../../lib/presenter.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
@@ -34,6 +35,7 @@ export function ChatSummaryAutomations(props: Props) {
   // The loader owns synchronous request state; Solid only observes its revision.
   let cron = createInitialCronState<CronCompactJob>();
   let showError = false;
+  let readAccess = false;
   let dirty = true;
   let active = true;
   let presentationScope = 0;
@@ -50,7 +52,15 @@ export function ChatSummaryAutomations(props: Props) {
     return showError;
   };
 
+  const readable = () => {
+    revision();
+    return readAccess;
+  };
+
   function reset(source: ApplicationGateway | undefined, key: string, retain = false) {
+    readAccess = canPresentGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
+      requireAdvertisement: false,
+    });
     const next = createInitialCronState<CronCompactJob>({
       client: source?.snapshot.client ?? null,
       connected: source?.snapshot.phase === "connected",
@@ -61,9 +71,15 @@ export function ChatSummaryAutomations(props: Props) {
         ? { sessionKey: identity.sessionKey, sessionAgentId: identity.agentId }
         : undefined;
     next.cronJobsSortBy = "name";
-    next.canRefresh = () => cron === next && visible() && Boolean(next.cronSessionFilter);
+    next.canRefresh = () =>
+      cron === next &&
+      visible() &&
+      Boolean(next.cronSessionFilter) &&
+      canCallGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
+        requireAdvertisement: false,
+      });
     const scope = source ? gatewayPresentationScope(source).key : 0;
-    if (retain && scope !== 0 && scope === presentationScope) {
+    if (retain && readAccess && scope !== 0 && scope === presentationScope) {
       next.cronJobs = cron.cronJobs;
       next.cronJobsSnapshotRevision = cron.cronJobsSnapshotRevision;
       next.cronJobsTotal = cron.cronJobsTotal;
@@ -80,6 +96,7 @@ export function ChatSummaryAutomations(props: Props) {
   async function load(append = false, retry?: HTMLButtonElement, isPresented = readPresented()) {
     const current = cron;
     if (
+      !readAccess ||
       !visible(isPresented) ||
       !current.connected ||
       !current.cronSessionFilter ||
@@ -128,14 +145,24 @@ export function ChatSummaryAutomations(props: Props) {
       let identity = JSON.stringify(resolveUiConversationIdentity(source.snapshot, key));
       // Reject obsolete event delivery before queued binding cleanup runs.
       const current = () => untrack(() => props.gateway === source && props.sessionKey === key);
+      // Connection publications retire request scopes before the next cron event is delivered.
       const unsubscribe = source.subscribe((snapshot) => {
         if (!current()) {
           return;
         }
         const nextIdentity = JSON.stringify(resolveUiConversationIdentity(snapshot, key));
         const changed = lifecycle.transition(snapshot);
-        if (changed || identity !== nextIdentity) {
-          reset(source, key, identity === nextIdentity && snapshot.phase !== "connected");
+        const nextReadAccess = canPresentGatewayMethod(snapshot, "cron.list", "operator.read", {
+          requireAdvertisement: false,
+        });
+        if (changed || identity !== nextIdentity || readAccess !== nextReadAccess) {
+          reset(
+            source,
+            key,
+            identity === nextIdentity &&
+              readAccess === nextReadAccess &&
+              snapshot.phase !== "connected",
+          );
           identity = nextIdentity;
         }
         if (dirty) {
@@ -267,18 +294,20 @@ export function ChatSummaryAutomations(props: Props) {
   );
   return (
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
-      <Show
-        when={state().cronJobs.length > 0}
-        fallback={<Show when={props.gateway && (!loaded() || error())}>{content()}</Show>}
-      >
-        <details class="chat-details__group" data-details-group="automations" open>
-          <summary class="chat-details__caption">
-            {t("chat.sessionDetails.automations")}
-            <span>{state().cronJobsTotal ?? state().cronJobs.length}</span>
-            <Icon name="chevronDown" />
-          </summary>
-          {content()}
-        </details>
+      <Show when={readable()}>
+        <Show
+          when={state().cronJobs.length > 0}
+          fallback={<Show when={props.gateway && (!loaded() || error())}>{content()}</Show>}
+        >
+          <details class="chat-details__group" data-details-group="automations" open>
+            <summary class="chat-details__caption">
+              {t("chat.sessionDetails.automations")}
+              <span>{state().cronJobsTotal ?? state().cronJobs.length}</span>
+              <Icon name="chevronDown" />
+            </summary>
+            {content()}
+          </details>
+        </Show>
       </Show>
     </openclaw-chat-summary-automations>
   );
