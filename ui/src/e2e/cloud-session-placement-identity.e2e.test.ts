@@ -70,11 +70,13 @@ suite.define(() => {
       for (const [label, value] of [
         ["Service", "machine0"],
         ["Profile", "team"],
-        ["Machine", "…d94c1a"],
       ]) {
         const term = facts.locator("dt", { hasText: label });
         expect(await term.locator("+ dd").textContent()).toBe(value);
       }
+      expect(await page.locator(".chat-pane__placement-heading > span").textContent()).toBe(
+        "…d94c1a",
+      );
       await page.keyboard.press("Escape");
       const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${session.key}"]`);
       expect(await sidebarRow.locator(".session-row-badge--cloud").getAttribute("aria-label")).toBe(

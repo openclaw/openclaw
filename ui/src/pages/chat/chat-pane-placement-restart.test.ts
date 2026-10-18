@@ -97,7 +97,9 @@ it.each([
         await selectPlacementConfiguration("Operating system", "windows/wsl2");
         await selectPlacementConfiguration("Machine", "fast");
       } else {
-        expect(clickChoice("gateway")?.textContent).toContain("Gateway · local");
+        expect(clickChoice("gateway")?.querySelector(".session-move__name")?.textContent).toBe(
+          "Gateway · local",
+        );
       }
       const restartButton = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
         (button) => button.textContent?.trim() === "Restart session",

@@ -90,6 +90,14 @@ function startMove(pane: ReturnType<typeof createTestChatPane>["pane"], row: Gat
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   dialogs = createModalDialogTestFixture();
 });
 
@@ -509,6 +517,10 @@ describe("local session placement actions", () => {
     const moving = dialogs.track(startMove(pane, session));
     await dialogs.waitFor(() => expect(option("gateway")).not.toBeNull());
     selectOption("gateway");
+    expect(
+      document.body.querySelector<HTMLButtonElement>('openclaw-modal-dialog button[type="submit"]')!
+        .disabled,
+    ).toBe(false);
     session.placement.generation = 2;
     clickButton("Move session");
     await moving;
