@@ -1,8 +1,9 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createEffect, onSettled, untrack } from "solid-js";
+import { Show, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
-import { createOverlayAnchor, type OverlayPlacement } from "../overlay-anchor.ts";
-import { createOverlay, findOverlayParent, type Overlay } from "../overlay-lifecycle.ts";
+import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
+import type { OverlayPlacement } from "../overlay-anchor.ts";
+import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
 import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
 import overlayStyles from "./overlay.css?inline";
@@ -39,8 +40,6 @@ export interface PopoverProps {
 export function Popover(props: PopoverProps): JSX.Element {
   let trigger!: HTMLButtonElement;
   let surface!: HTMLDivElement;
-  let mounted = false;
-  let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   // Identity, lazy mounting, and root placement are fixed for this native overlay lifetime.
   const initial = untrack(() => ({
     id: props.id,
@@ -59,26 +58,15 @@ export function Popover(props: PopoverProps): JSX.Element {
       root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
   });
   const control = useOverlayControl(overlay, initial.lazy, props, () => props.children);
-  createEffect(
-    () => [props.anchor, props.placement] as const,
-    ([anchor, placement]) => {
-      if (!mounted) {
-        return;
-      }
-      const target = anchor ?? trigger;
-      overlay.bindTrigger(target);
-      overlay.setParent(findOverlayParent(target));
-      anchorBinding?.update(target, placement);
-    },
+  const anchor = createAnchoredOverlay(
+    overlay,
+    () => trigger,
+    () => ({ anchor: props.anchor, placement: props.placement }),
+    { sameRoot: initial.sameRoot },
   );
   onSettled(() => {
     overlay.bindSurface(surface);
-    mounted = true;
-    const target = props.anchor ?? trigger;
-    overlay.bindTrigger(target);
-    overlay.setParent(findOverlayParent(target));
-    anchorBinding = createOverlayAnchor(overlay.surface, { sameRoot: initial.sameRoot });
-    anchorBinding.update(target, props.placement);
+    const disconnectAnchor = anchor.connect();
     const disconnectControl = control.connect(() =>
       props.ref?.({
         overlay,
@@ -87,8 +75,7 @@ export function Popover(props: PopoverProps): JSX.Element {
       }),
     );
     return () => {
-      mounted = false;
-      anchorBinding?.dispose();
+      disconnectAnchor();
       disconnectControl();
     };
   });

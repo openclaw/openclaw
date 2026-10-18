@@ -6,7 +6,6 @@ import {
   For,
   onCleanup,
   Show,
-  untrack,
 } from "solid-js";
 import type {
   MemoryMigrationProviderPlan,
@@ -18,6 +17,7 @@ import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import "../styles/onboarding-memory-import.css";
@@ -94,11 +94,20 @@ function providerResultMessage(result: ProviderResult | undefined) {
       });
 }
 
-function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryImportElement }) {
-  const host = untrack(() => props.host);
-  const [sourceRevision, setSourceRevision] = createSignal(0);
+function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImportElement) {
   const [planRequest, setPlanRequest] = createSignal(0);
-  const sourceChanged = () => setSourceRevision((value) => value + 1);
+  const sources = createMemo(() =>
+    projectSource(props.context, {
+      read: (context) => context,
+      subscribe(context, notify) {
+        const releases = [context?.gateway, context?.agents, context?.agentSelection].map(
+          (source) => source?.subscribe(notify),
+        );
+        return () => releases.forEach((release) => release?.());
+      },
+      equality: "revision",
+    }),
+  );
   // Selection and admission stay synchronous for same-turn changes and cancellation.
   let selectedByProvider: Record<string, boolean> = {};
   const [selection, setSelection] = createSignal(selectedByProvider, { equals: false });
@@ -120,18 +129,9 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
   let disposed = false;
 
   createEffect(
-    () => props.context,
-    (context) => {
-      const releases = [context?.gateway, context?.agents, context?.agentSelection].map((source) =>
-        source?.subscribe(sourceChanged),
-      );
-      return () => releases.forEach((release) => release?.());
-    },
-  );
-  createEffect(
     () => {
-      sourceRevision();
-      return { context: props.context, list: props.context?.agents.state.agentsList };
+      const context = sources().read();
+      return { context, list: context?.agents.state.agentsList };
     },
     ({ context, list }) => {
       if (list) {
@@ -153,15 +153,15 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
 
   const planInputs = createMemo(
     () => {
-      sourceRevision();
-      const snapshot = props.context?.gateway.snapshot;
+      const context = sources().read();
+      const snapshot = context?.gateway.snapshot;
       return [
         props.active,
         isClosed(),
         guardIsDone(),
         snapshot?.phase === "connected" ? snapshot.client : null,
         snapshot ? hasOperatorAdminAccess(snapshot.hello?.auth ?? null) : false,
-        currentAgentId(props.context),
+        currentAgentId(context),
         planRequest(),
       ] as const;
     },
@@ -229,7 +229,7 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
       : null;
   };
   const providers = createMemo(() => {
-    sourceRevision();
+    sources().read();
     return offeredProviders(currentBinding(offer())?.plan ?? null);
   });
   const isVisible = () => {
@@ -461,9 +461,7 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
 
 export const OnboardingMemoryImport = defineSolidBridge<Props>(
   "openclaw-onboarding-memory-import",
-  (props, host) => (
-    <OnboardingMemoryImportContent context={props.context} active={props.active} host={host} />
-  ),
+  OnboardingMemoryImportContent,
   {
     properties: {
       context: { default: undefined, attribute: false },

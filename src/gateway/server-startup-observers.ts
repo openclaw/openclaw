@@ -59,6 +59,7 @@ export async function markGatewayStartupMainSessionOrphans(
 
 type SubagentRegistryActivation = (
   resolveGatewayContext: GatewayContextResolver,
+  startupTrace?: GatewayStartupTrace,
 ) => void | Promise<void>;
 
 /** The tracked post-ready tail owns recovery and observers until their original work settles. */
@@ -149,7 +150,7 @@ export async function runGatewayStartupObservers(params: {
         );
         if (!params.signal.aborted && params.isClosing?.() !== true) {
           await measureStartup(params.startupTrace, "sidecars.subagent-activation", () =>
-            activateSubagentRegistry(params.resolveGatewayContext),
+            activateSubagentRegistry(params.resolveGatewayContext, params.startupTrace),
           );
         }
       });

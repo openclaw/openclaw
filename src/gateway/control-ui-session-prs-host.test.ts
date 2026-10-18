@@ -5,7 +5,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
-import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
+import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
@@ -74,7 +74,7 @@ it.each([false, true])(
         const secondReader = f.addReader("second-publication-reader");
         const targets = await Promise.all(
           [f.client, secondReader.client].map(async (client) => {
-            const capture = await prepareControlUiSessionPrRead({
+            const capture = createControlUiSessionPrRead({
               client,
               sessionKey,
               getRuntimeConfig,

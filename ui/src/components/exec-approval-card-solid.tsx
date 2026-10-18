@@ -18,6 +18,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
+import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 
 declare module "@solidjs/web" {
@@ -285,7 +286,12 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
           <Icon name="shieldQuestion" />
         </span>
         <div class="sidebar-approval-row__content">
-          <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
+          <div
+            ref={sidebarAttentionFocusRef("row-only")}
+            class="sidebar-approval-row__header"
+            data-issue-row-focus
+            tabindex="-1"
+          >
             <span class="sidebar-issues-panel__entity" title={sessionTitle()}>
               {sessionTitle()}
             </span>
@@ -320,6 +326,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
                 const label = createMemo(() => approvalDecisionLabel(decision, approval()));
                 return (
                   <button
+                    ref={sidebarAttentionFocusRef()}
                     type="button"
                     class={[
                       "btn btn--xs sidebar-approval-row__action",
@@ -340,6 +347,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
             </For>
             {props.openSessionHref && props.onOpenSession ? (
               <a
+                ref={sidebarAttentionFocusRef()}
                 class="sidebar-approval-row__open-session"
                 href={props.openSessionHref}
                 aria-label={t("sessionsView.openSession")}

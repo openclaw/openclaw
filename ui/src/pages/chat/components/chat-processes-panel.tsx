@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal } from "solid-js";
+import { Show, createMemo, createSignal } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -18,17 +18,12 @@ export type ChatProcessesPanel = SolidBridgeElement<SessionPanelProps>;
 export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
   "openclaw-chat-processes-panel",
   (props) => {
-    const [selected, setSelected] = createSignal<string | null>(null);
     const [finishedOpen, setFinishedOpen] = createSignal(false);
     const panel = useSessionPanel(props, ProcessesPanelData, () => setSelected(null));
     const data = () => panel().snapshot;
-    createEffect(
-      () => Boolean(data().error && !data().rows.length),
-      (denied) => {
-        if (denied) {
-          setSelected(null);
-        }
-      },
+    // Missing retained rows keep their detail state; access loss closes private output.
+    const [selected, setSelected] = createSignal<string | null>((previous) =>
+      data().error && !data().rows.length ? null : (previous ?? null),
     );
     const selectedRow = createMemo(() => data().rows.find((row) => row.instanceId === selected()));
     const running = createMemo(() => data().rows.filter((row) => row.status === "running"));

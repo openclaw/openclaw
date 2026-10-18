@@ -658,7 +658,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startupOrder).toEqual(["unlock", "ready"]);
     postReadyWork.resolve();
     await recoveryActivated.promise;
-    expect(hoisted.activateSubagentRegistry).toHaveBeenCalledWith(expect.any(Function));
+    expect(hoisted.activateSubagentRegistry).toHaveBeenCalledWith(expect.any(Function), undefined);
     expect(startupOrder).toEqual(["unlock", "ready", "registry"]);
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
   });

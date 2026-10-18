@@ -36,6 +36,7 @@ export interface TooltipPolicyOptions {
   trigger: () => HTMLElement | SVGElement | null;
   richContent: () => readonly Node[];
   richContainer: () => HTMLElement | null;
+  surface: HTMLElement;
   requestOpen: (open: boolean) => boolean;
   retire: () => void;
   preview: (anchor: HTMLElement | SVGElement, content: string) => void;
@@ -497,13 +498,10 @@ export class TooltipOwner {
 
   #syncDescription() {
     const richText = this.#richContentText;
-    this.options
-      .richContainer()
-      ?.closest<HTMLElement>(".tooltip-surface")
-      ?.style.setProperty(
-        "pointer-events",
-        richText && !this.options.props().pointerThrough ? "auto" : "none",
-      );
+    this.options.surface.style.setProperty(
+      "pointer-events",
+      richText && !this.options.props().pointerThrough ? "auto" : "none",
+    );
     if (!(this.options.props().describe ?? true)) {
       this.#restoreDescription();
       return;

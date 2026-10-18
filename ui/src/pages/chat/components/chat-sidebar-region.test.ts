@@ -581,13 +581,12 @@ describe("chat sidebar region", () => {
     async ({ slot, eventType, detail }) => {
       const handleToggleRequest = vi.fn();
       const region = await createRegion(openSlot({ columns: [] }, slot));
+      const panel = Object.assign(element("<div>Panel content</div>"), { handleToggleRequest });
       region.panelDefinitions = region.panelDefinitions.map((definition) =>
         Object.assign({}, definition, {
           available: definition.slot === slot,
-          content:
-            definition.slot === slot
-              ? Object.assign(element("<div>Panel content</div>"), { handleToggleRequest })
-              : null,
+          content: definition.slot === slot ? panel : null,
+          panelHost: definition.slot === slot ? panel : undefined,
         }),
       );
       await region.updateComplete;

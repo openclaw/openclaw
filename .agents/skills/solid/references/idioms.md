@@ -79,6 +79,7 @@ Start from the narrowest primitive that expresses the data's owner and lifetime:
 | Restartable event-driven delay or feedback reset                                 | `createTimeout(callback, milliseconds)`; call `schedule()` or `cancel()`                             |
 | Browser media capability                                                         | `createMediaQuery(query, fallback)` from `lib/reactive/platform.ts`                                  |
 | Document visibility                                                              | `createDocumentVisibility()` from `lib/reactive/platform.ts`; polling policy stays with its owner    |
+| One owned pointer gesture                                                        | `createPointerDrag()` from `lib/reactive/pointer-drag.ts`; caller keeps geometry and commit policy   |
 
 `createMemo(fn, { lazy: true })` defers the first computation until something
 reads it and disposes it when nothing observes it; `createSignal(v, { unobserved })`

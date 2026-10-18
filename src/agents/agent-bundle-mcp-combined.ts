@@ -152,9 +152,7 @@ export function createCombinedSessionMcpRuntime(params: {
     try {
       return await inFlight;
     } finally {
-      if (catalogInFlight === inFlight) {
-        catalogInFlight = undefined;
-      }
+      catalogInFlight = undefined;
     }
   };
 

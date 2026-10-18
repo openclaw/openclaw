@@ -37,12 +37,20 @@ export function resolveSkillLibraryPresentationInDatabase(
   db: EngineConnection,
   authority: SkillLibraryAuthority,
   actor = resolveSkillLibraryActor(db, authority),
+) {
+  return projectSkillLibraryPresentation(
+    actor,
+    tableExists(db, "user_profiles") && selectHasMultipleSessionSharingIdentities(db),
+  );
+}
+
+export function projectSkillLibraryPresentation(
+  actor: ReturnType<typeof resolveSkillLibraryActor>,
+  multipleProfiles: boolean,
 ): Pick<
   SkillsLibraryListResult,
   "profileId" | "multipleProfiles" | "defaultTarget" | "canManageWorkspace"
 > {
-  const multipleProfiles =
-    tableExists(db, "user_profiles") && selectHasMultipleSessionSharingIdentities(db);
   return {
     profileId: actor.profileId ?? null,
     multipleProfiles,
