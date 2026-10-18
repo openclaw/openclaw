@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, onTestFailed, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import {
@@ -13,6 +13,11 @@ import { recoverTerminalSessionEntryForVisibleTurn } from "../config/sessions/te
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  closeProvider,
+  listenProvider,
+  readProviderBody,
+} from "./gateway-provider-fixture.test-support.js";
 import { createRestartSafeChatRequest } from "./server-methods/chat-restart-recovery.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -50,31 +55,14 @@ it("chat.send recovers failed and statusless work for new messages and retained 
   const priorMessage = "Finish the interrupted recovery task.";
   const nextMessage = "Then verify the new request.";
   const targetRequests: string[] = [];
-  const requestPresence: Array<{ prior: boolean; next: boolean }> = [];
-  let phase = "setup";
-  let caseId: string | undefined;
-  onTestFailed(() => {
-    console.error(
-      "orphaned recovery diagnostics",
-      JSON.stringify({ phase, caseId, requestPresence }),
-    );
-  });
   let responseCount = 0;
   const providerServer = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
+      const body = await readProviderBody(request);
       if (request.method !== "POST" || request.url !== "/v1/responses") {
         response.writeHead(404).end();
         return;
       }
-      const body = Buffer.concat(chunks).toString("utf8");
-      requestPresence.push({
-        prior: body.includes(priorMessage),
-        next: body.includes(nextMessage),
-      });
       if (body.includes(priorMessage)) {
         targetRequests.push(body);
       }
@@ -88,16 +76,8 @@ it("chat.send recovers failed and statusless work for new messages and retained 
   });
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
   const runProof = async () => {
-    await new Promise<void>((resolve, reject) => {
-      providerServer.once("error", reject);
-      providerServer.listen(0, "127.0.0.1", resolve);
-    });
-    const address = providerServer.address();
-    if (!address || typeof address === "string") {
-      throw new Error("recovery provider did not bind");
-    }
     const provider = buildMockOpenAiResponsesProvider(
-      `http://127.0.0.1:${address.port}/v1`,
+      await listenProvider(providerServer),
       "gpt-orphaned-recovery",
     );
     const cfg = {
@@ -138,13 +118,11 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       { status: "failed", retry: true },
       { status: undefined, retry: true },
     ] as const) {
-      caseId = `${status ?? "statusless"}-${retry ? "retry" : "new"}`;
+      const caseId = `${status ?? "statusless"}-${retry ? "retry" : "new"}`;
       const sessionKey = `agent:main:dashboard:orphaned-chat-${caseId}`;
       const sessionId = `orphaned-chat-session-${caseId}`;
       const sourceRunId = `rejected-input-${caseId}`;
       targetRequests.length = 0;
-      requestPresence.length = 0;
-      phase = "seed";
       const target = {
         agentId: "main",
         sessionKey,
@@ -211,13 +189,11 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         expect(loadSessionEntry(target)).toEqual(stranded);
       }
       const runId = retry ? sourceRunId : `new-input-after-stranded-recovery-${caseId}`;
-      phase = "chat.send";
       await expect(send(runId, retry ? priorMessage : nextMessage)).resolves.toMatchObject({
         runId,
         status: retry ? "ok" : "started",
       });
       if (!retry) {
-        phase = "agent.wait";
         await vi.waitFor(
           async () => {
             const outcome = await client.request("agent.wait", { runId, timeoutMs: 30_000 });
@@ -226,7 +202,6 @@ it("chat.send recovers failed and statusless work for new messages and retained 
           { timeout: 30_000 },
         );
       }
-      phase = "session.done";
       await vi.waitFor(
         () => {
           const entry = loadSessionEntry(target);
@@ -234,7 +209,6 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         },
         { timeout: 30_000 },
       );
-      phase = "provider-count";
       expect(targetRequests).toHaveLength(retry ? 1 : 2);
       expect(targetRequests[0]).not.toContain(nextMessage);
       if (!retry) {
@@ -245,7 +219,6 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       expect(recovered?.archivedAt).toBeUndefined();
       expect(recovered?.mainRestartRecovery).toBeUndefined();
       expect(recovered?.restartRecoveryRuns).toBeUndefined();
-      phase = "transcript";
       // Captured model-prompt metadata can repeat text without creating another user turn.
       const transcript = JSON.stringify(
         (await loadTranscriptEvents({ ...target, sessionId })).flatMap((event) =>
@@ -256,7 +229,6 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       );
       expect(transcript.split(priorMessage)).toHaveLength(2);
       expect(transcript.split(nextMessage)).toHaveLength(retry ? 1 : 2);
-      phase = "complete";
     }
   };
   await runQaGatewayFixture(
@@ -271,10 +243,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
     },
     async () => {
       if (providerServer.listening) {
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
+        await closeProvider(providerServer);
       }
     },
     () => state.cleanup(),

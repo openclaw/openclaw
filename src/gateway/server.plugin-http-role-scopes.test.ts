@@ -1,8 +1,8 @@
 // Exercise named-role ceilings through real HTTP auth and plugin runtime dispatch.
 import { once } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -43,25 +43,18 @@ const proxyAuth = {
 } as const;
 const read = ["operator.read"];
 const write = ["operator.write"];
-function makeRoleCase(
-  surface: "write-default" | "trusted-operator",
-  role: string,
-  scopes: GatewayOperatorRoleDefinition["scopes"],
-  defaultScopes: string[],
-  declaredRead = read,
-) {
-  return { surface, role, scopes, defaultScopes, declaredRead };
-}
-const roleCases = [
-  makeRoleCase("write-default", "empty", [], [], []),
-  makeRoleCase("trusted-operator", "empty", [], [], []),
-  makeRoleCase("trusted-operator", "reader", read, read),
-  makeRoleCase("write-default", "reader", read, read),
-  makeRoleCase("write-default", "writer", write, write),
-  makeRoleCase("trusted-operator", "writer", write, [...read, ...write]),
-  makeRoleCase("write-default", "admin", ["operator.admin"], write),
-  makeRoleCase("trusted-operator", "admin", ["operator.admin"], [...CLI_DEFAULT_OPERATOR_SCOPES]),
-];
+type Scope = GatewayOperatorRoleDefinition["scopes"];
+const roleCases: Array<["write-default" | "trusted-operator", string, Scope, string[], string[]]> =
+  [
+    ["write-default", "empty", [], [], []],
+    ["trusted-operator", "empty", [], [], []],
+    ["trusted-operator", "reader", read, read, read],
+    ["write-default", "reader", read, read, read],
+    ["write-default", "writer", write, write, read],
+    ["trusted-operator", "writer", write, [...read, ...write], read],
+    ["write-default", "admin", ["operator.admin"], write, read],
+    ["trusted-operator", "admin", ["operator.admin"], [...CLI_DEFAULT_OPERATOR_SCOPES], read],
+  ];
 const roleDefinition = (
   scopes: GatewayOperatorRoleDefinition["scopes"],
 ): GatewayOperatorRoleDefinition => ({
@@ -79,6 +72,54 @@ const proxyHeaders = (email: string) => ({
   "x-forwarded-user": email,
   "x-forwarded-for": "198.51.100.20",
 });
+
+function roleConfig(
+  defaultRole: string,
+  definitions: Record<string, GatewayOperatorRoleDefinition>,
+): OpenClawConfig {
+  return {
+    gateway: {
+      trustedProxies: [proxyAddress],
+      auth: proxyAuth,
+      roles: { default: defaultRole, definitions },
+    },
+  };
+}
+
+type Route = ReturnType<typeof createGatewayTestRegistry>["httpRoutes"][number];
+function pluginServer(
+  registration: Omit<Route, keyof typeof route | "source">,
+  overrides: Parameters<typeof createTestGatewayServer>[0]["overrides"] = {},
+  wss?: WebSocketServer,
+) {
+  const registry = createGatewayTestRegistry({
+    httpRoutes: [{ ...route, source: "fixture", ...registration }],
+  });
+  const log = createSubsystemLogger("test/plugin-role-scopes");
+  const shouldEnforcePluginGatewayAuth = (
+    context: Parameters<typeof shouldEnforceGatewayAuthForPluginPath>[1],
+  ) => shouldEnforceGatewayAuthForPluginPath(registry, context);
+  const server = createTestGatewayServer({
+    resolvedAuth: proxyAuth,
+    overrides: {
+      handlePluginRequest: createGatewayPluginRequestHandler({ registry, log }),
+      shouldEnforcePluginGatewayAuth,
+      ...overrides,
+    },
+  });
+  if (wss) {
+    attachGatewayUpgradeHandler({
+      httpServer: server,
+      wss,
+      handlePluginUpgrade: createGatewayPluginUpgradeHandler({ registry, log }),
+      shouldEnforcePluginGatewayAuth,
+      clients: new Set(),
+      preauthConnectionBudget: createPreauthConnectionBudget(),
+      resolvedAuth: proxyAuth,
+    });
+  }
+  return server;
+}
 
 function observeRuntimeScope() {
   const client = getPluginRuntimeGatewayRequestScope()?.client;
@@ -112,70 +153,40 @@ async function dispatchPluginUpgrade(
   }
 }
 
-describe("plugin named-role ceiling", () => {
-  it.each(roleCases)("caps $surface HTTP and upgrade clients for $role", async (roleCase) => {
+it.each(roleCases)(
+  "caps %s HTTP and upgrade clients for %s",
+  async (surface, role, scopes, defaultScopes, declaredRead) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const email = "plugin-role@example.test";
       const profile = ensureProfileForEmail(email);
-      setUserProfileRole(profile.id, roleCase.role);
-      const cfg: OpenClawConfig = {
-        gateway: {
-          trustedProxies: [proxyAddress],
-          auth: proxyAuth,
-          roles: {
-            default: "denied",
-            definitions: {
-              denied: { sessions: { others: "none" }, agents: [], scopes: [] },
-              [roleCase.role]: roleDefinition(roleCase.scopes),
-            },
-          },
-        },
-      };
-      const registry = createGatewayTestRegistry({
-        httpRoutes: [
-          {
-            ...route,
-            source: "role-scoped-plugin",
-            gatewayRuntimeScopeSurface: roleCase.surface,
-            handler: async (_req: IncomingMessage, res: ServerResponse) => {
-              res.end(JSON.stringify(observeRuntimeScope()));
-              return true;
-            },
-            handleUpgrade: async (_req, socket) => {
-              socket.end(JSON.stringify(observeRuntimeScope()));
-              return true;
-            },
-          },
-        ],
+      setUserProfileRole(profile.id, role);
+      const cfg = roleConfig("denied", {
+        denied: { sessions: { others: "none" }, agents: [], scopes: [] },
+        [role]: roleDefinition(scopes),
       });
-      const log = createSubsystemLogger("test/plugin-role-scopes");
-      const shouldEnforcePluginGatewayAuth = (
-        pathContext: Parameters<typeof shouldEnforceGatewayAuthForPluginPath>[1],
-      ) => shouldEnforceGatewayAuthForPluginPath(registry, pathContext);
       const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
       try {
         await withTempConfig({
           cfg,
           run: async () => {
-            const server = createTestGatewayServer({
-              resolvedAuth: proxyAuth,
-              overrides: {
-                handlePluginRequest: createGatewayPluginRequestHandler({ registry, log }),
-                shouldEnforcePluginGatewayAuth,
+            const server = pluginServer(
+              {
+                gatewayRuntimeScopeSurface: surface,
+                handler: async (_req, res) => {
+                  res.end(JSON.stringify(observeRuntimeScope()));
+                  return true;
+                },
+                handleUpgrade: async (_req, socket) => {
+                  socket.end(JSON.stringify(observeRuntimeScope()));
+                  return true;
+                },
               },
-            });
-            attachGatewayUpgradeHandler({
-              httpServer: server,
+              {},
               wss,
-              handlePluginUpgrade: createGatewayPluginUpgradeHandler({ registry, log }),
-              shouldEnforcePluginGatewayAuth,
-              clients: new Set(),
-              preauthConnectionBudget: createPreauthConnectionBudget(),
-              resolvedAuth: proxyAuth,
-            });
+            );
             for (const [header, expectedScopes] of [
-              [undefined, roleCase.defaultScopes],
-              ["operator.read", roleCase.declaredRead],
+              [undefined, defaultScopes],
+              ["operator.read", declaredRead],
               ["", []],
             ] as const) {
               const request = {
@@ -218,67 +229,47 @@ describe("plugin named-role ceiling", () => {
         invalidateOperatorRolePolicy(profile.id);
       }
     });
-  });
-});
+  },
+);
 
 it("retires prepared plugin effects when role or proxy policy changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const email = "policy-change@example.test";
     const profile = ensureProfileForEmail(email);
-    const initial: OpenClawConfig = {
-      gateway: {
-        trustedProxies: [proxyAddress],
-        auth: proxyAuth,
-        roles: {
-          default: "writer",
-          definitions: {
-            writer: roleDefinition(write),
-            reader: roleDefinition(read),
-          },
-        },
-      },
-    };
+    const initial = roleConfig("writer", {
+      writer: roleDefinition(write),
+      reader: roleDefinition(read),
+    });
     let current = initial;
     let prepared = createDeferred();
     let resume = createDeferred();
     let effects = 0;
-    const registry = createGatewayTestRegistry({
-      httpRoutes: [
-        {
-          ...route,
-          source: "fixture",
-          gatewayRuntimeScopeSurface: "trusted-operator",
-          handler: async (_req, res) => {
-            const scope = getPluginRuntimeGatewayRequestScope();
-            prepared.resolve();
-            await resume.promise;
-            await scope?.revalidate?.();
-            const allowed = observeRuntimeScope().writeAllowed;
-            if (allowed) {
-              effects += 1;
-            }
-            res.statusCode = allowed ? 200 : 403;
-            res.end();
-            return true;
-          },
-        },
-      ],
-    });
     await withTempConfig({
       cfg: initial,
       run: async () => {
-        const server = createTestGatewayServer({
-          resolvedAuth: proxyAuth,
-          overrides: {
+        const server = pluginServer(
+          {
+            gatewayRuntimeScopeSurface: "trusted-operator",
+            handler: async (_req, res) => {
+              const scope = getPluginRuntimeGatewayRequestScope();
+              prepared.resolve();
+              await resume.promise;
+              await scope?.revalidate?.();
+              const allowed = observeRuntimeScope().writeAllowed;
+              if (allowed) {
+                effects += 1;
+              }
+              res.statusCode = allowed ? 200 : 403;
+              res.end();
+              return true;
+            },
+          },
+          {
             getRuntimeConfig: () => current,
             getResolvedAuth: () => resolveGatewayAuth({ authConfig: current.gateway?.auth }),
-            handlePluginRequest: createGatewayPluginRequestHandler({
-              registry,
-              log: createSubsystemLogger("test/plugin-http-policy"),
-            }),
             shouldEnforcePluginGatewayAuth: (path) => path.pathname === routePath,
           },
-        });
+        );
         const request = {
           path: routePath,
           method: "POST",
