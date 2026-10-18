@@ -2,6 +2,13 @@ import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import type { RuntimeAuthState } from "./helpers.js";
 
+/** SIWC OAuth renews through the selected profile instead of an attempt snapshot. */
+export function isRenewableSiwcRequestAuth(
+  apiKeyInfo: Pick<ResolvedProviderAuth, "mode" | "authFlow"> | null,
+): boolean {
+  return apiKeyInfo?.mode === "oauth" && apiKeyInfo.authFlow === "chatgpt-token-sharing";
+}
+
 export function resolveAttemptDispatchApiKey(params: {
   apiKeyInfo: ResolvedProviderAuth | null;
   runtimeAuthState: RuntimeAuthState | null;
@@ -12,6 +19,11 @@ export function resolveAttemptDispatchApiKey(params: {
     // authStorage. A transport-owning harness instead needs the original
     // resolved profile credential promised by its attempt contract.
     return params.pluginHarnessOwnsTransport ? params.runtimeAuthState.sourceApiKey : undefined;
+  }
+  if (!params.pluginHarnessOwnsTransport && isRenewableSiwcRequestAuth(params.apiKeyInfo)) {
+    // Core streaming resolves this profile's current access through AuthStorage
+    // at request time. Capturing it here would strand the attempt on an expired token.
+    return undefined;
   }
   return params.apiKeyInfo?.apiKey;
 }

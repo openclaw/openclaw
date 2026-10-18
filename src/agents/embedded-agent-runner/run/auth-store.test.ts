@@ -45,6 +45,38 @@ describe("resolveAttemptDispatchApiKey", () => {
       }),
     ).toBe("source-token");
   });
+
+  it("does not capture renewable SIWC access for core streaming", () => {
+    expect(
+      resolveAttemptDispatchApiKey({
+        apiKeyInfo: {
+          apiKey: "siwc-access-a",
+          source: "profile:openai:chatgpt",
+          mode: "oauth",
+          authFlow: "chatgpt-token-sharing",
+          profileId: "openai:chatgpt",
+        },
+        runtimeAuthState: null,
+        pluginHarnessOwnsTransport: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps the resolved SIWC credential for transport-owning harnesses", () => {
+    expect(
+      resolveAttemptDispatchApiKey({
+        apiKeyInfo: {
+          apiKey: "siwc-access-a",
+          source: "profile:openai:chatgpt",
+          mode: "oauth",
+          authFlow: "chatgpt-token-sharing",
+          profileId: "openai:chatgpt",
+        },
+        runtimeAuthState: null,
+        pluginHarnessOwnsTransport: true,
+      }),
+    ).toBe("siwc-access-a");
+  });
 });
 
 describe("createScopedAuthProfileStore", () => {

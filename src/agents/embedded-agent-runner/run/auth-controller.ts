@@ -12,6 +12,7 @@ import {
   type AuthProfileStore,
   isProfileInCooldown,
   markAuthProfileFailure,
+  resolveApiKeyForProfile,
   resolveProfilesUnavailableReason,
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
@@ -34,6 +35,7 @@ import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-au
 import { applyPreparedRuntimeAuthToModel } from "../../provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-protection.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
+import type { AuthStorageRuntimeCredential } from "../../sessions/auth-storage-types.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 import {
@@ -60,6 +62,7 @@ export type EmbeddedRunAuthState = {
 
 type RuntimeApiKeySink = {
   setRuntimeApiKey(provider: string, apiKey: string): void;
+  setRuntimeApiKeyResolver?(provider: string, resolver: AuthStorageRuntimeCredential): void;
 };
 
 type LogLike = {
@@ -557,7 +560,43 @@ export function createEmbeddedRunAuthController(params: {
     }
     if (!runtimeAuthHandled) {
       clearRuntimeAuthRefreshTimer();
-      params.authStorage.setRuntimeApiKey(runtimeModel.provider, sourceApiKey);
+      const renewableRequestCredential =
+        apiKeyInfo.mode === "oauth" &&
+        apiKeyInfo.authFlow === "chatgpt-token-sharing" &&
+        Boolean(profileId) &&
+        Boolean(params.authStorage.setRuntimeApiKeyResolver);
+      if (renewableRequestCredential) {
+        const selectedProfileId = profileId as string;
+        params.authStorage.setRuntimeApiKeyResolver?.(runtimeModel.provider, {
+          resolve: async () => {
+            if (state.lastProfileId !== selectedProfileId) {
+              throw new Error(
+                `Request credential no longer belongs to the selected auth profile "${selectedProfileId}".`,
+              );
+            }
+            const resolved = await resolveApiKeyForProfile({
+              cfg: params.config,
+              store: params.authStore,
+              profileId: selectedProfileId,
+              agentDir: params.agentDir,
+            });
+            if (state.lastProfileId !== selectedProfileId) {
+              throw new Error(
+                `Request credential resolution lost the selected auth profile "${selectedProfileId}".`,
+              );
+            }
+            if (!resolved || resolved.profileId !== selectedProfileId || !resolved.apiKey.trim()) {
+              throw new Error(
+                `Selected auth profile "${selectedProfileId}" has no renewable request credential.`,
+              );
+            }
+            return resolved.apiKey;
+          },
+          refresh: (errorText) => maybeRefreshRuntimeAuthForAuthError(errorText, false),
+        });
+      } else {
+        params.authStorage.setRuntimeApiKey(runtimeModel.provider, sourceApiKey);
+      }
       state.runtimeAuthState = null;
     }
     state.lastProfileId = profileId;

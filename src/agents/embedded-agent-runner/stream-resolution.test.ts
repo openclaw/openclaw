@@ -22,6 +22,7 @@ import { resolveProviderStreamFn } from "../../plugins/provider-runtime.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { buildStreamErrorAssistantMessage } from "../stream-message-shared.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import { streamWithIdleTimeout } from "./run/llm-idle-timeout.js";
@@ -411,6 +412,106 @@ describe("resolveEmbeddedAgentStream", () => {
     ]);
     expect(currentStreamFn).not.toHaveBeenCalled();
     expect(innerStreamFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries one token_expired request after renewing selected-profile access", async () => {
+    let access = "renewed-access-a";
+    const inner = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      const requestIndex = inner.mock.calls.length - 1;
+      queueMicrotask(() => {
+        if (requestIndex === 0) {
+          const error = buildStreamErrorAssistantMessage({
+            model: { api: "openai-responses", provider: "openai", id: "gpt-5.5" },
+            errorMessage:
+              '401 {"error":{"code":"token_expired","message":"Provided authentication token is expired."}}',
+          });
+          error.errorCode = "token_expired";
+          stream.push({ type: "error", reason: "error", error });
+          stream.end(error);
+          return;
+        }
+        const message = makeAgentAssistantMessage({
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "renewed" }],
+        });
+        stream.push({ type: "start", partial: { ...message, content: [] } });
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end(message);
+      });
+      return stream;
+    });
+    const refreshApiKey = vi.fn(async () => {
+      access = "renewed-access-b";
+      return true;
+    });
+    const { streamFn } = resolveEmbeddedAgentStream({
+      providerStreamFn: inner,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.5",
+      } as never,
+      authStorage: { getApiKey: async () => access, refreshApiKey },
+    });
+
+    const stream = await streamFn({ provider: "openai", id: "gpt-5.5" } as never, {} as never, {});
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    await expect(stream.result()).resolves.toMatchObject({ stopReason: "stop" });
+    expect(inner.mock.calls.map((call) => call[2]?.apiKey)).toEqual([
+      "renewed-access-a",
+      "renewed-access-b",
+    ]);
+    expect(refreshApiKey).toHaveBeenCalledOnce();
+    expect(refreshApiKey).toHaveBeenCalledWith("openai", expect.stringContaining("token_expired"));
+    expect(events.filter((event) => event.type === "error")).toEqual([]);
+    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+  });
+
+  it("does not retry an expired-token request after accepting streamed output", async () => {
+    const inner = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      const start = makeAgentAssistantMessage({ content: [] });
+      const error = buildStreamErrorAssistantMessage({
+        model: { api: "openai-responses", provider: "openai", id: "gpt-5.5" },
+        errorMessage: '401 {"error":{"code":"token_expired"}}',
+      });
+      error.errorCode = "token_expired";
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial: start });
+        stream.push({ type: "text_start", contentIndex: 0, partial: start });
+        stream.push({ type: "error", reason: "error", error });
+        stream.end(error);
+      });
+      return stream;
+    });
+    const refreshApiKey = vi.fn(async () => true);
+    const { streamFn } = resolveEmbeddedAgentStream({
+      providerStreamFn: inner,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.5",
+      } as never,
+      authStorage: { getApiKey: async () => "renewed-access-a", refreshApiKey },
+    });
+
+    const stream = await streamFn({ provider: "openai", id: "gpt-5.5" } as never, {} as never, {});
+    for await (const event of stream) {
+      void event;
+    }
+
+    await expect(stream.result()).resolves.toMatchObject({ stopReason: "error" });
+    expect(inner).toHaveBeenCalledOnce();
+    expect(refreshApiKey).not.toHaveBeenCalled();
   });
 
   it("propagates prompt cache identity into custom session streams", async () => {

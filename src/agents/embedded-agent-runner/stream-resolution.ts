@@ -3,11 +3,15 @@ import { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/int
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { admitProviderRateLimitStream } from "../../llm/provider-rate-limit-stream.js";
-import "../ai-transport-runtime-host.js";
+import type { AssistantMessage, AssistantMessageEvent } from "../../llm/types.js";
+import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
+import "../ai-transport-runtime-host.js";
 import type { StreamFn } from "../runtime/index.js";
+import { buildStreamErrorAssistantMessage } from "../stream-message-shared.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 import { wrapStreamFnWithSessionFork, type EmbeddedSessionForkIdentity } from "./session-fork.js";
 
@@ -78,7 +82,10 @@ type EmbeddedAgentStreamParams = EmbeddedStreamRuntimeOwner & {
   resolvedApiKey?: string;
   transportAuthAvailable?: boolean;
   authProfileId?: string;
-  authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
+  authStorage?: {
+    getApiKey(provider: string): Promise<string | undefined>;
+    refreshApiKey?(provider: string, errorText: string): Promise<boolean>;
+  };
   assertCurrent?: () => void;
   sessionFork?: EmbeddedSessionForkIdentity;
 };
@@ -282,7 +289,10 @@ function wrapEmbeddedAgentStreamApiKey(
   params: {
     providerId: string;
     resolvedApiKey?: string;
-    authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
+    authStorage?: {
+      getApiKey(provider: string): Promise<string | undefined>;
+      refreshApiKey?(provider: string, errorText: string): Promise<boolean>;
+    };
     assertCurrent?: () => void;
   },
 ): StreamFn {
@@ -290,14 +300,119 @@ function wrapEmbeddedAgentStreamApiKey(
     return inner;
   }
   const { authStorage, providerId, resolvedApiKey } = params;
+  const refreshAuth = authStorage?.refreshApiKey?.bind(authStorage);
   return async (m, context, options) => {
-    params.assertCurrent?.();
-    const apiKey = await resolveEmbeddedAgentApiKey({
-      provider: providerId,
-      resolvedApiKey,
-      authStorage,
+    const resolveApiKey = async () => {
+      params.assertCurrent?.();
+      const apiKey = await resolveEmbeddedAgentApiKey({
+        provider: providerId,
+        resolvedApiKey,
+        authStorage,
+      });
+      params.assertCurrent?.();
+      return apiKey ?? options?.apiKey;
+    };
+    const start = (apiKey: string | undefined) =>
+      inner(m, context, { ...options, apiKey: apiKey ?? options?.apiKey });
+    if (!refreshAuth) {
+      return start(await resolveApiKey());
+    }
+    return createAuthRecoveryStream({
+      model: m,
+      start,
+      resolveApiKey,
+      refreshAuth: (errorText) => refreshAuth(providerId, errorText),
+      assertCurrent: params.assertCurrent,
     });
-    params.assertCurrent?.();
-    return inner(m, context, { ...options, apiKey: apiKey ?? options?.apiKey });
   };
+}
+
+function isStructuredTokenExpiredError(error: AssistantMessage): boolean {
+  if (error.stopReason !== "error") {
+    return false;
+  }
+  const errorCode = error.errorCode?.trim().toLowerCase();
+  if (errorCode) {
+    return errorCode === "token_expired";
+  }
+  return /\btoken_expired\b|authentication token is expired/iu.test(error.errorMessage ?? "");
+}
+
+/**
+ * Retries one explicitly rejected model request after renewing its selected
+ * profile credential. The outer attempt replay gate remains authoritative.
+ */
+function createAuthRecoveryStream(params: {
+  model: Parameters<StreamFn>[0];
+  start: (apiKey: string | undefined) => ReturnType<StreamFn>;
+  resolveApiKey: () => Promise<string | undefined>;
+  refreshAuth: (errorText: string) => Promise<boolean>;
+  assertCurrent?: () => void;
+}): ReturnType<StreamFn> {
+  const outer = createAssistantMessageEventStream();
+  void Promise.resolve().then(async () => {
+    let pendingStart: Extract<AssistantMessageEvent, { type: "start" }> | undefined;
+    const flushStart = () => {
+      if (pendingStart) {
+        outer.push(pendingStart);
+        pendingStart = undefined;
+      }
+    };
+    try {
+      let acceptedContent = false;
+      let refreshed = false;
+      while (true) {
+        const stream = await params.start(await params.resolveApiKey());
+        let restart = false;
+        for await (const event of stream) {
+          if (event.type === "start" && !acceptedContent) {
+            pendingStart ??= event;
+            continue;
+          }
+          if (event.type === "error") {
+            let renew = false;
+            if (!refreshed && !acceptedContent && isStructuredTokenExpiredError(event.error)) {
+              try {
+                renew = await params.refreshAuth(event.error.errorMessage ?? "");
+              } catch {
+                renew = false;
+              }
+            }
+            if (renew) {
+              params.assertCurrent?.();
+              refreshed = true;
+              pendingStart = undefined;
+              restart = true;
+              break;
+            }
+            flushStart();
+            outer.push(event);
+            acceptedContent = true;
+            continue;
+          }
+          flushStart();
+          outer.push(event);
+          acceptedContent = true;
+        }
+        if (restart) {
+          continue;
+        }
+        flushStart();
+        outer.end(await stream.result());
+        return;
+      }
+    } catch (error) {
+      const message = buildStreamErrorAssistantMessage({
+        model: {
+          api: String(params.model.api),
+          provider: String(params.model.provider),
+          id: String(params.model.id),
+        },
+        errorMessage: formatErrorMessage(error),
+      });
+      outer.push({ type: "error", reason: "error", error: message });
+      outer.end(message);
+    }
+  });
+  return outer;
 }

@@ -63,6 +63,7 @@ import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js
 import { declarePromptHistoryRewrite } from "./prompt-cache-observability.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
+import { isRenewableSiwcRequestAuth } from "./run/auth-store.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
@@ -276,7 +277,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           providerStreamFn,
           sessionId: params.sessionId,
           signal: runAbortController.signal,
-          resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
+          resolvedApiKey:
+            hasRuntimeAuthExchange || isRenewableSiwcRequestAuth(apiKeyInfo)
+              ? undefined
+              : apiKeyInfo?.apiKey,
           config: params.config,
           thinkLevel,
           modelCallUrgency:

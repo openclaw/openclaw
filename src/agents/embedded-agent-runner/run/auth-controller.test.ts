@@ -21,7 +21,17 @@ import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixt
 const mocks = vi.hoisted(() => ({
   prepareProviderRuntimeAuth: vi.fn(),
   getApiKeyForModelCore: vi.fn(),
+  resolveApiKeyForProfile: vi.fn(),
 }));
+
+vi.mock("../../auth-profiles.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../auth-profiles.js")>("../../auth-profiles.js");
+  return {
+    ...actual,
+    resolveApiKeyForProfile: mocks.resolveApiKeyForProfile,
+  };
+});
 
 vi.mock("../../../plugins/provider-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../../../plugins/provider-runtime.js")>(
@@ -100,6 +110,7 @@ function createController(
       | "lockedProfileId"
       | "allowTransientCooldownProbe"
       | "agentDir"
+      | "authStorage"
       | "prepareModelForAuthProfile"
     >
   > & { warn?: (message: string) => void } = {},
@@ -141,12 +152,14 @@ beforeEach(() => {
   setRuntimeApiKey = vi.fn();
   mocks.prepareProviderRuntimeAuth.mockReset();
   mocks.getApiKeyForModelCore.mockReset();
+  mocks.resolveApiKeyForProfile.mockReset();
 });
 
 it.each([false, true])(
   "recovers expired SIWC auth without runtime exchange state (refresh fails: %s)",
   async (refreshFails) => {
     harness.models.runtime.provider = "openai";
+    let currentAccess = "synthetic-old-access";
     const auth = {
       apiKey: "synthetic-old-access",
       mode: "oauth",
@@ -163,26 +176,47 @@ it.each([false, true])(
       if (refreshFails) {
         throw new Error("synthetic refresh failure");
       }
-      return { ...auth, apiKey: "synthetic-renewed-access" };
+      currentAccess = "synthetic-renewed-access";
+      return { ...auth, apiKey: currentAccess };
     });
+    mocks.resolveApiKeyForProfile.mockImplementation(async () => ({
+      apiKey: currentAccess,
+      profileId: auth.profileId,
+      profileType: "oauth",
+      provider: "openai",
+    }));
+    const setRuntimeApiKeyResolver = vi.fn();
     const controller = createController({
       profileCandidates: [auth.profileId],
       fallbackConfigured: true,
+      authStorage: {
+        setRuntimeApiKey,
+        setRuntimeApiKeyResolver,
+      },
     });
     await controller.initializeAuthProfile();
     expect(harness.runtimeAuthState).toBeNull();
+    expect(setRuntimeApiKey).not.toHaveBeenCalled();
+    expect(setRuntimeApiKeyResolver).toHaveBeenCalledOnce();
+    const requestCredential = setRuntimeApiKeyResolver.mock.calls[0]?.[1] as {
+      resolve(): Promise<string | undefined>;
+      refresh?(errorText: string): Promise<boolean>;
+    };
+    await expect(requestCredential.resolve()).resolves.toBe("synthetic-old-access");
     const error =
       '401 {"error":{"code":"token_expired","message":"Provided authentication token is expired."}}';
-    await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, false)).resolves.toBe(
-      !refreshFails,
-    );
-    expect(setRuntimeApiKey).toHaveBeenLastCalledWith(
-      "openai",
+    await expect(requestCredential.refresh?.(error)).resolves.toBe(!refreshFails);
+    await expect(requestCredential.resolve()).resolves.toBe(
       refreshFails ? "synthetic-old-access" : "synthetic-renewed-access",
     );
+    expect(setRuntimeApiKeyResolver).toHaveBeenCalledTimes(refreshFails ? 1 : 2);
     await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, true)).resolves.toBe(false);
     expect(mocks.getApiKeyForModelCore).toHaveBeenCalledTimes(2);
     expect(harness.lastProfileId).toBe(auth.profileId);
+    harness.lastProfileId = "openai:different";
+    await expect(requestCredential.resolve()).rejects.toThrow(
+      'Request credential no longer belongs to the selected auth profile "openai:siwc".',
+    );
   },
 );
 

@@ -69,6 +69,7 @@ import type {
   AuthCredential,
   AuthStorageBackend,
   AuthStorageData,
+  AuthStorageRuntimeCredential,
   LockResult,
 } from "./auth-storage-types.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
@@ -352,7 +353,7 @@ export class AuthStorage {
 
   private data: AuthStorageData = {};
   private credentialSources = new Map<string, AuthProfileCredentialSource>();
-  private runtimeOverrides: Map<string, string> = new Map();
+  private runtimeOverrides: Map<string, AuthStorageRuntimeCredential> = new Map();
   private fallbackResolver?: (provider: string) => string | undefined;
   private loadError: Error | null = null;
   private errors: Error[] = [];
@@ -413,11 +414,19 @@ export class AuthStorage {
    * Used for CLI --api-key flag.
    */
   setRuntimeApiKey(provider: string, apiKey: string): void {
-    this.runtimeOverrides.set(provider, apiKey);
+    this.runtimeOverrides.set(provider, { resolve: async () => apiKey });
   }
 
   removeRuntimeApiKey(provider: string): void {
     this.runtimeOverrides.delete(provider);
+  }
+
+  setRuntimeApiKeyResolver(provider: string, resolver: AuthStorageRuntimeCredential): void {
+    this.runtimeOverrides.set(provider, resolver);
+  }
+
+  async refreshApiKey(providerId: string, errorText: string): Promise<boolean> {
+    return (await this.runtimeOverrides.get(providerId)?.refresh?.(errorText)) ?? false;
   }
 
   /**
@@ -713,7 +722,7 @@ export class AuthStorage {
     providerId: string,
     options?: { includeFallback?: boolean; baseUrl?: string },
   ): Promise<string | undefined> {
-    const runtimeKey = this.runtimeOverrides.get(providerId);
+    const runtimeKey = (await this.runtimeOverrides.get(providerId)?.resolve())?.trim();
     if (runtimeKey) {
       return runtimeKey;
     }

@@ -22,6 +22,11 @@ export type AuthCredential = ApiKeyCredential | OAuthCredential | TokenCredentia
 
 export type AuthStorageData = Record<string, AuthCredential>;
 
+export type AuthStorageRuntimeCredential = {
+  resolve(): Promise<string | undefined>;
+  refresh?(errorText: string): Promise<boolean>;
+};
+
 export type LockResult<T> = {
   result: T;
   next?: string;

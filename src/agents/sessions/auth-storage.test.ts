@@ -520,3 +520,42 @@ describe("SQLite auth storage", () => {
     );
   });
 });
+
+describe("AuthStorage runtime credential resolvers", () => {
+  it("prefers a request-scoped resolver over canonical storage and refreshes per request", async () => {
+    const storage = AuthStorage.inMemory({
+      openai: { type: "api_key", provider: "openai", key: "stored-key" },
+    });
+    const keys = ["renewed-key-a", "renewed-key-b"];
+    let index = 0;
+    storage.setRuntimeApiKeyResolver("openai", { resolve: async () => keys[index++] });
+
+    await expect(storage.getApiKey("openai")).resolves.toBe("renewed-key-a");
+    await expect(storage.getApiKey("openai")).resolves.toBe("renewed-key-b");
+  });
+
+  it("gives an explicit runtime override precedence over the resolver", async () => {
+    const storage = AuthStorage.inMemory({
+      openai: { type: "api_key", provider: "openai", key: "stored-key" },
+    });
+    const resolve = vi.fn(async () => "renewed-key");
+    storage.setRuntimeApiKeyResolver("openai", { resolve });
+    storage.setRuntimeApiKey("openai", "explicit-key");
+
+    await expect(storage.getApiKey("openai")).resolves.toBe("explicit-key");
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("refreshes only through a resolver that owns renewal", async () => {
+    const storage = AuthStorage.inMemory();
+    const refresh = vi.fn(async () => true);
+    storage.setRuntimeApiKeyResolver("openai", {
+      resolve: async () => "renewed-key",
+      refresh,
+    });
+
+    await expect(storage.refreshApiKey("openai", "401 token_expired")).resolves.toBe(true);
+    expect(refresh).toHaveBeenCalledWith("401 token_expired");
+    await expect(storage.refreshApiKey("anthropic", "401 token_expired")).resolves.toBe(false);
+  });
+});
