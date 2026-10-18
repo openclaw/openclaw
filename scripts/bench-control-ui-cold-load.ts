@@ -470,9 +470,7 @@ try {
   const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
   async function settle() {
     try {
-      await page
-        .locator(".chat-pane__session-title-text", { hasText: "Project dashboard 1" })
-        .waitFor();
+      await page.locator(".chat-pane__agent-name", { hasText: "Harbor" }).waitFor();
       await page
         .locator('.sidebar-rail [data-sidebar-entry^="session:"]')
         .nth(29)
