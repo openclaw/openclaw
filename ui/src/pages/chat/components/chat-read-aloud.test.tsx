@@ -58,41 +58,46 @@ afterEach(() => {
 function readButton(view: ReturnType<typeof mount>, name = "Read aloud") {
   return view.getByRole<HTMLButtonElement>("button", { name });
 }
+function nativeReadButton(container: HTMLElement) {
+  return expectDefined(
+    container.querySelector<HTMLButtonElement>('button[aria-label="Read aloud"]'),
+    "Read aloud action in the native transcript",
+  );
+}
 function pendingSpeech(gatewayListeners?: Set<() => void>) {
   const pending = createDeferred<TtsSpeakResult>();
   const request = vi.fn(() => pending.promise);
   return { pending, request, view: mount(request, true, gatewayListeners) };
 }
-function mount(
-  request: ReturnType<typeof vi.fn>,
-  configured = true,
-  gatewayListeners?: Set<() => void>,
-) {
+function speechContext(request: ReturnType<typeof vi.fn>, configured = true) {
   const runtimeConfig = createRuntimeConfigStub();
   Object.assign(runtimeConfig.state, {
     configSnapshot: { runtimeConfig: configured ? { tts: { provider: "openai" } } : {} },
   });
-  const context = createContext(request, { methods: ["tts.speak"], runtimeConfig });
-  if (gatewayListeners) {
+  return {
+    runtimeConfig,
+    context: createContext(request, { methods: ["tts.speak"], runtimeConfig }),
+  };
+}
+function mount(request: ReturnType<typeof vi.fn>, configured = true, listeners?: Set<() => void>) {
+  const { context } = speechContext(request, configured);
+  if (listeners) {
     context.gateway.subscribe = (listener) => {
       const notify = () => listener(context.gateway.snapshot);
-      gatewayListeners.add(notify);
-      return () => gatewayListeners.delete(notify);
+      listeners.add(notify);
+      return () => listeners.delete(notify);
     };
   }
-  const provider = createSolidApplicationContextProvider(context);
   const details = resolveMessageActionDetails(
     prepareChatMessageRender({ role: "assistant", content: speechText }),
     { messageId: "reply-1", senderLabel: "OpenClaw" },
   );
   return mountSolid(() => <MessageActions details={details} options={{}} />, {
-    wrapper: provider.wrapper,
+    wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
 }
 
 it("unlocks and reuses the same audio element before awaiting Gateway speech", async () => {
-  const pending = createDeferred<TtsSpeakResult>();
-  const request = vi.fn(() => pending.promise);
   let userActivation = true;
   const permitted = new WeakSet<HTMLAudioElement>();
   play.mockImplementation(function (this: HTMLAudioElement) {
@@ -103,7 +108,7 @@ it("unlocks and reuses the same audio element before awaiting Gateway speech", a
       ? Promise.resolve()
       : Promise.reject(new DOMException("User activation required", "NotAllowedError"));
   });
-  const view = mount(request);
+  const { pending, request, view } = pendingSpeech();
   const button = readButton(view);
   button.click();
   userActivation = false;
@@ -119,22 +124,18 @@ it("unlocks and reuses the same audio element before awaiting Gateway speech", a
   flush();
   expect(pause).toHaveBeenCalledTimes(2);
   expect(revoke).toHaveBeenCalledWith("blob:synthetic-speech");
-  expect(view.getByRole("button", { name: "Read aloud" })).toBe(button);
+  expect(readButton(view)).toBe(button);
 });
 
 it("keeps speech through Gateway notifications that preserve connection and text", async () => {
   const gatewayListeners = new Set<() => void>();
   const { pending, view } = pendingSpeech(gatewayListeners);
   readButton(view).click();
-  for (const notify of gatewayListeners) {
-    notify();
-  }
+  gatewayListeners.forEach((notify) => notify());
   flush();
   pending.resolve(speech);
   await waitForSolid(() => expect(play).toHaveBeenCalledTimes(2));
-  for (const notify of gatewayListeners) {
-    notify();
-  }
+  gatewayListeners.forEach((notify) => notify());
   flush();
   expect(revoke).not.toHaveBeenCalled();
   readButton(view, "Stop reading").click();
@@ -152,24 +153,13 @@ it("keeps native transcript speech with its current application context", async 
   });
   const synthesize = async () => speech;
   const request = vi.fn(synthesize);
-  const runtimeConfig = createRuntimeConfigStub();
-  Object.assign(runtimeConfig.state, {
-    configSnapshot: {
-      hash: "synthetic",
-      sourceConfig: {},
-      runtimeConfig: { tts: { provider: "openai" } },
-    },
-  });
-  const context = createContext(request, { methods: ["tts.speak"], runtimeConfig });
+  const { context, runtimeConfig } = speechContext(request);
   const transcript = createTestTranscript();
   const messages = [{ role: "assistant", content: speechText }];
   const props = { applicationContext: context, transcript, messages };
   const container = renderChatView(props);
   const thread = container.querySelector(".chat-thread-inner");
-  const button = expectDefined(
-    container.querySelector<HTMLButtonElement>('[aria-label="Read aloud"]'),
-    "configured Read aloud action in the native transcript",
-  );
+  const button = nativeReadButton(container);
   button.click();
   await speechStarted.promise;
   expect(play).toHaveBeenCalledTimes(2);
@@ -187,10 +177,7 @@ it("keeps native transcript speech with its current application context", async 
   });
   expect(container.querySelector(".chat-thread-inner")).toBe(thread);
   expect(revoke).toHaveBeenCalledWith("blob:synthetic-speech");
-  expectDefined(
-    container.querySelector<HTMLButtonElement>('[aria-label="Read aloud"]'),
-    "Read aloud action for the replacement application",
-  ).click();
+  nativeReadButton(container).click();
   await waitForSolid(() => expect(replacementRequest).toHaveBeenCalledOnce());
   expect(request).toHaveBeenCalledOnce();
   transcript.dispose();

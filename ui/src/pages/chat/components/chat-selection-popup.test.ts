@@ -5,33 +5,28 @@ import {
   showChatAnnotationEditor,
 } from "./chat-selection-popup.ts";
 
-// jsdom Ranges have no layout (and no getBoundingClientRect at all); stub the
-// rect the popup positions against and remove the stub afterwards.
+// JSDOM ranges have no layout; give the popup a fixed anchor.
 beforeAll(() => {
   Object.defineProperty(Range.prototype, "getBoundingClientRect", {
     configurable: true,
-    value: () =>
-      ({ top: 100, left: 100, bottom: 120, right: 200, width: 100, height: 20 }) as DOMRect,
+    value: () => new DOMRect(100, 100, 100, 20),
   });
 });
 afterAll(() => {
   delete (Range.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect;
 });
 
-function buildThreadWithBubble(text: string) {
-  const thread = document.createElement("div");
+function selection(text: string, end?: number) {
+  const thread = document.body.appendChild(document.createElement("div"));
   thread.className = "chat-thread";
-  const bubble = document.createElement("div");
-  bubble.className = "chat-bubble";
-  bubble.dataset.messageId = "assistant-1";
-  bubble.dataset.entryId = "entry-1";
-  const body = document.createElement("div");
-  body.className = "chat-text";
+  thread.innerHTML =
+    '<div class="chat-bubble" data-message-id="assistant-1" data-entry-id="entry-1"><div class="chat-text"></div></div>';
+  const body = thread.querySelector(".chat-text")!;
   body.textContent = text;
-  bubble.appendChild(body);
-  thread.appendChild(bubble);
-  document.body.appendChild(thread);
-  return { thread, textNode: body.firstChild as Text };
+  if (end !== undefined) {
+    selectRange(body.firstChild as Text, 0, end);
+  }
+  return thread;
 }
 
 function selectRange(node: Text, start: number, end: number) {
@@ -60,11 +55,6 @@ function pointerUp(
   }
 }
 
-function selection(text: string, end: number) {
-  const { thread, textNode } = buildThreadWithBubble(text);
-  selectRange(textNode, 0, end);
-  return thread;
-}
 const popup = () => document.querySelector(".chat-selection-popup");
 const dialog = () => document.querySelector("[role=dialog]");
 function scrollTranscript() {
@@ -81,16 +71,17 @@ function key(input: EventTarget, value: string, options: KeyboardEventInit = {})
 const onAskSideChatSpy = vi.fn();
 const onAddToChatSpy = vi.fn();
 
+afterEach(() => {
+  removeChatSelectionPopup();
+  window.getSelection()?.removeAllRanges();
+  document.body.innerHTML = "";
+  onAskSideChatSpy.mockReset();
+  onAddToChatSpy.mockReset();
+  vi.useRealTimers();
+});
+
 describe("chat selection popup", () => {
   beforeEach(() => vi.useFakeTimers());
-  afterEach(() => {
-    removeChatSelectionPopup();
-    window.getSelection()?.removeAllRanges();
-    document.body.innerHTML = "";
-    onAskSideChatSpy.mockReset();
-    onAddToChatSpy.mockReset();
-    vi.useRealTimers();
-  });
 
   it("routes Add to chat to its own composer", () => {
     const thread = selection("Let's Encrypt cert is valid", 18);
@@ -122,7 +113,7 @@ describe("chat selection popup", () => {
   });
 
   it("ignores selections outside chat bubbles and collapsed selections", () => {
-    const { thread } = buildThreadWithBubble("bubble text");
+    const thread = selection("bubble text");
     const outside = document.createElement("p");
     outside.textContent = "outside text";
     document.body.appendChild(outside);
@@ -143,10 +134,9 @@ describe("chat selection popup", () => {
   });
 
   it("keeps only the latest pending selection popup", () => {
-    const { thread, textNode } = buildThreadWithBubble("replacement selection");
+    const thread = selection("replacement selection", 11);
     const firstAskSideChat = vi.fn();
     const secondAskSideChat = vi.fn();
-    selectRange(textNode, 0, 11);
     const pendingTimerCount = vi.getTimerCount();
     pointerUp(thread, { onAskSideChat: firstAskSideChat }, false);
     pointerUp(thread, { onAskSideChat: secondAskSideChat }, false);
@@ -160,20 +150,20 @@ describe("chat selection popup", () => {
     );
   });
 
-  it("dismisses the selection toolbar when the transcript scrolls", () => {
-    const thread = selection("scroll away from me", 7);
-    pointerUp(thread);
-    expect(popup()).not.toBeNull();
-    scrollTranscript();
-    expect(popup()).toBeNull();
-  });
-
-  it("dismisses when the selection collapses", () => {
+  it.each([
+    ["the transcript scrolls", scrollTranscript],
+    [
+      "the selection collapses",
+      () => {
+        window.getSelection()?.removeAllRanges();
+        document.dispatchEvent(new Event("selectionchange"));
+      },
+    ],
+  ] as const)("dismisses the selection toolbar when %s", (_name, dismiss) => {
     const thread = selection("dismiss me later", 7);
     pointerUp(thread);
     expect(popup()).not.toBeNull();
-    window.getSelection()?.removeAllRanges();
-    document.dispatchEvent(new Event("selectionchange"));
+    dismiss();
     expect(popup()).toBeNull();
   });
 
@@ -192,11 +182,6 @@ describe("chat selection popup", () => {
 });
 
 describe("chat annotation editor", () => {
-  afterEach(() => {
-    removeChatSelectionPopup();
-    document.body.innerHTML = "";
-  });
-
   function editor(options: Partial<Parameters<typeof showChatAnnotationEditor>[0]> = {}) {
     const onSave = vi.fn();
     const onCancel = vi.fn();
@@ -289,8 +274,7 @@ describe("chat annotation editor", () => {
     input.value = "Short layout control.";
     input.dispatchEvent(new Event("input", { bubbles: true }));
 
-    // Compensation for a width or height change scrolls the transcript the
-    // anchor lives in; that is not the user dismissing the editor.
+    // Layout compensation is not a user dismissal.
     scrollTranscript();
     expect(document.querySelector(".chat-annotation-editor")).not.toBeNull();
     expect(input.value).toBe("Short layout control.");
@@ -311,21 +295,17 @@ describe("chat annotation editor", () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it("still closes an untouched editor when the transcript scrolls", () => {
-    editor({ comment: "Saved comment", expanded: true });
-    scrollTranscript();
-    expect(dialog()).toBeNull();
-  });
-
   it.each([
+    ["transcript scroll", { comment: "Saved comment", expanded: true }, scrollTranscript],
     [
       "an outside interaction",
+      {},
       () => document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })),
     ],
-    ["Escape", () => key(document, "Escape")],
-    ["its owner retiring the pane", () => removeChatSelectionPopup("pane-a")],
-  ])("still dismisses the editor through %s", (_name, dismiss) => {
-    editor();
+    ["Escape", {}, () => key(document, "Escape")],
+    ["its owner retiring the pane", {}, () => removeChatSelectionPopup("pane-a")],
+  ] as const)("still dismisses an untouched editor through %s", (_name, options, dismiss) => {
+    editor(options);
     dismiss();
     expect(dialog()).toBeNull();
   });

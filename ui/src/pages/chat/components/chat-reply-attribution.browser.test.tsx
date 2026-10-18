@@ -67,9 +67,34 @@ function messageGroup(
     ...overrides,
   };
 }
+type Quote = { senderLabel: string; text: string };
+function ownReply(content: string, id: string, replyToId: string, replyToPreview?: Quote) {
+  return messageGroup(
+    { role: "user", content, __openclaw: { id, replyToId, replyToPreview } },
+    { role: "user", timestamp: 1 },
+    id,
+  );
+}
+const replyOptions = {
+  showReasoning: false,
+  showToolCalls: false,
+  avatarPlacement: "gutter",
+} satisfies ReplyProps["options"];
 const bounds = (element: Element) => element.getBoundingClientRect();
+const select = <T extends Element = HTMLElement>(selector: string, root: ParentNode = host) =>
+  root.querySelector<T>(selector)!;
 const part = (name: string, root: ParentNode = host) =>
-  root.querySelector<HTMLElement>(`.chat-reply-attribution__${name}`)!;
+  select(`.chat-reply-attribution__${name}`, root);
+const avatarSelector = ":scope > .chat-avatar, :scope > .chat-avatar-slot";
+const replyRow = () => select(".chat-reply-attribution--reply");
+const replyText = (row: HTMLElement) =>
+  [...row.querySelectorAll(".chat-reply-attribution__name, .chat-reply-attribution__unavailable")]
+    .map((element) => element.textContent)
+    .join("");
+async function viewport(width: number) {
+  await page.viewport(width, 800);
+  host.style.width = `${width - 32}px`;
+}
 
 async function draw(name: string, source = true, onOpenReply = vi.fn()) {
   const group = messageGroup(
@@ -85,9 +110,7 @@ async function draw(name: string, source = true, onOpenReply = vi.fn()) {
     },
   );
   drawGroup(group, {
-    showReasoning: false,
-    showToolCalls: false,
-    avatarPlacement: "gutter",
+    ...replyOptions,
     onOpenReply,
     resolveReplyPreview: () => ({
       messageId: "prompt",
@@ -99,11 +122,8 @@ async function draw(name: string, source = true, onOpenReply = vi.fn()) {
     }),
   });
   await document.fonts.ready;
-  const row = host.querySelector<HTMLElement>(".chat-reply-attribution--reply")!;
-  return {
-    row,
-    name: part("name", row),
-  };
+  const row = replyRow();
+  return { row, name: part("name", row) };
 }
 
 function expectSingleLine(row: HTMLElement) {
@@ -137,12 +157,8 @@ function expectSingleLine(row: HTMLElement) {
   }
 }
 
-// Theme changes colors only; geometry is proven once per width.
 describe.each([1440, 360])("reply attribution (%d px)", (width) => {
-  beforeEach(async () => {
-    await page.viewport(width, 800);
-    host.style.width = `${width - 32}px`;
-  });
+  beforeEach(() => viewport(width));
 
   it.each(["ltr", "rtl"])(
     "shows the viewport-appropriate reply cue in %s layout",
@@ -151,30 +167,28 @@ describe.each([1440, 360])("reply attribution (%d px)", (width) => {
       const { row } = await draw("Casey Morgan");
       const group = row.closest(".chat-group")!;
       const icon = part("mobile-icon", row);
-      // The hidden text fallback must not stretch the agent image past its 16px circle.
-      const face = row.querySelector(".chat-author-avatar .identity-avatar__fallback")!;
+      const face = select(".chat-author-avatar .identity-avatar__fallback", row);
       expect([bounds(face).width, bounds(face).height]).toEqual([16, 16]);
       if (width < 768) {
-        const avatar = group.querySelector(":scope > .chat-avatar, :scope > .chat-avatar-slot")!;
+        const avatar = select(avatarSelector, group);
         expect(bounds(avatar).width).toBe(0);
-        expect(group.querySelector(".chat-reply-connector")!.getBoundingClientRect().width).toBe(0);
-        expect(bounds(icon).width).toBe(14);
-        expect(bounds(icon).height).toBe(14);
+        expect(bounds(select(".chat-reply-connector", group)).width).toBe(0);
+        expect(bounds(icon)).toMatchObject({ width: 14, height: 14 });
         const transform = new DOMMatrixReadOnly(getComputedStyle(icon).transform);
         expect(transform.a).toBe(direction === "rtl" ? -1 : 1);
         const groupBounds = bounds(group);
         const rowBounds = bounds(row);
         expect(Math.abs(rowBounds.left - groupBounds.left)).toBeLessThanOrEqual(1);
         expect(Math.abs(rowBounds.right - groupBounds.right)).toBeLessThanOrEqual(1);
-        const bubble = group.querySelector(".chat-bubble")!;
-        const content = bubble.querySelector(".chat-text")!.getBoundingClientRect();
+        const bubble = select(".chat-bubble", group);
+        const content = bounds(select(".chat-text", bubble));
         expect(content.top - bounds(bubble).top).toBeCloseTo(4, 1);
         expect(content.top - rowBounds.bottom).toBeCloseTo(12, 1);
         return;
       }
       expect(bounds(icon).width).toBe(0);
-      const speaker = group.querySelector(":scope > .chat-avatar, :scope > .chat-avatar-slot")!;
-      const text = group.querySelector(".chat-bubble > .chat-text")!;
+      const speaker = select(avatarSelector, group);
+      const text = select(".chat-bubble > .chat-text", group);
       const speakerBounds = bounds(speaker);
       const textBounds = bounds(text);
       const lineHeight = Number.parseFloat(getComputedStyle(text).lineHeight);
@@ -183,14 +197,10 @@ describe.each([1440, 360])("reply attribution (%d px)", (width) => {
       ).toBeLessThanOrEqual(1);
       await expect
         .poll(() => {
-          const path = group.querySelector<SVGPathElement>(".chat-reply-connector path")!;
-          const svg = path.ownerSVGElement!.getBoundingClientRect();
-          const avatar = group
-            .querySelector(":scope > .chat-avatar, :scope > .chat-avatar-slot")!
-            .getBoundingClientRect();
-          const label = row
-            .querySelector(".chat-reply-attribution__label")!
-            .getBoundingClientRect();
+          const path = select<SVGPathElement>(".chat-reply-connector path", group);
+          const svg = bounds(path.ownerSVGElement!);
+          const avatar = bounds(speaker);
+          const label = bounds(part("label", row));
           const start = path.getPointAtLength(0);
           const end = path.getPointAtLength(path.getTotalLength());
           const labelEdge = direction === "rtl" ? label.right : label.left;
@@ -230,7 +240,7 @@ it("updates a mounted reply across the mobile breakpoint without losing navigati
     const target = page.getByRole("button", { name: "Replying to Casey Morgan", exact: true });
     await target.click();
     expect(onOpenReply).toHaveBeenLastCalledWith("prompt");
-    const button = host.querySelector<HTMLButtonElement>(".chat-reply-attribution button")!;
+    const button = select<HTMLButtonElement>(".chat-reply-attribution button");
     button.focus();
     await userEvent.keyboard("{Enter}");
     expect(onOpenReply).toHaveBeenLastCalledWith("prompt");
@@ -242,21 +252,11 @@ it("keeps the unavailable-original label visible inside an own reply without a s
   await page.viewport(1440, 800);
   host.style.width = "720px";
   drawGroup(
-    messageGroup(
-      {
-        role: "user",
-        content: "Follow up on the earlier synthetic answer.",
-        __openclaw: { id: "reply-paged", replyToId: "earlier-answer" },
-      },
-      { key: "own-missing-reply", role: "user", timestamp: 1 },
-      "reply-paged",
-    ),
+    ownReply("Follow up on the earlier synthetic answer.", "reply-paged", "earlier-answer"),
     { showReasoning: false, resolveReplyPreview: () => ({ missing: true }) },
   );
   await document.fonts.ready;
-  const fallback = host.querySelector<HTMLElement>(
-    ".chat-reply-attribution--inline .chat-reply-attribution__unavailable",
-  )!;
+  const fallback = part("unavailable", select(".chat-reply-attribution--inline"));
   expect(fallback.textContent?.trim()).toBe("Original message unavailable");
   expect(getComputedStyle(fallback).visibility).toBe("visible");
   const fallbackBounds = bounds(fallback);
@@ -270,35 +270,22 @@ it("keeps the unavailable-original label visible inside an own reply without a s
 it.each([1440, 390])(
   "keeps a short own reply readable without overlapping its label at %d px",
   async (width) => {
-    await page.viewport(width, 800);
+    await viewport(width);
     const onOpenReply = vi.fn();
     for (const direction of ["ltr", "rtl"]) {
       host.dir = direction;
-      host.style.width = width - 32 + "px";
       drawGroup(
-        messageGroup(
-          {
-            role: "user",
-            content: "OK",
-            __openclaw: {
-              id: "reply",
-              replyToId: "source",
-              replyToPreview: {
-                senderLabel: "Casey Morgan",
-                text: "Please review the release checklist. ".repeat(20),
-              },
-            },
-          },
-          { key: "own", role: "user", timestamp: 1 },
-          "reply",
-        ),
+        ownReply("OK", "reply", "source", {
+          senderLabel: "Casey Morgan",
+          text: "Please review the release checklist. ".repeat(20),
+        }),
         { showReasoning: false, onOpenReply },
       );
       await document.fonts.ready;
-      const row = host.querySelector<HTMLElement>(".chat-reply-attribution--inline")!;
+      const row = select(".chat-reply-attribution--inline");
       const name = part("name", row);
       const label = part("label", row);
-      const button = row.querySelector<HTMLButtonElement>("button")!;
+      const button = select<HTMLButtonElement>("button", row);
       expect(name.scrollWidth - name.clientWidth).toBeLessThanOrEqual(1);
       expect(label.scrollWidth - label.clientWidth).toBeLessThanOrEqual(1);
       const a = bounds(label),
@@ -317,11 +304,8 @@ it.each([1440, 390])(
 it.each([1440, 390])(
   "keeps a reserved reply strip row at a fixed height through every lookup outcome at %d px",
   async (width) => {
-    await page.viewport(width, 800);
-    host.style.width = `${width - 32}px`;
-    type Lookup = ReturnType<
-      NonNullable<Parameters<typeof MessageGroup>[0]["options"]["resolveReplyPreview"]>
-    >;
+    await viewport(width);
+    type Lookup = ReturnType<NonNullable<ReplyProps["options"]["resolveReplyPreview"]>>;
     const pending: Lookup = { pending: true };
     const missing: Lookup = { missing: true };
     const found: Lookup = {
@@ -331,7 +315,6 @@ it.each([1440, 390])(
       sender: { id: "mira", name: "Mira" },
       text: "Checklist",
     };
-    // A found original without renderable text (image-only, etc.) still names its author.
     const foundWithoutText = createReplyPreviewResolver(new Map(), {
       assistantName: "OpenClaw",
       replyMessageAccess: {
@@ -342,33 +325,17 @@ it.each([1440, 390])(
         }),
       },
     })("older");
-    // Live rows can remain pending until an authoritative history page supplies the source.
-    const outcomes = [
-      { name: "found with sender", snapshot: undefined, steps: [pending, found], text: "Mira" },
-      {
-        name: "found without text",
-        snapshot: undefined,
-        steps: [pending, foundWithoutText],
-        text: "Mira",
-      },
-      {
-        name: "sender-only snapshot, then missing",
-        snapshot: { senderLabel: "Mira", text: "" },
-        steps: [pending, missing],
-        text: "MiraOriginal message unavailable",
-      },
-      {
-        name: "missing without name",
-        snapshot: undefined,
-        steps: [pending, missing],
-        text: "Original message unavailable",
-      },
-      {
-        name: "unconfirmed until a later page",
-        snapshot: undefined,
-        steps: [pending, pending, found],
-        text: "Mira",
-      },
+    const outcomes: Array<[string, boolean, Lookup[], string]> = [
+      ["found with sender", false, [pending, found], "Mira"],
+      ["found without text", false, [pending, foundWithoutText], "Mira"],
+      [
+        "sender-only snapshot, then missing",
+        true,
+        [pending, missing],
+        "MiraOriginal message unavailable",
+      ],
+      ["missing without name", false, [pending, missing], "Original message unavailable"],
+      ["unconfirmed until a later page", false, [pending, pending, found], "Mira"],
     ];
     const layoutShift = PerformanceObserver.supportedEntryTypes.includes("layout-shift");
     const shifts: Array<PerformanceEntry & { value?: number; sources?: Array<{ node?: Node }> }> =
@@ -382,7 +349,7 @@ it.each([1440, 390])(
         requestAnimationFrame(() => resolve(null));
       });
     try {
-      for (const outcome of outcomes) {
+      for (const [name, snapshot, steps, text] of outcomes) {
         const group = messageGroup(
           {
             role: "assistant",
@@ -390,7 +357,7 @@ it.each([1440, 390])(
             __openclaw: {
               id: "answer",
               replyToId: "older",
-              ...(outcome.snapshot ? { replyToPreview: outcome.snapshot } : {}),
+              ...(snapshot ? { replyToPreview: { senderLabel: "Mira", text: "" } } : {}),
             },
           },
           { replyShared: true },
@@ -399,72 +366,55 @@ it.each([1440, 390])(
           drawGroup(
             group,
             {
-              showReasoning: false,
-              showToolCalls: false,
-              avatarPlacement: "gutter",
+              ...replyOptions,
               onOpenReply: vi.fn(),
               resolveReplyPreview: () => lookup,
             },
             true,
           );
         const measure = () => {
-          const row = host.querySelector(".chat-reply-attribution--reply")!.getBoundingClientRect();
+          const row = bounds(replyRow());
           return {
             rowTop: row.top,
             rowHeight: row.height,
-            text: host.querySelector(".chat-bubble .chat-text")!.getBoundingClientRect().top,
-            after: host.querySelector(".after")!.getBoundingClientRect().top,
+            text: bounds(select(".chat-bubble .chat-text")).top,
+            after: bounds(select(".after")).top,
           };
         };
         view?.dispose();
         view = undefined;
-        drawLookup(outcome.steps[0]);
+        drawLookup(steps[0]);
         await document.fonts.ready;
         await frame();
         await frame();
         const reserved = measure();
         expect(reserved.rowHeight).toBeGreaterThan(0);
-        if (!outcome.snapshot) {
+        if (!snapshot) {
           // A pending row holds its place invisibly; the connector waits for the name.
-          const row = host.querySelector(".chat-reply-attribution--reply")!;
-          expect(getComputedStyle(row).visibility, outcome.name).toBe("hidden");
-          expect(host.querySelector(".chat-reply-connector"), outcome.name).toBeNull();
+          expect(getComputedStyle(replyRow()).visibility, name).toBe("hidden");
+          expect(host.querySelector(".chat-reply-connector"), name).toBeNull();
         }
         // A sender-only snapshot paints the name before the lookup answers.
-        expect(host.querySelector(".chat-reply-attribution__name")?.textContent, outcome.name).toBe(
-          outcome.snapshot?.senderLabel,
-        );
+        expect(part("name")?.textContent, name).toBe(snapshot ? "Mira" : undefined);
         const since = performance.now();
-        for (const step of outcome.steps.slice(1)) {
+        for (const step of steps.slice(1)) {
           drawLookup(step);
           // Same geometry in the committing frame and the frames after it.
-          expect(measure(), outcome.name).toEqual(reserved);
+          expect(measure(), name).toEqual(reserved);
           await frame();
-          expect(measure(), outcome.name).toEqual(reserved);
+          expect(measure(), name).toEqual(reserved);
           await frame();
-          expect(measure(), outcome.name).toEqual(reserved);
+          expect(measure(), name).toEqual(reserved);
         }
-        const row = host.querySelector<HTMLElement>(".chat-reply-attribution--reply")!;
-        expect(getComputedStyle(row).visibility, outcome.name).toBe("visible");
-        expect(
-          row.querySelector(".chat-reply-attribution__label")?.textContent?.trim(),
-          outcome.name,
-        ).toBe("Replying to");
-        expect(
-          [
-            ...row.querySelectorAll(
-              ".chat-reply-attribution__name, .chat-reply-attribution__unavailable",
-            ),
-          ]
-            .map((element) => element.textContent)
-            .join(""),
-          outcome.name,
-        ).toBe(outcome.text);
-        if (outcome.steps.at(-1) === missing) {
-          expect(row.querySelector(".chat-author-avatar, button, a"), outcome.name).toBeNull();
+        const row = replyRow();
+        expect(getComputedStyle(row).visibility, name).toBe("visible");
+        expect(part("label", row)?.textContent?.trim(), name).toBe("Replying to");
+        expect(replyText(row), name).toBe(text);
+        if (steps.at(-1) === missing) {
+          expect(row.querySelector(".chat-author-avatar, button, a"), name).toBeNull();
         }
-        if (outcome.steps.at(-1) === foundWithoutText) {
-          expect(row.querySelector("button .chat-author-avatar"), outcome.name).not.toBeNull();
+        if (steps.at(-1) === foundWithoutText) {
+          expect(row.querySelector("button .chat-author-avatar"), name).not.toBeNull();
         }
         if (layoutShift) {
           shifts.push(...observer.takeRecords());
@@ -474,7 +424,7 @@ it.each([1440, 390])(
               (entry.sources ?? []).some((source) => source.node && host.contains(source.node)),
             )
             .map((entry) => ({ value: entry.value, startTime: entry.startTime }));
-          expect(stripShifts, outcome.name).toEqual([]);
+          expect(stripShifts, name).toEqual([]);
         }
       }
     } finally {

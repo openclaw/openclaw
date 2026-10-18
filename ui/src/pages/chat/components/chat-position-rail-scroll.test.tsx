@@ -102,11 +102,7 @@ describe("conversation position rail scroll rendering", () => {
     const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
       kind: "content",
       key: `row-${index}`,
-      content: (
-        <div class="chat-bubble" data-entry-id={`row-${index}`}>
-          {index}
-        </div>
-      ),
+      content: <div class="chat-bubble" data-entry-id={`row-${index}`} />,
     }));
     const ids = rows.map((row) => row.key);
     const identityMap = () => new Map(ids.map((id) => [id, id]));
@@ -146,14 +142,13 @@ describe("conversation position rail scroll rendering", () => {
         );
       });
     host.renderTranscript = transcriptView;
-    const settleUpdates = async () => {
+    const settleUpdates = async (frame = false) => {
+      if (frame) {
+        flushFrame();
+      }
       while (host.isUpdatePending) {
         await host.updateComplete;
       }
-    };
-    const frame = () => {
-      flushFrame();
-      return settleUpdates();
     };
     const scrollTo = (offset: number) => {
       container.scrollTop = offset;
@@ -187,8 +182,8 @@ describe("conversation position rail scroll rendering", () => {
       }
       scrollTo(50);
       await settleUpdates();
-      await frame();
-      await frame();
+      await settleUpdates(true);
+      await settleUpdates(true);
       expectCurrent("row-2");
       // A prior sibling commit can leave layout dirty in this checkpoint.
       // Recording the render's scroll facts must consume already observed geometry.
@@ -219,7 +214,7 @@ describe("conversation position rail scroll rendering", () => {
       host.requestRender();
       await settleUpdates();
       clearRailReads();
-      await frame();
+      await settleUpdates(true);
       expectNoRailFrameReads();
       performUpdate.mockClear();
 
@@ -242,7 +237,7 @@ describe("conversation position rail scroll rendering", () => {
       scrollTo(55);
       expect(offsets).toEqual([5]);
       clearRailReads();
-      await frame();
+      await settleUpdates(true);
       expectNoRailFrameReads();
       expect(performUpdate).not.toHaveBeenCalled();
       expectCurrent("row-2");
@@ -251,7 +246,7 @@ describe("conversation position rail scroll rendering", () => {
       // the rail must still publish its midpoint crossing and keyboard entry.
       scrollTo(70);
       expect(offsets).toEqual([5, 15]);
-      await frame();
+      await settleUpdates(true);
       expect(performUpdate).not.toHaveBeenCalled();
       expectCurrent("row-3");
       container.dispatchEvent(new WheelEvent("wheel", { deltaY: 600 }));
@@ -264,20 +259,20 @@ describe("conversation position rail scroll rendering", () => {
       // The precise end edge is recorded without committing the unchanged virtual range.
       scrollTo(4198.5);
       await settleUpdates();
-      await frame();
-      await frame();
+      await settleUpdates(true);
+      await settleUpdates(true);
       expect(recordViewport.mock.results.at(-1)?.value).toBe(false);
       performUpdate.mockClear();
       scrollTo(4199.5);
       await settleUpdates();
       expect(recordViewport.mock.results.at(-1)?.value).toBe(true);
       expect(performUpdate).not.toHaveBeenCalled();
-      await frame();
+      await settleUpdates(true);
       expectCurrent("row-39");
-      await frame();
+      await settleUpdates(true);
       performUpdate.mockClear();
       scrollTo(4199.75);
-      await frame();
+      await settleUpdates(true);
       expect(performUpdate).not.toHaveBeenCalled();
 
       // The physical end crosses row 35's boundary, so its new virtual range
@@ -286,7 +281,7 @@ describe("conversation position rail scroll rendering", () => {
         container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey;
       scrollTo(4200);
       await settleUpdates();
-      await frame();
+      await settleUpdates(true);
       expect(performUpdate).toHaveBeenCalledTimes(1);
       expect(
         container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
