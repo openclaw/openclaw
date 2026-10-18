@@ -1,0 +1,294 @@
+{
+  "id": "cloudflare-clef",
+  "name": "Cloudflare Clef",
+  "description": "Typed text and image decisions through the authenticated Cloudflare CLI.",
+  "categories": [
+    "models"
+  ],
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "providers": [
+    "cloudflare-clef"
+  ],
+  "contracts": {
+    "decisionProviders": [
+      "cloudflare-clef"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "binaryPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "profile": {
+        "type": "string",
+        "minLength": 1
+      },
+      "accountId": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{32}$"
+      }
+    }
+  },
+  "uiHints": {
+    "binaryPath": {
+      "label": "Cloudflare CLI executable",
+      "help": "Absolute path to cf, installed and authenticated as the Gateway service user. Defaults to cf on PATH."
+    },
+    "profile": {
+      "label": "CLI profile",
+      "help": "Optional Cloudflare CLI authentication profile."
+    },
+    "accountId": {
+      "label": "Cloudflare account ID",
+      "help": "Optional account selection for multi-account logins."
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "cloudflare-clef": {
+        "models": [
+          {
+            "id": "clef",
+            "name": "Clef",
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 65536,
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "cloudflare-clef-cli",
+                "input": [
+                  "text",
+                  "image"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "limits": {
+                  "maxQuestions": 64,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": [
+                      "image/png",
+                      "image/jpeg",
+                      "image/webp"
+                    ],
+                    "remoteUrls": false
+                  }
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs"
+                }
+              }
+            }
+          },
+          {
+            "id": "clef-flash",
+            "name": "Clef Flash",
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 24576,
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "cloudflare-clef-cli",
+                "input": [
+                  "text",
+                  "image"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "limits": {
+                  "maxQuestions": 64,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": [
+                      "image/png",
+                      "image/jpeg",
+                      "image/webp"
+                    ],
+                    "remoteUrls": false
+                  }
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs"
+                }
+              }
+            }
+          },
+          {
+            "id": "clef-omni",
+            "name": "Clef Omni",
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 64000,
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "cloudflare-clef-cli",
+                "input": [
+                  "text",
+                  "image"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "limits": {
+                  "maxQuestions": 64,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": [
+                      "image/png",
+                      "image/jpeg",
+                      "image/webp"
+                    ],
+                    "remoteUrls": false
+                  }
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs"
+                }
+              }
+            }
+          }
+        ],
+        "authScope": "plugin"
+      }
+    }
+  },
+  "decisionModels": [
+    {
+      "provider": "cloudflare-clef",
+      "id": "clef",
+      "name": "Clef",
+      "capabilities": {
+        "questionTypes": [
+          "boolean",
+          "choice",
+          "score"
+        ],
+        "maxQuestions": 64,
+        "maxChoiceAlternatives": 255,
+        "maxScoreLevels": 10,
+        "confidence": "provider-specific"
+      }
+    },
+    {
+      "provider": "cloudflare-clef",
+      "id": "clef-flash",
+      "name": "Clef Flash",
+      "capabilities": {
+        "questionTypes": [
+          "boolean",
+          "choice",
+          "score"
+        ],
+        "maxQuestions": 64,
+        "maxChoiceAlternatives": 255,
+        "maxScoreLevels": 10,
+        "confidence": "provider-specific"
+      }
+    },
+    {
+      "provider": "cloudflare-clef",
+      "id": "clef-omni",
+      "name": "Clef Omni",
+      "capabilities": {
+        "questionTypes": [
+          "boolean",
+          "choice",
+          "score"
+        ],
+        "maxQuestions": 64,
+        "maxChoiceAlternatives": 255,
+        "maxScoreLevels": 10,
+        "confidence": "provider-specific"
+      }
+    }
+  ],
+  "syntheticAuthRefs": [
+    "cloudflare-clef"
+  ],
+  "nonSecretAuthMarkers": [
+    "cloudflare-cli"
+  ]
+}
