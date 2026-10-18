@@ -44,7 +44,8 @@ function interceptCurrent(store: PluginStateKeyedStore<unknown>, intercept: Inte
 }
 function observeCurrent(intercept: InterceptStore) {
   const store = getBrowserStateRuntime().sessionTabs;
-  return vi.spyOn(store, "withCurrent").mockImplementation(interceptCurrent(store, intercept));
+  const intercepted = interceptCurrent(store, intercept);
+  return vi.spyOn(store, "withCurrent").mockImplementation(intercepted);
 }
 function requester() {
   let current = true;
