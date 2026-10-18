@@ -382,14 +382,6 @@ describe("iOS Periphery comment workflow", () => {
     expect(sharedWorkflow.jobs?.["scan-macos"]?.["runs-on"]).toBe("xcode-27");
   });
 
-  it("accepts deflated Periphery artifacts", async () => {
-    const archive = reportZip([], "0\n", "DEFLATE");
-    const result = await runReport(archive);
-
-    expect(result.downloadCount).toBe(1);
-    expect(result.core.warnings).toEqual([]);
-  });
-
   it.each([
     [
       "oversized artifact metadata before download",
@@ -459,14 +451,16 @@ describe("iOS Periphery comment workflow", () => {
     expectUnavailableComment(result.updatedBodies);
   });
 
-  it("escapes finding text before creating a PR comment", async () => {
+  it("reads deflated findings and escapes them before creating a PR comment", async () => {
     const longName = `![click](https://example.invalid)\r\n@octocat|next${"a".repeat(260)}`;
     const archive = reportZip(
       [{ kind: "<script>*bold*</script>", location: "Sources/Test.swift:12", name: longName }],
       "1\n",
+      "DEFLATE",
     );
     const result = await runReport(archive);
 
+    expect(result).toMatchObject({ downloadCount: 1, core: { warnings: [] } });
     expect(result.createdBodies).toHaveLength(1);
     const body = result.createdBodies[0] ?? "";
     const parsed = markdownToIR(body, { linkify: true, tableMode: "bullets" });
