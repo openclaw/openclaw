@@ -99,16 +99,15 @@ import {
 } from "./doctor-auth-legacy-paths.js";
 import {
   acquireAuthProfileMigrationSourceLocks,
-  archiveAuthProfileMigrationSource,
   prepareAuthProfileSourceReceipt,
   parseAuthProfileMigrationSource,
   assertAuthProfileMigrationSourcesUnchanged,
   digestAuthProfileMigrationValue,
   finalizeAuthProfileMigrationSource,
-  hasTerminalAuthProfileMigrationReceipt,
   resumePendingAuthProfileMigrationArchives,
   type AuthProfileMigrationSourceReceipt,
 } from "./doctor-auth-migration-receipts.js";
+import { finishPreviouslyMigratedAuthProfileSource } from "./doctor-auth-previously-migrated-source.js";
 import {
   ensureConfigAuthProfiles,
   stripImportedConfigAuthProfileCredentials,
@@ -535,20 +534,6 @@ function hasImportableAuthProfileStore(store: AuthProfileStore | null): store is
   return Boolean(store && (Object.keys(store.profiles).length > 0 || hasAuthProfileState(store)));
 }
 
-function archivePreviouslyMigratedAuthProfileSource(
-  receipt: AuthProfileMigrationSourceReceipt,
-  result: LegacyFlatAuthProfileRepairResult,
-): boolean {
-  if (!hasTerminalAuthProfileMigrationReceipt(receipt.sourceKey, receipt.env)) {
-    return false;
-  }
-  archiveAuthProfileMigrationSource(receipt);
-  result.changes.push(
-    `Archived a previously migrated legacy auth source without replaying credentials (${shortenHomePath(receipt.archivePath)}).`,
-  );
-  return true;
-}
-
 function loadAuthProfileMigrationTargetStore(
   agentDir: string | undefined,
   database?: AuthProfileDatabase,
@@ -798,9 +783,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           env,
         }),
       );
-      sourceReceipts = sourceReceipts.filter(
-        (receipt) => !archivePreviouslyMigratedAuthProfileSource(receipt, result),
-      );
+      sourceReceipts = sourceReceipts.filter((receipt) => {
+        const change = finishPreviouslyMigratedAuthProfileSource(receipt);
+        if (change) {
+          result.changes.push(change);
+        }
+        return !change;
+      });
       assertAuthProfileMigrationSourcesUnchanged(candidateSourcePaths, sourceReceipts);
       if (sourceReceipts.length === 0 && !configStore) {
         continue;

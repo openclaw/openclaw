@@ -44,6 +44,10 @@ export type AuthProfileMigrationSourceReceipt = {
   env?: NodeJS.ProcessEnv;
 };
 
+export type TerminalAuthProfileMigrationArchiveInspection =
+  | { status: "not-terminal" | "unavailable" }
+  | { status: "verified"; archivePath: string };
+
 function createAuthProfileMigrationSourceReceipt(params: {
   sourcePath: string;
   sourceBytes: Buffer;
@@ -489,22 +493,50 @@ export function resumePendingAuthProfileMigrationArchives(
   return changes;
 }
 
-export function hasTerminalAuthProfileMigrationReceipt(
-  sourceKey: string,
-  env?: NodeJS.ProcessEnv,
-): boolean {
+export function inspectTerminalAuthProfileMigrationArchive(
+  receipt: AuthProfileMigrationSourceReceipt,
+): TerminalAuthProfileMigrationArchiveInspection {
   const row = withExistingOpenClawStateDatabaseReadOnly(
     ({ db }) =>
       executeSqliteQueryTakeFirstSync(
         db,
         getNodeSqliteKysely<MigrationDatabase>(db)
           .selectFrom("migration_sources")
-          .select("status")
-          .where("source_key", "=", sourceKey),
+          .select(["status", "report_json"])
+          .where("source_key", "=", receipt.sourceKey),
       ),
-    { env },
+    { env: receipt.env },
   );
-  return row?.status === "completed" || row?.status === "archived-unparsed";
+  if (row?.status !== "completed" && row?.status !== "archived-unparsed") {
+    return { status: "not-terminal" };
+  }
+
+  let report: unknown;
+  try {
+    report = JSON.parse(row.report_json) as unknown;
+  } catch {
+    return { status: "unavailable" };
+  }
+  if (!isRecord(report) || typeof report.archivePath !== "string") {
+    return { status: "unavailable" };
+  }
+  const archivePath = path.resolve(report.archivePath);
+  if (archivePath === path.resolve(receipt.sourcePath)) {
+    return { status: "unavailable" };
+  }
+  try {
+    const sourceBytes = fs.readFileSync(receipt.sourcePath);
+    const archiveBytes = fs.readFileSync(archivePath);
+    if (
+      sha256Hex(sourceBytes) === receipt.sourceSha256 &&
+      sha256Hex(archiveBytes) === receipt.sourceSha256
+    ) {
+      return { status: "verified", archivePath };
+    }
+  } catch {
+    // A missing or unreadable archive cannot prove the source is safe to remove.
+  }
+  return { status: "unavailable" };
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
