@@ -31,6 +31,49 @@ import {
 
 const KEY = "0123456789abcdef".repeat(4);
 const SOURCE = "127.0.0.1";
+const hello = (tabs: unknown[] = [], userAgent = "test", browserVersion = "Chrome/test") => ({
+  type: "hello",
+  userAgent,
+  browserVersion,
+  extensionVersion: "2",
+  tabs,
+});
+const tab = (title: string, tabId = 1, url = "https://example.test", active = true) => ({
+  tabId,
+  url,
+  title,
+  active,
+});
+const authHello = (clientNonce = randomRelayNonce()) => ({
+  type: "auth.hello",
+  v: 2,
+  keyId: relayKeyIdFromHex(KEY),
+  clientNonce,
+});
+const authResponse = (challenge: BrowserRelayAuthChallenge) => ({
+  type: "auth.response",
+  v: 2,
+  sessionId: challenge.sessionId,
+  clientProof: createRelayProof(KEY, "client", challenge),
+});
+const completion = (challenge: BrowserRelayAuthChallenge) => ({
+  v: 2,
+  sessionId: challenge.sessionId,
+  clientProof: createRelayProof(KEY, "client", challenge),
+});
+const httpHello = (clientNonce = randomRelayNonce()) => ({
+  v: 2,
+  keyId: relayKeyIdFromHex(KEY),
+  clientNonce,
+  role: "cdp",
+  transport: "connection",
+  method: "GET",
+  resource: "/json/list",
+  flow: "json-list",
+});
+function sendJson(socket: Pick<WebSocket, "send">, value: unknown) {
+  socket.send(JSON.stringify(value));
+}
 
 async function authenticate(
   connection: RawHttpConnection,
@@ -60,11 +103,7 @@ async function authenticate(
   const completeResponse = await connection.request(
     "POST",
     BROWSER_RELAY_AUTH_COMPLETE_PATH,
-    JSON.stringify({
-      v: 2,
-      sessionId: challenge.sessionId,
-      clientProof: createRelayProof(KEY, "client", challenge),
-    }),
+    JSON.stringify(completion(challenge)),
     { "Content-Type": "application/json" },
   );
   expect(completeResponse.status).toBe(200);
@@ -78,15 +117,7 @@ async function authenticate(
 
 function attachTestExtension(handle: ExtensionRelayHandle): void {
   const handlers = handle.bridge.attachExtensionSocket({ send: () => {}, close: () => {} });
-  handlers.onMessage(
-    JSON.stringify({
-      type: "hello",
-      userAgent: "test",
-      browserVersion: "Chrome/test",
-      extensionVersion: "2",
-      tabs: [],
-    }),
-  );
+  handlers.onMessage(JSON.stringify(hello()));
 }
 
 function rawDataText(data: RawData): string {
@@ -114,25 +145,11 @@ async function openExtensionSocket(
 async function authenticateV2Extension(handle: ExtensionRelayHandle): Promise<WebSocket> {
   const ws = await openExtensionSocket(handle, BROWSER_RELAY_EXTENSION_SUBPROTOCOL);
   const challengeMessage = once(ws, "message");
-  ws.send(
-    JSON.stringify({
-      type: "auth.hello",
-      v: 2,
-      keyId: relayKeyIdFromHex(KEY),
-      clientNonce: randomRelayNonce(),
-    }),
-  );
+  sendJson(ws, authHello());
   const [challengeData] = (await challengeMessage) as [RawData];
   const challenge = JSON.parse(rawDataText(challengeData)) as BrowserRelayAuthChallenge;
   const okMessage = once(ws, "message");
-  ws.send(
-    JSON.stringify({
-      type: "auth.response",
-      v: 2,
-      sessionId: challenge.sessionId,
-      clientProof: createRelayProof(KEY, "client", challenge),
-    }),
-  );
+  sendJson(ws, authResponse(challenge));
   const [okData] = (await okMessage) as [RawData];
   expect(JSON.parse(rawDataText(okData))).toMatchObject({
     type: "auth.ok",
@@ -297,32 +314,9 @@ describe("extension relay WebSocket auth v2 frame boundary", () => {
         prepareAuthenticated: async () => await preparation,
         removePreAuthGuard,
       });
-      const clientNonce = randomRelayNonce();
-      harness.socket.emit(
-        "message",
-        Buffer.from(
-          JSON.stringify({
-            type: "auth.hello",
-            v: 2,
-            keyId: relayKeyIdFromHex(KEY),
-            clientNonce,
-          }),
-        ),
-        false,
-      );
+      harness.socket.emit("message", Buffer.from(JSON.stringify(authHello())), false);
       const challenge = JSON.parse(harness.send.mock.calls[0]?.[0]) as BrowserRelayAuthChallenge;
-      harness.socket.emit(
-        "message",
-        Buffer.from(
-          JSON.stringify({
-            type: "auth.response",
-            v: 2,
-            sessionId: challenge.sessionId,
-            clientProof: createRelayProof(KEY, "client", challenge),
-          }),
-        ),
-        false,
-      );
+      harness.socket.emit("message", Buffer.from(JSON.stringify(authResponse(challenge))), false);
       expect(removePreAuthGuard).toHaveBeenCalledOnce();
 
       await vi.advanceTimersByTimeAsync(BROWSER_RELAY_CHALLENGE_TTL_MS + 1);
@@ -419,14 +413,7 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
       handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: false });
       const authority = getBrowserRelayAuthV2Authority(KEY);
       const issueChallenge = vi.spyOn(authority, "issueChallenge");
-      const payload = Buffer.from(
-        JSON.stringify({
-          type: "auth.hello",
-          v: 2,
-          keyId: relayKeyIdFromHex(KEY),
-          clientNonce: randomRelayNonce(),
-        }).padEnd(payloadBytes, " "),
-      );
+      const payload = Buffer.from(JSON.stringify(authHello()).padEnd(payloadBytes, " "));
       // Valid JSON padding leaves the wire limit as the fragmented case's rejection owner.
       expect(payload.byteLength).toBe(payloadBytes);
       expect(parseRelayAuthHello(parseStrictJsonObject(payload.toString("utf8"))) !== null).toBe(
@@ -455,27 +442,12 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
   it("keeps the 64 MiB application receiver after v2 authentication", async () => {
     handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: false });
     const socket = await authenticateV2Extension(handle);
-    socket.send(
-      JSON.stringify({
-        type: "hello",
-        userAgent: "test",
-        browserVersion: "Chrome/test",
-        extensionVersion: "2",
-        tabs: [
-          {
-            tabId: 1,
-            url: `https://example.test/${"a".repeat(16_000)}`,
-            title: "one",
-            active: true,
-          },
-          {
-            tabId: 2,
-            url: `https://example.test/${"b".repeat(16_000)}`,
-            title: "two",
-            active: false,
-          },
-        ],
-      }),
+    sendJson(
+      socket,
+      hello([
+        tab("one", 1, `https://example.test/${"a".repeat(16_000)}`),
+        tab("two", 2, `https://example.test/${"b".repeat(16_000)}`, false),
+      ]),
     );
 
     await vi.waitFor(() => expect(handle?.bridge.extensionConnected).toBe(true));
@@ -496,15 +468,7 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
     let versionConnection: RawHttpConnection | undefined;
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
-      extension.send(
-        JSON.stringify({
-          type: "hello",
-          userAgent: "test",
-          browserVersion: "Chrome/test",
-          extensionVersion: "2",
-          tabs: [{ tabId: 1, url: "https://example.test", title: "one", active: true }],
-        }),
-      );
+      sendJson(extension, hello([tab("one")]));
       await vi.waitFor(() => expect(handle?.bridge.extensionConnected).toBe(true));
 
       const credential = Buffer.from(`openclaw-internal:${handle.internalToken}`).toString(
@@ -521,22 +485,18 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
       });
 
       const attachment = once(extension, "message");
-      client.send(
-        JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
-      );
+      sendJson(client, { id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } });
       const [attachmentData] = (await attachment) as [RawData];
       const attachCommand = JSON.parse(rawDataText(attachmentData)) as {
         type: string;
         seq: number;
       };
       expect(attachCommand.type).toBe("attach");
-      extension.send(
-        JSON.stringify({
-          type: "result",
-          seq: attachCommand.seq,
-          result: { targetId: "target-1" },
-        }),
-      );
+      sendJson(extension, {
+        type: "result",
+        seq: attachCommand.seq,
+        result: { targetId: "target-1" },
+      });
       await vi.waitFor(() =>
         expect(clientFrames.some((frame) => frame.method === "Target.attachedToTarget")).toBe(true),
       );
@@ -604,15 +564,7 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
     const extension = await authenticateV2Extension(handle);
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
-      extension.send(
-        JSON.stringify({
-          type: "hello",
-          userAgent: "test",
-          browserVersion: "Chrome/test",
-          extensionVersion: "2",
-          tabs: [{ tabId: 1, url: "https://example.test", title: "initial", active: true }],
-        }),
-      );
+      sendJson(extension, hello([tab("initial")]));
       await vi.waitFor(() => expect(handle?.bridge.extensionConnected).toBe(true));
 
       for (let index = 0; index < 4; index += 1) {
@@ -621,12 +573,7 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
         const [pingData] = (await ping) as [RawData];
         expect(JSON.parse(rawDataText(pingData))).toEqual({ type: "ping" });
         extension.send(JSON.stringify({ type: "pong" }));
-        extension.send(
-          JSON.stringify({
-            type: "tabs",
-            tabs: [{ tabId: 1, url: "https://example.test", title: `beat-${index}`, active: true }],
-          }),
-        );
+        sendJson(extension, { type: "tabs", tabs: [tab(`beat-${index}`)] });
         await vi.waitFor(() =>
           expect(handle?.bridge.accessibleTabs()[0]?.title).toBe(`beat-${index}`),
         );
@@ -648,15 +595,7 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
       "openclaw-extension-relay",
       `openclaw-extension-token.${KEY}`,
     ]);
-    active.send(
-      JSON.stringify({
-        type: "hello",
-        userAgent: "test",
-        browserVersion: "Chrome/test",
-        extensionVersion: "2",
-        tabs: [],
-      }),
-    );
+    sendJson(active, hello([]));
     await vi.waitFor(() => expect(handle?.bridge.extensionConnected).toBe(true));
 
     // Alias equivalence is covered at the authority boundary in auth-v2.test.ts.
@@ -686,15 +625,7 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
     attacker[0]!.close();
     await released;
     const promoted = await authenticateV2Extension(handle);
-    promoted.send(
-      JSON.stringify({
-        type: "hello",
-        userAgent: "test-v2",
-        browserVersion: "Chrome/test-v2",
-        extensionVersion: "2",
-        tabs: [],
-      }),
-    );
+    sendJson(promoted, hello([], "test-v2", "Chrome/test-v2"));
     await vi.waitFor(() => expect(handle?.bridge.extensionConnected).toBe(true));
 
     promoted.close();
@@ -711,29 +642,14 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
     const challengeResponse = await original.request(
       "POST",
       BROWSER_RELAY_AUTH_CHALLENGE_PATH,
-      JSON.stringify({
-        v: 2,
-        keyId: relayKeyIdFromHex(KEY),
-        clientNonce: randomRelayNonce(),
-        role: "cdp",
-        transport: "connection",
-        method: "GET",
-        resource: "/json/list",
-        flow: "json-list",
-      }),
+      JSON.stringify(httpHello()),
     );
     const challenge = JSON.parse(challengeResponse.body) as BrowserRelayAuthChallenge;
-    const completion = JSON.stringify({
-      v: 2,
-      sessionId: challenge.sessionId,
-      clientProof: createRelayProof(KEY, "client", challenge),
-    });
-    expect((await other.request("POST", BROWSER_RELAY_AUTH_COMPLETE_PATH, completion)).status).toBe(
-      409,
+    const body = JSON.stringify(completion(challenge));
+    expect((await other.request("POST", BROWSER_RELAY_AUTH_COMPLETE_PATH, body)).status).toBe(409);
+    expect((await original.request("POST", BROWSER_RELAY_AUTH_COMPLETE_PATH, body)).status).toBe(
+      200,
     );
-    expect(
-      (await original.request("POST", BROWSER_RELAY_AUTH_COMPLETE_PATH, completion)).status,
-    ).toBe(200);
     original.close();
     other.close();
   });
@@ -742,17 +658,7 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
     handle = await startExtensionRelayServer({ port: 0, token: KEY });
     const first = await RawHttpConnection.connect(handle.port);
     const second = await RawHttpConnection.connect(handle.port);
-    const nonce = randomRelayNonce();
-    const body = JSON.stringify({
-      v: 2,
-      keyId: relayKeyIdFromHex(KEY),
-      clientNonce: nonce,
-      role: "cdp",
-      transport: "connection",
-      method: "GET",
-      resource: "/json/list",
-      flow: "json-list",
-    });
+    const body = JSON.stringify(httpHello());
     expect((await first.request("POST", BROWSER_RELAY_AUTH_CHALLENGE_PATH, body)).status).toBe(200);
     expect((await second.request("POST", BROWSER_RELAY_AUTH_CHALLENGE_PATH, body)).status).toBe(
       401,

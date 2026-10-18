@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
 import { resolveProfile, type ResolvedBrowserConfig } from "../config.js";
@@ -76,12 +77,26 @@ function createHandle(token: string, port = RELAY_PORT): ExtensionRelayHandle {
   };
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
+function pendingRebind() {
+  const oldRelay = createHandle(OLD_TOKEN);
+  const { profile, state } = createState(OLD_TOKEN, oldRelay);
+  const runtime = getOrCreateProfileRuntime(state, profile);
+  const startEntered = createDeferred<void>();
+  const releaseStart = createDeferred<void>();
+  const replacement = createHandle(ROTATED_TOKEN);
+  startExtensionRelayServerMock.mockImplementationOnce(async () => {
+    startEntered.resolve();
+    await releaseStart.promise;
+    return replacement;
   });
-  return { promise, resolve };
+  const lease = (signal?: AbortSignal) =>
+    withProfileOperationLease({
+      state,
+      runtime,
+      signal,
+      run: async (leaseSignal) => await ensureExtensionRelayForProfile(state, profile, leaseSignal),
+    });
+  return { oldRelay, profile, state, runtime, startEntered, releaseStart, replacement, lease };
 }
 
 describe("extension relay lifecycle", () => {
@@ -137,16 +152,7 @@ describe("extension relay lifecycle", () => {
   });
 
   it("coalesces concurrent rebinds to one exact relay handle", async () => {
-    const oldRelay = createHandle(OLD_TOKEN);
-    const { profile, state } = createState(OLD_TOKEN, oldRelay);
-    const startEntered = deferred();
-    const releaseStart = deferred();
-    const replacement = createHandle(ROTATED_TOKEN);
-    startExtensionRelayServerMock.mockImplementationOnce(async () => {
-      startEntered.resolve();
-      await releaseStart.promise;
-      return replacement;
-    });
+    const { oldRelay, profile, state, startEntered, releaseStart, replacement } = pendingRebind();
 
     const first = ensureExtensionRelayForProfile(state, profile);
     await startEntered.promise;
@@ -160,32 +166,14 @@ describe("extension relay lifecycle", () => {
   });
 
   it("keeps a shared HMAC-rotation rebind alive when its first caller is cancelled", async () => {
-    const oldRelay = createHandle(OLD_TOKEN);
-    const { profile, state } = createState(OLD_TOKEN, oldRelay);
-    const runtime = getOrCreateProfileRuntime(state, profile);
-    const startEntered = deferred();
-    const releaseStart = deferred();
-    const replacement = createHandle(ROTATED_TOKEN);
-    startExtensionRelayServerMock.mockImplementationOnce(async () => {
-      startEntered.resolve();
-      await releaseStart.promise;
-      return replacement;
-    });
+    const { oldRelay, state, runtime, startEntered, releaseStart, replacement, lease } =
+      pendingRebind();
     const firstController = new AbortController();
-    const first = withProfileOperationLease({
-      state,
-      runtime,
-      signal: firstController.signal,
-      run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
-    });
+    const first = lease(firstController.signal);
     void first.catch(() => {});
     await startEntered.promise;
 
-    const sibling = withProfileOperationLease({
-      state,
-      runtime,
-      run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
-    });
+    const sibling = lease();
     void sibling.catch(() => {});
     await expect.poll(() => ensureExtensionRelayTokenMock.mock.calls.length).toBe(2);
     firstController.abort(new Error("first browser request cancelled"));
@@ -204,32 +192,13 @@ describe("extension relay lifecycle", () => {
   });
 
   it("releases a cancelled sibling without waiting for another caller's pending rebind", async () => {
-    const oldRelay = createHandle(OLD_TOKEN);
-    const { profile, state } = createState(OLD_TOKEN, oldRelay);
-    const runtime = getOrCreateProfileRuntime(state, profile);
-    const startEntered = deferred();
-    const releaseStart = deferred();
-    const replacement = createHandle(ROTATED_TOKEN);
-    startExtensionRelayServerMock.mockImplementationOnce(async () => {
-      startEntered.resolve();
-      await releaseStart.promise;
-      return replacement;
-    });
-    const owner = withProfileOperationLease({
-      state,
-      runtime,
-      run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
-    });
+    const { oldRelay, runtime, startEntered, releaseStart, replacement, lease } = pendingRebind();
+    const owner = lease();
     void owner.catch(() => {});
     await startEntered.promise;
 
     const siblingController = new AbortController();
-    const sibling = withProfileOperationLease({
-      state,
-      runtime,
-      signal: siblingController.signal,
-      run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
-    });
+    const sibling = lease(siblingController.signal);
     let siblingError: unknown;
     void sibling.catch((error: unknown) => {
       siblingError = error;
@@ -251,22 +220,9 @@ describe("extension relay lifecycle", () => {
   });
 
   it("fences and drains a lifecycle-owned rebind when its profile transitions", async () => {
-    const oldRelay = createHandle(OLD_TOKEN);
-    const { profile, state } = createState(OLD_TOKEN, oldRelay);
-    const runtime = getOrCreateProfileRuntime(state, profile);
-    const startEntered = deferred();
-    const releaseStart = deferred();
-    const replacement = createHandle(ROTATED_TOKEN);
-    startExtensionRelayServerMock.mockImplementationOnce(async () => {
-      startEntered.resolve();
-      await releaseStart.promise;
-      return replacement;
-    });
-    const pending = withProfileOperationLease({
-      state,
-      runtime,
-      run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
-    });
+    const { oldRelay, state, runtime, startEntered, releaseStart, replacement, lease } =
+      pendingRebind();
+    const pending = lease();
     void pending.catch(() => {});
     await startEntered.promise;
 
