@@ -2,7 +2,6 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -14,37 +13,25 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { statusModelRefs } from "../status/status-message.test-support.js";
 import {
-  buildStatusMessage as buildStatusMessageRaw,
-  statusModelRefs,
-} from "../status/status-message.test-support.js";
+  buildStatusMessage,
+  modelArgs,
+  providerModels,
+  statusContext,
+  type StatusTestArgs,
+} from "./status.test-fixtures.js";
 
-type StatusArgs = Parameters<typeof buildStatusMessageRaw>[0];
-type StatusTestArgs = Omit<Partial<StatusArgs>, "sessionEntry"> & {
-  sessionEntry?: Partial<NonNullable<StatusArgs["sessionEntry"]>>;
+const openrouterArgs = {
+  ...modelArgs("openrouter", "google/gemini-2.5-pro"),
+  thinkingCatalog: [
+    { provider: "openrouter", id: "google/gemini-2.5-pro", contextWindow: 999_000 },
+    { provider: "google", id: "gemini-2.5-pro", contextWindow: 2_000_000 },
+  ],
+  config: providerModels(["google", "gemini-2.5-pro", { contextWindow: 2_000_000 }]),
 };
-const statusContext = {
-  sessionKey: "agent:main:main",
-  sessionScope: "per-sender",
-  queue: { mode: "collect", depth: 0 },
-} as const;
-
-function buildStatusMessage({ sessionEntry, ...args }: StatusTestArgs): string {
-  return buildStatusMessageRaw({
-    ...statusContext,
-    modelAuth: "api-key",
-    activeModelAuth: "api-key",
-    modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-opus-4-6" }),
-    agent: { model: "anthropic/claude-opus-4-6" },
-    ...args,
-    sessionEntry: sessionEntry && { sessionId: "status", updatedAt: 0, ...sessionEntry },
-  });
-}
-function modelArgs(provider: string, model: string): Pick<StatusArgs, "modelRefs" | "agent"> {
-  return {
-    modelRefs: statusModelRefs({ provider, model }),
-    agent: { model: `${provider}/${model}` },
-  };
+function usage(input: number, output: number, cacheRead: number, totalTokens: number) {
+  return { input, output, cacheRead, cacheWrite: 0, totalTokens };
 }
 beforeEach(() =>
   cliBackendsTesting.setDepsForTest({
@@ -119,13 +106,7 @@ describe("status transcript usage and model context", () => {
     });
   }
 
-  const baselineTranscriptUsage = {
-    input: 1,
-    output: 2,
-    cacheRead: 1000,
-    cacheWrite: 0,
-    totalTokens: 1003,
-  } as const;
+  const baselineTranscriptUsage = usage(1, 2, 1000, 1003);
 
   async function buildTranscriptStatusText(params: { sessionId: string; sessionKey: string }) {
     return buildTranscriptUsageStatusMessage({
@@ -176,19 +157,12 @@ describe("status transcript usage and model context", () => {
       writeTranscriptUsageLog({
         agentId: "main",
         sessionId,
-        usage: {
-          input: 3_800_000,
-          output: 20_000,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 3_820_000,
-        },
+        usage: usage(3_800_000, 20_000, 0, 3_820_000),
       });
 
       const text = await buildTranscriptUsageStatusMessage({
         sessionEntry: {
           sessionId,
-
           inputTokens: 3_800_000,
           outputTokens: 20_000,
           totalTokens: 3_800_000,
@@ -210,19 +184,12 @@ describe("status transcript usage and model context", () => {
       writeTranscriptUsageLog({
         agentId: "main",
         sessionId,
-        usage: {
-          input: 10_000,
-          output: 1_000,
-          cacheRead: 26_000,
-          cacheWrite: 0,
-          totalTokens: 36_000,
-        },
+        usage: usage(10_000, 1_000, 26_000, 36_000),
       });
 
       const text = await buildTranscriptUsageStatusMessage({
         sessionEntry: {
           sessionId,
-
           inputTokens: 16,
           outputTokens: 5_100,
           cacheRead: 2_300_000,
@@ -255,13 +222,7 @@ describe("status transcript usage and model context", () => {
             role: "assistant",
             provider: "openclaw",
             model: "delivery-mirror",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-            },
+            usage: usage(0, 0, 0, 0),
           },
         },
       );
@@ -283,30 +244,11 @@ describe("status transcript usage and model context", () => {
         agentId: "main",
         sessionId,
         model: "google/gemini-2.5-pro",
-        usage: {
-          input: 2,
-          output: 3,
-          cacheRead: 1200,
-          cacheWrite: 0,
-          totalTokens: 1205,
-        },
+        usage: usage(2, 3, 1200, 1205),
       });
 
       const text = await buildTranscriptUsageStatusMessage({
-        ...modelArgs("openrouter", "google/gemini-2.5-pro"),
-        thinkingCatalog: [
-          { provider: "openrouter", id: "google/gemini-2.5-pro", contextWindow: 999_000 },
-          { provider: "google", id: "gemini-2.5-pro", contextWindow: 2_000_000 },
-        ],
-        config: {
-          models: {
-            providers: {
-              google: {
-                models: [{ id: "gemini-2.5-pro", contextWindow: 2_000_000 }],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
+        ...openrouterArgs,
         sessionEntry: {
           sessionId,
           totalTokens: 5,
@@ -321,20 +263,7 @@ describe("status transcript usage and model context", () => {
 
   it("keeps runtime slash model ids in their admitted provider catalog when modelProvider is missing", () => {
     const text = buildStatusMessage({
-      ...modelArgs("openrouter", "google/gemini-2.5-pro"),
-      thinkingCatalog: [
-        { provider: "openrouter", id: "google/gemini-2.5-pro", contextWindow: 999_000 },
-        { provider: "google", id: "gemini-2.5-pro", contextWindow: 2_000_000 },
-      ],
-      config: {
-        models: {
-          providers: {
-            google: {
-              models: [{ id: "gemini-2.5-pro", contextWindow: 2_000_000 }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
+      ...openrouterArgs,
       sessionEntry: {
         totalTokens: 1205,
         totalTokensFresh: true,
@@ -354,18 +283,10 @@ describe("status transcript usage and model context", () => {
         { provider: "xiaomi", model: "mimo-v2-flash" },
         { provider: "fake-minimax", model: "FakeMiniMax-M2.5" },
       ),
-      config: {
-        models: {
-          providers: {
-            "fake-minimax": {
-              models: [{ id: "FakeMiniMax-M2.5", contextWindow: 777_000 }],
-            },
-            xiaomi: {
-              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
+      config: providerModels(
+        ["fake-minimax", "FakeMiniMax-M2.5", { contextWindow: 777_000 }],
+        ["xiaomi", "mimo-v2-flash", { contextWindow: 1_048_576 }],
+      ),
       agent: {
         model: "xiaomi/mimo-v2-flash",
       },
@@ -394,15 +315,7 @@ describe("status transcript usage and model context", () => {
   it("keeps provider-aware lookup for non-fallback runtime slash ids", () => {
     const text = buildStatusMessage({
       ...modelArgs("openai", "gpt-4o"),
-      config: {
-        models: {
-          providers: {
-            openai: {
-              models: [{ id: "gpt-4o", contextWindow: 777_000 }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
+      config: providerModels(["openai", "gpt-4o", { contextWindow: 777_000 }]),
       sessionEntry: {
         model: "openai/gpt-4o",
         totalTokens: 49_000,
@@ -422,13 +335,7 @@ describe("status transcript usage and model context", () => {
         agentId: "main",
         sessionId,
         model: "gemini-2.5-pro",
-        usage: {
-          input: 2,
-          output: 3,
-          cacheRead: 1200,
-          cacheWrite: 0,
-          totalTokens: 1205,
-        },
+        usage: usage(2, 3, 1200, 1205),
       });
 
       const text = await buildTranscriptUsageStatusMessage({

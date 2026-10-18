@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ThinkingCatalogEntry, ThinkLevel } from "./thinking.shared.js";
+import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 
 const mocks = vi.hoisted(() => ({ profile: vi.fn() }));
 vi.mock("../plugins/provider-thinking.js", () => ({
@@ -32,6 +32,9 @@ function thinkingModel(entry: Omit<ThinkingCatalogEntry, "provider" | "id"> = {}
   };
 }
 const baseLevels = ["off", "minimal", "low", "medium", "high"];
+function levels(params: ReturnType<typeof thinkingModel>, runtime?: string) {
+  return listThinkingLevels(params.provider, params.model, params.catalog, runtime);
+}
 
 describe("thinking normalization", () => {
   it("normalizes streaming reasoning visibility", () => {
@@ -40,25 +43,22 @@ describe("thinking normalization", () => {
 });
 
 describe("prepared catalog identity", () => {
-  it.each([{ provider: "demo/team", model: "Reader", expected: baseLevels, defaultLevel: "off" }])(
-    "preserves literal identity for $provider/$model",
-    ({ provider, model, expected, defaultLevel }) => {
-      const thinkingLevelMap = { off: null, minimal: null, low: null, medium: null };
-      const catalog = [
-        { provider: " DEMO ", id: "demo/Mixed", reasoning: true, thinkingLevelMap },
-        { provider: "demo", id: "Mixed", reasoning: false },
-        { provider: "demo", id: "Mixed", reasoning: true },
-        { provider: "demo", id: "DEMO/Mixed", reasoning: false },
-        { provider: "demo", id: "team/Reader", reasoning: true, thinkingLevelMap },
-      ];
-      const catalogResolver = createThinkingCatalogResolver(catalog);
-      for (const source of [{ catalog }, { catalogResolver }]) {
-        const params = { provider, model, ...source };
-        expect(resolveThinkingProfile(params).levels.map(({ id }) => id)).toEqual(expected);
-        expect(resolveThinkingDefaultForModel(params)).toBe(defaultLevel);
-      }
-    },
-  );
+  it("preserves literal identity for demo/team/Reader", () => {
+    const thinkingLevelMap = { off: null, minimal: null, low: null, medium: null };
+    const catalog = [
+      { provider: " DEMO ", id: "demo/Mixed", reasoning: true, thinkingLevelMap },
+      { provider: "demo", id: "Mixed", reasoning: false },
+      { provider: "demo", id: "Mixed", reasoning: true },
+      { provider: "demo", id: "DEMO/Mixed", reasoning: false },
+      { provider: "demo", id: "team/Reader", reasoning: true, thinkingLevelMap },
+    ];
+    const catalogResolver = createThinkingCatalogResolver(catalog);
+    for (const source of [{ catalog }, { catalogResolver }]) {
+      const params = { provider: "demo/team", model: "Reader", ...source };
+      expect(resolveThinkingProfile(params).levels.map(({ id }) => id)).toEqual(baseLevels);
+      expect(resolveThinkingDefaultForModel(params)).toBe("off");
+    }
+  });
 });
 
 describe("provider profiles", () => {
@@ -111,46 +111,41 @@ describe("provider profiles", () => {
     });
   });
 
-  it.each([undefined] as const)(
-    "preserves binary labels and default %s from catalog context",
-    (defaultLevel) => {
-      mocks.profile.mockImplementation(({ context }) =>
-        context.reasoning && context.compat?.thinkingFormat === "qwen-chat-template"
-          ? { levels: [{ id: "off" }, { id: "low", label: "on" }], defaultLevel }
-          : undefined,
-      );
-      const params = {
-        provider: "vllm",
-        model: "Qwen/Qwen3-8B",
-        catalog: [
-          {
-            provider: "vllm",
-            id: "vllm/Qwen/Qwen3-8B",
-            reasoning: true,
-            thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-            compat: { thinkingFormat: "qwen-chat-template", supportedReasoningEfforts: ["xhigh"] },
-          },
-        ],
-      };
-      expect(listThinkingLevelLabels(params.provider, params.model, params.catalog)).toEqual([
-        "off",
-        "on",
-      ]);
-      expect(formatThinkingLevels(params.provider, params.model, ", ", params.catalog)).toBe(
-        "off, on",
-      );
-      expect(resolveThinkingDefaultForModel(params)).toBe(defaultLevel ?? "low");
-      expect(resolveSupportedThinkingLevel({ ...params, level: "adaptive" })).toBe("low");
-    },
-  );
+  it("preserves binary labels and default from catalog context", () => {
+    mocks.profile.mockImplementation(({ context }) =>
+      context.reasoning && context.compat?.thinkingFormat === "qwen-chat-template"
+        ? { levels: [{ id: "off" }, { id: "low", label: "on" }], defaultLevel: undefined }
+        : undefined,
+    );
+    const params = {
+      provider: "vllm",
+      model: "Qwen/Qwen3-8B",
+      catalog: [
+        {
+          provider: "vllm",
+          id: "vllm/Qwen/Qwen3-8B",
+          reasoning: true,
+          thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+          compat: { thinkingFormat: "qwen-chat-template", supportedReasoningEfforts: ["xhigh"] },
+        },
+      ],
+    };
+    expect(listThinkingLevelLabels(params.provider, params.model, params.catalog)).toEqual([
+      "off",
+      "on",
+    ]);
+    expect(formatThinkingLevels(params.provider, params.model, ", ", params.catalog)).toBe(
+      "off, on",
+    );
+    expect(resolveThinkingDefaultForModel(params)).toBe("low");
+    expect(resolveSupportedThinkingLevel({ ...params, level: "adaptive" })).toBe("low");
+  });
 
   it("keeps a configured catalog opt-out authoritative over runtime reasoning", () => {
     mocks.profile.mockReturnValue({ levels: [{ id: "off" }, { id: "low" }] });
     const params = thinkingModel({ reasoning: false, configuredReasoning: false });
     params.catalog.push({ provider: "demo-cli", id: "demo-model", reasoning: true });
-    expect(listThinkingLevels(params.provider, params.model, params.catalog, "demo-cli")).toEqual([
-      "off",
-    ]);
+    expect(levels(params, "demo-cli")).toEqual(["off"]);
   });
 
   it("preserves known-empty efforts while offering only host Ultra", () => {
@@ -172,7 +167,7 @@ describe("provider profiles", () => {
     expect(isThinkingLevelSupported({ ...params, level: "off" })).toBe(false);
     expect(isThinkingLevelSupported({ ...params, level: "high" })).toBe(false);
     expect(resolveProviderThinkingLevel({ ...params, level: "ultra" })).toBeUndefined();
-    expect(listThinkingLevels(params.provider, params.model, params.catalog, "codex")).toEqual([]);
+    expect(levels(params, "codex")).toEqual([]);
   });
 
   it.each([
@@ -191,11 +186,7 @@ describe("provider profiles", () => {
           reasoningEffortMap: { high: "ProviderLow", MAX: "ProviderHigh" },
         },
       });
-      expect(
-        listThinkingLevels(params.provider, params.model, params.catalog, agentRuntime).includes(
-          "max",
-        ),
-      ).toBe(expected);
+      expect(levels(params, agentRuntime).includes("max")).toBe(expected);
     },
   );
 
@@ -213,12 +204,7 @@ describe("provider profiles", () => {
       },
       compat: { supportedReasoningEfforts: ["high", "xhigh", "max"] },
     });
-    expect(listThinkingLevels(params.provider, params.model, params.catalog, "openclaw")).toEqual([
-      "off",
-      "high",
-      "max",
-      "ultra",
-    ]);
+    expect(levels(params, "openclaw")).toEqual(["off", "high", "max", "ultra"]);
     expect(resolveThinkingDefaultForModel(params)).toBe("high");
   });
 
@@ -227,12 +213,7 @@ describe("provider profiles", () => {
       reasoning: true,
       compat: { supportedReasoningEfforts: ["low", "high", "xhigh", "max", "ultra"] },
     });
-    expect(listThinkingLevels(params.provider, params.model, params.catalog, "codex")).toEqual([
-      ...baseLevels,
-      "xhigh",
-      "max",
-      "ultra",
-    ]);
+    expect(levels(params, "codex")).toEqual([...baseLevels, "xhigh", "max", "ultra"]);
   });
 
   it("uses canonical Claude params without a provider profile", () => {
@@ -252,20 +233,13 @@ describe("provider profiles", () => {
     expect(resolveSupportedThinkingLevel({ ...params, level: "adaptive" })).toBe("medium");
   });
 
-  it.each<{
-    levels: ThinkLevel[];
-    defaultLevel?: ThinkLevel;
-    requested: ThinkLevel;
-    expected: ThinkLevel;
-  }>([{ levels: ["low", "medium", "high"], requested: "off", expected: "low" }])(
-    "clamps $requested to $expected with default $defaultLevel",
-    ({ levels, defaultLevel, requested, expected }) => {
-      mocks.profile.mockReturnValue({ levels: levels.map((id) => ({ id })), defaultLevel });
-      expect(resolveSupportedThinkingLevel({ ...thinkingModel(), level: requested })).toBe(
-        expected,
-      );
-    },
-  );
+  it("clamps off to the lowest supported effort without a default", () => {
+    mocks.profile.mockReturnValue({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: undefined,
+    });
+    expect(resolveSupportedThinkingLevel({ ...thinkingModel(), level: "off" })).toBe("low");
+  });
 
   it("preserves provider ids and labels in options", () => {
     mocks.profile.mockReturnValue({
@@ -299,8 +273,6 @@ describe("Ultra provider boundary", () => {
     expect(resolveThinkingSelectionForModel({ ...params, level: "ultra" }).level).toBe("ultra");
     expect(resolveProviderThinkingLevel({ ...params, level: "ultra" })).toBe("off");
     expect(resolveThinkingSelectionForModel(params).requestedLevel).toBe("off");
-    expect(listThinkingLevels(params.provider, params.model, params.catalog, "codex")).toEqual([
-      "off",
-    ]);
+    expect(levels(params, "codex")).toEqual(["off"]);
   });
 });

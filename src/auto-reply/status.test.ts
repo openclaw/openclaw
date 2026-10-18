@@ -3,10 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  buildStatusMessage as buildStatusMessageRaw,
-  statusModelRefs,
-} from "../status/status-message.test-support.js";
+import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
+import { statusModelRefs } from "../status/status-message.test-support.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import * as commandsRegistry from "./commands-registry.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
@@ -15,37 +13,13 @@ import {
   buildCommandsMessagePaginated,
   buildToolsMessage,
 } from "./status.js";
-
-type StatusArgs = Parameters<typeof buildStatusMessageRaw>[0];
-
-type StatusTestArgs = Omit<Partial<StatusArgs>, "sessionEntry"> & {
-  sessionEntry?: Partial<NonNullable<StatusArgs["sessionEntry"]>>;
-};
-
-function buildStatusMessage({ sessionEntry, ...args }: StatusTestArgs): string {
-  return buildStatusMessageRaw({
-    ...statusContext,
-    modelAuth: "api-key",
-    activeModelAuth: "api-key",
-    modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-opus-4-6" }),
-    agent: { model: "anthropic/claude-opus-4-6" },
-    ...args,
-    sessionEntry: sessionEntry && { sessionId: "status", updatedAt: 0, ...sessionEntry },
-  });
-}
-
-function modelArgs(provider: string, model: string): Pick<StatusArgs, "modelRefs" | "agent"> {
-  return {
-    modelRefs: statusModelRefs({ provider, model }),
-    agent: { model: `${provider}/${model}` },
-  };
-}
-
-const statusContext = {
-  sessionKey: "agent:main:main",
-  sessionScope: "per-sender",
-  queue: { mode: "collect", depth: 0 },
-} as const;
+import {
+  buildStatusMessage,
+  modelArgs,
+  providerModels,
+  statusContext,
+  type StatusTestArgs,
+} from "./status.test-fixtures.js";
 
 const { listPluginCommands } = vi.hoisted(() => ({
   listPluginCommands: vi.fn(
@@ -97,6 +71,22 @@ type FallbackContextStatusOverrides = {
   runtimeContextTokens?: number;
   sessionContextTokens?: number;
 };
+
+function audioDecision(
+  outcome: MediaUnderstandingDecision["outcome"],
+  attempts: MediaUnderstandingDecision["attachments"][number]["attempts"],
+  chosen?: MediaUnderstandingDecision["attachments"][number]["chosen"],
+  attachmentIndex = 0,
+): MediaUnderstandingDecision {
+  return {
+    capability: "audio",
+    outcome,
+    attachmentDispositions: {
+      [attachmentIndex]: { kind: outcome === "success" ? "handled" : "failed" },
+    },
+    attachments: [{ attachmentIndex, attempts, ...(chosen ? { chosen } : {}) }],
+  };
+}
 
 function makeFallbackContextStatusArgs({
   activeProvider = "minimax-portal",
@@ -229,20 +219,14 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       ...modelArgs("minimax-portal", "MiniMax-M2.7"),
       config: {
+        ...providerModels(
+          ["minimax-portal", "MiniMax-M2.7", { contextWindow: 200_000 }],
+          ["anthropic", "claude-opus-4-6", { contextWindow: 1_048_576 }],
+        ),
         channels: {
           modelByChannel: {
             discord: {
               "123": "minimax-portal/MiniMax-M2.7",
-            },
-          },
-        },
-        models: {
-          providers: {
-            "minimax-portal": {
-              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
-            },
-            anthropic: {
-              models: [{ id: "claude-opus-4-6", contextWindow: 1_048_576 }],
             },
           },
         },
@@ -349,20 +333,13 @@ describe("buildStatusMessage", () => {
 
   it("prefers active CLI OAuth over selected env API-key labels for runtime aliases", () => {
     const text = buildCliAliasStatus({
-      config: {
-        models: {
-          providers: {
-            anthropic: {
-              models: [
-                {
-                  id: "claude-opus-4-7",
-                  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-                },
-              ],
-            },
-          },
+      config: providerModels([
+        "anthropic",
+        "claude-opus-4-7",
+        {
+          cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
         },
-      } as unknown as OpenClawConfig,
+      ]),
       sessionEntry: {},
       modelAuth: "api-key (env: ANTHROPIC_API_KEY)",
     });
@@ -404,26 +381,13 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       queue: { mode: "none" },
       mediaDecisions: [
-        createSuccessfulImageMediaDecision() as unknown as NonNullable<
-          Parameters<typeof buildStatusMessage>[0]["mediaDecisions"]
-        >[number],
-        {
-          capability: "audio",
-          outcome: "skipped",
-          attachmentDispositions: { 1: { kind: "failed" } },
-          attachments: [
-            {
-              attachmentIndex: 1,
-              attempts: [
-                {
-                  type: "provider",
-                  outcome: "skipped",
-                  reason: "maxBytes: too large",
-                },
-              ],
-            },
-          ],
-        },
+        createSuccessfulImageMediaDecision(),
+        audioDecision(
+          "skipped",
+          [{ type: "provider", outcome: "skipped", reason: "maxBytes: too large" }],
+          undefined,
+          1,
+        ),
       ],
     });
 
@@ -435,25 +399,14 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       queue: { mode: "none" },
       mediaDecisions: [
-        {
-          capability: "audio",
+        audioDecision("success", [], {
+          type: "cli",
+          provider: "whisper-cli",
+          model: "whisper-cli",
+          requestedBackend: "device:0",
+          observedBackend: "metal",
           outcome: "success",
-          attachmentDispositions: { 0: { kind: "handled" } },
-          attachments: [
-            {
-              attachmentIndex: 0,
-              attempts: [],
-              chosen: {
-                type: "cli",
-                provider: "whisper-cli",
-                model: "whisper-cli",
-                requestedBackend: "device:0",
-                observedBackend: "metal",
-                outcome: "success",
-              },
-            },
-          ],
-        },
+        }),
       ],
     });
 
@@ -464,28 +417,14 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       queue: { mode: "none" },
       mediaDecisions: [
-        {
-          capability: "audio",
-          outcome: "failed",
-          attachmentDispositions: { 0: { kind: "failed" } },
-          attachments: [
-            {
-              attachmentIndex: 0,
-              attempts: [
-                {
-                  type: "provider",
-                  outcome: "skipped",
-                  reason: "empty output",
-                },
-                {
-                  type: "provider",
-                  outcome: "failed",
-                  reason: "Error: Audio transcription response missing text",
-                },
-              ],
-            },
-          ],
-        },
+        audioDecision("failed", [
+          { type: "provider", outcome: "skipped", reason: "empty output" },
+          {
+            type: "provider",
+            outcome: "failed",
+            reason: "Error: Audio transcription response missing text",
+          },
+        ]),
       ],
     });
 

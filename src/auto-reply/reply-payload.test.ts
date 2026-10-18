@@ -10,6 +10,17 @@ import {
   setReplyPayloadMetadata,
 } from "./reply-payload.js";
 
+function ttsPayload(text?: string, visibleTextAlreadyDelivered?: boolean) {
+  return {
+    ...(text ? { text } : {}),
+    mediaUrl: "file:///tmp/answer.mp3",
+    ttsSupplement: {
+      spokenText: "answer",
+      ...(visibleTextAlreadyDelivered === undefined ? {} : { visibleTextAlreadyDelivered }),
+    },
+  };
+}
+
 describe("command reply delivery", () => {
   it("requires a non-empty reply whose payloads were all produced by the command owner", () => {
     expect(isCommandReplyForDelivery(undefined)).toBe(false);
@@ -44,40 +55,10 @@ describe("reply payload terminal content", () => {
     ["reasoning", { text: "thinking", isReasoning: true }, false],
     ["commentary", { text: "working", isCommentary: true }, false],
     ["status", { text: "compacting", isStatusNotice: true }, false],
-    [
-      "fresh text with TTS audio",
-      {
-        text: "answer",
-        mediaUrl: "file:///tmp/answer.mp3",
-        ttsSupplement: { spokenText: "answer" },
-      },
-      true,
-    ],
-    [
-      "already-delivered text with TTS audio",
-      {
-        text: "answer",
-        mediaUrl: "file:///tmp/answer.mp3",
-        ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
-      },
-      false,
-    ],
-    [
-      "audio-only TTS supplement",
-      {
-        mediaUrl: "file:///tmp/answer.mp3",
-        ttsSupplement: { spokenText: "answer" },
-      },
-      false,
-    ],
-    [
-      "TTS supplement",
-      {
-        mediaUrl: "file:///tmp/answer.mp3",
-        ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
-      },
-      false,
-    ],
+    ["fresh text with TTS audio", ttsPayload("answer"), true],
+    ["already-delivered text with TTS audio", ttsPayload("answer", true), false],
+    ["audio-only TTS supplement", ttsPayload(), false],
+    ["TTS supplement", ttsPayload(undefined, true), false],
   ] as const)("classifies %s payloads", (_name, payload, expected) => {
     expect(isReplyPayloadTerminalContent(payload)).toBe(expected);
   });
@@ -104,26 +85,14 @@ describe("session writer delivery authority", () => {
       },
     );
 
-    expect(isReplyPayloadSessionWriterDeliveryAuthorized(payload, currentEntry)).toBe(true);
-    expect(
-      isReplyPayloadSessionWriterDeliveryAuthorized(payload, {
-        ...currentEntry,
-        activeWriterRunId: "run-replacement",
-      }),
-    ).toBe(false);
-    expect(
-      isReplyPayloadSessionWriterDeliveryAuthorized(payload, {
-        ...currentEntry,
-        lifecycleRevision: "revision-replacement",
-      }),
-    ).toBe(false);
-    expect(
-      isReplyPayloadSessionWriterDeliveryAuthorized(payload, {
-        ...currentEntry,
-        sessionId: "session-replacement",
-      }),
-    ).toBe(false);
-    expect(isReplyPayloadSessionWriterDeliveryAuthorized(payload, undefined)).toBe(false);
+    const authorized = (
+      entry: Parameters<typeof isReplyPayloadSessionWriterDeliveryAuthorized>[1],
+    ) => isReplyPayloadSessionWriterDeliveryAuthorized(payload, entry);
+    expect(authorized(currentEntry)).toBe(true);
+    expect(authorized({ ...currentEntry, activeWriterRunId: "run-replacement" })).toBe(false);
+    expect(authorized({ ...currentEntry, lifecycleRevision: "revision-replacement" })).toBe(false);
+    expect(authorized({ ...currentEntry, sessionId: "session-replacement" })).toBe(false);
+    expect(authorized(undefined)).toBe(false);
   });
 });
 

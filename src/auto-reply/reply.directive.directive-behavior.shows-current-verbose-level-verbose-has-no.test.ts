@@ -17,6 +17,24 @@ const emptyAliasIndex: ModelAliasIndex = {
   byKey: new Map(),
 };
 
+function directiveConfig(
+  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {},
+): OpenClawConfig {
+  return {
+    commands: { text: true },
+    agents: {
+      defaults: { model: "anthropic/claude-opus-4-6", workspace: "/tmp/openclaw", ...defaults },
+    },
+  };
+}
+
+const fastConfig = () =>
+  directiveConfig({
+    models: {
+      "anthropic/claude-opus-4-6": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+    },
+  });
+
 async function runDirectiveStatus(
   body: string,
   overrides: Partial<HandleDirectiveOnlyParams> = {},
@@ -26,34 +44,14 @@ async function runDirectiveStatus(
     sessionId: "status",
     updatedAt: Date.now(),
   };
-  const cfg = {
-    commands: { text: true },
-    agents: {
-      defaults: {
-        model: "anthropic/claude-opus-4-6",
-        workspace: "/tmp/openclaw",
-      },
-    },
-  } as OpenClawConfig;
   const effectiveSessionKey = overrides.sessionKey ?? sessionKey;
   const effectiveSessionEntry = overrides.sessionEntry ?? sessionEntry;
   const effectiveSessionStore = overrides.sessionStore ?? {
     [effectiveSessionKey]: effectiveSessionEntry,
   };
-  const {
-    sessionKey: _ignoredSessionKey,
-    sessionEntry: _ignoredSessionEntry,
-    sessionStore: _ignoredSessionStore,
-    cfg: overrideCfg,
-    ...restOverrides
-  } = overrides;
   const result = await handleDirectiveOnly({
-    cfg: createCanonicalAgentConfigFixture(overrideCfg ?? cfg).config,
     agentId: "main",
     directives: parseInlineSessionDirectives(body),
-    sessionEntry: effectiveSessionEntry,
-    sessionStore: effectiveSessionStore,
-    sessionKey: effectiveSessionKey,
     elevatedEnabled: false,
     elevatedAllowed: false,
     defaultProvider: "anthropic",
@@ -67,7 +65,11 @@ async function runDirectiveStatus(
     initialModelLabel: "anthropic/claude-opus-4-6",
     formatModelSwitchEvent: (label) => `Switched to ${label}`,
     senderIsOwner: true,
-    ...restOverrides,
+    ...overrides,
+    cfg: createCanonicalAgentConfigFixture(overrides.cfg ?? directiveConfig()).config,
+    sessionEntry: effectiveSessionEntry,
+    sessionStore: effectiveSessionStore,
+    sessionKey: effectiveSessionKey,
   });
   return { text: result?.text, sessionEntry: effectiveSessionEntry };
 }
@@ -77,20 +79,7 @@ describe("directive behavior", () => {
 
   it("reports current directive defaults when no arguments are provided", async () => {
     const { text: fastText } = await runDirectiveStatus("/fast", {
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-4-6",
-            workspace: "/tmp/openclaw",
-            models: {
-              "anthropic/claude-opus-4-6": {
-                params: { fastMode: "auto", fastAutoOnSeconds: 30 },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: fastConfig(),
     });
     expect(fastText).toContain("Current fast mode: auto (30 sec) (default: model)");
     expect(fastText).toContain("Options: on, off, ultrafast, auto (30 sec), default, status.");
@@ -115,13 +104,7 @@ describe("directive behavior", () => {
 
     const { text: execText } = await runDirectiveStatus("/exec", {
       cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-4-6",
-            workspace: "/tmp/openclaw",
-          },
-        },
+        ...directiveConfig(),
         tools: {
           exec: {
             host: "gateway",
@@ -142,20 +125,7 @@ describe("directive behavior", () => {
   });
   it("reports concise fast status for explicit status queries", async () => {
     const { text: statusText } = await runDirectiveStatus("/fast status", {
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-4-6",
-            workspace: "/tmp/openclaw",
-            models: {
-              "anthropic/claude-opus-4-6": {
-                params: { fastMode: "auto", fastAutoOnSeconds: 30 },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: fastConfig(),
     });
 
     expect(statusText).toContain("Current fast mode: auto (30 sec) (default: model)");
@@ -242,10 +212,12 @@ describe("directive behavior", () => {
     expect(collect.text).toMatch(/Queue debounce set to 2000ms/);
     expect(collect.text).toMatch(/Queue cap set to 5/);
     expect(collect.text).toMatch(/Queue drop set to old/);
-    expect(collect.sessionEntry.queueMode).toBe("collect");
-    expect(collect.sessionEntry.queueDebounceMs).toBe(2000);
-    expect(collect.sessionEntry.queueCap).toBe(5);
-    expect(collect.sessionEntry.queueDrop).toBe("old");
+    expect(collect.sessionEntry).toMatchObject({
+      queueMode: "collect",
+      queueDebounceMs: 2000,
+      queueCap: 5,
+      queueDrop: "old",
+    });
 
     const resetEntry: SessionEntry = {
       sessionId: "queue",
