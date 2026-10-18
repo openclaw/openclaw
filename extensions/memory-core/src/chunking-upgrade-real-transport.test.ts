@@ -14,7 +14,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
 import type { MemoryIndexManager } from "./memory/manager.js";
 import { isolateMemoryManagerTestConfig } from "./memory/test-config-helpers.js";
@@ -30,20 +30,11 @@ const { closeAllMemorySearchManagers, getMemorySearchManager } = await import(".
 type ServerMode = "ok" | "unauthorized" | "quota";
 
 type CapturedRequest = {
-  method: string | undefined;
-  url: string | undefined;
   status: number;
   body: Record<string, unknown>;
 };
 
-type EmbeddingServer = {
-  baseUrl: string;
-  requests: CapturedRequest[];
-  setMode: (mode: ServerMode) => void;
-  close: () => Promise<void>;
-};
-
-const servers: EmbeddingServer[] = [];
+const closeServers: Array<() => Promise<void>> = [];
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -66,7 +57,7 @@ function errorBody(mode: Exclude<ServerMode, "ok">): Record<string, unknown> {
   };
 }
 
-async function startEmbeddingServer(): Promise<EmbeddingServer> {
+async function startEmbeddingServer() {
   const requests: CapturedRequest[] = [];
   let mode: ServerMode = "ok";
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -75,12 +66,12 @@ async function startEmbeddingServer(): Promise<EmbeddingServer> {
         const body = await readJsonBody(req);
         if (mode !== "ok") {
           const status = mode === "quota" ? 429 : 401;
-          requests.push({ method: req.method, url: req.url, status, body });
+          requests.push({ status, body });
           res.writeHead(status, { "content-type": "application/json" });
           res.end(JSON.stringify(errorBody(mode)));
           return;
         }
-        requests.push({ method: req.method, url: req.url, status: 200, body });
+        requests.push({ status: 200, body });
         const input = body.input;
         const texts = Array.isArray(input) ? input : [input];
         res.writeHead(200, { "content-type": "application/json" });
@@ -96,7 +87,7 @@ async function startEmbeddingServer(): Promise<EmbeddingServer> {
           }),
         );
       } catch (error) {
-        requests.push({ method: req.method, url: req.url, status: 500, body: {} });
+        requests.push({ status: 500, body: {} });
         res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: String(error) } }));
       }
@@ -110,18 +101,19 @@ async function startEmbeddingServer(): Promise<EmbeddingServer> {
     });
   });
   const address = server.address() as AddressInfo;
-  servers.push({
+  const fixture = {
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     requests,
-    setMode: (next) => {
+    setMode: (next: ServerMode) => {
       mode = next;
     },
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       }),
-  });
-  return servers[servers.length - 1] as EmbeddingServer;
+  };
+  closeServers.push(fixture.close);
+  return fixture;
 }
 
 vi.setConfig({ testTimeout: 240_000 });
@@ -130,206 +122,187 @@ afterAll(() => {
   vi.resetConfig();
 });
 
-describe("memory format upgrade fallback over a real embedding transport", () => {
-  let root = "";
-  let workspace = "";
-  let memory = "";
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+let root = "";
+let workspace = "";
+let memory = "";
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
-  const setStateDir = (stateDir: string): void => {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
-  };
+const setStateDir = (stateDir: string): void => {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+};
 
-  function requireManager(
-    result: Awaited<ReturnType<typeof getMemorySearchManager>>,
-  ): MemoryIndexManager {
-    if (!result.manager) {
-      throw new Error("memory search manager missing");
-    }
-    return result.manager as unknown as MemoryIndexManager;
+async function acquireManager(cfg: OpenClawConfig): Promise<MemoryIndexManager> {
+  const result = await getMemorySearchManager({
+    runInBackgroundContext: runInMemoryTestBackgroundContext,
+    cfg,
+    agentId: "main",
+  });
+  if (!result.manager) {
+    throw new Error("memory search manager missing");
   }
+  return result.manager as unknown as MemoryIndexManager;
+}
 
-  function createConfig(params: {
-    baseUrl: string;
-    extraPaths?: string[];
-    model?: string;
-  }): OpenClawConfig {
-    return isolateMemoryManagerTestConfig({
-      memory: {
-        search: {
-          provider: "openai-compatible",
-          model: params.model ?? "text-embedding-bge-m3",
-          remote: { baseUrl: params.baseUrl, apiKey: "fixture-token" },
-          outputDimensionality: 3,
-          store: { vector: { enabled: true } },
-          query: { minScore: 0 },
-          ...(params.extraPaths ? { extraPaths: params.extraPaths } : {}),
-        },
+function createConfig(params: {
+  baseUrl: string;
+  extraPaths?: string[];
+  model?: string;
+}): OpenClawConfig {
+  return isolateMemoryManagerTestConfig({
+    memory: {
+      search: {
+        provider: "openai-compatible",
+        model: params.model ?? "text-embedding-bge-m3",
+        remote: { baseUrl: params.baseUrl, apiKey: "fixture-token" },
+        outputDimensionality: 3,
+        store: { vector: { enabled: true } },
+        query: { minScore: 0 },
+        ...(params.extraPaths ? { extraPaths: params.extraPaths } : {}),
       },
-      agents: { defaults: { workspace }, entries: { main: {} } },
-    } as OpenClawConfig);
-  }
+    },
+    agents: { defaults: { workspace }, entries: { main: {} } },
+  } as OpenClawConfig);
+}
 
-  // Seeds a published index, then reopens its metadata as an older runtime's
-  // index so the next search sees a pending OpenClaw format upgrade.
-  async function seedPriorFormatIndex(
-    cfg: OpenClawConfig,
-    version: "chunkingVersion" | "embeddingInputFormatVersion" = "chunkingVersion",
-  ): Promise<string> {
-    const manager = requireManager(
-      await getMemorySearchManager({
-        runInBackgroundContext: runInMemoryTestBackgroundContext,
-        cfg,
-        agentId: "main",
+// Seeds a published index, then reopens its metadata as an older runtime's
+// index so the next search sees a pending OpenClaw format upgrade.
+async function seedPriorFormatIndex(
+  cfg: OpenClawConfig,
+  version: "chunkingVersion" | "embeddingInputFormatVersion" = "chunkingVersion",
+): Promise<string> {
+  const manager = await acquireManager(cfg);
+  await manager.sync({ reason: "test", force: true });
+  const dbPath = manager.status().dbPath;
+  if (!dbPath) {
+    throw new Error("memory search manager database path missing");
+  }
+  await manager.close();
+  await closeAllMemorySearchManagers();
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db
+      .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+      .get();
+    if (typeof row?.value !== "string") {
+      throw new Error("fixture index metadata is missing");
+    }
+    const meta = JSON.parse(row.value) as Record<string, unknown>;
+    db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
+      JSON.stringify({
+        ...meta,
+        [version]: version === "chunkingVersion" ? MEMORY_CHUNKING_VERSION - 1 : 0,
       }),
     );
-    await manager.sync({ reason: "test", force: true });
-    const dbPath = manager.status().dbPath;
-    if (!dbPath) {
-      throw new Error("memory search manager database path missing");
-    }
-    await manager.close();
+  } finally {
+    db.close();
+  }
+  return dbPath;
+}
+
+function createMemorySearchToolFor(cfg: OpenClawConfig) {
+  const tool = createMemorySearchTool({ config: cfg, agentId: "main", oneShotCliRun: true });
+  if (!tool) {
+    throw new Error("memory_search tool missing");
+  }
+  return tool;
+}
+
+async function prepareUpgrade(
+  cfg: OpenClawConfig,
+  name: string,
+  version: "chunkingVersion" | "embeddingInputFormatVersion" = "chunkingVersion",
+) {
+  const filePath = path.join(memory, `${name}.md`);
+  await fs.writeFile(filePath, `${name}()\nfinish()`);
+  const dbPath = await seedPriorFormatIndex(cfg, version);
+  // Changed input forces a fresh embedding instead of reuse from the cache.
+  await fs.writeFile(filePath, `${name}() changed after the prior index was published.`);
+  return dbPath;
+}
+
+async function searchTool(cfg: OpenClawConfig, query: string) {
+  try {
+    return await createMemorySearchToolFor(cfg).execute(query, { query, corpus: "memory" });
+  } finally {
     await closeAllMemorySearchManagers();
-    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    const db = new DatabaseSync(dbPath);
-    try {
-      const row = db
-        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
-        .get();
-      if (typeof row?.value !== "string") {
-        throw new Error("fixture index metadata is missing");
-      }
-      const meta = JSON.parse(row.value) as Record<string, unknown>;
-      db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
-        JSON.stringify({
-          ...meta,
-          [version]: version === "chunkingVersion" ? MEMORY_CHUNKING_VERSION - 1 : 0,
-        }),
-      );
-    } finally {
-      db.close();
-    }
-    return dbPath;
   }
+}
 
-  function createMemorySearchToolFor(cfg: OpenClawConfig) {
-    const tool = createMemorySearchTool({ config: cfg, agentId: "main", oneShotCliRun: true });
-    if (!tool) {
-      throw new Error("memory_search tool missing");
-    }
-    return tool;
-  }
-
-  async function prepareUpgrade(
-    cfg: OpenClawConfig,
-    name: string,
-    version: "chunkingVersion" | "embeddingInputFormatVersion" = "chunkingVersion",
-  ) {
-    const filePath = path.join(memory, `${name}.md`);
-    await fs.writeFile(filePath, `${name}()\nfinish()`);
-    const dbPath = await seedPriorFormatIndex(cfg, version);
-    // Changed input forces a fresh embedding instead of reuse from the cache.
-    await fs.writeFile(filePath, `${name}() changed after the prior index was published.`);
-    return dbPath;
-  }
-
-  async function searchTool(cfg: OpenClawConfig, query: string) {
-    try {
-      return await createMemorySearchToolFor(cfg).execute(query, { query, corpus: "memory" });
-    } finally {
-      await closeAllMemorySearchManagers();
-      closeOpenClawAgentDatabasesForTest();
-    }
-  }
-
-  function expectPaused(details: unknown) {
-    expect(details).toMatchObject({
-      results: [],
-      disabled: true,
-      unavailable: true,
-      error: expect.stringContaining("HTTP 401"),
-      warning: expect.stringContaining("Rebuilding may call the configured embedding provider"),
-    });
-  }
-
-  beforeAll(async () => {
-    const rawRoot = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-mem-real-transport-"),
-    );
-    root = await fs.realpath(rawRoot);
-    workspace = path.join(root, "workspace");
-    memory = path.join(workspace, "memory");
+function expectPaused(details: unknown) {
+  expect(details).toMatchObject({
+    results: [],
+    disabled: true,
+    unavailable: true,
+    error: expect.stringContaining("HTTP 401"),
+    warning: expect.stringContaining("Rebuilding may call the configured embedding provider"),
   });
+}
 
-  afterAll(async () => {
-    if (root) {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  beforeEach(async () => {
-    testing.resetMemorySearchToolCooldowns();
-    rmSync(workspace, { recursive: true, force: true });
-    mkdirSync(memory, { recursive: true });
-    setStateDir(path.join(workspace, ".state-memory-index"));
-    await configureMemoryCoreDreamingStateForTests();
-    await fs.writeFile(
-      path.join(memory, "2026-01-12.md"),
-      "# Log\nAlpha memory line.\nZebra memory line.",
-    );
-  });
-
-  afterEach(async () => {
-    const pendingServers = servers.splice(0);
-    await Promise.all(pendingServers.map((server) => server.close()));
-    await closeAllMemorySearchManagers();
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    resetMemoryCoreDreamingStateForTests();
-    if (originalStateDir === undefined) {
-      Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-    } else {
-      Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalStateDir);
-    }
-  });
-
-  it.each(["chunkingVersion", "embeddingInputFormatVersion"] as const)(
-    "serves keyword results through memory_search when a real server rejects the %s rebuild",
-    async (version) => {
-      const server = await startEmbeddingServer();
-      const cfg = createConfig({
-        baseUrl: server.baseUrl,
-        model: version === "embeddingInputFormatVersion" ? "embeddinggemma" : undefined,
-      });
-      await prepareUpgrade(cfg, "UpgradeKeywordFallback", version);
-      server.setMode("unauthorized");
-      const result = await searchTool(cfg, "UpgradeKeywordFallback");
-      expect(result.details).toMatchObject({
-        results: [expect.objectContaining({ path: "memory/UpgradeKeywordFallback.md" })],
-      });
-      expect(result.details).not.toHaveProperty("unavailable");
-      // The rejection must have reached the real server for the rebuild's fresh
-      // embedding; the seed phase answered 200 beforehand.
-      expect(server.requests.some((request) => request.status === 401)).toBe(true);
-      expect(server.requests.some((request) => request.status === 200)).toBe(true);
-      if (version === "embeddingInputFormatVersion") {
-        const failedInputs = server.requests
-          .filter((request) => request.status === 401)
-          .flatMap((request) => request.body.input);
-        expect(failedInputs).toContainEqual(expect.stringMatching(/^title: none \| text: /));
-      }
-    },
+beforeAll(async () => {
+  const rawRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-mem-real-transport-"),
   );
+  root = await fs.realpath(rawRoot);
+  workspace = path.join(root, "workspace");
+  memory = path.join(workspace, "memory");
+});
 
-  it("keeps memory_search paused when a real outage rebuild has no usable FTS index", async () => {
-    const server = await startEmbeddingServer();
-    const cfg = createConfig({ baseUrl: server.baseUrl });
-    const dbPath = await prepareUpgrade(cfg, "UpgradeFtsPaused");
-    // Occupy the FTS table name with a view so every schema ensure — including
-    // the upgrade rebuild's republish — fails to restore a usable keyword index.
+afterAll(async () => {
+  if (root) {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+beforeEach(async () => {
+  testing.resetMemorySearchToolCooldowns();
+  rmSync(workspace, { recursive: true, force: true });
+  mkdirSync(memory, { recursive: true });
+  setStateDir(path.join(workspace, ".state-memory-index"));
+  await configureMemoryCoreDreamingStateForTests();
+});
+
+afterEach(async () => {
+  await Promise.all(closeServers.splice(0).map((close) => close()));
+  await closeAllMemorySearchManagers();
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  resetMemoryCoreDreamingStateForTests();
+  if (originalStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalStateDir);
+  }
+});
+
+it.each([
+  "chunkingVersion",
+  "embeddingInputFormatVersion",
+  "missing-fts",
+  "changed-scope",
+] as const)("handles a real unauthorized upgrade rebuild with %s", async (mode) => {
+  const server = await startEmbeddingServer();
+  const cfg = createConfig({
+    baseUrl: server.baseUrl,
+    model: mode === "embeddingInputFormatVersion" ? "embeddinggemma" : undefined,
+  });
+  const wikiPath = path.join(root, "wiki");
+  if (mode === "changed-scope") {
+    await fs.mkdir(wikiPath, { recursive: true });
+    await fs.writeFile(path.join(wikiPath, "note.md"), "UpgradeScopeWiki alpha note.");
+  }
+  const seedCfg =
+    mode === "changed-scope"
+      ? createConfig({ baseUrl: server.baseUrl, extraPaths: [wikiPath] })
+      : cfg;
+  const version = mode === "embeddingInputFormatVersion" ? mode : "chunkingVersion";
+  const dbPath = await prepareUpgrade(seedCfg, "UpgradeKeywordFallback", version);
+  if (mode === "missing-fts") {
+    // A view occupies the FTS name, preventing schema repair during republish.
     const sabotaged = new DatabaseSync(dbPath);
     try {
       sabotaged.exec("DROP TABLE IF EXISTS memory_index_chunks_fts");
@@ -337,64 +310,50 @@ describe("memory format upgrade fallback over a real embedding transport", () =>
     } finally {
       sabotaged.close();
     }
-    server.setMode("unauthorized");
+  }
+  server.setMode("unauthorized");
+  const result = await searchTool(cfg, "UpgradeKeywordFallback");
+  if (mode === "missing-fts" || mode === "changed-scope") {
+    expectPaused(result.details);
+  } else {
+    expect(result.details).toMatchObject({
+      results: [expect.objectContaining({ path: "memory/UpgradeKeywordFallback.md" })],
+    });
+    expect(result.details).not.toHaveProperty("unavailable");
+  }
+  expect(server.requests.map(({ status }) => status)).toEqual(expect.arrayContaining([200, 401]));
+  if (mode === "embeddingInputFormatVersion") {
+    const failedInputs = server.requests
+      .filter(({ status }) => status === 401)
+      .flatMap(({ body }) => body.input);
+    expect(failedInputs).toContainEqual(expect.stringMatching(/^title: none \| text: /));
+  }
+});
 
-    expectPaused((await searchTool(cfg, "UpgradeFtsPaused")).details);
-    expect(server.requests.some((request) => request.status === 401)).toBe(true);
-  });
-
-  it("pauses memory_search when a real outage rebuild coincides with a changed scope", async () => {
-    const server = await startEmbeddingServer();
-    const wikiPath = path.join(root, "wiki");
-    await fs.mkdir(wikiPath, { recursive: true });
-    await fs.writeFile(path.join(wikiPath, "note.md"), "UpgradeScopeWiki alpha note.");
-    const cfgWithWiki = createConfig({ baseUrl: server.baseUrl, extraPaths: [wikiPath] });
-    const cfgWithoutWiki = createConfig({ baseUrl: server.baseUrl });
-    await prepareUpgrade(cfgWithWiki, "UpgradeScopeMemory");
-    server.setMode("unauthorized");
-
-    expectPaused((await searchTool(cfgWithoutWiki, "UpgradeScopeMemory")).details);
-    expect(server.requests.some((request) => request.status === 401)).toBe(true);
-  });
-
-  it("keeps keyword results readable when a real quota-exhausted server rate-limits the rebuild", async () => {
-    const server = await startEmbeddingServer();
-    const cfg = createConfig({ baseUrl: server.baseUrl });
-    await prepareUpgrade(cfg, "UpgradeQuotaFallback");
-    server.setMode("quota");
-
-    const manager = requireManager(
-      await getMemorySearchManager({
-        runInBackgroundContext: runInMemoryTestBackgroundContext,
-        cfg,
-        agentId: "main",
-      }),
+it("keeps keyword results readable when a real quota-exhausted server rate-limits the rebuild", async () => {
+  const server = await startEmbeddingServer();
+  const cfg = createConfig({ baseUrl: server.baseUrl });
+  await prepareUpgrade(cfg, "UpgradeQuotaFallback");
+  server.setMode("quota");
+  const manager = await acquireManager(cfg);
+  try {
+    // A real quota rejection rate-limits the rebuild over the wire while the
+    // published keyword index stays readable.
+    const results = await manager.search("UpgradeQuotaFallback");
+    expect(results).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/UpgradeQuotaFallback.md" })]),
     );
-    try {
-      // A real quota rejection rate-limits the rebuild over the wire while the
-      // published keyword index stays readable.
-      const results = await manager.search("UpgradeQuotaFallback");
-      expect(results).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: "memory/UpgradeQuotaFallback.md" }),
-        ]),
-      );
-      expect(manager.status().custom?.indexIdentity).toMatchObject({
-        status: "mismatched",
-        code: "chunking_version",
-        owner: "openclaw",
-        chunkingVersionOnly: true,
-      });
-    } finally {
-      await manager.close();
-      await closeAllMemorySearchManagers();
-      closeOpenClawAgentDatabasesForTest();
-    }
-    // The quota rejection reached the real server over the wire. How many
-    // retries fit into the run is clock-dependent — the rate-limit budget
-    // drains through backoff sleeps and the search fallback races it — so the
-    // run only promises at least one wire-visible 429; the exact budget is
-    // owned by the embedding-policy unit tests.
-    expect(server.requests.some((request) => request.status === 429)).toBe(true);
-  });
+    expect(manager.status().custom?.indexIdentity).toMatchObject({
+      status: "mismatched",
+      code: "chunking_version",
+      owner: "openclaw",
+      chunkingVersionOnly: true,
+    });
+  } finally {
+    await manager.close();
+    await closeAllMemorySearchManagers();
+    closeOpenClawAgentDatabasesForTest();
+  }
+  // Backoff races search fallback; the policy unit tests own the exact retry budget.
+  expect(server.requests.some((request) => request.status === 429)).toBe(true);
 });
