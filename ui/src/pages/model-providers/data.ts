@@ -388,6 +388,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
       return Object.assign(
+        {},
         draft.card,
         draft.catalogOutcome ? { catalogStatus: draft.catalogOutcome.status } : {},
         apiKeySupported === undefined ? {} : { apiKeySupported },

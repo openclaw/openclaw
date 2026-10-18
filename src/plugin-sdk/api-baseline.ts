@@ -407,7 +407,7 @@ export async function renderPluginSdkApiBaseline(params?: {
   const context = await createCompilerContext(repoRoot, entrypoints, inputs);
   const { checker, declarationClosure, printer, program } = context;
   try {
-    const modules = entrypoints.toSorted(compareText).map((entrypoint) =>
+    const modules = [...entrypoints].toSorted(compareText).map((entrypoint) =>
       buildModuleSurface({
         checker,
         declarationClosure,

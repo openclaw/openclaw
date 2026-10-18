@@ -286,6 +286,7 @@ class ProfileState {
             throw new Error(t("profilePage.identity.profileUnavailable"));
           }
           this.gitCoauthorEnabled = change.enabled;
+          return;
         }
       }
     } catch (error) {
@@ -301,11 +302,15 @@ class ProfileState {
               )
             : formatUiError(error, t("profilePage.identity.profileUnavailable"));
       }
+      return;
     } finally {
       if (isCurrent() && this.identityBusy === change.kind) {
         this.identityBusy = null;
         this.publish();
       }
+    }
+    if (isCurrent()) {
+      void this.loadIdentity();
     }
   }
 

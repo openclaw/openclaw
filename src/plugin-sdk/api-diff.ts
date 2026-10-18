@@ -79,7 +79,7 @@ async function readStringList(repoRoot: string, relativePath: string): Promise<s
   if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
     throw new Error(`${relativePath} must contain a JSON string array`);
   }
-  return parsed;
+  return [...parsed];
 }
 
 /** Read the public entrypoint inventory owned by one repository revision. */
@@ -224,16 +224,12 @@ function collectDeclarationChanges(
   const addedByName = new Map<string, string[]>();
   for (const [key, section] of beforeByKey) {
     if (!afterByKey.has(key)) {
-      const removed = removedByName.get(section.name) ?? [];
-      removed.push(section.text);
-      removedByName.set(section.name, removed);
+      removedByName.set(section.name, [...(removedByName.get(section.name) ?? []), section.text]);
     }
   }
   for (const [key, section] of afterByKey) {
     if (!beforeByKey.has(key)) {
-      const added = addedByName.get(section.name) ?? [];
-      added.push(section.text);
-      addedByName.set(section.name, added);
+      addedByName.set(section.name, [...(addedByName.get(section.name) ?? []), section.text]);
     }
   }
 
@@ -305,10 +301,12 @@ export function diffPluginSdkApi(
       const beforeExport = beforeExports.get(exportName);
       const afterExport = afterExports.get(exportName);
       let change: PluginSdkApiExportChange["change"];
-      if (!beforeExport) {
+      if (!beforeExport && afterExport) {
         change = "added";
-      } else if (!afterExport) {
+      } else if (beforeExport && !afterExport) {
         change = "removed";
+      } else if (!beforeExport || !afterExport) {
+        continue;
       } else if (
         beforeExport.kind !== afterExport.kind ||
         beforeExport.declaration !== afterExport.declaration

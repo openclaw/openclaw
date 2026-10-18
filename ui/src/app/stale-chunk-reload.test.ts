@@ -968,6 +968,26 @@ describe("installMissingStylesheetRecovery", () => {
   });
 });
 
+describe("retryStaleChunkReloadWhenReachable deadline enforcement", () => {
+  it("resolves at the remaining deadline even when a fetch does not settle on abort", async () => {
+    const response = deferred<Response>();
+    const probe = vi.fn<typeof fetch>(() => response.promise);
+    vi.stubGlobal("fetch", probe);
+    const reload = vi.fn();
+    const pending = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 5_000 });
+    try {
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(reload).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      response.resolve(new Response(null, { status: 503 }));
+      await vi.advanceTimersByTimeAsync(0);
+    }
+  });
+});
+
 it("never starts another probe once the wait carried past the deadline", async () => {
   const reload = vi.fn();
   const probe = stubDocumentFetch(new Response(null, { status: 503 }));
