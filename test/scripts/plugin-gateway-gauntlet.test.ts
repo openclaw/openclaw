@@ -264,15 +264,15 @@ describe("plugin gateway gauntlet helpers", () => {
     }
   }
 
-  it.each([
-    {
-      name: "stops parsing after the argument terminator",
-      args: ["--plugin", "telegram", "--", "--plugin", "discord"],
-      expected: { pluginIds: ["telegram"] },
-    },
-    {
-      name: "accepts a leading package-manager separator",
-      args: [
+  it("stops parsing options after the argument terminator", () => {
+    expect(parseArgs(["--plugin", "telegram", "--", "--plugin", "discord"])).toMatchObject({
+      pluginIds: ["telegram"],
+    });
+  });
+
+  it("accepts package-manager argument separators before script options", () => {
+    expect(
+      parseArgs([
         "--",
         "--plugin",
         "telegram",
@@ -280,15 +280,12 @@ describe("plugin gateway gauntlet helpers", () => {
         "3",
         "--qa-scenario",
         "channel-chat-baseline",
-      ],
-      expected: {
-        limit: 3,
-        pluginIds: ["telegram"],
-        qaScenarios: ["channel-chat-baseline"],
-      },
-    },
-  ])("$name", ({ args, expected }) => {
-    expect(parseArgs(args)).toMatchObject(expected);
+      ]),
+    ).toMatchObject({
+      limit: 3,
+      pluginIds: ["telegram"],
+      qaScenarios: ["channel-chat-baseline"],
+    });
   });
 
   it("rejects duplicate repeatable selectors", () => {
@@ -370,12 +367,10 @@ describe("plugin gateway gauntlet helpers", () => {
       "openclaw.plugin.json",
       JSON.stringify({ id: "beta", commandAliases: ["dreaming"], onboardingScopes: ["memory"] }),
     );
-    await writeManifest("kimi-coding", "openclaw.plugin.json", JSON.stringify({ id: "kimi" }));
-    await writeManifest("qa-lab", "openclaw.plugin.json", JSON.stringify({ id: "qa-lab" }));
 
     const matrix = discoverBundledPluginManifests(repoRoot);
 
-    expect(matrix.map((entry) => entry.id)).toEqual(["alpha", "beta", "kimi"]);
+    expect(matrix.map((entry) => entry.id)).toEqual(["alpha", "beta"]);
     expect(matrix[0]).toEqual({
       activation: {},
       authMethods: ["oauth"],
@@ -401,12 +396,33 @@ describe("plugin gateway gauntlet helpers", () => {
       { name: "dreaming", kind: "runtime-slash", cliCommand: null },
     ]);
     expect(beta.buildId).toBe("beta");
-    const kimi = expectDefined(matrix[2], "Kimi bundled plugin manifest");
-    expect(kimi).toMatchObject({ buildId: "kimi-coding", id: "kimi" });
+  });
+
+  it("keeps manifest ids separate from bounded build entry ids", async () => {
+    await writeManifest("kimi-coding", "openclaw.plugin.json", JSON.stringify({ id: "kimi" }));
+
+    const matrix = discoverBundledPluginManifests(repoRoot);
+
+    expect(matrix).toEqual([
+      expect.objectContaining({
+        buildId: "kimi-coding",
+        id: "kimi",
+      }),
+    ]);
+    const kimi = expectDefined(matrix[0], "Kimi bundled plugin manifest");
     expect(buildGauntletPrebuildEnv({}, { buildIds: [kimi.buildId] })).toEqual({
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "kimi-coding",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
+  });
+
+  it("skips source-only plugin dirs that are excluded from the built runtime", async () => {
+    await writeManifest("qa-lab", "openclaw.plugin.json", JSON.stringify({ id: "qa-lab" }));
+    await writeManifest("telegram", "openclaw.plugin.json", JSON.stringify({ id: "telegram" }));
+
+    const matrix = discoverBundledPluginManifests(repoRoot);
+
+    expect(matrix.map((entry) => entry.id)).toEqual(["telegram"]);
   });
 
   it("detects plugin load failures in successful command output", () => {
@@ -460,24 +476,23 @@ describe("plugin gateway gauntlet helpers", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "missing requirements",
-      entries: [{ id: "alpha", requiredPlugins: ["missing"] }],
-      error: 'Bundled plugin "alpha" requires unknown bundled plugin "missing"',
-    },
-    {
-      name: "requirement cycles",
-      entries: [
-        { id: "alpha", requiredPlugins: ["beta"] },
-        { id: "beta", requiredPlugins: ["alpha"] },
-      ],
-      error: "Bundled plugin dependency cycle detected: alpha -> beta -> alpha",
-    },
-  ])("rejects bundled plugin $name", ({ entries, error }) => {
+  it("rejects missing bundled plugin requirements", () => {
+    const entries = [{ id: "alpha", requiredPlugins: ["missing"] }];
+
+    expect(() => collectRequiredPluginEntries(entries, entries)).toThrow(
+      'Bundled plugin "alpha" requires unknown bundled plugin "missing"',
+    );
+  });
+
+  it("rejects bundled plugin requirement cycles", () => {
+    const entries = [
+      { id: "alpha", requiredPlugins: ["beta"] },
+      { id: "beta", requiredPlugins: ["alpha"] },
+    ];
+
     expect(() =>
       collectRequiredPluginEntries(entries, [expectDefined(entries[0], "alpha plugin entry")]),
-    ).toThrow(error);
+    ).toThrow("Bundled plugin dependency cycle detected: alpha -> beta -> alpha");
   });
 
   it("flags gateway startup CPU observations using bench summary keys", () => {
@@ -519,22 +534,19 @@ describe("plugin gateway gauntlet helpers", () => {
     ]);
   });
 
-  it.each([false, true])("flags metric anomalies (cold start=%s)", (coldStart) => {
-    const peak = {
-      pluginId: "peak-plugin",
-      phase: "lifecycle:install",
-      wallMs: 1_000,
-      cpuCoreRatio: 1.2,
-      maxRssMb: 500,
-    };
-    const ordinary = [
-      { pluginId: "a", phase: "lifecycle:install", wallMs: 100, maxRssMb: 100 },
-      { pluginId: "b", phase: "lifecycle:install", wallMs: 110, maxRssMb: 110 },
-    ];
+  it("flags absolute peaks and phase-relative anomalies", () => {
     const observations = collectMetricObservations(
-      coldStart
-        ? [{ phase: "prebuild", wallMs: 100, maxRssMb: 100 }, peak, ...ordinary]
-        : [...ordinary, peak],
+      [
+        { pluginId: "a", phase: "lifecycle:install", wallMs: 100, maxRssMb: 100 },
+        { pluginId: "b", phase: "lifecycle:install", wallMs: 110, maxRssMb: 110 },
+        {
+          pluginId: "c",
+          phase: "lifecycle:install",
+          wallMs: 1_000,
+          cpuCoreRatio: 1.2,
+          maxRssMb: 500,
+        },
+      ],
       {
         cpuCoreWarn: 0.9,
         hotWallWarnMs: 900,
@@ -550,11 +562,37 @@ describe("plugin gateway gauntlet helpers", () => {
       "phase-rss-high",
       "phase-rss-anomaly",
     ]);
-    if (coldStart) {
-      for (const observation of observations) {
-        expect(observation).toMatchObject({ coldStart: true });
-      }
-    }
+  });
+
+  it("marks first work-row anomalies as cold-start observations", () => {
+    const observations = collectMetricObservations(
+      [
+        { phase: "prebuild", wallMs: 100, maxRssMb: 100 },
+        {
+          pluginId: "first-plugin",
+          phase: "lifecycle:install",
+          wallMs: 1_000,
+          cpuCoreRatio: 1.2,
+          maxRssMb: 500,
+        },
+        { pluginId: "second-plugin", phase: "lifecycle:install", wallMs: 100, maxRssMb: 100 },
+        { pluginId: "third-plugin", phase: "lifecycle:install", wallMs: 110, maxRssMb: 110 },
+      ],
+      {
+        cpuCoreWarn: 0.9,
+        hotWallWarnMs: 900,
+        maxRssWarnMb: 450,
+        wallAnomalyMultiplier: 3,
+        rssAnomalyMultiplier: 2.5,
+      },
+    );
+
+    expect(observations).toEqual([
+      expect.objectContaining({ kind: "phase-cpu-hot", coldStart: true }),
+      expect.objectContaining({ kind: "phase-wall-anomaly", coldStart: true }),
+      expect.objectContaining({ kind: "phase-rss-high", coldStart: true }),
+      expect.objectContaining({ kind: "phase-rss-anomaly", coldStart: true }),
+    ]);
   });
 
   it("uses QA gateway metrics instead of source CLI wrapper CPU for QA hot observations", () => {
@@ -613,6 +651,23 @@ describe("plugin gateway gauntlet helpers", () => {
     });
     const env = { EXISTING: "1" };
     expect(buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
+  });
+
+  it("marks gauntlet prebuilds as runtime-only when requested", () => {
+    expect(
+      buildGauntletPrebuildEnv(
+        { EXISTING: "1" },
+        {
+          buildIds: ["acpx"],
+          skipDeclarationBuild: true,
+        },
+      ),
+    ).toEqual({
+      EXISTING: "1",
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx",
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+    });
   });
 
   it("prebuilds only the QA runtime needed by the gauntlet", () => {
@@ -1394,6 +1449,21 @@ try {
     });
   });
 
+  it("promotes gauntlet observations to guard failures when requested", () => {
+    const observations = [
+      { kind: "phase-rss-high", phase: "qa:rpc", pluginId: "kitchen", maxRssMb: 2048 },
+    ];
+
+    expect(buildObservationGuardFailures(observations, false)).toEqual([]);
+    expect(buildObservationGuardFailures(observations, true)).toEqual([
+      {
+        kind: "observation:phase-rss-high",
+        message: "Gauntlet observation threshold exceeded: phase-rss-high",
+        observation: observations[0],
+      },
+    ]);
+  });
+
   it("does not promote setup and first cold-start observations to guard failures", () => {
     const observations = [
       { kind: "phase-rss-high", phase: "prebuild", maxRssMb: 2214 },
@@ -1595,9 +1665,8 @@ try {
     ]);
   });
 
-  it.each([
-    {
-      name: "reports failed scenarios",
+  it("fails successful QA chunks whose summary reports failed scenarios", async () => {
+    await runQaSummaryFailureScenario({
       qaSummary: {
         counts: { failed: 1, passed: 1, total: 2 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
@@ -1614,9 +1683,11 @@ try {
       diagnosticFailure: "qa-summary-failed-scenarios",
       diagnosticDetail: "QA suite reported 1 failed scenario(s)",
       rowAssertion: "metrics",
-    },
-    {
-      name: "is still running",
+    });
+  });
+
+  it("fails successful QA chunks whose summary is still running", async () => {
+    await runQaSummaryFailureScenario({
       qaSummary: {
         counts: { failed: 0, passed: 1, total: 1 },
         run: { status: "running" },
@@ -1631,9 +1702,11 @@ try {
       scenarioIds: ["channel-chat-baseline"],
       diagnosticFailure: "qa-summary-invalid",
       diagnosticDetail: "QA suite summary run.status must be completed, got running",
-    },
-    {
-      name: "has no step evidence",
+    });
+  });
+
+  it("fails successful QA chunks whose passed scenarios have no step evidence", async () => {
+    await runQaSummaryFailureScenario({
       qaSummary: {
         counts: { failed: 0, passed: 1, total: 1 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
@@ -1644,9 +1717,11 @@ try {
       diagnosticFailure: "qa-summary-invalid",
       diagnosticDetail:
         "QA suite summary passed scenario has no step evidence: channel-chat-baseline",
-    },
-    {
-      name: "has statuses disagreeing with counts",
+    });
+  });
+
+  it("fails successful QA chunks whose scenario statuses disagree with counts", async () => {
+    await runQaSummaryFailureScenario({
       qaSummary: {
         counts: { failed: 0, passed: 1, total: 2 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
@@ -1663,25 +1738,24 @@ try {
       diagnosticFailure: "qa-summary-invalid",
       diagnosticDetail:
         "QA suite summary failed count mismatch: counts.failed=0, failed scenarios=1",
-    },
-    {
-      name: "is missing",
+    });
+  });
+
+  it("fails successful QA chunks that do not write the requested summary", async () => {
+    await runQaSummaryFailureScenario({
       scenarioIds: ["channel-chat-baseline"],
       diagnosticFailure: "qa-summary-missing",
       rowAssertion: "missing",
-    },
-    {
-      name: "is oversized",
+    });
+  });
+
+  it("fails successful QA chunks that write oversized summary JSON", async () => {
+    await runQaSummaryFailureScenario({
       qaSummary: { filler: "x".repeat(128) },
       scenarioIds: ["channel-chat-baseline"],
       diagnosticFailure: "qa-summary-invalid",
       diagnosticDetail: expect.stringContaining("QA suite summary exceeded 64 bytes"),
       maxBytes: "64",
-    },
-  ] satisfies Array<Parameters<typeof runQaSummaryFailureScenario>[0] & { name: string }>)(
-    "fails successful QA chunks whose summary $name",
-    async (scenario) => {
-      await runQaSummaryFailureScenario(scenario);
-    },
-  );
+    });
+  });
 });

@@ -140,18 +140,19 @@ describe("UsagePage cache convergence", () => {
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(1);
       window.dispatchEvent(new Event("focus"));
       await vi.advanceTimersByTimeAsync(0);
+      await page.loadUsage();
       await page.updateComplete;
       expect(page.querySelector(".usage-loading-card")).toBeNull();
       expect(page.querySelector(".usage-cache-warning.warning")?.textContent).toContain(
         "Automatic checks paused",
       );
-      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2);
+      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(3);
       refreshButton(page).click();
       await vi.advanceTimersByTimeAsync(0);
       await page.updateComplete;
       expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
       expect(Boolean(page.querySelector(".usage-loading-card"))).toBe(!committed);
-      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(3);
+      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(4);
     },
   );
 
@@ -456,17 +457,18 @@ describe("UsagePage provider usage outcome", () => {
       const page = await createPage(client, false, context);
       await preloadUsage(page);
       for (let attempt = 0; attempt < 3; attempt += 1) {
+        let pending: Promise<void> | undefined;
         if (state === "pending") {
           heldUsage = deferred<SessionsUsageResult>();
-          context.publishUsage({ usageUpdatedAt: attempt * 2 + 1 });
+          pending = page.loadUsage();
         } else if (state === "hidden") {
           visibility.mockReturnValue("hidden");
         }
-        context.publishUsage({ usageUpdatedAt: attempt * 2 + 2 });
+        context.publishUsage({ usageUpdatedAt: attempt + 1 });
         if (state === "pending") {
           heldUsage!.resolve(cacheSnapshot("fresh").result);
           heldUsage = undefined;
-          await vi.advanceTimersByTimeAsync(0);
+          await pending;
         } else if (state === "hidden") {
           visibility.mockReturnValue("visible");
           window.dispatchEvent(new Event("focus"));
@@ -475,7 +477,7 @@ describe("UsagePage provider usage outcome", () => {
       }
       expect(page.providerUsageStalled).toBe(true);
       providerUsageRefreshing = false;
-      await page.refresh();
+      await page.loadUsage();
       expect(page.providerUsageStalled).toBe(false);
     },
   );
@@ -518,14 +520,18 @@ describe("UsagePage provider usage outcome", () => {
         loadedAtMs: loadSource === "preload" ? Date.now() : null,
       };
       await page.updateComplete;
-      const refresh = () => page.refresh();
+      const refresh = () => {
+        (
+          page as unknown as { refreshPolicy: { request: (reason: "manual") => void } }
+        ).refreshPolicy.request("manual");
+      };
       if (loadSource === "direct") {
-        await refresh();
+        refresh();
         await vi.waitFor(() => {
           if (failed) {
             expect(page.providerUsageUnavailable).toBe(true);
           } else {
-            expect(page.read().data.providerUsage).toEqual(summary.providers);
+            expect(page.providerUsageSummary).toEqual(summary);
           }
         });
       }
@@ -534,11 +540,11 @@ describe("UsagePage provider usage outcome", () => {
       ).length;
       phase = 2;
       if (aggregateFails) {
-        await refresh();
+        refresh();
         await vi.waitFor(() => expect(page.usageError).not.toBeNull());
         expect(page.providerUsageUnavailable).toBe(false);
         if (!failed) {
-          expect(page.read().data.providerUsage).toEqual(summary.providers);
+          expect(page.providerUsageSummary).toEqual(summary);
         }
       } else {
         window.dispatchEvent(new Event("focus"));
@@ -547,7 +553,7 @@ describe("UsagePage provider usage outcome", () => {
             previousCalls + 1,
           );
         });
-        await vi.waitFor(() => expect(page.read().data.providerUsage).toEqual(summary.providers));
+        await vi.waitFor(() => expect(page.providerUsageSummary).toEqual(summary));
       }
     },
   );

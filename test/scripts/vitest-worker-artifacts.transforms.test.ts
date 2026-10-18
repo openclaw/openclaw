@@ -64,8 +64,6 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
           directory,
           layout,
         );
-        const projectNames = layout === "projects" ? ["first", "second"] : ["first"];
-        const projectCount = projectNames.length;
         const controlled = createControlledWorkerCompiler(
           directory,
           testRunnerFixtureEnv(),
@@ -105,15 +103,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             expectedValue = "first",
             configValue = "first",
           ) => {
-            const args = [
-              "run",
-              "--config",
-              config,
-              ...projectNames.flatMap((name) => ["--project", name]),
-            ];
-            const previousObservations = fs.existsSync(path.join(directory, "observations.jsonl"))
-              ? readLines("observations.jsonl").length
-              : 0;
+            const args = ["run", "--config", config, "--project", "first"];
             const reuse = mode === "compiled" && generations.size > 0;
             const result = reuse
               ? await startBorrower(owner, args).result
@@ -165,18 +155,10 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
               );
             }
             expect(result.code, result.stderr + result.stdout).toBe(0);
-            const currentGenerations = readLines("generations.jsonl")
-              .slice(previousObservations)
-              .map((line): string => JSON.parse(line));
-            const observed = readLines("observations.jsonl")
-              .slice(previousObservations)
-              .map((line) => JSON.parse(line));
-            expect(observed).toEqual(
-              projectNames.map(() => ({ value: expectedValue, configValue })),
-            );
-            expect(currentGenerations).toHaveLength(projectCount);
-            expect(new Set(currentGenerations).size).toBe(1);
-            const generation = currentGenerations[0]!;
+            const generation: string = JSON.parse(readLines("generations.jsonl").at(-1)!);
+            const observed = JSON.parse(readLines("observations.jsonl").at(-1)!);
+            expect(observed.value).toBe(expectedValue);
+            expect(observed.configValue).toBe(configValue);
             if (mode === "compiled") {
               const generationDirectory = fileURLToPath(new URL("../../", generation));
               if (reuse) {
@@ -203,27 +185,24 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             }
             console.log(
               "cache transport",
-              JSON.stringify({ mode, observed, generation, transforms: counts() }),
+              JSON.stringify({ mode, ...observed, generation, transforms: counts() }),
             );
           };
           await launch("compiled");
-          expect(counts()).toEqual([projectCount, projectCount]);
+          expect(counts()).toEqual([1, 1]);
           expect(
             JSON.parse(fs.readFileSync(path.join(cacheDirectory, "_metadata.json"), "utf8")),
           ).toEqual({ lockfileHash: expect.stringMatching(/^[a-f\d]{8}$/u) });
           await launch("compiled");
           expect(generations.size).toBe(2);
-          expect(counts(), "unchanged parents must reuse filesystem transforms").toEqual([
-            projectCount,
-            projectCount,
-          ]);
+          expect(counts(), "unchanged parents must reuse filesystem transforms").toEqual([1, 1]);
           await launch("source");
-          expect(counts()).toEqual([2 * projectCount, 2 * projectCount]);
+          expect(counts()).toEqual([2, 2]);
           // Switching back with a leaf edit also proves the unchanged parent reuses
           // its compiled transform, without preparing another complete worker set.
           fs.writeFileSync(value, 'export const value: string = "second";');
           await launch("compiled", "second");
-          expect(counts()).toEqual([3 * projectCount, 2 * projectCount]);
+          expect(counts()).toEqual([3, 2]);
           fs.writeFileSync(
             config,
             fs
@@ -234,7 +213,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
               ),
           );
           await launch("compiled", "configured");
-          expect(counts()).toEqual([4 * projectCount, 3 * projectCount]);
+          expect(counts()).toEqual([4, 3]);
           expect(generations.size).toBe(2);
           expect(
             preparationLog.mock.calls.filter(([line]) =>
@@ -261,8 +240,8 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
           );
           for (const compiler of compilers) {
             expect(compiler).toMatchObject({
-              inputs: 3,
-              outputs: 3,
+              inputs: 2,
+              outputs: 2,
               processStartTime: expect.any(Number),
               isMainThread: true,
             });

@@ -111,13 +111,11 @@ describe("OpenAI Talk account defaults", () => {
 
       expect(providerConfig.model).toBe(model);
       expect(
-        await readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilitiesAsync(
-          {
-            cfg,
-            agentId: "voice-agent",
-            providerConfig,
-          },
-        ),
+        readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
+          cfg,
+          agentId: "voice-agent",
+          providerConfig,
+        }),
       ).toMatchObject({ handlesAgentConsult: true, supportsToolCalls: false });
       const request = {
         cfg,
@@ -156,17 +154,15 @@ describe("OpenAI Talk account defaults", () => {
       rawConfig: { azureDeployment: "voice-deployment" },
       model: "gpt-realtime-2.1",
     },
-  ])("preserves $name when resolving Talk defaults", async ({ context, rawConfig, model }) => {
+  ])("preserves $name when resolving Talk defaults", ({ context, rawConfig, model }) => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     expect(
-      (
-        await provider.resolveConfigAsync?.({
-          cfg: {},
-          rawConfig: { apiKey: "test-api-key-platform", ...rawConfig },
-          surface: "gateway-relay",
-          ...context,
-        })
-      )?.model,
+      provider.resolveConfig?.({
+        cfg: {},
+        rawConfig: { apiKey: "test-api-key-platform", ...rawConfig },
+        surface: "gateway-relay",
+        ...context,
+      })?.model,
     ).toBe(model);
   });
 });

@@ -370,39 +370,14 @@ describe("embedded run retry dispatch", () => {
   });
 
   it.each([
-    {
-      contextTokens: 40_000,
-      expectedBudget: 40_000,
-      nativeModelOwned: true,
-      sessionKey: "agent:main:session-1",
-    },
-    {
-      contextTokens: undefined,
-      expectedBudget: undefined,
-      nativeModelOwned: true,
-      sessionKey: "agent:main:session-1",
-    },
-    {
-      contextTokens: 2_000_000,
-      expectedBudget: 1_050_000,
-      nativeModelOwned: true,
-      sessionKey: "agent:main:session-1",
-    },
-    {
-      contextTokens: 40_000,
-      expectedBudget: 40_000,
-      nativeModelOwned: false,
-      sessionKey: "agent:main:session-1",
-    },
-    {
-      contextTokens: 40_000,
-      expectedBudget: 40_000,
-      nativeModelOwned: true,
-      sessionKey: "agent:main:subagent:child",
-    },
+    { contextTokens: 40_000, nativeModelOwned: true, sessionKey: "agent:main:session-1" },
+    { contextTokens: undefined, nativeModelOwned: true, sessionKey: "agent:main:session-1" },
+    { contextTokens: 2_000_000, nativeModelOwned: true, sessionKey: "agent:main:session-1" },
+    { contextTokens: 40_000, nativeModelOwned: false, sessionKey: "agent:main:session-1" },
+    { contextTokens: 40_000, nativeModelOwned: true, sessionKey: "agent:main:subagent:child" },
   ])(
     "forwards cap $contextTokens to Codex start/resume (native catalog: $nativeModelOwned, $sessionKey)",
-    async ({ contextTokens, expectedBudget, nativeModelOwned, sessionKey }) => {
+    async ({ contextTokens, nativeModelOwned, sessionKey }) => {
       const input = makeDispatchInput({}, createEmbeddedRunReplayState());
       input.runInput.resolvedSessionKey = sessionKey;
       const { runParams, provider, modelId } = input.runInput;
@@ -454,8 +429,7 @@ describe("embedded run retry dispatch", () => {
             appServer: codex.resolveCodexPromptSnapshotAppServerOptions(),
           });
 
-        expect(attempt.contextTokenBudget).toBe(expectedBudget);
-        expect(attempt.authoredContextTokenCap).toBe(contextTokens);
+        expect(attempt.contextTokenBudget).toBe(nativeModelOwned ? undefined : contextTokens);
         for (const request of [threadStartParams, threadResumeParams]) {
           if (contextTokens === undefined) {
             expect(request.config).not.toHaveProperty("model_context_window");

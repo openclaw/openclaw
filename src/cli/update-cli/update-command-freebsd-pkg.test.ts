@@ -80,8 +80,6 @@ describe("FreeBSD pkg update admission", () => {
     { platform: "freebsd", manager: "pkg", ownership: "owned" },
     { platform: "freebsd", manager: "pkg", ownership: "unowned" },
     { platform: "linux", manager: "pacman", ownership: "owned" },
-    { platform: "linux", manager: "pacman", ownership: "missing" },
-    { platform: "freebsd", manager: "pkg", ownership: "missing" },
   ] as const)(
     "admits $manager roots before npm discovery ($ownership)",
     async ({ platform, manager, ownership }) => {
@@ -94,18 +92,9 @@ describe("FreeBSD pkg update admission", () => {
           killed: false,
           termination: "exit",
         });
-        const runCommand = vi.fn<typeof exec.runCommandBuffered>().mockResolvedValue(
-          pkgQueryResult(
-            ownership === "owned" ? `${root}/package.json\n` : "",
-            ownership === "missing"
-              ? {
-                  code: null,
-                  termination: "error",
-                  error: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
-                }
-              : {},
-          ),
-        );
+        const runCommand = vi
+          .fn<typeof exec.runCommandBuffered>()
+          .mockResolvedValue(pkgQueryResult(ownership === "owned" ? `${root}/package.json\n` : ""));
         const onWarning = vi.fn();
         const admission = shared.resolveGlobalManager({
           root,
@@ -116,17 +105,7 @@ describe("FreeBSD pkg update admission", () => {
         if (ownership !== "owned") {
           await expect(admission).resolves.toBe("npm");
           expect(command).toHaveBeenCalled();
-          if (ownership === "missing") {
-            expect(onWarning).toHaveBeenCalledExactlyOnceWith(
-              expect.stringContaining(`${manager} executable was not found`),
-            );
-            expect(onWarning.mock.calls[0]?.[0]).toContain(
-              "Continuing without verified system-package ownership.",
-            );
-            expect(onWarning.mock.calls[0]?.[0]).not.toContain("Restore access");
-          } else {
-            expect(onWarning).not.toHaveBeenCalled();
-          }
+          expect(onWarning).not.toHaveBeenCalled();
         } else {
           await expect(admission).rejects.toBeInstanceOf(shared.UpdatePreMutationError);
           await expect(admission).rejects.toMatchObject({

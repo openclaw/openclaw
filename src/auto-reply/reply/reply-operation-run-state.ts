@@ -56,10 +56,10 @@ export type ReplyOperationRunState = {
   backgroundWorkStarted?: boolean;
   preRunRejection?: ReplyPreRunRejectionCode;
   /**
-   * Armed by the admitted interactive run owner. Interruption recovery consumes it once;
-   * true means the session lane will answer instead.
+   * Armed by the admitted interactive run owner. Dispatch consumes it once when a stale
+   * watchdog drops the turn before output; true means the session lane will answer instead.
    */
-  continueStalledTurn?: (guidance?: string, owner?: ReplyOperation) => boolean;
+  continueStalledTurn?: () => boolean;
 };
 
 // Carries this invocation's admission decision through reply option spreads so
@@ -106,7 +106,7 @@ export function recordReplyOperationAgentTurn(
       outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
     );
     if (outcome?.kind === "settled") {
-      state.messagingToolSentTargets = outcome.result.messagingToolSentTargets;
+      state.messagingToolSentTargets = outcome.result.messagingToolSentTargets?.slice();
       state.backgroundWorkStarted = Boolean(
         outcome.result.asyncWorkStarted || outcome.result.acceptedSessionSpawns?.length,
       );

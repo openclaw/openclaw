@@ -33,7 +33,6 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       authenticatedUserProfile: client?.authenticatedUserProfile,
       operatorRoleActor: client?.internal?.operatorRoleActor,
       operatorScopes: client?.connect.scopes,
-      approvalReviewerDeviceId: client?.connect.device?.id,
       senderIsOwner: client?.connect?.scopes?.includes("operator.admin"),
       clientCaps: client?.connect?.caps,
       conversationReadOrigin: resolveGatewayConversationReadOrigin({

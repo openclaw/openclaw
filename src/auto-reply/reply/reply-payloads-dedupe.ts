@@ -214,10 +214,14 @@ export function resolveMessagingToolPayloadDedupe(params: MessagingToolDedupeRou
   const matchingTargets = getMatchingMessagingToolReplyTargets(params);
   const matchingRoute = matchingTargets.length > 0;
   const routeSentTexts = matchingTargets.flatMap((target) =>
-    target.text?.trim() ? [target.text] : [],
+    typeof target.text === "string" && target.text.trim() ? [target.text] : [],
   );
-  const routeSentMediaUrls = matchingTargets.flatMap(
-    (target) => target.mediaUrls?.filter((url) => url.trim()) ?? [],
+  const routeSentMediaUrls = matchingTargets.flatMap((target) =>
+    Array.isArray(target.mediaUrls)
+      ? target.mediaUrls.filter(
+          (url): url is string => typeof url === "string" && Boolean(url.trim()),
+        )
+      : [],
   );
   const allTargetsMatchRoute = matchingRoute && matchingTargets.length === sentTargets.length;
 

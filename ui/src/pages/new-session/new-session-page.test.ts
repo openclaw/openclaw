@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
-import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
+import * as attachmentInputs from "../chat/components/chat-attachment-inputs.ts";
 import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { NewSessionModelControl } from "./model-control.ts";
 import { NewSessionPageOwner } from "./new-session-page-owner.ts";
 import "./new-session-page-entry.ts";
 
@@ -65,26 +64,23 @@ afterEach(() => {
 describe("new session draft route ownership", () => {
   it("prepares composer options once per published typing revision without replacing the input", async () => {
     const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
-    const projectRecents = vi.spyOn(DraftPlaceBrowser.prototype, "resolveProjectRecents");
-    const renderModels = vi.spyOn(NewSessionModelControl.prototype, "renderProps");
+    const updated = vi.spyOn(NewSessionPageOwner.prototype, "updated");
     const page = await mount(routeData("research"));
     const textarea = page.querySelector<HTMLTextAreaElement>("textarea")!;
     await enterMessage(page, "warmup");
     for (const text of ["h", "he", "hello"]) {
       prepare.mockClear();
-      projectRecents.mockClear();
-      renderModels.mockClear();
+      updated.mockClear();
       await enterMessage(page, text);
-      expect(prepare).toHaveBeenCalledOnce();
-      expect(projectRecents.mock.calls.length).toBeLessThanOrEqual(2);
-      expect(renderModels).not.toHaveBeenCalled();
+      expect(updated).toHaveBeenCalled();
+      expect(prepare).toHaveBeenCalledTimes(updated.mock.calls.length);
       expect(page.querySelector("textarea")).toBe(textarea);
       expect(textarea.value).toBe(text);
     }
   });
 
   it("keeps retained attachment callbacks connected to live draft and lock state", async () => {
-    const inputs = vi.spyOn(attachmentInputs, "ChatAttachmentInputs");
+    const inputs = vi.spyOn(attachmentInputs, "renderChatAttachmentInputs");
     let dictating = false;
     vi.spyOn(NewSessionDictationControl.prototype, "active", "get").mockImplementation(
       () => dictating,
@@ -100,6 +96,21 @@ describe("new session draft route ownership", () => {
     page.requestUpdate();
     await settle(page);
     expect(retained?.disabled).toBe(true);
+  });
+
+  it("prepares composer options once per draft revision rather than per prop read", async () => {
+    const page = await mount(routeData("research"));
+    const textarea = page.querySelector("textarea");
+    const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
+    const projectRecents = vi.spyOn(DraftPlaceBrowser.prototype, "resolveProjectRecents");
+
+    await enterMessage(page, "Keep typing without rebuilding options");
+
+    expect(message(page)).toBe("Keep typing without rebuilding options");
+    expect(page.querySelector("textarea")).toBe(textarea);
+    expect(prepare.mock.calls.length).toBeGreaterThan(0);
+    expect(prepare.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(projectRecents.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
   it.each([false, true])(
@@ -280,7 +291,7 @@ describe("new session draft route ownership", () => {
       targets: HTMLElement[];
       expected: readonly Destination[];
       openDialog?: boolean;
-      openMenu?: boolean;
+      openDropdown?: boolean;
     };
     const append = <T extends HTMLElement>(element: T): T => page.appendChild(element);
     const main = append(document.createElement("main"));
@@ -288,10 +299,8 @@ describe("new session draft route ownership", () => {
     const button = append(document.createElement("button"));
     const link = append(document.createElement("a"));
     link.href = "#target";
-    const menu = append(document.createElement("div"));
-    menu.setAttribute("role", "menu");
-    menu.popover = "manual";
-    const menuItem = menu.appendChild(document.createElement("button"));
+    const menu = append(document.createElement("wa-dropdown")) as HTMLElement & { open: boolean };
+    const menuItem = menu.appendChild(document.createElement("wa-dropdown-item"));
     menuItem.setAttribute("role", "menuitemradio");
     menuItem.tabIndex = -1;
     const dialog = append(document.createElement("dialog"));
@@ -322,13 +331,13 @@ describe("new session draft route ownership", () => {
         name: "menuitem",
         targets: [menuItem],
         expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
-        openMenu: true,
+        openDropdown: true,
       },
       {
-        name: "open native menu",
+        name: "open wa-dropdown",
         targets: [main],
         expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
-        openMenu: true,
+        openDropdown: true,
       },
       { name: "dialog", targets: [dialogButton], expected: overlay, openDialog: true },
       {
@@ -342,7 +351,7 @@ describe("new session draft route ownership", () => {
     for (const row of routing) {
       for (const target of row.targets) {
         for (const [index, key] of keys.entries()) {
-          menu.togglePopover(row.openMenu === true);
+          menu.open = row.openDropdown === true;
           dialog.open = row.openDialog === true;
           target.focus();
           target.dispatchEvent(

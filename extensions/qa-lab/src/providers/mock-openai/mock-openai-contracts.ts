@@ -44,8 +44,6 @@ export type QaMockProviderDispatchResult = {
   previewPauseMs?: number;
   previewPause?: () => Promise<void>;
   responsePauseMs?: number;
-  /** Holds an accepted SSE stream open with comment keepalives during the pause. */
-  responseKeepaliveMs?: number;
 };
 
 export type StreamEvent =
@@ -295,9 +293,9 @@ export const QA_YIELD_REJECTION_IMAGE_DELAY_MS = 4_000;
 export const QA_SUBAGENT_SELF_YIELD_WORKER_RE = /subagent self yield qa worker/i;
 export const QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE = /subagent self yield qa remote job finished/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE =
-  /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback|race|private)/i;
+  /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback|private)/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE =
-  /subagent terminal reply qa worker:\s*(visible|silent|empty|restart|fallback|race)/i;
+  /subagent terminal reply qa worker:\s*(visible|silent|empty|restart|fallback)/i;
 export const QA_SUBAGENT_PRIVATE_WORKER_RE =
   /subagent private completion qa worker:\s*(first|second)/i;
 export const QA_SUBAGENT_PRIVATE_RESULT_RE = /QA-PARENT-PRIVATE-CHILD1-[A-F0-9]{32}/u;
@@ -336,7 +334,6 @@ export const QA_SUBAGENT_TERMINAL_MARKERS = {
   empty: "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
   restart: "QA-SUBAGENT-TERMINAL-RESTART-OK",
   fallback: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
-  race: "QA-SUBAGENT-TERMINAL-RACE-OK",
 } as const;
 export const QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER = "QA-SUBAGENT-EMPTY-PARENT-ACK";
 export const QA_SUBAGENT_TERMINAL_METADATA_SENTINEL = "QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK";
@@ -347,9 +344,10 @@ export const QA_IMAGE_GENERATION_PROMPT_RE =
   /image generation check|capability flip image check|\/tool\s+image_generate/i;
 export const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
-export const QA_EMPTY_RESPONSE_RETRY_NEEDLE = "Continue from the current state";
+export const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
+  "The previous attempt did not produce a user-visible answer.";
 export const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE =
-  "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:";
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer.";
 export const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
   /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
 export const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
@@ -447,15 +445,6 @@ export function isPreviewCompletion(
   );
 }
 
-export function writeSseHeaders(res: ServerResponse, contentLength?: number) {
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-    ...(contentLength === undefined ? {} : { "content-length": contentLength }),
-  });
-}
-
 export async function writeSse(
   res: ServerResponse,
   events: Array<StreamEvent | AnthropicStreamEvent>,
@@ -474,9 +463,12 @@ export async function writeSse(
   const body =
     frames.slice(Math.max(0, completionIndex)).join("") +
     (protocol === "responses" ? "data: [DONE]\n\n" : "");
-  if (!res.headersSent) {
-    writeSseHeaders(res, completionIndex < 0 ? Buffer.byteLength(body) : undefined);
-  }
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+    ...(completionIndex < 0 ? { "content-length": Buffer.byteLength(body) } : {}),
+  });
   if (completionIndex >= 0) {
     // Flush preview deltas before delaying the final text and completion frames.
     res.write(frames.slice(0, completionIndex).join(""));

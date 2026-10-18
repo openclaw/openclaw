@@ -5,6 +5,7 @@ import {
   findNormalizedProviderKey,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { resolvePrimaryStringValue } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import {
@@ -57,7 +58,18 @@ function resolveConnectionModels(
   cfg: OpenClawConfig,
   models: ProviderPresetModels,
 ): ModelDefinitionConfig[] {
-  return cfg.models?.mode === "replace" ? resolvePresetModels(models) : [];
+  return cfg.models?.mode === "replace" ? structuredClone(resolvePresetModels(models)) : [];
+}
+
+function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined {
+  if (!model || typeof model !== "object") {
+    return undefined;
+  }
+  if (!("fallbacks" in model)) {
+    return undefined;
+  }
+  const fallbacks = (model as { fallbacks?: unknown }).fallbacks;
+  return Array.isArray(fallbacks) ? fallbacks.map((value) => String(value)) : undefined;
 }
 
 function completeProviderPreset(
@@ -114,7 +126,7 @@ function normalizeModelProvidersForConfig(
   let mutated = false;
   const nextProviders: Record<string, ModelProviderConfig> = {};
   for (const [providerId, providerConfig] of Object.entries(providers)) {
-    const models = providerConfig.models
+    const models = Array.isArray(providerConfig.models)
       ? normalizeProviderModelsForConfig(providerId, providerConfig.models)
       : providerConfig.models;
     if (models !== providerConfig.models) {
@@ -132,13 +144,15 @@ function resolveProviderModelMergeState(
   cfg: OpenClawConfig,
   providerId: string,
 ): ProviderModelMergeState {
-  const providers: Record<string, ModelProviderConfig> = { ...cfg.models?.providers };
+  const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
   const existingProviderKey = Object.hasOwn(providers, providerId)
     ? providerId
     : findNormalizedProviderKey(providers, providerId);
   const existingProvider =
-    existingProviderKey !== undefined ? providers[existingProviderKey] : undefined;
-  const existingModels: ModelDefinitionConfig[] = existingProvider?.models
+    existingProviderKey !== undefined
+      ? (providers[existingProviderKey] as ModelProviderConfig | undefined)
+      : undefined;
+  const existingModels: ModelDefinitionConfig[] = Array.isArray(existingProvider?.models)
     ? normalizeProviderModelsForConfig(providerId, existingProvider.models)
     : [];
   // Collapse case/alias variants into the canonical provider key before writing,
@@ -294,7 +308,7 @@ function mergeOnboardProviderConfigs(
         delete merged[key];
       }
     }
-    if (!existingProvider) {
+    if (!isRecord(existingProvider) || !isRecord(providerConfig)) {
       merged[providerId] = providerConfig;
       continue;
     }
@@ -356,9 +370,9 @@ export function applyAgentDefaultModelPrimary(
   primary: string,
 ): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
-  const model = defaults?.model;
-  const normalizedFallbacks = (typeof model === "string" ? undefined : model?.fallbacks)?.map(
-    normalizeAgentModelRefForConfig,
+  const existingFallbacks = extractAgentDefaultModelFallbacks(cfg.agents?.defaults?.model);
+  const normalizedFallbacks = existingFallbacks?.map((fallback) =>
+    normalizeAgentModelRefForConfig(fallback),
   );
   const normalizedModels =
     defaults?.models === undefined ? undefined : normalizeAgentModelMapForConfig(defaults.models);

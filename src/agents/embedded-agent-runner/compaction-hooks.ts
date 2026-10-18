@@ -250,7 +250,6 @@ type CompactionHookParams = {
       messageCountAfter: number;
       tokensAfter?: number;
       compactedCount: number;
-      compactionOutcome?: "skipped";
       sessionFile: string;
       previousSessionId?: string;
       summaryLength?: number;
@@ -288,7 +287,6 @@ export async function runCompactionHooks(params: CompactionHookParams): Promise<
               messageCount: params.messageCountAfter,
               tokenCount: params.tokensAfter,
               compactedCount: params.compactedCount,
-              ...(params.compactionOutcome ? { compactionOutcome: params.compactionOutcome } : {}),
               summaryLength: params.summaryLength,
               tokensBefore: params.tokensBefore,
               tokensAfter: params.tokensAfter,

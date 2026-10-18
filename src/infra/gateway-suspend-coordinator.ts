@@ -22,9 +22,6 @@ import {
 } from "./gateway-active-work.js";
 
 const GATEWAY_SUSPEND_TTL_MS = 2 * 60_000;
-// Thirty seconds to drain, then fifteen to hand off or release. Reconnects do not
-// extend user-visible downtime; freeze/snapshot leases retain their own TTL.
-const GATEWAY_SUSPEND_DRAIN_BUDGET_MS = 45_000;
 const GATEWAY_SUSPEND_BUSY_RETRY_AFTER_MS = 20_000;
 const GATEWAY_SUSPEND_DRAIN_POLL_MS = 5_000;
 const GATEWAY_SCHEDULER_RECOVERY_RETRY_MS = 1_000;
@@ -56,9 +53,10 @@ type GatewaySuspendResumeResult =
 type GatewaySuspendCoordinatorEntryBase = {
   owner: object;
   resumeScheduling: () => void;
-  reopenAdmission: (reason?: string) => boolean;
+  reopenAdmission: () => boolean;
   warn?: (message: string) => void;
   timer?: ReturnType<typeof setTimeout>;
+  timerGeneration?: number;
 };
 
 type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
@@ -112,6 +110,7 @@ function schedulerRecoveryResult(): GatewaySchedulerRecoveryResult {
 }
 
 function clearEntryTimer(entry: GatewaySuspendCoordinatorEntry): void {
+  entry.timerGeneration = (entry.timerGeneration ?? 0) + 1;
   if (entry.timer) {
     clearTimeout(entry.timer);
     entry.timer = undefined;
@@ -120,20 +119,16 @@ function clearEntryTimer(entry: GatewaySuspendCoordinatorEntry): void {
 
 function scheduleResume(entry: GatewaySuspendCoordinatorEntry, delayMs: number): void {
   clearEntryTimer(entry);
+  const generation = entry.timerGeneration;
   entry.timer = setTimeout(() => {
-    if (COORDINATOR_STATE.current === entry) {
-      resumeAndReopen(entry, entry.kind === "held" ? "expired" : "scheduler-recovered");
+    if (entry.timerGeneration === generation && COORDINATOR_STATE.current === entry) {
+      resumeAndReopen(entry);
     }
   }, delayMs);
   entry.timer.unref?.();
 }
 
-function resumeAndReopen(entry: GatewaySuspendCoordinatorEntry, reason = "resume"): boolean {
-  if (reason === "expired" && entry.kind === "held") {
-    entry.warn?.(
-      `gateway suspension ${entry.drain ? "drain deadline" : "lease"} expired owner=${JSON.stringify(entry.requestId)} leaseId=${JSON.stringify(entry.suspensionId)}; reopening admission`,
-    );
-  }
+function resumeAndReopen(entry: GatewaySuspendCoordinatorEntry): boolean {
   try {
     entry.resumeScheduling();
   } catch (err) {
@@ -144,7 +139,7 @@ function resumeAndReopen(entry: GatewaySuspendCoordinatorEntry, reason = "resume
   if (COORDINATOR_STATE.current !== entry) {
     return true;
   }
-  if (!entry.reopenAdmission(reason)) {
+  if (!entry.reopenAdmission()) {
     entry.warn?.("gateway scheduler recovery could not reopen admission");
     enterSchedulerRecovery(entry);
     return false;
@@ -180,7 +175,7 @@ function normalizeExpiredHeldSuspension(
   if (held.nowMs() < held.expiresAtMs && performance.now() < held.deadlineAtMs) {
     return held;
   }
-  resumeAndReopen(held, "expired");
+  resumeAndReopen(held);
   return COORDINATOR_STATE.current;
 }
 
@@ -202,7 +197,7 @@ function armSchedulerRecovery(
 function resumeSchedulingBeforeReopen(params: {
   owner: object;
   resumeScheduling: () => void;
-  reopenAdmission: (reason?: string) => boolean;
+  reopenAdmission: () => boolean;
   isInvalidated: () => boolean;
   warn?: (message: string) => void;
 }): boolean {
@@ -291,7 +286,6 @@ export function prepareGatewaySuspend(params: {
   inspect?: Partial<GatewayActiveWorkInspectors>;
   nowMs?: () => number;
   createSuspensionId?: () => string;
-  caller?: string;
   warn?: (message: string) => void;
 }): GatewaySuspendPrepareResult {
   const terminalPolicy = params.terminalPolicy ?? "preserve";
@@ -300,8 +294,7 @@ export function prepareGatewaySuspend(params: {
     ignoreTerminalSessions: terminalPolicy === "terminate",
   };
   const nowMs = (params.nowMs ?? Date.now)();
-  const ttlMs = drain ? GATEWAY_SUSPEND_DRAIN_BUDGET_MS : GATEWAY_SUSPEND_TTL_MS;
-  const deadlineAtMs = performance.now() + ttlMs;
+  const deadlineAtMs = performance.now() + GATEWAY_SUSPEND_TTL_MS;
   const existing = currentSuspension();
   if (existing?.kind === "recovering") {
     return schedulerRecoveryResult();
@@ -314,8 +307,8 @@ export function prepareGatewaySuspend(params: {
     ) {
       return { status: "conflict", expiresAtMs: existing.expiresAtMs };
     }
-    // Drain admission has an absolute deadline, including after becoming ready.
-    if (!existing.drain && !existing.handoff) {
+    // Repeated preparation may renew a lease, never an already-armed interruption.
+    if (!existing.handoff) {
       existing.nowMs = params.nowMs ?? Date.now;
       renewHeldSuspension(existing, nowMs);
     }
@@ -330,33 +323,24 @@ export function prepareGatewaySuspend(params: {
   }
 
   const owner = {};
-  const suspensionId = (params.createSuspensionId ?? randomUUID)();
   let suspensionInvalidated = false;
-  const admission = tryBeginGatewaySuspendAdmission(
-    () => {
-      suspensionInvalidated = true;
-      const activeEntry = COORDINATOR_STATE.current;
-      if (activeEntry?.owner !== owner) {
-        return;
-      }
-      clearEntryTimer(activeEntry);
-      COORDINATOR_STATE.current = null;
-      // Restart drain must not resume the old scheduler while shutdown is in
-      // flight. Keep its cleanup until the next in-process lifecycle begins.
-      COORDINATOR_STATE.retiredForLifecycleReset = activeEntry;
-      const signal = getGatewayRestartDrainSignal();
-      if (activeEntry.kind === "held" && signal.aborted) {
-        activeEntry.handoff = undefined;
-        activeEntry.shutdown = { signal, phase: "interrupting" };
-      }
-    },
-    {
-      owner: params.requestId,
-      leaseId: suspensionId,
-      caller: params.caller ?? "in-process",
-      reason: drain ? "drain" : "freeze",
-    },
-  );
+  const admission = tryBeginGatewaySuspendAdmission(() => {
+    suspensionInvalidated = true;
+    const activeEntry = COORDINATOR_STATE.current;
+    if (activeEntry?.owner !== owner) {
+      return;
+    }
+    clearEntryTimer(activeEntry);
+    COORDINATOR_STATE.current = null;
+    // Restart drain must not resume the old scheduler while shutdown is in
+    // flight. Keep its cleanup until the next in-process lifecycle begins.
+    COORDINATOR_STATE.retiredForLifecycleReset = activeEntry;
+    const signal = getGatewayRestartDrainSignal();
+    if (activeEntry.kind === "held" && signal.aborted) {
+      activeEntry.handoff = undefined;
+      activeEntry.shutdown = { signal, phase: "interrupting" };
+    }
+  });
   if (!admission) {
     const snapshot = createGatewayActiveWorkSnapshot(params.inspect, activeWorkOptions);
     return {
@@ -383,7 +367,10 @@ export function prepareGatewaySuspend(params: {
     params.pauseScheduling();
     schedulingPaused = true;
     const snapshot = createGatewayActiveWorkSnapshot(params.inspect, activeWorkOptions);
-    if ((params.nowMs ?? Date.now)() >= nowMs + ttlMs || performance.now() >= deadlineAtMs) {
+    if (
+      (params.nowMs ?? Date.now)() >= nowMs + GATEWAY_SUSPEND_TTL_MS ||
+      performance.now() >= deadlineAtMs
+    ) {
       throw new Error("gateway suspension expired during preparation");
     }
     if (!snapshot.idle && !drain) {
@@ -406,7 +393,8 @@ export function prepareGatewaySuspend(params: {
       throw new Error("gateway suspension admission changed during preparation");
     }
     reopenAdmission = admission.release;
-    const expiresAtMs = nowMs + ttlMs;
+    const suspensionId = (params.createSuspensionId ?? randomUUID)();
+    const expiresAtMs = nowMs + GATEWAY_SUSPEND_TTL_MS;
     const held = armExpiry({
       owner,
       requestId: params.requestId,
@@ -663,6 +651,6 @@ export function resetGatewaySuspendCoordinatorForLifecycleRestart(): void {
     } catch (err) {
       entry.warn?.(`gateway scheduler resume failed during lifecycle reset: ${String(err)}`);
     }
-    entry.reopenAdmission("lifecycle-reset");
+    entry.reopenAdmission();
   }
 }

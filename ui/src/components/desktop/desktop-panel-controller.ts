@@ -10,8 +10,8 @@ import { t } from "../../i18n/index.ts";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
-import type { DesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
+import { DesktopFullscreenController } from "../fullscreen-controller.ts";
 import {
   DESKTOP_PANEL_TOGGLE_EVENT,
   type DesktopPanelToggleDetail,
@@ -60,7 +60,6 @@ export class DesktopPanelController extends SolidPanelController {
   onFocusTargetChange:
     | ((target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>) => void)
     | null = null;
-  fullscreenMode!: DesktopFullscreen;
 
   /** Browser tests replace the transport without opening a real RFB socket. */
   desktopClientFactory: () => Pick<desktopTransport.DesktopClient, "connect"> = () =>
@@ -149,8 +148,11 @@ export class DesktopPanelController extends SolidPanelController {
     layout: desktopPanelLayout,
     reservationPrefix: "desktop",
     isAvailable: () => this.available,
-    isFullscreen: () => this.fullscreenMode?.ownsFullscreen() ?? false,
+    isFullscreen: () => this.fullscreenMode.active,
   });
+  private readonly fullscreenMode = new DesktopFullscreenController(this, () =>
+    this.dockLayout.syncReservation(),
+  );
 
   override connectedCallback(): void {
     if (!this.embedded) {
@@ -651,7 +653,7 @@ export class DesktopPanelController extends SolidPanelController {
         loading: this.loading,
         automaticSource: this.usesAutomaticSource,
         hasTarget: this.sessionKey !== null || this.requestedSource !== null,
-        errorText: this.launcher.error ?? this.errorText,
+        errorText: this.fullscreenMode.errorText ?? this.launcher.error ?? this.errorText,
         noticeText: this.noticeText,
         availability: this.sessionSource.desktopAvailability,
         picker: {

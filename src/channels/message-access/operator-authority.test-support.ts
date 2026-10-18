@@ -29,7 +29,7 @@ export function createCommandOwnerTestGateway(cfg: OpenClawConfig) {
 }
 
 export async function withAdminIngress(
-  run: (fixture: Awaited<ReturnType<typeof createAdminIngressFixture>>) => Promise<void>,
+  run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
   authority: "role" | "identity-grant" = "role",
   channelId: "discord" | "slack" = "discord",
 ) {
@@ -52,7 +52,7 @@ export async function withAdminIngress(
   }
   try {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const fixture = await createAdminIngressFixture(state, authority, channelId);
+      const fixture = await createFixture(state, authority, channelId);
       try {
         await run(fixture);
       } finally {
@@ -66,7 +66,7 @@ export async function withAdminIngress(
   }
 }
 
-export async function createAdminIngressFixture(
+async function createFixture(
   state: OpenClawTestState,
   authority: "role" | "identity-grant",
   channelId: "discord" | "slack",

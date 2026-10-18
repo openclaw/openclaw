@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { expect, it, vi } from "vitest";
 import { evaluateAttemptDecisionToolPrefilter } from "../src/agents/embedded-agent-runner/run/attempt-decision-prefilter.js";
@@ -103,13 +102,6 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     setActivePluginRegistry(builder.registry);
     const initial = config(true);
     setRuntimeConfigSnapshot(initial);
-    // Keep host policy initialization outside the 500 ms consumer budget;
-    // the suspended import and DNS below exercise admission, not cold setup.
-    resolveProviderHttpRequestConfigWithOriginTrust({
-      provider: "typesafe",
-      baseUrl: "http://localhost:" + server.claim.port + "/v1",
-      defaultBaseUrl: "https://api.typesafe.ai/v1",
-    });
     const pending = turn(initial);
     await loading.promise;
     const disabledConfig = config(false);
@@ -144,8 +136,8 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     for (const change of ["optout", "model", "authority", "provider-config", "secrets"] as const) {
       const resolving = createDeferredCore();
       const resolved = createDeferredCore();
-      setRuntimeConfigSnapshot(config(true));
-      const localConfig = getRuntimeConfigSnapshot()!;
+      const localConfig = config(true);
+      setRuntimeConfigSnapshot(localConfig);
       const before = requests;
       const originalError = new Error("synthetic authority closed");
       const intercepted = vi

@@ -1,4 +1,8 @@
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { CoreConfig } from "../../types.js";
@@ -22,9 +26,16 @@ export function createMatrixHandlerState(config: {
   runtime: RuntimeEnv;
   allowFromResolvedEntries: readonly MatrixResolvedAllowlistEntry[];
   groupAllowFromResolvedEntries: readonly MatrixResolvedAllowlistEntry[];
+  resolveLiveUserAllowlist: typeof resolveMatrixMonitorLiveUserAllowlist;
 }) {
-  const { core, accountId, runtime, allowFromResolvedEntries, groupAllowFromResolvedEntries } =
-    config;
+  const {
+    core,
+    accountId,
+    runtime,
+    allowFromResolvedEntries,
+    groupAllowFromResolvedEntries,
+    resolveLiveUserAllowlist,
+  } = config;
 
   let cachedStoreAllowFrom: {
     value: string[];
@@ -49,7 +60,7 @@ export function createMatrixHandlerState(config: {
     if (cached?.signature === signature) {
       return cached.entries;
     }
-    const entries = await resolveMatrixMonitorLiveUserAllowlist({
+    const entries = await resolveLiveUserAllowlist({
       cfg: paramsValue.cfg,
       accountId,
       entries: paramsValue.entries,
@@ -84,7 +95,10 @@ export function createMatrixHandlerState(config: {
   };
   const readStoreAllowFrom = async (): Promise<string[]> => {
     const now = Date.now();
-    if (cachedStoreAllowFrom && cachedStoreAllowFrom.expiresAtMs > now) {
+    if (
+      cachedStoreAllowFrom &&
+      isFutureDateTimestampMs(cachedStoreAllowFrom.expiresAtMs, { nowMs: now })
+    ) {
       return cachedStoreAllowFrom.value;
     }
     cachedStoreAllowFrom = null;
@@ -95,14 +109,21 @@ export function createMatrixHandlerState(config: {
         accountId,
       })
       .catch(() => []);
-    cachedStoreAllowFrom = { value, expiresAtMs: now + ALLOW_FROM_STORE_CACHE_TTL_MS };
+    const expiresAtMs = resolveExpiresAtMsFromDurationMs(ALLOW_FROM_STORE_CACHE_TTL_MS, {
+      nowMs: now,
+    });
+    cachedStoreAllowFrom = expiresAtMs === undefined ? null : { value, expiresAtMs };
     return value;
   };
 
   const shouldSendPairingReply = (senderId: string, created: boolean): boolean => {
     const now = Date.now();
     const lastSentAtMs = pairingReplySentAtMsBySender.get(senderId);
-    if (!created && lastSentAtMs !== undefined && now - lastSentAtMs < PAIRING_REPLY_COOLDOWN_MS) {
+    if (
+      !created &&
+      typeof lastSentAtMs === "number" &&
+      now - lastSentAtMs < PAIRING_REPLY_COOLDOWN_MS
+    ) {
       return false;
     }
     setBoundedMap(pairingReplySentAtMsBySender, senderId, now, MAX_TRACKED_PAIRING_REPLY_SENDERS);

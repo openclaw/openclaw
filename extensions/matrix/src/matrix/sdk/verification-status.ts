@@ -17,16 +17,21 @@ export function isMatrixDeviceVerifiedInCurrentClient(
 }
 
 export async function trustMatrixOwnIdentity(crypto: MatrixCryptoBootstrapApi): Promise<void> {
-  const ownIdentity = await crypto.getOwnIdentity().catch(() => undefined);
+  const ownIdentity =
+    typeof crypto.getOwnIdentity === "function"
+      ? await crypto.getOwnIdentity().catch(() => undefined)
+      : undefined;
   if (!ownIdentity) {
     return;
   }
   try {
-    if (ownIdentity.isVerified()) {
+    if (typeof ownIdentity.isVerified === "function" && ownIdentity.isVerified()) {
       return;
     }
-    await ownIdentity.verify();
+    if (typeof ownIdentity.verify === "function") {
+      await ownIdentity.verify();
+    }
   } finally {
-    ownIdentity.free();
+    ownIdentity.free?.();
   }
 }

@@ -28,7 +28,7 @@ import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-st
 import { loadChatHistory } from "./chat-history.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
-import { enqueueChatMessage } from "./chat-queue.ts";
+import { enqueueChatMessage, readQueuedMessageById } from "./chat-queue.ts";
 import {
   captureChatCommandComposerRecovery,
   cancelChatDelivery,
@@ -58,6 +58,7 @@ import {
   OFFLINE_QUEUE_STORAGE_ERROR,
   prependReplyQuote,
 } from "./chat-send-support.ts";
+import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import {
   withChatSubmitGuard,
@@ -680,7 +681,17 @@ export async function handleSendChat(
           storageMode: canSendFromMemory ? "memory" : "durable",
         }),
     );
+    const pending = readQueuedMessageById(host, queued.id);
     accepted = sendResult !== "failed";
+    const pendingBusySend =
+      sendResult === "pending" &&
+      pending?.sendState === "waiting-idle" &&
+      host.sessionKey === submittedSessionKey &&
+      visibleSessionMatches(host, submittedSessionKey, pending.agentId) &&
+      (isChatBusy(host) || hasDirectSessionRun(host));
+    if (pendingBusySend) {
+      recordChatSendTiming(host, pending, "queued-busy", submittedAtMs);
+    }
   };
   await withChatSubmitGuard(
     host,

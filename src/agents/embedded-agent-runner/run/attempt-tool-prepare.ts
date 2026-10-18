@@ -11,10 +11,7 @@ import { resolveStagedInputMediaPaths } from "../../../media/staged-inputs.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
-import {
-  readAdmittedRunOperatorAuthority,
-  resolveAdmittedRunActiveAssertion,
-} from "../../admitted-run-context.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import {
   createOpenClawCodingToolsInternalAsync,
   resolveToolLoopDetectionConfig,
@@ -88,8 +85,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
-  const pluginExecutionAuthority = readAdmittedRunOperatorAuthority(attempt.admittedRunContext);
-  const pluginExecutionSkillsSnapshot = attempt.skillsSnapshot;
   const workspaceReadiness = captureAgentWorkspaceReadiness(attempt.sessionKey);
   const captureBaseline = attempt.awaitSessionDiffBaseline;
   const assertBaselineSource = captureBaseline
@@ -197,9 +192,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
-  const inheritedPublicationToolRef: NonNullable<
-    OpenClawCodingToolsOptions["inheritedPublicationToolRef"]
-  > = {};
   const generationCleanups: Array<(reason: string) => Promise<void>> = [];
   const retiringGenerations = new Set<Promise<void>>();
   let retiredCleanupFailed = false;
@@ -308,19 +300,11 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     abortSignal: AbortSignal,
   ) => {
     webSearchUnconfigured = false;
-    inheritedPublicationToolRef.current = undefined;
     let constructedToolsRaw: Awaited<ReturnType<typeof createOpenClawCodingToolsInternalAsync>> =
       [];
     if (shouldConstructTools) {
-      const assertActive = resolveAdmittedRunActiveAssertion(
-        attempt.admittedRunContext,
-        abortSignal,
-      );
       const codingToolOptions: OpenClawCodingToolsOptions = {
         awaitSessionDiffBaseline,
-        pluginExecutionAuthority,
-        pluginExecutionSkillsSnapshot,
-        assertInvocationCurrent: assertActive,
         agentId: params.setup.sessionAgentId,
         ...buildConversationContext(),
         exec: {
@@ -395,7 +379,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         enableHeartbeatTool: attempt.enableHeartbeatTool,
         forceHeartbeatTool: attempt.forceHeartbeatTool,
         inheritedToolAllowlistRef: inheritedToolAllowlist,
-        inheritedPublicationToolRef,
         cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
         cronCreatorToolAllowlistCaptureRef,
         authProfileStore: attempt.authProfileStore,
@@ -412,6 +395,10 @@ export async function prepareEmbeddedAttemptToolBase(params: {
           : undefined,
         onYield: params.onYield,
       };
+      const assertActive = resolveAdmittedRunActiveAssertion(
+        attempt.admittedRunContext,
+        abortSignal,
+      );
       const allTools = await createOpenClawCodingToolsInternalAsync(
         codingToolOptions,
         params.skillReadResources,
@@ -529,7 +516,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       forceDirectMessageTool,
       requireExplicitMessageTarget,
       inheritedToolAllowlist,
-      inheritedPublicationToolRef,
       localModelLeanEnabled,
       localModelLeanPreserveToolNames,
       replaySafetyOptions,

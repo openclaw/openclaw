@@ -59,10 +59,17 @@ function createGeminiToolDefinition(
   };
 }
 
+function resolveGoogleModelProviderConfig(
+  config?: OpenClawConfig,
+): Record<string, unknown> | undefined {
+  const provider = config?.models?.providers?.google;
+  return isRecord(provider) ? provider : undefined;
+}
+
 function getGoogleModelProviderCredentialFallback(
   config?: OpenClawConfig,
 ): { path: string; value: unknown } | undefined {
-  const provider = config?.models?.providers?.google;
+  const provider = resolveGoogleModelProviderConfig(config);
   return provider && provider.apiKey !== undefined
     ? { path: GOOGLE_PROVIDER_CREDENTIAL_PATH, value: provider.apiKey }
     : undefined;
@@ -72,7 +79,7 @@ function withGoogleModelProviderFallbacks(
   searchConfig: Record<string, unknown> | undefined,
   config?: OpenClawConfig,
 ): Record<string, unknown> | undefined {
-  const provider = config?.models?.providers?.google;
+  const provider = resolveGoogleModelProviderConfig(config);
   if (!provider || (provider.apiKey === undefined && provider.baseUrl === undefined)) {
     return searchConfig;
   }

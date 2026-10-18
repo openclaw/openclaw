@@ -403,7 +403,7 @@ export async function runCliFallbackCandidate(
             ...forkRunParams,
             authProfileId,
             mediaImageLayout: params.currentTurnImages.mediaImageLayout,
-            messageChannel: turn.followupRun.originatingChannel,
+            messageChannel: turn.followupRun.originatingChannel ?? undefined,
             messageProvider: hookMessageProvider,
             currentChannelId:
               turn.followupRun.originatingTo ?? turn.sessionCtx.OriginatingTo ?? turn.sessionCtx.To,

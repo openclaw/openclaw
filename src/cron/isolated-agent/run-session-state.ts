@@ -9,7 +9,6 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
-import { preserveSqliteSameKeySessionRolloverLineage } from "../../config/sessions/session-entry-lineage.js";
 import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
@@ -176,7 +175,6 @@ export async function beginCronSessionWorkAdmission(params: {
   cronSession: MutableCronSession;
   agentSessionKey: string;
   runSessionKey: string;
-  usesDetachedRunSession: boolean;
   signal?: AbortSignal;
   onInterrupt: () => void;
 }) {
@@ -196,10 +194,6 @@ export async function beginCronSessionWorkAdmission(params: {
     signal: params.signal,
     onInterrupt: params.onInterrupt,
     assertAllowed: async (signal) => {
-      // Bound sessions borrow workspace authority; detached rows claim only at their write.
-      if (params.usesDetachedRunSession) {
-        return;
-      }
       const currentEntry = await loadCronSessionEntryLatest(cronSession.storePath, agentSessionKey);
       signal.throwIfAborted();
       const changed = initialSessionEntry
@@ -283,7 +277,9 @@ export function createPersistCronSessionEntry(params: {
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
       liveEntry.sessionId &&
-      (liveEntry.cliSessionIds !== undefined ||
+      (liveEntry.sessionStartedAt !== undefined ||
+        liveEntry.lastInteractionAt !== undefined ||
+        liveEntry.cliSessionIds !== undefined ||
         liveEntry.cliSessionBindings !== undefined ||
         liveEntry.claudeCliSessionId !== undefined) &&
       !(await cronTranscriptExists({
@@ -462,11 +458,10 @@ export function createCronRunContinuationSession(params: {
     delete source.createdVia;
     delete source.createdActor;
     delete source.createdAt;
-    // Node-local lineage must not leak across keys: generation history and
-    // fork ancestry describe the cron root, not this :run: node.
+    // Node-local lineage must not leak across keys: the base row's generation
+    // chain and fork ancestry describe the cron root, not this :run: node.
     delete source.previousSessionId;
     delete source.forkSource;
-    delete source.usageFamilySessionIds;
     const snapshot = { source, continuation: structuredClone(continuation) };
     if (phase === "running" && isDeepStrictEqual(snapshot, persistedSnapshot)) {
       return;
@@ -494,13 +489,7 @@ export function createCronRunContinuationSession(params: {
         persisted = true;
         return {
           ...current,
-          ...(current
-            ? preserveSqliteSameKeySessionRolloverLineage({
-                next: source,
-                previous: current,
-                sessionKey: params.runSessionKey,
-              })
-            : source),
+          ...source,
           // Snapshot merges remove cleared keys; continuity copies must carry
           // their absence too, or this row resurrects an invalid native handle.
           cliSessionBindings: source.cliSessionBindings,

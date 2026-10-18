@@ -37,7 +37,35 @@ describe("turn validation", () => {
     ]);
   });
 
-  it.each([false])(
+  it("does not merge Gemini turns across tool results", () => {
+    const prefix = [
+      { role: "user", content: "Use tool" },
+      assistant([call("toolUse")]),
+      { role: "toolResult", toolUseId: "tool-1", content: [text("Found data")] },
+    ];
+    expect(
+      validateGeminiTurns(
+        asMessages([
+          ...prefix,
+          assistant([text("Answer")]),
+          assistant([text("Extra")]),
+          user("Next"),
+        ]),
+      ),
+    ).toEqual([...prefix, assistant([text("Answer"), text("Extra")]), user("Next")]);
+  });
+
+  it("keeps consecutive users and assistants separate when merging is disabled", () => {
+    const messages = asMessages([
+      user("Switch model"),
+      user("Read notes.txt"),
+      assistant([text("Done")]),
+      assistant([text("Extra")]),
+    ]);
+    expect(validateAnthropicTurns(messages, { mergeConsecutiveTurns: false })).toEqual(messages);
+  });
+
+  it.each([true, false])(
     "preserves signed tool-result pairing across an injected assistant (merging=%s)",
     (mergeConsecutiveTurns) => {
       const result = {
@@ -138,6 +166,21 @@ describe("turn validation", () => {
       user("Use tool"),
       omitted,
       following,
+    ]);
+  });
+
+  it("accepts a current tool-result alias alongside a stale alias", () => {
+    const following = [
+      {
+        ...textToolResult("tool-current", "gateway", "ok", { isError: false }),
+        toolUseId: "tool-stale",
+      },
+      user("Continue"),
+    ];
+    expect(validateToolTurn(signed("tool-current"), following)).toEqual([
+      user("Use tool"),
+      assistant(signed("tool-current")),
+      ...following,
     ]);
   });
 

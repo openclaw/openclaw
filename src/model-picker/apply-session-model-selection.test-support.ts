@@ -58,7 +58,10 @@ export function createModelSelectionMocks() {
         placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities(...args),
     }),
     placementRuntimePreparation: () => ({
-      prepareWorkerPlacementSessionRuntime: async () => () => "fixture",
+      prepareWorkerPlacementSessionRuntime: async () => ({
+        read: () => "fixture",
+        [Symbol.dispose]: () => {},
+      }),
     }),
   };
   const resetMocks = () => {

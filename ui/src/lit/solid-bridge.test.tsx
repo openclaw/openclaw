@@ -1,8 +1,9 @@
+import { ContextProvider } from "@lit/context";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { LitElement, html, render as renderLit } from "lit";
 import { createEffect, createMemo, createSignal, flush, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
 import { ShellLayoutBoundary } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider, useApplication } from "../lib/reactive/context.ts";
@@ -413,7 +414,7 @@ it.each(["attribute"])("honors the public setter when updating %s", async (input
   expect(host.querySelector("output")?.textContent).toBe("NORMALIZED");
 });
 
-it("provides the Solid application context, rebinds replacements, and unsubscribes", async () => {
+it("provides the existing Lit application context, rebinds replacements, and unsubscribes", async () => {
   const seen = vi.fn();
   const connection = vi.fn();
   const ContextBridge = defineSolidBridge(
@@ -427,24 +428,25 @@ it("provides the Solid application context, rebinds replacements, and unsubscrib
   );
   const first = { basePath: "/first" } as ApplicationContext;
   const second = { basePath: "/second" } as ApplicationContext;
-  const container = createApplicationContextProvider(first);
+  const container = document.createElement("div");
+  const provider = new ContextProvider(container, {
+    context: applicationContext,
+    initialValue: first,
+  });
   document.body.append(container);
   const host = document.createElement("openclaw-solid-context-test") as SolidBridgeElement<object>;
   container.append(host);
   await host.updateComplete;
   expect(seen).toHaveBeenLastCalledWith(first);
-  container.setContext(second);
+  provider.setValue(second);
   await host.updateComplete;
   expect(host.textContent).toBe("/second");
   expect(seen).toHaveBeenLastCalledWith(second);
-  container.setContext(first);
-  await host.updateComplete;
-  expect(host.textContent).toBe("/first");
   expect(connection).toHaveBeenCalledExactlyOnceWith(host);
   host.remove();
   await Promise.resolve();
   seen.mockClear();
-  container.setContext(first);
+  provider.setValue(first);
   await Promise.resolve();
   expect(seen).not.toHaveBeenCalled();
 
@@ -470,8 +472,12 @@ it("releases the old provider when a nearer provider takes over without moving t
   );
   const first = { basePath: "/first" } as ApplicationContext;
   const second = { basePath: "/second" } as ApplicationContext;
-  const outer = createApplicationContextProvider(first);
+  const outer = document.createElement("div");
   const inner = document.createElement("div");
+  const outerProvider = new ContextProvider(outer, {
+    context: applicationContext,
+    initialValue: first,
+  });
   outer.append(inner);
   document.body.append(outer);
   const host = document.createElement(
@@ -479,17 +485,21 @@ it("releases the old provider when a nearer provider takes over without moving t
   ) as SolidBridgeElement<object>;
   inner.append(host);
   await host.updateComplete;
-  const innerProvider = render(() => <ApplicationProvider value={first} host={inner} />);
+  const innerProvider = new ContextProvider(inner, {
+    context: applicationContext,
+    initialValue: first,
+  });
+  innerProvider.hostConnected();
   await host.updateComplete;
   seen.mockClear();
-  outer.setContext(second);
+  outerProvider.setValue(second);
   await host.updateComplete;
   expect(seen).not.toHaveBeenCalled();
   expect(host.textContent).toBe("/first");
   host.remove();
   await Promise.resolve();
-  outer.setContext(first);
-  innerProvider.unmount();
+  outerProvider.setValue(first);
+  innerProvider.setValue(second);
   await host.updateComplete;
   expect(seen).not.toHaveBeenCalled();
 });

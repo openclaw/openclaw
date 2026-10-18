@@ -32,8 +32,6 @@ type CandidateTarget = Omit<AgentDatabaseMigrationTarget, "realPath">;
 
 export type PreparedAgentDatabaseMigrationDiscovery = {
   preparedTranscriptArchives?: Set<string>;
-  /** Earlier committed version steps defer historical content repair for this invocation. */
-  versionMigrations?: readonly { path: string; foundVersion: number }[];
   stateDir: string;
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   registeredAgentDatabases: readonly { agentId: string; path: string }[];
@@ -75,10 +73,7 @@ export function prepareAgentDatabaseMigrationDiscovery(params: {
       deletionJournal,
     }),
     ...(params.preparedDiscovery?.stateDir === stateDir
-      ? {
-          preparedTranscriptArchives: params.preparedDiscovery.preparedTranscriptArchives,
-          versionMigrations: params.preparedDiscovery.versionMigrations,
-        }
+      ? { preparedTranscriptArchives: params.preparedDiscovery.preparedTranscriptArchives }
       : {}),
   };
 }

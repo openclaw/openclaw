@@ -1,9 +1,9 @@
-import { onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyResult,
 } from "../../api/types.ts";
+import type { ControllerHost } from "../model-providers/page-controller.ts";
 import type { ModelSetupConnection } from "./first-run-setup.ts";
 import { captureModelSetupResult, type ModelSetupTaskResult } from "./model-setup-task-result.ts";
 import { MODEL_SETUP_DETECT_TIMEOUT_MS, MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";
@@ -15,14 +15,17 @@ type ModelSetupDetectTaskResult = ModelSetupTaskResult<SystemAgentSetupDetectRes
 };
 
 function createSetupRequest<Args, Result>(
+  host: Pick<ControllerHost, "addController">,
   request: (args: Args, signal: AbortSignal) => Promise<Result | undefined>,
   onComplete?: (result: Result) => void,
 ) {
   let controller: AbortController | undefined;
-  onCleanup(() => {
-    const retired = controller;
-    controller = undefined;
-    retired?.abort();
+  host.addController({
+    hostDisconnected: () => {
+      const retired = controller;
+      controller = undefined;
+      retired?.abort();
+    },
   });
   return async (args: Args): Promise<Result | undefined> => {
     controller?.abort();
@@ -39,38 +42,45 @@ function createSetupRequest<Args, Result>(
   };
 }
 
-export function createModelSetupDetectRequest(options: {
-  getHello: () => ModelSetupConnection["hello"];
-  onComplete: (outcome: ModelSetupDetectTaskResult) => void;
-}) {
+export function createModelSetupDetectRequest(
+  host: Pick<ControllerHost, "addController">,
+  options: {
+    getHello: () => ModelSetupConnection["hello"];
+    onComplete: (outcome: ModelSetupDetectTaskResult) => void;
+  },
+) {
   return createSetupRequest<
     readonly [GatewayBrowserClient | null, string | null, object | null],
     ModelSetupDetectTaskResult
-  >(async ([client, agentId, token], signal) => {
-    if (!client || !token) {
-      return undefined;
-    }
-    const hello = options.getHello();
-    return {
-      ...(await captureModelSetupResult(client, () =>
-        client.request<SystemAgentSetupDetectResult>(
-          "openclaw.setup.detect",
-          agentId ? { agentId } : {},
-          { timeoutMs: MODEL_SETUP_DETECT_TIMEOUT_MS, signal },
-        ),
-      )),
-      agentId,
-      hello,
-      token,
-    };
-  }, options.onComplete);
+  >(
+    host,
+    async ([client, agentId, token], signal) => {
+      if (!client || !token) {
+        return undefined;
+      }
+      const hello = options.getHello();
+      return {
+        ...(await captureModelSetupResult(client, () =>
+          client.request<SystemAgentSetupDetectResult>(
+            "openclaw.setup.detect",
+            agentId ? { agentId } : {},
+            { timeoutMs: MODEL_SETUP_DETECT_TIMEOUT_MS, signal },
+          ),
+        )),
+        agentId,
+        hello,
+        token,
+      };
+    },
+    options.onComplete,
+  );
 }
 
-export function createModelSetupVerifyRequest() {
+export function createModelSetupVerifyRequest(host: Pick<ControllerHost, "addController">) {
   return createSetupRequest<
     readonly [GatewayBrowserClient | null, string | null, "utility" | undefined],
     ModelSetupTaskResult<SystemAgentSetupVerifyResult>
-  >(async ([client, agentId, modelTarget], signal) =>
+  >(host, async ([client, agentId, modelTarget], signal) =>
     client
       ? captureModelSetupResult(client, () =>
           client.request<SystemAgentSetupVerifyResult>(

@@ -10,7 +10,6 @@ import { prepareSessionTranscriptReadTargetCore } from "../config/sessions/sessi
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import type { SkillCommandSpec } from "../skills/types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { SessionTitleFields } from "./session-utils.types.js";
 
@@ -19,10 +18,10 @@ const EMPTY_SESSION_TITLE_FIELDS: SessionTitleFields = {
   lastMessagePreview: null,
 };
 
-/** Read normalized task text through the existing bounded history owner. Command metadata is attempt-local. */
+/** Reuse the bounded title cache in the existing history worker without transporting session metadata. */
 export async function readSessionTitleFieldsFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
-  opts?: { includeInterSession?: boolean; skillCommands?: SkillCommandSpec[] },
+  opts?: { includeInterSession?: boolean },
 ): Promise<SessionTitleFields> {
   const memory = captureSessionActorTranscriptRead(scope);
   if (memory) {
@@ -31,7 +30,6 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
       : (
           await memory.read("session.history.title", {
             includeInterSession: opts?.includeInterSession,
-            skillCommands: opts?.skillCommands,
           })
         ).fields;
   }
@@ -55,7 +53,6 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
       owner.readTitleFields({
         scope: { ...readScope, storePath: databasePath },
         ...(opts?.includeInterSession ? { includeInterSession: true } : {}),
-        ...(opts?.skillCommands ? { skillCommands: opts.skillCommands } : {}),
         ...(admission ? { admission: { ...admission } } : {}),
       }),
     );

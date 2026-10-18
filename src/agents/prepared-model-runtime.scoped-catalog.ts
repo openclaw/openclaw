@@ -1,4 +1,3 @@
-import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -12,6 +11,10 @@ import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
+import {
+  captureModelsJsonContents,
+  prepareWorkspaceBuildGroup,
+} from "./prepared-model-runtime.facts.js";
 import {
   materializePreparedModelCatalog,
   prepareFullCatalogFacts,
@@ -29,7 +32,6 @@ export async function prepareScopedReadOnlyModelCatalog(
   providerDiscoveryProviderIds: readonly string[],
   catalogMode: PreparedModelRuntimeCatalogMode = "static",
 ): Promise<ModelCatalogSnapshot> {
-  const { prepareWorkspaceBuildGroup } = await import("./prepared-model-runtime.facts.js");
   const scopedInput = input.readOnly ? input : { ...input, readOnly: true };
   const { agentFacts, pluginGeneration } = await prepareWorkspaceBuildGroup(
     [scopedInput],
@@ -71,7 +73,6 @@ export async function prepareAgentCatalogSource(
   catalogMode: PreparedModelRuntimeCatalogMode,
   persist = true,
   sourceOptions: {
-    refresh?: boolean;
     authStore?: AuthProfileStore;
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
@@ -126,7 +127,6 @@ export async function prepareAgentCatalogSource(
         providerOutcomes: resultOutcomes(),
       };
     }
-    const { captureModelsJsonContents } = await import("./prepared-model-runtime.facts.js");
     if (!input.readOnly) {
       await ensureOpenClawModelsJson(input.config, input.agentDir, options);
     }
@@ -140,12 +140,7 @@ export async function prepareAgentCatalogSource(
   };
   const { pluginMetadataSnapshot: metadataSnapshot, pluginRegistry } = pluginGeneration;
   // Read-only inventories can request live discovery without preparing a runtime registry.
-  const { value, providerExpiries, servingLimits } = await captureProviderCatalogExpiries(
-    () =>
-      pluginRegistry
-        ? withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, prepareSource)
-        : prepareSource(),
-    { refresh: sourceOptions.refresh },
-  );
-  return { ...value, providerExpiries, servingLimits };
+  return pluginRegistry
+    ? withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, prepareSource)
+    : prepareSource();
 }

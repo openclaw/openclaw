@@ -195,7 +195,7 @@ describe("google meet chrome transport", () => {
   );
 
   it.each(["pinned-node"])(
-    "leaves through a pinned node %j without resolving inventory",
+    "leaves through a pinned node %j before yielding to inventory",
     async (nodeId) => {
       const requests: Parameters<PluginRuntime["nodes"]["invoke"]>[0][] = [];
       const runtime = browserRuntime(
@@ -221,10 +221,11 @@ describe("google meet chrome transport", () => {
         meetingUrl: MEET_URL,
         tab: { targetId: "pinned-tab", openedByPlugin: false },
       });
+      const beforeYield = [...requests];
       const result = await leaving;
 
       expect(result).toStrictEqual({ left: true, note: "Meet tab is already closed." });
-      expect(requests).toStrictEqual([
+      expect(beforeYield).toStrictEqual([
         {
           nodeId,
           command: "browser.proxy",

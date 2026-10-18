@@ -16,7 +16,6 @@ export type ModelCallUrgency = "foreground" | "normal" | "background";
 
 export function resolveModelCallUrgency(provenance: {
   trigger?: EmbeddedRunTrigger;
-  skillWorkshopReviewOf?: string;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   currentInboundEventKind?: InboundEventKind;
   inputProvenance?: InputProvenance;
@@ -30,7 +29,7 @@ export function resolveModelCallUrgency(provenance: {
     provenance.trigger === "cron" ||
     provenance.trigger === "heartbeat" ||
     provenance.trigger === "memory";
-  if (backgroundRunKind || backgroundTrigger || provenance.skillWorkshopReviewOf) {
+  if (backgroundRunKind || backgroundTrigger) {
     return "background";
   }
   // Delegated runs may retain user provenance; they are not the interactive source turn.

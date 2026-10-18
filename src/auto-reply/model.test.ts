@@ -37,6 +37,13 @@ describe("extractModelDirective", () => {
       expect(result.cleaned).toBe("runtime-extra=codex");
     });
 
+    it("keeps OpenRouter preset paths that include @ in the model name", () => {
+      const result = extractModelDirective("/model openrouter/@preset/kimi-2-5");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("openrouter/@preset/kimi-2-5");
+      expect(result.rawProfile).toBeUndefined();
+    });
+
     it("still allows profile overrides after OpenRouter preset paths", () => {
       const result = extractModelDirective("/model openrouter/@preset/kimi-2-5@work");
       expect(result.hasDirective).toBe(true);
@@ -46,6 +53,17 @@ describe("extractModelDirective", () => {
   });
 
   describe("alias shortcuts", () => {
+    it("recognizes /gpt as model directive when alias is configured", () => {
+      const result = extractModelDirective("/gpt", {
+        aliases: ["gpt", "sonnet", "opus"],
+      });
+      expect(result.hasDirective).toBe(true);
+      expect(result.source).toBe("alias");
+      expect(result.rawModel).toBe("gpt");
+      expect(result.rawRuntime).toBeUndefined();
+      expect(result.cleaned).toBe("");
+    });
+
     it.each(["--runtime codex -s", "-s --runtime codex"])(
       "applies runtime and session alias options from %s",
       (options) => {
@@ -81,15 +99,26 @@ describe("extractModelDirective", () => {
       expect(session.cleaned).toBe("--session");
     });
 
-    it("recognizes case-insensitive aliases mid-message", () => {
-      const result = extractModelDirective("switch to /OPUS please", {
+    it("recognizes alias mid-message", () => {
+      const result = extractModelDirective("switch to /opus please", {
         aliases: ["opus"],
       });
       expect(result.hasDirective).toBe(true);
-      expect(result.source).toBe("alias");
-      expect(result.rawModel).toBe("OPUS");
-      expect(result.rawRuntime).toBeUndefined();
+      expect(result.rawModel).toBe("opus");
       expect(result.cleaned).toBe("switch to please");
+    });
+
+    it("is case-insensitive for aliases", () => {
+      const result = extractModelDirective("/GPT", { aliases: ["gpt"] });
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("GPT");
+    });
+
+    it("does not match alias without leading slash", () => {
+      const result = extractModelDirective("gpt is great", {
+        aliases: ["gpt"],
+      });
+      expect(result.hasDirective).toBe(false);
     });
 
     it("attributes a literal /model directive when alias text follows it", () => {

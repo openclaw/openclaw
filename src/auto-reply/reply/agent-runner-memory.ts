@@ -219,16 +219,16 @@ export async function runSessionCompactionIfNeeded(params: {
     minimumThresholdTokens: responsesServerCompactionThreshold,
   });
   const freshNeedsOutputRead =
-    freshPersistedTokens !== undefined &&
-    promptTokenEstimate !== undefined &&
+    typeof freshPersistedTokens === "number" &&
+    typeof promptTokenEstimate === "number" &&
     threshold > 0 &&
     freshPersistedTokens + promptTokenEstimate >= threshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS;
   const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
-  const shouldCheckActiveTranscriptBytes = maxActiveTranscriptBytes !== undefined;
+  const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
   const transcriptUsageTokens =
     params.isHeartbeat ||
     isCodexRuntime ||
-    (freshPersistedTokens !== undefined && !freshNeedsOutputRead)
+    (typeof freshPersistedTokens === "number" && !freshNeedsOutputRead)
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
           ...compactionTarget,
@@ -244,8 +244,8 @@ export async function runSessionCompactionIfNeeded(params: {
   const activeTranscriptBytes =
     transcriptUsageTokens?.transcriptByteSize ?? transcriptSizeSnapshot?.byteSize;
   const exceedsTranscriptByteThreshold =
-    activeTranscriptBytes !== undefined &&
-    maxActiveTranscriptBytes !== undefined &&
+    typeof activeTranscriptBytes === "number" &&
+    typeof maxActiveTranscriptBytes === "number" &&
     activeTranscriptBytes >= maxActiveTranscriptBytes;
   let terminalCompactionNoticeSent = false;
   const notifyCompaction = async (phase: CompactionNoticePhase, text?: string) => {
@@ -289,14 +289,37 @@ export async function runSessionCompactionIfNeeded(params: {
   if (isCodexRuntime && !shouldCompactByTranscriptBytes) {
     // Codex owns native-thread token pressure; OpenClaw owns the host transcript byte fuse
     // that bounds fresh-thread bootstrap seeds.
+    logVerbose(
+      `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex ` +
+        `reason=codex_native_auto_compaction ` +
+        `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
+        `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
+    );
     return entry;
   }
+  const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
   const projectedTokenCount = resolveProjectedPromptTokens(
     freshPersistedTokens,
     promptTokenEstimate,
     transcriptUsageTokens,
   );
   const tokenCountForCompaction = asPositiveFiniteNumber(projectedTokenCount);
+
+  logVerbose(
+    `preflightCompaction check: sessionKey=${params.sessionKey} ` +
+      `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
+      `contextWindow=${contextWindowTokens} threshold=${threshold} ` +
+      `responsesServerCompactionThreshold=${responsesServerCompactionThreshold ?? "undefined"} ` +
+      `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
+      `persistedFresh=${entry?.totalTokensFresh === true} ` +
+      `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
+      `transcriptPromptSource=${transcriptUsageTokens?.promptTokenSource ?? "undefined"} ` +
+      `promptTokensEst=${promptTokenEstimate ?? "undefined"} ` +
+      `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
+      `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"} ` +
+      `sizeTrigger=${shouldCompactByTranscriptBytes} ` +
+      `sizeTriggerLatched=${transcriptByteCompactionLatched}`,
+  );
 
   const shouldCompactByTokens =
     !params.isHeartbeat &&
@@ -330,6 +353,14 @@ export async function runSessionCompactionIfNeeded(params: {
   }
 
   const compactionTrigger = shouldCompactByTranscriptBytes ? "transcript_bytes" : "tokens";
+  logVerbose(
+    `preflightCompaction triggered: sessionKey=${params.sessionKey} ` +
+      `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
+      `threshold=${threshold} trigger=${compactionTrigger} ` +
+      `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
+      `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
+  );
+
   assertActive();
   params.onCompactionStart?.();
   // Provider work can outlive the caller; never account against a replacement session row.
@@ -347,8 +378,8 @@ export async function runSessionCompactionIfNeeded(params: {
       : undefined;
     assertActive();
     const transcriptByteCompactionLatch =
-      postCompactionBytes !== undefined &&
-      maxActiveTranscriptBytes !== undefined &&
+      typeof postCompactionBytes === "number" &&
+      typeof maxActiveTranscriptBytes === "number" &&
       postCompactionBytes >= maxActiveTranscriptBytes
         ? {
             activeBytes: postCompactionBytes,
@@ -451,8 +482,8 @@ export async function runSessionCompactionIfNeeded(params: {
           ? {
               transcriptBytePreflightHarness: "codex" as const,
               ...(compactionTarget.storePath &&
-              activeTranscriptBytes !== undefined &&
-              maxActiveTranscriptBytes !== undefined
+              typeof activeTranscriptBytes === "number" &&
+              typeof maxActiveTranscriptBytes === "number"
                 ? {
                     withCompactionPersistenceAsync: async (prepared) => {
                       const committed = await persistCompactionBoundaryWithSessionEntryAsync(
@@ -695,7 +726,7 @@ export async function runMemoryFlushIfNeeded(params: {
   const shouldReadTranscriptForOutput =
     entry &&
     hasFreshPersistedPromptTokens &&
-    promptTokenEstimate !== undefined &&
+    typeof promptTokenEstimate === "number" &&
     flushThreshold > 0 &&
     persistedPromptTokens + promptTokenEstimate >=
       flushThreshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS;
@@ -720,7 +751,7 @@ export async function runMemoryFlushIfNeeded(params: {
   assertMemoryFlushCurrent();
   const transcriptByteSize = sessionLogSnapshot?.byteSize;
   const shouldForceFlushByTranscriptSize =
-    transcriptByteSize !== undefined && transcriptByteSize >= forceFlushTranscriptBytes;
+    typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
 
   const transcriptUsageTokens =
     shouldReadTranscript && entry
@@ -739,6 +770,7 @@ export async function runMemoryFlushIfNeeded(params: {
         )
       : undefined;
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
+  const transcriptOutputTokens = transcriptUsageTokens?.outputTokens;
   const shouldPersistTranscriptPromptTokens =
     transcriptPromptTokens !== undefined &&
     transcriptUsageTokens?.promptTokenSource !== "prompt_projection" &&
@@ -787,6 +819,18 @@ export async function runMemoryFlushIfNeeded(params: {
   );
   const tokenCountForFlush = asPositiveFiniteNumber(projectedTokenCount);
 
+  logVerbose(
+    `memoryFlush check: sessionKey=${params.sessionKey} ` +
+      `tokenCount=${tokenCountForFlush ?? "undefined"} ` +
+      `contextWindow=${contextWindowTokens} threshold=${flushThreshold} ` +
+      `isHeartbeat=${params.isHeartbeat} isCli=${isCli} memoryFlushWritable=${memoryFlushWritable} ` +
+      `compactionCount=${entry?.compactionCount ?? 0} memoryFlushCompactionCount=${entry?.memoryFlush?.compactionCount ?? "undefined"} ` +
+      `persistedPromptTokens=${persistedPromptTokens ?? "undefined"} persistedFresh=${entry?.totalTokensFresh === true} ` +
+      `promptTokensEst=${promptTokenEstimate ?? "undefined"} transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} transcriptOutputTokens=${transcriptOutputTokens ?? "undefined"} ` +
+      `projectedTokenCount=${projectedTokenCount ?? "undefined"} transcriptBytes=${transcriptByteSize ?? "undefined"} ` +
+      `forceFlushTranscriptBytes=${forceFlushTranscriptBytes} forceFlushByTranscriptSize=${shouldForceFlushByTranscriptSize}`,
+  );
+
   const shouldFlushMemory =
     shouldRunMemoryFlush({
       entry,
@@ -800,6 +844,10 @@ export async function runMemoryFlushIfNeeded(params: {
   if (!shouldFlushMemory) {
     return { sessionEntry: entry, outcome: "skipped" };
   }
+
+  logVerbose(
+    `memoryFlush triggered: sessionKey=${params.sessionKey} tokenCount=${tokenCountForFlush ?? "undefined"} threshold=${flushThreshold}`,
+  );
 
   params.replyOperation?.setPhase("memory_flushing");
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
@@ -819,7 +867,8 @@ export async function runMemoryFlushIfNeeded(params: {
       ...params,
       sessionEntry: entry,
       flushRunId,
-      resolution: memoryFlushResolution,
+      contextWindowTokens,
+      memoryFlushWritable,
       abortSignal,
       assertCurrent: assertMemoryFlushCurrent,
       recordPersistenceToolSuccess: () => {
@@ -833,6 +882,7 @@ export async function runMemoryFlushIfNeeded(params: {
     return { sessionEntry: entry, outcome: "skipped" };
   }
   const {
+    plan: activeMemoryFlushPlan,
     writePath: memoryFlushWritePath,
     systemPrompt: flushSystemPrompt,
     selection,
@@ -889,7 +939,7 @@ export async function runMemoryFlushIfNeeded(params: {
     const flushExecution = await runEmbeddedAgentEntry({
       preparedRunAdmission,
       modelResolve: {
-        prompt: memoryFlushPlan.prompt,
+        prompt: activeMemoryFlushPlan.prompt,
         awaitSessionDiffBaseline: params.followupRun.runObservers?.awaitSessionDiffBaseline,
         cwd: maintenanceRun.cwd,
         modelSelectionLocked: maintenanceRun.modelSelectionLocked,
@@ -968,7 +1018,7 @@ export async function runMemoryFlushIfNeeded(params: {
           memoryFlushTools,
           initialTurnTainted:
             !params.followupRun.run.senderIsOwner || sessionLogSnapshot?.turnTainted === true,
-          prompt: memoryFlushPlan.prompt,
+          prompt: activeMemoryFlushPlan.prompt,
           transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
           isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
@@ -1061,45 +1111,49 @@ async function recordMemoryFlushFailure(
   const { sessionKey, storePath } = run;
   if (!isAbortError(error) && storePath && sessionKey) {
     try {
-      let failureCount = 0;
-      const updatedEntry = await updateSessionEntry(
-        { storePath, sessionKey },
-        (currentEntry) => {
-          failureCount =
+      const adoptEntry = (entry: SessionEntry | null) => {
+        if (entry) {
+          sessionEntry = entry;
+          if (run.sessionStore) {
+            run.sessionStore[sessionKey] = entry;
+          }
+        }
+      };
+      const updateEntry = (update: Parameters<typeof updateSessionEntry>[1]) =>
+        updateSessionEntry({ storePath, sessionKey }, update, {
+          skipMaintenance: true,
+          takeCacheOwnership: true,
+        });
+      const failedEntry = await updateEntry(async (currentEntry) => ({
+        memoryFlush: {
+          kind: "failed",
+          ...(currentEntry.memoryFlush?.compactionCount !== undefined
+            ? { compactionCount: currentEntry.memoryFlush.compactionCount }
+            : {}),
+          failureCount:
             (currentEntry.memoryFlush?.kind === "failed"
               ? currentEntry.memoryFlush.failureCount
-              : 0) + 1;
-          return {
-            memoryFlush:
-              failureCount >= MAX_FLUSH_FAILURES
-                ? { kind: "succeeded", compactionCount: currentEntry.compactionCount ?? 0 }
-                : {
-                    kind: "failed",
-                    ...(currentEntry.memoryFlush?.compactionCount !== undefined
-                      ? { compactionCount: currentEntry.memoryFlush.compactionCount }
-                      : {}),
-                    failureCount,
-                  },
-          };
+              : 0) + 1,
         },
-        { skipMaintenance: true, takeCacheOwnership: true },
-      );
-      if (updatedEntry) {
-        sessionEntry = updatedEntry;
-        if (run.sessionStore) {
-          run.sessionStore[sessionKey] = updatedEntry;
-        }
-      } else {
-        failureCount = 0;
-      }
+      }));
+      adoptEntry(failedEntry);
+      const failureCount =
+        failedEntry?.memoryFlush?.kind === "failed" ? failedEntry.memoryFlush.failureCount : 0;
       logVerbose(
         `memory flush failed (attempt ${failureCount}/${MAX_FLUSH_FAILURES}): ${truncatedError}`,
       );
-      if (updatedEntry && failureCount >= MAX_FLUSH_FAILURES) {
+      if (failedEntry && failureCount >= MAX_FLUSH_FAILURES) {
         outcome = "exhausted";
         logVerbose(
           `memory flush exhausted: skipping flush for this compaction cycle after ${failureCount} consecutive failures`,
         );
+        const exhaustedEntry = await updateEntry(async (currentEntry) => ({
+          memoryFlush: {
+            kind: "succeeded",
+            compactionCount: currentEntry.compactionCount ?? 0,
+          },
+        }));
+        adoptEntry(exhaustedEntry);
       }
     } catch (persistError) {
       logVerbose(`failed to persist memory flush failure metadata: ${String(persistError)}`);

@@ -26,11 +26,7 @@ import type {
   SessionTranscriptHydrationChunk,
   SessionTranscriptHydrationWorkerResult,
 } from "./session-transcript-worker.types.js";
-import {
-  MAX_COMPRESSED_EVENT_BYTES,
-  readTranscriptStorageEncoding,
-  transcriptEventJsonSql,
-} from "./transcript-payload.js";
+import { readTranscriptStorageEncoding, transcriptEventJsonSql } from "./transcript-payload.js";
 
 const SLICE_BYTES = 64 * 1024;
 const CHUNK_BYTES = 1024 * 1024;
@@ -71,27 +67,18 @@ export async function streamSessionTranscriptHydration(
         ...request.target,
         beforeEventSeq: fence?.beforeRawSeq,
       });
-      const eventSlice = (offset: number | Expression<number>, length = SLICE_BYTES) =>
-        engineTextByteSliceSql(database.db, transcriptEventJsonSql(database.db), offset, length);
+      const eventSlice = (offset: number | Expression<number>) =>
+        engineTextByteSliceSql(
+          database.db,
+          transcriptEventJsonSql(database.db),
+          offset,
+          SLICE_BYTES,
+        ).as("data");
       const pageQuery = source
-        .select((eb) => [
-          "seq",
-          eb
-            .case()
-            .when(
-              eb.and([
-                eb("event_json", "is", null),
-                eb("event_utf8_bytes", ">=", encoding === "UTF-8" ? SLICE_BYTES : SLICE_BYTES / 2),
-              ]),
-            )
-            .then(null)
-            .else(eventSlice(1))
-            .end()
-            .as("data"),
-        ])
+        .select(["seq", eventSlice(1)])
         .orderBy("seq", "asc")
         .limit(PAGE_ROWS);
-      const readPage = prepareSqliteQuerySync<number, { seq: number; data: Uint8Array | null }>(
+      const readPage = prepareSqliteQuerySync<number, { seq: number; data: Uint8Array }>(
         database.db,
         (parameter) =>
           pageQuery.where(
@@ -104,41 +91,26 @@ export async function streamSessionTranscriptHydration(
         { seq: number; offset: number },
         { data: Uint8Array }
       >(database.db, (parameter) =>
-        source.select(eventSlice(parameter((value) => value.offset)).as("data")).where(
+        source.select(eventSlice(parameter((value) => value.offset))).where(
           "seq",
           "=",
           parameter((value) => value.seq),
         ),
       );
-      // Compressed records are bounded; identity TEXT must retain native slicing for giant imports.
-      const readCompressed = prepareSqliteQueryTakeFirstSync<number, { data: Uint8Array }>(
-        database.db,
-        (parameter) =>
-          source.select(eventSlice(1, MAX_COMPRESSED_EVENT_BYTES * 2).as("data")).where(
-            "seq",
-            "=",
-            parameter((seq) => seq),
-          ),
-      );
       let frames: SessionTranscriptHydrationChunk["frames"] = [];
-      let transfers: ArrayBuffer[] = [];
       let bytes = 0;
       let eventCount = 0;
       const flush = async () => {
         if (frames.length === 0) {
           return;
         }
-        const response = await channel.request(
-          {
-            kind: "transcript-hydration-chunk",
-            encoding,
-            frames,
-          } satisfies SessionTranscriptHydrationChunk,
-          transfers,
-        );
+        const response = await channel.request({
+          kind: "transcript-hydration-chunk",
+          encoding,
+          frames,
+        } satisfies SessionTranscriptHydrationChunk);
         response.consumed();
         frames = [];
-        transfers = [];
         bytes = 0;
         control.throwIfCancelled();
       };
@@ -150,27 +122,14 @@ export async function streamSessionTranscriptHydration(
             ? executeSqliteQuerySync(database.db, pageQuery).rows
             : readPage(afterSeq).rows;
         for (const row of page) {
-          const initial =
-            row.data ??
-            expectDefined(readCompressed(row.seq), "compressed transcript snapshot row").data;
           for (let offset = 1; ; offset += SLICE_BYTES) {
             control.throwIfCancelled();
-            // A shared subarray would clone the entire event or detach later slices on transfer.
-            const owned =
-              row.data === null
-                ? Uint8Array.from(initial.subarray(offset - 1, offset - 1 + SLICE_BYTES))
-                : undefined;
             const data =
-              owned ??
-              (offset === 1
-                ? initial
-                : expectDefined(readPart({ seq: row.seq, offset }), "transcript snapshot row")
-                    .data);
+              offset === 1
+                ? row.data
+                : expectDefined(readPart({ seq: row.seq, offset }), "transcript snapshot row").data;
             if (bytes + data.byteLength > CHUNK_BYTES) {
               await flush();
-            }
-            if (owned) {
-              transfers.push(owned.buffer);
             }
             const endOfEvent = data.byteLength < SLICE_BYTES;
             frames.push({

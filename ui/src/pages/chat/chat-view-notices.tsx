@@ -14,13 +14,14 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { LitContent } from "../../lit/solid-content.tsx";
 import {
   ChatProviderReviewNotice,
   type ChatProviderReviewController,
 } from "./chat-provider-review-controller.tsx";
 import type { SubagentRoster, SubagentRowContext } from "./chat-spawned-subagent.ts";
 import { ChatChildAttention } from "./components/chat-child-attention.tsx";
-import { WorkspaceConflictNotice } from "./components/chat-workspace-conflict.tsx";
+import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
@@ -270,9 +271,11 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
           </>
         )}
       </Show>
-      <WorkspaceConflictNotice
-        conflict={props.workspaceConflict ?? undefined}
-        onDismiss={props.onDismissWorkspaceConflict}
+      <LitContent
+        value={renderWorkspaceConflictNotice({
+          conflict: props.workspaceConflict ?? undefined,
+          onDismiss: props.onDismissWorkspaceConflict,
+        })}
       />
       <ChatPlacementStartupError
         status={props.placementStartup}

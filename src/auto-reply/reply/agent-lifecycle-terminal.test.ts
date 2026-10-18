@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
-import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
+import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import * as providerFailover from "../../plugins/provider-failover.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -112,23 +112,9 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     expect(JSON.stringify(event)).not.toContain(rawDiagnostic);
   });
 
-  it.each(
-    (["typed", "raw"] as const).flatMap((kind) => [
-      {
-        kind,
-        code: "selected_auth_profile_unavailable",
-        expected:
-          "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
-      },
-      {
-        kind,
-        code: AUTH_PROFILE_COOLDOWN_ERROR_CODE,
-        expected: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-      },
-    ]),
-  )(
-    "publishes bounded $code recovery from $kind failures without discovering providers",
-    ({ kind, code, expected }) => {
+  it.each(["typed", "raw"] as const)(
+    "publishes bounded selected-profile recovery from %s failures without discovering providers",
+    (kind) => {
       const classifyProvider = vi
         .spyOn(providerFailover, "classifyProviderFailoverSignalWithPlugin")
         .mockImplementation(() => {
@@ -149,17 +135,19 @@ describe("createAgentLifecycleTerminalBackstop", () => {
           kind === "typed"
             ? new FailoverError(rawCause, {
                 reason: "auth",
-                code,
+                code: "selected_auth_profile_unavailable",
                 profileId,
                 cause: new Error(rawCause),
               })
             : Object.assign(new Error(rawCause), {
-                code,
+                code: "selected_auth_profile_unavailable",
               });
         terminal.emit("error", error);
 
         const event = emitAgentEvent.mock.calls[0]?.[0];
-        expect(event.data.error).toBe(expected);
+        expect(event.data.error).toBe(
+          renderFailoverCodeUserCopy("selected_auth_profile_unavailable"),
+        );
         expect(JSON.stringify(event)).not.toContain(profileId);
         expect(JSON.stringify(event)).not.toContain(rawCause);
         expect(classifyProvider).not.toHaveBeenCalled();

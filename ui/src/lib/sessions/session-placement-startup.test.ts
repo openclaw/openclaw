@@ -130,10 +130,30 @@ describe("session placement startup", () => {
     });
   });
 
+  it("sends after an ambiguous dispatch error when durable placement is active", async () => {
+    const attachments = [{ type: "file", mimeType: "text/plain", content: "aGVsbG8=" }];
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("transport closed"))
+      .mockResolvedValueOnce({ session: { placement: { state: "active" } } })
+      .mockResolvedValueOnce({ runId: "run-1", messageSeq: 3 });
+
+    await expect(
+      startSessionPlacementInitialTurn(clientWith(request), { ...params, attachments }, () => true),
+    ).resolves.toMatchObject({
+      status: "started",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: params.key });
+    expect(request).toHaveBeenNthCalledWith(
+      3,
+      "sessions.send",
+      expect.objectContaining({ message: params.message, attachments }),
+    );
+  });
+
   it.each([{ name: "absent placement", response: { session: {} } }])(
     "waits through $name after an ambiguous dispatch error",
     async ({ response }) => {
-      const attachments = [{ type: "file", mimeType: "text/plain", content: "aGVsbG8=" }];
       vi.useFakeTimers();
       onTestFinished(() => {
         vi.useRealTimers();
@@ -146,11 +166,7 @@ describe("session placement startup", () => {
         })
         .mockResolvedValueOnce({ runId: "run-1" });
 
-      const outcome = startSessionPlacementInitialTurn(
-        clientWith(request),
-        { ...params, attachments },
-        () => true,
-      );
+      const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
       await vi.runAllTimersAsync();
       await expect(outcome).resolves.toMatchObject({ status: "started" });
       expect(request).toHaveBeenNthCalledWith(3, "sessions.describe", { key: params.key });
@@ -158,7 +174,7 @@ describe("session placement startup", () => {
       expect(request).toHaveBeenNthCalledWith(
         4,
         "sessions.send",
-        expect.objectContaining({ message: params.message, attachments }),
+        expect.objectContaining({ message: params.message }),
       );
     },
   );

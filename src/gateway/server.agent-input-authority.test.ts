@@ -11,14 +11,13 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
-import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
+import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
-import { createSessionsCreateTool } from "../agents/tools/sessions-create-tool.js";
 import * as followupCustody from "../agents/tools/sessions-send-followup-custody.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { createReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.tool-authority.js";
@@ -35,21 +34,17 @@ import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
-import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import type { PreparedAgentRunDispatch } from "./agent-turn/agent-run-admission-types.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import * as gatewayDispatch from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
-import { runIndependentCreationInputCase } from "./server.agent-input-authority.create.test-helper.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { withPreparedSessionResolve } from "./sessions-resolve.js";
 import {
   agentCommandMock,
-  dispatchInboundMessageMock,
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
 } from "./test-helpers.js";
@@ -77,21 +72,6 @@ describe("spawn input ownership transfer", () => {
     cleanup: async () => {
       await harness?.close();
     },
-  });
-
-  it.for([
-    "slow acceptance",
-    "slow kickoff failure",
-    "before acceptance",
-    "after acceptance",
-    "guest after acceptance",
-    "participant after creation",
-    "participant after acceptance",
-    "target abort",
-    "target replacement",
-    "operator revocation",
-  ] as const)("transfers independently created input at %s", async (boundary, { signal }) => {
-    await runIndependentCreationInputCase(kernel.gatewayRequestContext, boundary, signal);
   });
 
   it.for([
@@ -200,34 +180,10 @@ describe("spawn input ownership transfer", () => {
         }
         const text =
           opts.sessionKey === childKey ? "delayed child result" : "received child result";
-        const { terminalReply } = prepareAgentRunTerminalReply({ rawText: text });
-        const loaded = await loadSessionEntryAsync(opts.sessionKey!, { agentId: "main" });
-        await sessionAccessor.persistSessionTranscriptTurn(
-          {
-            agentId: "main",
-            sessionKey: opts.sessionKey!,
-            sessionId: loaded.entry!.sessionId,
-            storePath: loaded.storePath,
-          },
-          {
-            cwd: "/tmp",
-            runId: opts.runId,
-            expectedSessionId: loaded.entry!.sessionId,
-            touchSessionEntry: false,
-            updateMode: "none",
-            messages: [
-              {
-                message: {
-                  role: "assistant",
-                  phase: "final_answer",
-                  stopReason: "stop",
-                  content: [{ type: "text", text }],
-                },
-                now: Date.now(),
-              },
-            ],
-          },
-        );
+        const terminalReply = buildAgentRunTerminalReplySnapshot({
+          visibleText: text,
+          rawText: text,
+        });
         emitAgentEvent({
           runId: opts.runId!,
           stream: "lifecycle",
@@ -855,9 +811,7 @@ describe("accepted input Gateway instance retirement", () => {
     },
   });
 
-  it("rejects retained agent and independent-creation input after acceptance", async ({
-    signal,
-  }) => {
+  it("rejects retained host dispatch after acceptance", async ({ signal }) => {
     await prepareGatewayReplyRuntimeForTest();
     const context = kernel.gatewayRequestContext;
     const runId = randomUUID();
@@ -876,11 +830,6 @@ describe("accepted input Gateway instance retirement", () => {
       storePath: (await loadSessionEntryAsync(childKey, { agentId: "main" })).storePath,
     };
     const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
-    const client = createOperatorClient({ profileName: randomUUID(), scopes: ["operator.admin"] });
-    const operator = expectDefined(
-      await captureGatewayOperatorRunAuthority({ client, context }),
-      "creation operator",
-    );
     const admission = prepareAgentRunAdmission({
       cfg: context.getRuntimeConfig(),
       operationalRunInstance: createOperationalRunInstanceRef(`parent-${runId}`),
@@ -888,16 +837,6 @@ describe("accepted input Gateway instance retirement", () => {
         runId: `parent-${runId}`,
         agentId: "main",
         ingress: { kind: "system", boundary: "spawn-input-proof", state: "present" },
-      },
-    });
-    const creationAdmission = prepareAgentRunAdmission({
-      cfg: context.getRuntimeConfig(),
-      operationalRunInstance: createOperationalRunInstanceRef(`creation-parent-${runId}`),
-      operatorAuthority: operator.authority,
-      facts: {
-        runId: `creation-parent-${runId}`,
-        agentId: "main",
-        ingress: { kind: "gateway-client", boundary: "agent", state: "present" },
       },
     });
     const releaseExecution = createDeferred();
@@ -908,7 +847,6 @@ describe("accepted input Gateway instance retirement", () => {
     let execution: Promise<void> | undefined;
     let restoreExecution: (() => void) | undefined;
     let restoreRuntimeRelease: (() => void) | undefined;
-    let createdWorkReleased: Promise<void> | undefined;
     try {
       const admitted = await admission.admit("embedded");
       const guard = await withGatewayToolCallerIdentity(
@@ -966,84 +904,15 @@ describe("accepted input Gateway instance retirement", () => {
       );
       restoreRuntimeRelease = () => runtimeRelease.mockRestore();
 
-      const creationAdmitted = await creationAdmission.admit("embedded");
-      const creationCaller = createAdmittedGatewayToolCallerIdentity({
-        admittedRunContext: creationAdmitted,
-        agentId: "main",
-        sessionKey: parentKey,
-      });
-      const creationGuard = await withGatewayToolCallerIdentity(creationCaller, () =>
-        captureAgentToolSourceExecutionGuard(),
-      );
-      const createdInputEntered = createDeferred<UserTurnTranscriptRecorder>();
-      dispatchInboundMessageMock.mockReset().mockImplementation((args) => {
-        createdInputEntered.resolve(
-          expectDefined(args.replyOptions?.userTurnTranscriptRecorder, "created input recorder"),
-        );
-        return releaseExecution.promise.then(() => ({
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        }));
-      });
-      const created = await withPluginRuntimeGatewayRequestScope(
-        { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
-        () =>
-          withGatewayToolCallerIdentity(creationCaller, () =>
-            expectDefined(createSessionsCreateTool(), "creation tool").execute(
-              "create-retirement",
-              { message: "Continue independently" },
-            ),
-          ),
-      );
-      expect(created.details).toMatchObject({
-        runStarted: true,
-        sessionKey: expect.any(String),
-        sessionId: expect.any(String),
-      });
-      const createdReceipt = created.details as { sessionKey: string; sessionId: string };
-      const createdScope = {
-        agentId: "main",
-        ...createdReceipt,
-        storePath: (await loadSessionEntryAsync(createdReceipt.sessionKey, { agentId: "main" }))
-          .storePath,
-      };
-      const createdRecorder = await withinTest(createdInputEntered.promise, signal);
-      createdWorkReleased = getSessionWorkAdmissionRelease({
-        scope: createdScope.storePath,
-        identities: [createdReceipt.sessionKey, createdReceipt.sessionId],
-      });
-      const createdPending = await listSessionPendingInputs(createdScope);
-      expect(createdPending).toMatchObject({ total: 1, items: [{ state: "queued" }] });
-      const createdRunId = expectDefined(createdPending.items[0], "created pending input").runId;
-      const createdAbortEntry = expectDefined(
-        context.chatAbortControllers.get(createdRunId),
-        "created input target",
-      );
-      const createdTranscript = sessionAccessor.loadTranscriptEventsSync(createdScope);
-      expect(createdAbortEntry.controller.signal.aborted).toBe(false);
-      expect(() => creationGuard()).not.toThrow();
-
-      // The synthetic agent source stays live as the control. Creation's real
-      // operator source retires with its Gateway; neither target is cancelled.
+      // Retire only the instance owner: parent authority and the child controller
+      // remain live, so neither full shutdown nor cancellation can explain refusal.
       expect(kernel.gatewayInstanceRuntime.isAvailable()).toBe(true);
       kernel.gatewayInstanceRuntime.close();
       expect(kernel.gatewayInstanceRuntime.isAvailable()).toBe(false);
       expect(() => guard()).not.toThrow();
-      expect(() => creationGuard()).toThrow("tool invocation authority is no longer active");
       expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
-      expect(context.chatAbortControllers.get(createdRunId)).toBe(createdAbortEntry);
-      expect(createdAbortEntry.controller.signal.aborted).toBe(false);
-      await expect(
-        Promise.resolve().then(() =>
-          expectDefined(
-            createdRecorder.withPendingInput,
-            "accepted creation input",
-          )(() => createdRecorder.persistApproved()),
-        ),
-      ).rejects.toThrow();
-      expect(createdRecorder.getAdmissionReceipt?.()).toBeUndefined();
       release();
-      await Promise.all([execution, createdWorkReleased]);
+      await execution;
 
       expect(accepted).toEqual(originalAck);
       expect(context.dedupe.get(`agent:${runId}`)).toMatchObject({
@@ -1064,12 +933,6 @@ describe("accepted input Gateway instance retirement", () => {
       });
       expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(transcript);
       expect(prepared.userTurn.recorder?.getAdmissionReceipt()).toBeUndefined();
-      expect(await listSessionPendingInputs(createdScope)).toEqual({
-        total: 1,
-        items: [{ ...createdPending.items[0], state: "interrupted" }],
-      });
-      expect(sessionAccessor.loadTranscriptEventsSync(createdScope)).toEqual(createdTranscript);
-      expect(createdAbortEntry.controller.signal.aborted).toBe(false);
       expect(agentCommandMock).not.toHaveBeenCalled();
       expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
       expect(context.chatAbortControllers.size).toBe(0);
@@ -1080,13 +943,10 @@ describe("accepted input Gateway instance retirement", () => {
       expect(() => guard()).not.toThrow();
     } finally {
       release();
-      await Promise.allSettled([dispatch, execution, createdWorkReleased]);
-      dispatchInboundMessageMock.mockReset();
+      await Promise.allSettled([dispatch, execution]);
       restoreRuntimeRelease?.();
       restoreExecution?.();
       admission.close();
-      creationAdmission.close();
-      operator.release();
       signal.removeEventListener("abort", release);
     }
   });

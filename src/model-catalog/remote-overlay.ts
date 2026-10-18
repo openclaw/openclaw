@@ -33,7 +33,6 @@ type RemoteModelCatalogMetadata = {
 export type ActiveRemoteModelCatalog = RemoteModelCatalogMetadata & {
   revision: string;
   providers: RemoteModelCatalogOverlay;
-  recommendations: Readonly<Record<string, readonly string[]>>;
   pricing: Readonly<Record<string, RemoteModelCatalogPrice>>;
   upstreamPricing: Readonly<Record<string, RemoteModelCatalogUpstreamPrice>>;
 };
@@ -44,7 +43,10 @@ const remoteCatalogScope = resolveGlobalSingleton(
   () => new AsyncLocalStorage<{ catalog: ActiveRemoteModelCatalog | null }>(),
 );
 
-function isCompatible(bundle: RemoteModelCatalogWireBundle): boolean {
+function isCompatible(bundle: RemoteModelCatalogWireBundle, bundledGeneratedAt: number): boolean {
+  if (bundle.generatedAt <= bundledGeneratedAt) {
+    return false;
+  }
   if (!bundle.minVersion) {
     return true;
   }
@@ -60,27 +62,14 @@ function selectCompatibleRemoteModelCatalog(
     return null;
   }
   const bundle = parseRemoteModelCatalogWireBundle(JSON.parse(stored.bundle_json));
-  if (!isCompatible(bundle)) {
+  if (!isCompatible(bundle, bundledGeneratedAt)) {
     return null;
   }
-  const recommendations = Object.fromEntries(
-    Object.entries(bundle.providers).map(([provider, catalog]) => [
-      provider,
-      catalog.recommendedModels ?? [],
-    ]),
-  );
-  // Bundled rows and prices supersede older downloads, but do not contain the
-  // hosted recommendations. Rank only currently served rows against those IDs.
-  const overlay =
-    bundle.generatedAt > bundledGeneratedAt
-      ? projectRemoteModelCatalog(bundle)
-      : { providers: {}, pricing: {}, upstreamPricing: {} };
   return freezeJsonSnapshot({
     sourceUrl: stored.source_url,
     generatedAt: bundle.generatedAt,
     revision: createHash("sha256").update(stored.bundle_json).digest("hex"),
-    recommendations,
-    ...overlay,
+    ...projectRemoteModelCatalog(bundle),
   });
 }
 
@@ -175,11 +164,7 @@ export async function readRemoteModelCatalogUpdate(
     bundledGeneratedAt,
   );
   context.admission.assertCurrent();
-  return snapshot &&
-    snapshot.generatedAt > bundledGeneratedAt &&
-    isRemoteCatalogSourceActive(config, snapshot.sourceUrl)
-    ? snapshot
-    : undefined;
+  return snapshot && isRemoteCatalogSourceActive(config, snapshot.sourceUrl) ? snapshot : undefined;
 }
 
 /** The prepared catalog owner commits this pair in the same turn as its rows. */
@@ -212,12 +197,4 @@ export function getRemoteModelCatalogProviderOverlay(
 ): ModelCatalogProvider | undefined {
   const providerId = normalizeProviderId(provider);
   return providerId ? getActiveRemoteModelCatalog(config)?.providers[providerId] : undefined;
-}
-
-export function getRemoteModelCatalogProviderRecommendations(
-  config: OpenClawConfig,
-  provider: string,
-): readonly string[] | undefined {
-  const providerId = normalizeProviderId(provider);
-  return providerId ? getActiveRemoteModelCatalog(config)?.recommendations[providerId] : undefined;
 }

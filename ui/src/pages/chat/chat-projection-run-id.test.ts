@@ -1,12 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { nothing, render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import * as chatThread from "./chat-thread.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import { ChatThread } from "./components/chat-thread-view.tsx";
+import { renderChatThread } from "./components/chat-thread.test-support.ts";
 import { threadProps } from "./components/chat-transcript.test-support.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 
@@ -49,34 +48,33 @@ describe("transcript run identity", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const transcript = createTestTranscript();
     onTestFinished(() => {
-      view.unmount();
+      render(nothing, container);
       transcript.hostDisconnected();
       container.remove();
     });
-    const view = mountSolid(
-      () =>
-        createComponent(ChatThread, {
-          props: {
-            ...threadProps("run-id-projection"),
-            sessions: {
-              ts: 0,
-              path: "",
-              count: 1,
-              defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-              sessions: [
-                {
-                  key: "agent:main:main",
-                  kind: "direct",
-                  updatedAt: 1,
-                  hasActiveRun: true,
-                  activeRunIds: ["arbitrary-first", "other-run"],
-                },
-              ],
-            },
+    render(
+      renderChatThread(
+        {
+          ...threadProps("run-id-projection"),
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                updatedAt: 1,
+                hasActiveRun: true,
+                activeRunIds: ["arbitrary-first", "other-run"],
+              },
+            ],
           },
-          transcript,
-        }),
-      { container },
+        },
+        transcript,
+      ),
+      container,
     );
     flush();
     transcript.hostConnected();

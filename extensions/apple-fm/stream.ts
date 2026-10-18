@@ -23,7 +23,9 @@ export function createAppleFmStream(native: Pick<AppleFmNative, "run">): StreamF
     void (async () => {
       try {
         options?.signal?.throwIfAborted();
-        const responseFormat = options?.responseFormat;
+        const responseFormat = options?.responseFormat
+          ? structuredClone(options.responseFormat)
+          : undefined;
         const request = {
           systemPrompt: context.systemPrompt,
           messages: context.messages,

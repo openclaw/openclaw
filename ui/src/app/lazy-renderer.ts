@@ -1,31 +1,34 @@
-import { createSignal } from "solid-js";
+import type { ReactiveControllerHost } from "lit";
 
-export type LazyRenderer<Renderer> = ReturnType<typeof createLazyRenderer<Renderer>>;
+export class LazyRenderer<Renderer> {
+  renderer: Renderer | null = null;
+  failed = false;
+  private pending: Promise<void> | null = null;
 
-/** A shell-owned lazy view publishes only to its own rendering consumers. */
-export function createLazyRenderer<Renderer>(importRenderer: () => Promise<Renderer>) {
-  const [renderer, setRenderer] = createSignal<Renderer | null>(null);
-  const [failed, setFailed] = createSignal(false);
-  let pending: Promise<void> | null = null;
+  constructor(
+    private readonly host: Pick<ReactiveControllerHost, "requestUpdate">,
+    private readonly importRenderer: () => Promise<Renderer>,
+  ) {}
 
-  const load = () => {
-    pending ??= importRenderer()
-      .then((value) => {
-        setRenderer(() => value);
-        setFailed(false);
+  load(): void {
+    this.pending ??= this.importRenderer()
+      .then((renderer) => {
+        this.renderer = renderer;
+        this.failed = false;
+        this.host.requestUpdate();
       })
       .catch(() => {
-        pending = null;
-        setFailed(true);
+        this.failed = true;
+        this.pending = null;
+        this.host.requestUpdate();
       });
-  };
-  return {
-    renderer,
-    failed,
-    load,
-    retry() {
-      setFailed(false);
-      load();
-    },
-  };
+  }
+
+  retry(): void {
+    if (this.failed) {
+      this.failed = false;
+      this.host.requestUpdate();
+    }
+    this.load();
+  }
 }

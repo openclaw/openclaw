@@ -20,13 +20,13 @@ struct QuickChatCatalogPresentationTests {
             let presentation = QuickChatPresentationTests()
             try await presentation.checkConversationDisclosurePreservesOneComposerAndItsDraft()
             try await presentation.checkShortcutPresentsAnEditorWithoutRequiringForegroundOwnership()
-            try await self.checkRestrictedOperatorModelPolicyRetiresRenderedChoices()
+            try await self.checkRestrictedOperatorModelPolicyRetiresRenderedChoicesAndOpenMenu()
         }
     }
 
     private func checkRenderedPickerUsesCatalogAvailabilityReasoningAndSpeed() async throws {
         let application = AppKitTestSupport.application
-        #expect(AppKitTestSupport.hasAccessoryActivationPolicy)
+        #expect(AppKitTestSupport.didSetActivationPolicy)
         if ProcessInfo.processInfo.environment["OPENCLAW_TEST_QUICKCHAT_APPEARANCE"] == "dark" {
             application.appearance = NSAppearance(named: .darkAqua)
         }
@@ -136,7 +136,7 @@ struct QuickChatCatalogPresentationTests {
         }
     }
 
-    private func checkRestrictedOperatorModelPolicyRetiresRenderedChoices() async throws {
+    private func checkRestrictedOperatorModelPolicyRetiresRenderedChoicesAndOpenMenu() async throws {
         let application = AppKitTestSupport.application
         let appearance = application.appearance
         defer { application.appearance = appearance }
@@ -197,7 +197,14 @@ struct QuickChatCatalogPresentationTests {
 
             let held = AsyncTestGate()
             let invalidate = try await fixture.prepareModelChange(.holding, onHeldRead: { held.open() })
-            invalidate()
+            button = try await self.waitForModelButton(in: panel, value: model.modelControlLabel)
+            try AppKitTestSupport.pointAtModelButton(button, in: panel)
+            try await AppKitTestSupport.openMenu(
+                button, in: panel, waitForDismissal: true, requireCompositedPopup: true)
+            { menu in
+                try AppKitTestSupport.record(menu: menu, content: content, name: "guest-model-open")
+                invalidate()
+            }
             await held.wait()
             try Task.checkCancellation()
             await fixture.releaseHeldCatalog()

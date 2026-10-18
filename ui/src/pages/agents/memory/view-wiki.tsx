@@ -1,12 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show, untrack } from "solid-js";
 import "../../../components/modal-dialog.ts";
 import { i18n } from "../../../i18n/index.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { WikiImportInsights, WikiOverview } from "./dreaming.ts";
 import { DiaryEmpty, DreamingAction, formatCompactDateTime } from "./view-shared.tsx";
-import type { DreamingProps } from "./view-types.ts";
+import type { DreamingProps, DreamingViewState } from "./view-types.ts";
 
 function formatWikiCount(
   kind: "page" | "claimRow" | "openQuestion" | "contradiction",
@@ -64,12 +65,57 @@ function formatWikiOverviewClusterSummary(cluster: WikiOverview["clusters"][numb
   return parts.join(" · ");
 }
 
+function toggleExpandedCard(bucket: Set<string>, key: string, onChange: () => void): void {
+  if (bucket.has(key)) {
+    bucket.delete(key);
+  } else {
+    bucket.add(key);
+  }
+  onChange();
+}
+
+async function openWikiPreview(lookup: string, props: DreamingProps): Promise<void> {
+  const state = untrack(() => props.viewState);
+  const request: NonNullable<DreamingViewState["wikiPreview"]> = {
+    page: { title: pathDisplayName(lookup), path: lookup, content: "" },
+    loading: true,
+    error: null,
+  };
+  state.wikiPreview = request;
+  props.onViewStateChange();
+  try {
+    const preview = await props.onOpenWikiPage(lookup);
+    if (state.wikiPreview !== request) {
+      return;
+    }
+    if (!preview) {
+      request.error = t("dreaming.wiki.pageNotFound", { lookup });
+      return;
+    }
+    request.page = { ...preview };
+  } catch (error) {
+    if (state.wikiPreview === request) {
+      request.error = formatUiError(error);
+    }
+  } finally {
+    if (state.wikiPreview === request) {
+      request.loading = false;
+      props.onViewStateChange();
+    }
+  }
+}
+
+function closeWikiPreview(props: DreamingProps): void {
+  props.viewState.wikiPreview = null;
+  props.onViewStateChange();
+}
+
 export function renderWikiPreviewOverlay(props: DreamingProps) {
-  const preview = createMemo(() => props.wikiPreview?.request);
+  const preview = createMemo(() => props.viewState.wikiPreview);
   return (
     <Show when={preview()} keyed>
       {(request) => {
-        const current = () => props.wikiPreview ?? request;
+        const current = () => props.viewState.wikiPreview ?? request;
         const updatedAtLabel = () => {
           const updatedAt = current().page.updatedAt;
           return updatedAt ? ` · ${formatCompactDateTime(updatedAt)}` : "";
@@ -78,7 +124,7 @@ export function renderWikiPreviewOverlay(props: DreamingProps) {
           <openclaw-modal-dialog
             label={current().page.title || t("dreaming.wiki.previewFallbackTitle")}
             style="--openclaw-modal-width: 1120px"
-            onModal-cancel={() => props.onCloseWikiPreview()}
+            onModal-cancel={() => closeWikiPreview(props)}
           >
             <div class="dreams-diary__preview-panel">
               <div class="dreams-diary__preview-header">
@@ -90,6 +136,13 @@ export function renderWikiPreviewOverlay(props: DreamingProps) {
                     {current().page.path} {updatedAtLabel()}
                   </div>
                 </div>
+                <button
+                  type="button"
+                  class="btn btn--subtle btn--sm"
+                  onClick={() => closeWikiPreview(props)}
+                >
+                  {t("dreaming.wiki.close")}
+                </button>
               </div>
               <div class="dreams-diary__preview-body">
                 {current().loading ? (
@@ -111,15 +164,6 @@ export function renderWikiPreviewOverlay(props: DreamingProps) {
                   </>
                 )}
               </div>
-              <openclaw-modal-actions class="dreams-diary__preview-footer">
-                <button
-                  type="button"
-                  class="btn btn--subtle btn--sm"
-                  onClick={() => props.onCloseWikiPreview()}
-                >
-                  {t("dreaming.wiki.close")}
-                </button>
-              </openclaw-modal-actions>
             </div>
           </openclaw-modal-dialog>
         );
@@ -214,18 +258,12 @@ function renderWikiInsightBody(card: WikiInsightCard, expanded: boolean) {
 }
 
 function WikiInsightCard(props: { owner: DreamingProps; card: WikiInsightCard }) {
-  const owner = () => props.owner;
+  const owner = untrack(() => props.owner);
+  const state = untrack(() => owner.viewState);
   const item = () => props.card.item;
-  const expandedBucket = () =>
-    props.card.kind === "import" ? "expandedInsightCards" : "expandedWikiCards";
-  const expanded = createMemo(() => owner().viewState[expandedBucket()][item().pagePath] === true);
-  const toggleExpanded = () => {
-    const bucket = expandedBucket();
-    const key = item().pagePath;
-    owner().onViewStateChange((draft) => {
-      draft[bucket][key] = !draft[bucket][key];
-    });
-  };
+  const expandedCards = () =>
+    props.card.kind === "import" ? state.expandedInsightCards : state.expandedWikiCards;
+  const expanded = createMemo(() => expandedCards().has(item().pagePath));
   const badgeClass = () => {
     const card = props.card;
     return card.kind === "import" ? card.item.riskLevel : "wiki";
@@ -256,10 +294,10 @@ function WikiInsightCard(props: { owner: DreamingProps; card: WikiInsightCard })
       onClick={() => {
         const card = props.card;
         if (card.kind === "wiki" && card.item.kind === "report") {
-          void owner().onOpenWikiPage(card.item.pagePath);
+          void openWikiPreview(card.item.pagePath, owner);
           return;
         }
-        toggleExpanded();
+        toggleExpandedCard(expandedCards(), item().pagePath, owner.onViewStateChange);
       }}
     >
       <div class="dreams-diary__insight-topline">
@@ -281,7 +319,7 @@ function WikiInsightCard(props: { owner: DreamingProps; card: WikiInsightCard })
           disabled={false}
           onClick={(event) => {
             event.stopPropagation();
-            toggleExpanded();
+            toggleExpandedCard(expandedCards(), item().pagePath, owner.onViewStateChange);
           }}
         />
         <DreamingAction
@@ -293,7 +331,7 @@ function WikiInsightCard(props: { owner: DreamingProps; card: WikiInsightCard })
           disabled={false}
           onClick={(event) => {
             event.stopPropagation();
-            void owner().onOpenWikiPage(item().pagePath);
+            void openWikiPreview(item().pagePath, owner);
           }}
         />
       </div>

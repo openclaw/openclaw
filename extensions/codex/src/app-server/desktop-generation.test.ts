@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readMacOSDesktopGenerationFingerprint } from "./desktop-generation-fingerprint.js";
+import {
+  readMacOSDesktopGenerationFingerprint,
+  resolveMacOSDesktopGenerationWatchPaths,
+} from "./desktop-generation-fingerprint.js";
 import { createCodexDesktopGenerationOwner } from "./desktop-generation-owner.js";
 
 describe("Codex desktop generation owner", () => {
@@ -52,14 +55,31 @@ describe("Codex desktop generation owner", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 
-  it("settles a replaced desktop bundle as a new generation", async () => {
-    await withTempDir("openclaw-codex-generation-replacement-", async (root) => {
+  it.each([
+    "plugins/openai-bundled/plugins/unified-computer-use",
+    "cua_node/lib/node_modules/@oai/cua-repl",
+  ])("settles same-version %s content changes as a new generation", async (artifactRelative) => {
+    await withTempDir("openclaw-codex-generation-plugin-fingerprint-", async (root) => {
       const chatGpt = candidate(root, "ChatGPT.app");
-      await writeCommand(chatGpt.appServerCommandPath, "chatgpt-x");
+      const pluginRoot = path.join(
+        chatGpt.appBundlePath,
+        "Contents",
+        "Resources",
+        artifactRelative,
+      );
+      const pluginName = path.basename(pluginRoot);
+      await Promise.all([
+        writeCommand(chatGpt.appServerCommandPath, "chatgpt-x"),
+        fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true }),
+      ]);
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        JSON.stringify({ name: pluginName, version: "1.0.0" }),
+      );
+      await fs.writeFile(path.join(pluginRoot, ".mcp.json"), "plugin-content-x");
       const initialFingerprint = await readMacOSDesktopGenerationFingerprint([chatGpt]);
 
-      await fs.rename(chatGpt.appBundlePath, `${chatGpt.appBundlePath}.previous`);
-      await writeCommand(chatGpt.appServerCommandPath, "chatgpt-y");
+      await fs.writeFile(path.join(pluginRoot, ".mcp.json"), "plugin-content-y");
       const updatedFingerprint = await readMacOSDesktopGenerationFingerprint([chatGpt]);
       expect(updatedFingerprint).not.toBe(initialFingerprint);
 
@@ -80,6 +100,14 @@ describe("Codex desktop generation owner", () => {
 
       await expect(updated).resolves.toMatchObject({ epoch: 2 });
     });
+  });
+
+  it("watches stable application roots for recursive artifact updates", () => {
+    const fixture = candidate("/Applications", "ChatGPT.app");
+    expect(resolveMacOSDesktopGenerationWatchPaths([fixture])).toEqual([
+      "/Applications",
+      fixture.appBundlePath,
+    ]);
   });
 });
 

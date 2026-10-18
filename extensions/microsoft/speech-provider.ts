@@ -164,8 +164,6 @@ async function listMicrosoftVoices(
 }
 
 export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
-  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
-    readMicrosoftProviderConfig(providerConfig).enabled;
   return {
     id: "microsoft",
     label: "Microsoft",
@@ -200,9 +198,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
       return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);
     },
-    // Retained for synchronous SDK consumers through 2026-12-31.
-    isConfigured,
-    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    isConfigured: ({ providerConfig }) => readMicrosoftProviderConfig(providerConfig).enabled,
     synthesize: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig);
       const { isVoiceMessageCompatibleAudio } = await import("openclaw/plugin-sdk/media-runtime");

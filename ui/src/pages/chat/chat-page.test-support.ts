@@ -8,6 +8,7 @@ import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { createGatewayHarness } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
+import { ChatPageState } from "./chat-page-state.ts";
 import type { ChatPage } from "./chat-page.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
@@ -137,6 +138,11 @@ export function createSplitLayout(sessionKey: string): ChatSplitLayout {
   return insertPane(singlePane, "p1", sessionKey, "right");
 }
 
+export function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
+  (ChatPageState.forHost(page) as unknown as { layout: ChatSplitLayout | undefined }).layout =
+    layout;
+}
+
 export function stubMatchMedia(matches: boolean) {
   vi.stubGlobal(
     "matchMedia",
@@ -178,7 +184,9 @@ export function createChatPageStateContext() {
 
 /** Settles the bridge and the page-owned Solid projection without a browser timer. */
 export async function settleChatPage(page: ChatPage): Promise<void> {
+  const state = ChatPageState.forHost(page);
   await page.updateComplete;
+  await state.updateComplete;
   flush();
   await Promise.resolve();
   flush();

@@ -3,9 +3,7 @@ import { normalizeStringifiedEntries } from "openclaw/plugin-sdk/string-coerce-r
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
-import { withMatrixSendCurrentness } from "../sdk/send-currentness.js";
 import { isMatrixInviteAutoJoinTarget } from "../target-ids.js";
-import { getMatrixMonitorTaskSignal } from "./task-runner.js";
 
 export function registerMatrixAutoJoin(params: {
   client: MatrixClient;
@@ -78,12 +76,8 @@ export function registerMatrixAutoJoin(params: {
   // Handle invites directly so both "always" and "allowlist" modes share the same path.
   const onInvite = (roomId: string, _inviteEvent: unknown) => {
     void params.runDetachedTask(`auto-join invite handler room=${roomId}`, async () => {
-      const monitorSignal = getMatrixMonitorTaskSignal();
       if (autoJoin === "allowlist") {
         const allowedAliasRoomIds = await resolveAllowedAliasRoomIds();
-        if (monitorSignal?.aborted) {
-          return;
-        }
         const allowed =
           autoJoinAllowlist.has("*") ||
           allowedRoomIds.has(roomId) ||
@@ -95,23 +89,10 @@ export function registerMatrixAutoJoin(params: {
         }
       }
 
-      if (monitorSignal?.aborted) {
-        return;
-      }
-
       try {
-        await withMatrixSendCurrentness(
-          client,
-          () => {
-            monitorSignal?.throwIfAborted();
-          },
-          () => client.joinRoom(roomId),
-        );
+        await client.joinRoom(roomId);
         logVerbose(`matrix: joined room ${roomId}`);
       } catch (err) {
-        if (monitorSignal?.aborted) {
-          return;
-        }
         runtime.error?.(`matrix: failed to join room ${roomId}: ${String(err)}`);
       }
     });

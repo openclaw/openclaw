@@ -1,6 +1,6 @@
 /** Finalize one run result, confirm its notification, then commit its destination conversation. */
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
@@ -12,6 +12,7 @@ import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import type { CronResolvedDeliveryState } from "../types.js";
 import {
   logCronDeliveryWarn,
+  normalizeSilentReplyText,
   resolveDescendantSubagentFollowup,
   resolveDirectCronDeliveryGeneration,
   resolveStaleCronDeliveryError,
@@ -25,6 +26,7 @@ import { normalizeDirectCronDeliveryPayloads } from "./delivery-payload-normaliz
 import { requiresExternalCronDelivery } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
+import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 const followup = createLazyImportLoader(() => import("./subagent-followup.runtime.js"));
 const conversationResult = createLazyImportLoader(() => import("../conversation-result.js"));
@@ -60,12 +62,7 @@ export async function dispatchCronDelivery(
     synthesizedText = text;
     outputText = synthesizedText;
     summary = pickSummaryFromOutput(synthesizedText) ?? summary;
-    deliveryPayloads = [
-      ...deliveryPayloads.filter((payload) =>
-        hasOutboundReplyContent({ ...payload, text: undefined }, { trimText: true }),
-      ),
-      { text: synthesizedText },
-    ];
+    deliveryPayloads = [{ text: synthesizedText }];
   };
   const finish = async (
     disposition?: CronDeliveryDisposition,
@@ -125,7 +122,7 @@ export async function dispatchCronDelivery(
         timeoutMs: params.timeoutMs,
         abortSignal: params.abortSignal,
       });
-      if ((!child?.reply && child?.disposition !== "silent") || params.isAborted()) {
+      if (!child?.reply || params.isAborted()) {
         return finish({
           kind: "error",
           error: params.isAborted()
@@ -136,7 +133,7 @@ export async function dispatchCronDelivery(
           delivered: false,
         });
       }
-      if (child?.reply) {
+      if (!isSilentReplyText(child.reply, SILENT_REPLY_TOKEN)) {
         adoptChild(child.reply);
       }
     }
@@ -165,7 +162,7 @@ export async function dispatchCronDelivery(
     return failTarget(params.resolvedDelivery.error.message);
   }
   if (!sentByTool && (synthesizedText || params.spawnOnlyHandoff)) {
-    const initial = synthesizedText ?? "";
+    const initial = synthesizedText?.trim() ?? "";
     const child = await resolveDescendantSubagentFollowup({
       sessionKey: params.runSessionKey,
       runStartedAt: params.runStartedAt,
@@ -175,21 +172,10 @@ export async function dispatchCronDelivery(
       initialSynthesizedText: initial,
       abortSignal: params.abortSignal,
     });
-    if (child.finalDisposition === "silent") {
-      deliveryPayloads = deliveryPayloads.filter((payload) =>
-        hasOutboundReplyContent({ ...payload, text: undefined }, { trimText: true }),
-      );
-      synthesizedText = outputText = summary = undefined;
-      if (deliveryPayloads.length === 0) {
-        deliveryAttempted = true;
-        record("not-delivered", undefined, "silent");
-        return finish({ kind: "suppressed" });
-      }
-    }
     if (child.finalReply) {
       adoptChild(child.finalReply);
     }
-    if (params.spawnOnlyHandoff && !synthesizedText?.trim() && deliveryPayloads.length === 0) {
+    if (params.spawnOnlyHandoff && !synthesizedText?.trim()) {
       deliveryAttempted = true;
       return finish({
         kind: "error",
@@ -201,7 +187,13 @@ export async function dispatchCronDelivery(
         delivered: false,
       });
     }
-    if (!params.deliveryBestEffort && child.hasUnsettledDescendants) {
+    if (
+      (!params.deliveryBestEffort && child.hasUnsettledDescendants) ||
+      (child.hadDescendants &&
+        synthesizedText?.trim() === initial &&
+        isLikelyInterimCronMessage(initial) &&
+        !isSilentReplyText(initial, SILENT_REPLY_TOKEN))
+    ) {
       deliveryAttempted = true;
       record(
         "not-delivered",
@@ -234,6 +226,8 @@ export async function dispatchCronDelivery(
     return finish(sentByTool ? undefined : { kind: "suppressed" });
   }
   deliveryPayloads = normalized.payload;
+  const finalText = normalizeSilentReplyText(synthesizedText);
+  synthesizedText = finalText.strippedTrailingSilentToken ? undefined : finalText.text;
   if (synthesizedText) {
     outputText = synthesizedText;
   }

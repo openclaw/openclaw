@@ -29,34 +29,23 @@ export function attachBrokerNativeResource(
   let initializedOwner = false;
   let closed = false;
   let failure: Error | undefined;
-  let transportLost = false;
   let closing: { id: number; completion: Deferred } | undefined;
-  const recordFailure = (error: Error) => {
-    if (closed) {
+  const lose = (error: Error) => {
+    if (closed || failure) {
       return;
     }
-    const firstFailure = failure === undefined;
-    failure ??= error;
+    failure = error;
     clearTimeout(retryTimer);
     clearTimeout(startupTimer);
     initialized.reject(error);
     closing?.completion.reject(error);
     closing = undefined;
     target.close();
-    if (firstFailure) {
-      fail(error);
-    }
-  };
-  const lose = (error: Error) => {
-    if (closed || transportLost) {
-      return;
-    }
-    transportLost = true;
-    recordFailure(error);
     transport?.close();
+    fail(error);
   };
-  const transmit = async (message: BrokerResourceRequest, cleanup = false) => {
-    if (failure && (!cleanup || transportLost)) {
+  const transmit = async (message: BrokerResourceRequest) => {
+    if (failure) {
       throw failure;
     }
     if (!transport || closed) {
@@ -103,10 +92,7 @@ export function attachBrokerNativeResource(
         );
       }
     } else if (response.type === "resource-failed") {
-      // A failed factory or operation still has a broker-owned close obligation.
-      recordFailure(
-        toErrorObject(decodeNativeWorkerFailure(response.error), "Native resource failed"),
-      );
+      lose(toErrorObject(decodeNativeWorkerFailure(response.error), "Native resource failed"));
     }
   };
   const start = () => {
@@ -122,7 +108,7 @@ export function attachBrokerNativeResource(
     transport = createBrokerResourceSocket(candidate, {
       message: receive,
       close(error) {
-        if (closed || transportLost) {
+        if (closed || failure) {
           return;
         }
         if (
@@ -157,15 +143,9 @@ export function attachBrokerNativeResource(
           Math.max(0, attachment.startupDeadline - spawnBrokerStartupNowMs()),
         );
   start();
-  const assertCleanupAvailable = () => {
-    if (transportLost && failure) {
+  const assertAvailable = () => {
+    if (failure) {
       throw failure;
-    }
-  };
-  const failDelivery = (error: unknown, message: string) => {
-    const cause = toErrorObject(error, message);
-    if (cause !== failure) {
-      lose(cause);
     }
   };
   // Keep the target's original port queue until the factory has installed its real receiver.
@@ -173,7 +153,7 @@ export function attachBrokerNativeResource(
     () => {
       target.on("message", (value: unknown) => {
         void transmit({ type: "resource-target", id: attachment.id, value }).catch(
-          (error: unknown) => failDelivery(error, "Native resource input delivery failed"),
+          (error: unknown) => lose(toErrorObject(error, "Native resource input delivery failed")),
         );
       });
     },
@@ -182,36 +162,29 @@ export function attachBrokerNativeResource(
   return {
     ownerMessage(value: unknown, sequence: number) {
       void initialized.promise
-        .then(() => transmit({ type: "resource-owner", id: attachment.id, sequence, value }, true))
-        .catch((error: unknown) => failDelivery(error, "Native resource owner delivery failed"));
+        .then(() => transmit({ type: "resource-owner", id: attachment.id, sequence, value }))
+        .catch((error: unknown) =>
+          lose(toErrorObject(error, "Native resource owner delivery failed")),
+        );
     },
     async close() {
       if (closed) {
         return;
       }
-      assertCleanupAvailable();
+      assertAvailable();
       if (!initializedOwner) {
-        try {
-          await initialized.promise;
-        } catch (error) {
-          if (!ready || transportLost) {
-            throw error;
-          }
-        }
+        await initialized.promise;
       }
       if (closed) {
         return;
       }
-      assertCleanupAvailable();
+      assertAvailable();
       const pending = closing ?? { id: ++closeSequence, completion: createDeferredCore() };
       if (!closing) {
         closing = pending;
         void pending.completion.promise.catch(() => {});
-        void transmit(
-          { type: "resource-close", id: attachment.id, requestId: pending.id },
-          true,
-        ).catch((error: unknown) =>
-          lose(toErrorObject(error, "Native resource close delivery failed")),
+        void transmit({ type: "resource-close", id: attachment.id, requestId: pending.id }).catch(
+          (error: unknown) => lose(toErrorObject(error, "Native resource close delivery failed")),
         );
       }
       await pending.completion.promise;

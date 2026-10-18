@@ -1,3 +1,5 @@
+import { html } from "lit";
+import { styleMap } from "lit/directives/style-map.js";
 import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 // The icon owns its CSS so composer and transcript call sites cannot render it unstyled.
@@ -248,15 +250,13 @@ function fileIconAssetPath(path: string): string {
   return inferControlUiPublicAssetPath(`file-icons/${path}.svg`);
 }
 
-export type AttachmentFileIconOptions = {
+export function renderAttachmentFileIcon(options: {
   filename: string;
   mimeType?: string;
   mode: AttachmentFileVisualMode;
   unavailable?: boolean;
   loading?: boolean;
-};
-
-export function prepareAttachmentFileIcon(options: AttachmentFileIconOptions) {
+}) {
   const resolved = resolveAttachmentFileIcon(options.filename, options.mimeType);
   const large = options.mode === "large-placeholder";
   const size = large ? "44px" : "20px";
@@ -268,16 +268,22 @@ export function prepareAttachmentFileIcon(options: AttachmentFileIconOptions) {
           ? `compact/${theme}/${resolved.compact}`
           : `compact/unknown-${theme}`,
     );
-  return {
-    family: resolved.family,
-    large,
-    style: {
+  return html`<span
+    class="chat-attachment-file-icon ${
+      options.unavailable ? "chat-attachment-file-icon--unavailable" : ""
+    } ${options.loading ? "skeleton" : ""}"
+    data-family=${resolved.family}
+    data-mode=${options.mode}
+    aria-hidden="true"
+    style=${styleMap({
       width: size,
       height: size,
       "--chat-file-icon-light": `url("${assetPath("light")}")`,
       "--chat-file-icon-dark": `url("${assetPath("dark")}")`,
       "--chat-file-icon-overlay": `url("${fileIconAssetPath(`overlays/${resolved.family}`)}")`,
       "--chat-file-icon-accent": resolved.accent,
-    },
-  };
+    })}
+  >
+    ${large ? html`<span class="chat-attachment-file-icon__overlay"></span>` : null}
+  </span>`;
 }

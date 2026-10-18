@@ -1,5 +1,4 @@
 /** Best-effort shared-state registry for adopted upstream sessions. */
-import { getOrLoadSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
@@ -13,7 +12,6 @@ import {
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import {
-  emptyWatchedSessionUpstreamLinksAdmission,
   upsertSessionUpstreamLinkInDatabase,
   deleteSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
@@ -25,7 +23,7 @@ export type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
 const log = createSubsystemLogger("sessions/upstream-links");
 
-/** @deprecated Await upsertSessionUpstreamLinkAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await upsertSessionUpstreamLinkAsync. Retained during stable deprecation. */
 export function upsertSessionUpstreamLink(
   input: SessionUpstreamLinkInput,
   options: OpenClawStateDatabaseOptions & {
@@ -55,7 +53,7 @@ export function upsertSessionUpstreamLink(
   }
 }
 
-/** @deprecated Await deleteSessionUpstreamLinkAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await deleteSessionUpstreamLinkAsync. Retained during stable deprecation. */
 export function deleteSessionUpstreamLink(
   sessionKey: string,
   agentId: string,
@@ -180,17 +178,7 @@ export async function listWatchedSessionUpstreamLinks(
 ): Promise<Map<string, SessionUpstreamLink[]>> {
   const grouped = new Map<string, SessionUpstreamLink[]>();
   try {
-    const context = captureOpenClawStateWorkerContext(options);
-    if (
-      getOrLoadSqliteDatabaseAdmissionForPath(
-        context.admission.databasePath,
-        emptyWatchedSessionUpstreamLinksAdmission,
-        () => undefined,
-      )
-    ) {
-      return grouped;
-    }
-    const links = await executeOpenClawStateWorker(context, {
+    const links = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
       type: "sessionUpstream.listWatched",
       input: undefined,
     });

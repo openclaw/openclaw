@@ -207,6 +207,7 @@ export function recoverCronJobInDatabase(
       runningAtMs,
       preservedOccurrenceAtMs,
       nowMs,
+      deferredNotifications: notifications,
     });
     if (job.enabled && job.state.nextRunAtMs === undefined) {
       recomputeJobNextRunAtMs({ state, job, nowMs, deferredNotifications: notifications });

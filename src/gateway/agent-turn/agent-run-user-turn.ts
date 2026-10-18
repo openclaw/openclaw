@@ -12,7 +12,6 @@ import {
 } from "../../agents/bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../../agents/bash-tools.exec-types.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deleteMediaBuffer } from "../../media/store.js";
@@ -57,8 +56,6 @@ import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.
 
 export type PreparedAgentRunUserTurn = {
   privateCompletion?: true;
-  /** Trusted input-owner policy; not accepted from the wire request. */
-  replyExpectation?: ReplyExpectation;
   bashElevated?: ExecElevatedDefaults;
   claimedExecApprovalFollowupHandoffId?: string;
   execApprovalFollowupHandoffClaimId: string;
@@ -142,7 +139,6 @@ export async function prepareAgentRunUserTurn(params: {
   onUserTurnMediaPersisted: () => void;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
-  replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
   abortSignal?: AbortSignal;
   getAbortStopReason?: () => string;
@@ -239,7 +235,6 @@ export async function prepareAgentRunUserTurn(params: {
         "Private completion requires an exact internal requester turn with delivery disabled",
       );
     }
-    const trackRequesterCompletion = params.privateCompletion || settleWakeReplay !== undefined;
     const suppressPromptPersistence =
       !params.privateCompletion &&
       (params.requestedPromptPersistenceSuppression ||
@@ -304,7 +299,8 @@ export async function prepareAgentRunUserTurn(params: {
         };
       }
       recorder = createUserTurnTranscriptRecorder({
-        trackInputCompletion: trackRequesterCompletion || peerDelivery !== undefined,
+        trackInputCompletion:
+          params.privateCompletion || settleWakeReplay !== undefined || peerDelivery !== undefined,
         ...(peerMessage ? { message: peerMessage } : {}),
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
@@ -372,7 +368,7 @@ export async function prepareAgentRunUserTurn(params: {
     }
 
     let releaseProcessingAbortObserver: (() => void) | undefined;
-    if (trackRequesterCompletion && recorder && !recorder.getProcessingCompletion?.()) {
+    if (params.privateCompletion && recorder && !recorder.getProcessingCompletion?.()) {
       const recordAbort = () => {
         const stopReason = params.getAbortStopReason?.() ?? "rpc";
         const settle = () => {
@@ -384,7 +380,7 @@ export async function prepareAgentRunUserTurn(params: {
             }),
           ).catch((error: unknown) => {
             params.context.logGateway.warn(
-              `requester input cancellation persistence failed: ${formatForLog(error)}`,
+              `private input cancellation persistence failed: ${formatForLog(error)}`,
             );
           });
         };
@@ -406,7 +402,6 @@ export async function prepareAgentRunUserTurn(params: {
     }
     return {
       ...(params.privateCompletion ? { privateCompletion: true as const } : {}),
-      replyExpectation: params.replyExpectation,
       ...(releaseProcessingAbortObserver ? { releaseProcessingAbortObserver } : {}),
       ...(execApprovalFollowupRuntimeHandoff?.bashElevated
         ? { bashElevated: execApprovalFollowupRuntimeHandoff.bashElevated }

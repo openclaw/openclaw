@@ -20,19 +20,9 @@ type Token = ReturnType<MarkdownItParser["parse"]>[number];
 
 const FENCE = "---";
 const BOM = "﻿";
+const KV_RE = /^([^:]+?)\s*:\s*(.+)$/;
 
 const md = new MarkdownIt({ html: true });
-
-export function parseMdItemKeyValue(text: string): AstItem["kv"] {
-  const match = /^([^:\r\n]+?)[ \t]*:\s*(.+)$/s.exec(text);
-  const value = match === null ? "" : expectDefined(match[2], "item value capture").trim();
-  return match === null || value === ""
-    ? undefined
-    : {
-        key: expectDefined(match[1], "item key capture").trim(),
-        value,
-      };
-}
 
 export function parseMd(raw: string): ParseResult {
   const diagnostics: Diagnostic[] = [];
@@ -48,14 +38,7 @@ export function parseMd(raw: string): ParseResult {
   const { preamble, blocks } = walkBlocks(tokens, bodyLines, bodyFileLine);
 
   return {
-    ast: {
-      kind: "md",
-      raw,
-      frontmatter: fm?.entries ?? [],
-      ...(fm === null ? {} : { frontmatterEndLine: fm.endLine + 1 }),
-      preamble,
-      blocks,
-    },
+    ast: { kind: "md", raw, frontmatter: fm?.entries ?? [], preamble, blocks },
     diagnostics,
   };
 }
@@ -183,12 +166,16 @@ function extractItems(tokens: readonly Token[], bodyFileLine: number): AstItem[]
         text = x.content;
       }
     }
-    const kv = parseMdItemKeyValue(text);
+    const kvMatch = KV_RE.exec(text);
+    const kvKey = kvMatch === null ? undefined : expectDefined(kvMatch[1], "item key capture");
+    const kvValue = kvMatch === null ? undefined : expectDefined(kvMatch[2], "item value capture");
     items.push({
       text,
-      slug: slugify(kv?.key ?? text),
+      slug: kvKey === undefined ? slugify(text) : slugify(kvKey),
       line: bodyFileLine + expectDefined(t.map.at(0), "list item token map start"),
-      ...(kv === undefined ? {} : { kv }),
+      ...(kvKey !== undefined && kvValue !== undefined
+        ? { kv: { key: kvKey.trim(), value: kvValue.trim() } }
+        : {}),
     });
   }
   return items;

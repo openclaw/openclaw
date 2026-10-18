@@ -25,30 +25,14 @@ import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migration
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 
-function auditRecord(key: string, value: string, ts = "2026-07-01T00:00:00.000Z") {
+function auditRecord(key: string, value: string) {
   return {
-    ts,
+    ts: "2026-07-01T00:00:00.000Z",
     source: "config-io",
     event: "config.write",
     argv: ["openclaw", "config", "set", key, value],
     execArgv: [],
   };
-}
-
-function detectAudit(stateDir: string) {
-  return detectLegacyAuditLogs({ stateDir, doctorOnlyStateMigrations: true });
-}
-
-function migrateAudit(stateDir: string) {
-  return migrateLegacyAuditLogs({ detected: detectAudit(stateDir), stateDir });
-}
-
-function auditEntries(stateDir: string, env = process.env) {
-  return createSqliteAuditRecordStore({
-    scope: CONFIG_AUDIT_SCOPE,
-    maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-  }).entries();
 }
 
 function withAuditState(run: (state: OpenClawTestState) => Promise<void>) {
@@ -132,8 +116,19 @@ describe("legacy audit portable backups", () => {
         const marker = "quarantined-audit-value-7f3c";
         await fs.mkdir(path.dirname(sourcePath), { recursive: true });
         await fs.writeFile(sourcePath, `${JSON.stringify(auditRecord("safe", "value"))}\n`);
-        await migrateAudit(state.stateDir);
-        expect(detectAudit(state.stateDir).hasLegacy).toBe(false);
+        await migrateLegacyAuditLogs({
+          detected: detectLegacyAuditLogs({
+            stateDir: state.stateDir,
+            doctorOnlyStateMigrations: true,
+          }),
+          stateDir: state.stateDir,
+        });
+        expect(
+          detectLegacyAuditLogs({
+            stateDir: state.stateDir,
+            doctorOnlyStateMigrations: true,
+          }).hasLegacy,
+        ).toBe(false);
         const sanitizedPath = `${sourcePath}.migrated`;
         const sanitizedBytes = await fs.readFile(sanitizedPath);
         let retainedPath = state.statePath(rawRelativePath);
@@ -203,7 +198,13 @@ describe("legacy audit portable backups", () => {
       const record = auditRecord("safe", "same");
       await fs.mkdir(path.dirname(sourcePath), { recursive: true });
       await fs.writeFile(sourcePath, `${JSON.stringify(record)}\n`);
-      await migrateAudit(state.stateDir);
+      await migrateLegacyAuditLogs({
+        detected: detectLegacyAuditLogs({
+          stateDir: state.stateDir,
+          doctorOnlyStateMigrations: true,
+        }),
+        stateDir: state.stateDir,
+      });
       await fs.appendFile(state.statePath(rawRelativePath), `${JSON.stringify(record)}\n`);
 
       const { databasePath: restoredDatabasePath } = await captureBackup(state, 25);
@@ -211,13 +212,20 @@ describe("legacy audit portable backups", () => {
 
       const restoredStateDir = path.dirname(path.dirname(restoredDatabasePath));
       try {
-        const restoredDetection = detectAudit(restoredStateDir);
+        const restoredDetection = detectLegacyAuditLogs({
+          stateDir: restoredStateDir,
+          doctorOnlyStateMigrations: true,
+        });
         expect(restoredDetection.hasLegacy).toBe(true);
         await migrateLegacyAuditLogs({
           detected: restoredDetection,
           stateDir: restoredStateDir,
         });
-        const restoredEntries = auditEntries(restoredStateDir);
+        const restoredEntries = createSqliteAuditRecordStore({
+          scope: CONFIG_AUDIT_SCOPE,
+          maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+          env: { ...process.env, OPENCLAW_STATE_DIR: restoredStateDir },
+        }).entries();
         expect(new Set(restoredEntries.map((entry) => entry.key)).size).toBe(2);
         expect(restoredEntries.map((entry) => entry.value)).toEqual([record, record]);
       } finally {
@@ -234,7 +242,13 @@ describe("backup legacy audit capture boundary", () => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "backup-audit-boundary-", scenario: "minimal" },
         async (state) => {
-          const record = auditRecord("safe", "preserved-audit-record");
+          const record = {
+            ts: "2026-07-01T00:00:00.000Z",
+            source: "config-io",
+            event: "config.write",
+            argv: ["openclaw", "config", "set", "safe", "preserved-audit-record"],
+            execArgv: [],
+          };
           await state.writeText("logs/config-audit.jsonl", `${JSON.stringify(record)}\n`);
           const originalSnapshot = backupSqliteSnapshot.createBackupSqliteSnapshotPlan;
           const realNow = Date.now.bind(Date);
@@ -247,7 +261,13 @@ describe("backup legacy audit capture boundary", () => {
               if (scenario === "lease-duration overrun") {
                 clock.mockImplementation(() => realNow() + 61_000);
               } else {
-                const migrated = await migrateAudit(state.stateDir);
+                const migrated = await migrateLegacyAuditLogs({
+                  detected: detectLegacyAuditLogs({
+                    stateDir: state.stateDir,
+                    doctorOnlyStateMigrations: true,
+                  }),
+                  stateDir: state.stateDir,
+                });
                 expect(migrated.warnings).toEqual([]);
               }
               try {
@@ -281,10 +301,20 @@ describe("backup legacy audit capture boundary", () => {
             );
             const restoredStateDir = path.join(restored.targetPath, stateAsset.archivePath);
             for (let attempt = 0; attempt < 2; attempt += 1) {
-              const migrated = await migrateAudit(restoredStateDir);
+              const migrated = await migrateLegacyAuditLogs({
+                detected: detectLegacyAuditLogs({
+                  stateDir: restoredStateDir,
+                  doctorOnlyStateMigrations: true,
+                }),
+                stateDir: restoredStateDir,
+              });
               expect(migrated.warnings).toEqual([]);
             }
-            const records = auditEntries(restoredStateDir, state.env);
+            const records = createSqliteAuditRecordStore({
+              scope: CONFIG_AUDIT_SCOPE,
+              maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+              env: { ...state.env, OPENCLAW_STATE_DIR: restoredStateDir },
+            }).entries();
             expect(records.map((entry) => entry.value)).toEqual([record]);
           } finally {
             clock.mockRestore();
@@ -304,7 +334,13 @@ describe("backup legacy audit capture boundary", () => {
         const outputPath = state.path("backup.tar.gz");
         await state.writeText(
           "logs/config-audit.jsonl",
-          `${JSON.stringify(auditRecord("safe", "initial"))}\n`,
+          `${JSON.stringify({
+            ts: "2026-07-01T00:00:00.000Z",
+            source: "config-io",
+            event: "config.write",
+            argv: ["openclaw", "config", "set", "safe", "initial"],
+            execArgv: [],
+          })}\n`,
         );
         const originalSnapshot = backupSqliteSnapshot.createBackupSqliteSnapshotPlan;
         let snapshotAttempts = 0;
@@ -314,7 +350,13 @@ describe("backup legacy audit capture boundary", () => {
             snapshotAttempts += 1;
             await fs.appendFile(
               sourcePath,
-              `${JSON.stringify(auditRecord("safe", `append-${snapshotAttempts}`, `2026-07-01T00:00:0${snapshotAttempts}.000Z`))}\n`,
+              `${JSON.stringify({
+                ts: `2026-07-01T00:00:0${snapshotAttempts}.000Z`,
+                source: "config-io",
+                event: "config.write",
+                argv: ["openclaw", "config", "set", "safe", `append-${snapshotAttempts}`],
+                execArgv: [],
+              })}\n`,
             );
             return await originalSnapshot(params);
           });

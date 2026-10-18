@@ -385,6 +385,16 @@ class WearSessionScopeTest {
   }
 
   @Test
+  fun identifiedOlderAbortCannotEndAnAnonymousReply() {
+    assertForeignTerminalPreservesLiveReply("aborted", activeRunId = null)
+  }
+
+  @Test
+  fun identifiedOlderErrorCannotEndAnAnonymousReply() {
+    assertForeignTerminalPreservesLiveReply("error", activeRunId = null)
+  }
+
+  @Test
   fun anonymousReplyFinalReconcilesWhenTheRunIsFirstIdentified() {
     val completed = WearChatMessage("completed", "assistant", "Finished reply", 2)
     val current = activeTerminalState(activeRunId = null)

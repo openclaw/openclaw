@@ -1,10 +1,6 @@
 import { MODEL_APIS } from "../config/types.models.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
-import {
-  readModelServingContextWindow,
-  type ModelServingContextLimit,
-} from "./model-serving-context.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 
 function isCatalogModelApi(
@@ -15,17 +11,9 @@ function isCatalogModelApi(
 
 /** Shared metadata projection; keep transport headers and authoring fields out of catalog entries. */
 export function modelCatalogRowToEntry(
-  row: Omit<ModelCatalogEntry, "api"> & {
-    api?: string;
-    servingContextLimit?: ModelServingContextLimit;
-  },
+  row: Omit<ModelCatalogEntry, "api"> & { api?: string },
 ): ModelCatalogEntry {
   const contextWindow = row.contextWindow ?? row.contextTokens;
-  const servingWindow = readModelServingContextWindow(row);
-  const contextTokens =
-    servingWindow === undefined
-      ? row.contextTokens
-      : Math.min(servingWindow, row.contextTokens ?? contextWindow ?? Infinity);
   return {
     id: row.id,
     name: row.name,
@@ -39,7 +27,7 @@ export function modelCatalogRowToEntry(
       ? { contextWindows: row.contextWindows.map((option) => ({ ...option })) }
       : {}),
     ...(row.contextWindowDefault ? { contextWindowDefault: row.contextWindowDefault } : {}),
-    ...(contextTokens !== undefined ? { contextTokens } : {}),
+    ...(row.contextTokens !== undefined ? { contextTokens: row.contextTokens } : {}),
     reasoning: row.reasoning,
     ...(row.thinkingLevelMap ? { thinkingLevelMap: { ...row.thinkingLevelMap } } : {}),
     ...(row.input ? { input: [...row.input] } : {}),

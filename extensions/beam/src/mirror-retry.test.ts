@@ -1,6 +1,6 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
-  createPluginStateKeyedStoreV2ForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -149,22 +149,18 @@ describe("Beam terminal retry policy", () => {
     const stateDir = tempDirs.make("beam-capacity-");
     const stateEnv: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: stateDir };
     resetPluginStateStoreForTests();
-    const keyedStore = createPluginStateKeyedStoreV2ForTests<BeamStoredSession>(
-      "beam-capacity",
-      {
-        namespace: "sessions",
-        maxEntries: BEAM_MAX_SESSIONS,
-        overflowPolicy: "evict-oldest",
-        defaultTtlMs: BEAM_RETENTION_MS,
-        env: stateEnv,
-      },
-      { assertCurrent() {} },
-    );
+    const keyedStore = createPluginStateKeyedStoreForTests<BeamStoredSession>("beam-capacity", {
+      namespace: "sessions",
+      maxEntries: BEAM_MAX_SESSIONS,
+      overflowPolicy: "evict-oldest",
+      defaultTtlMs: BEAM_RETENTION_MS,
+      env: stateEnv,
+    });
     const acceptedTargetStates: boolean[] = [];
     let phase: "build" | "final" = "build";
     let rejectedTargetWrites = 0;
     const receiverStore = createBeamStore({
-      state: { openKeyedStoreV2: () => keyedStore },
+      state: { openKeyedStore: () => keyedStore },
     } as unknown as PluginRuntime);
     const store: BeamStore = {
       ...receiverStore,

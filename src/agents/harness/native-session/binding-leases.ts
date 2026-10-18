@@ -161,7 +161,7 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
     assertCurrent?: () => void,
     authority?: NativeSessionBindingAuthority,
   ): Promise<TResult> => {
-    const deadline = performance.now() + options.lease.waitMs;
+    const deadline = Date.now() + options.lease.waitMs;
     while (true) {
       assertSettled(key);
       let busy = false;
@@ -220,7 +220,7 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
       if (!busy) {
         return result;
       }
-      if (performance.now() >= deadline) {
+      if (Date.now() >= deadline) {
         throw options.errors.leaseTimeout(key);
       }
       await sleep(options.lease.retryIntervalMs);
@@ -441,7 +441,7 @@ type NativeSessionBindingLease = { token: string; expiresAt: number };
 export type NativeSessionBindingRecord = { lease?: NativeSessionBindingLease };
 
 /**
- * @deprecated Use NativeSessionBindingStateStoreV2. Supported through 2026-12-31.
+ * @deprecated Use NativeSessionBindingStateStoreV2; removal follows a stable deprecation period.
  */
 export type NativeSessionBindingStateStore<TRecord extends NativeSessionBindingRecord> = Pick<
   PluginStateSyncKeyedStore<TRecord>,

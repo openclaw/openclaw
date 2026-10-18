@@ -18,7 +18,7 @@ import {
 } from "../shared/path-binding.js";
 import { streamFetchedFile } from "./file-fetch-stream.js";
 import {
-  createReadErrorClassifier,
+  classifyFsSafeReadError,
   readAbsolutePath,
   rejectCanonicalPathChange,
   resolveCanonicalReadPath,
@@ -38,19 +38,31 @@ type FileFetchParams = {
   expectedBinding?: unknown;
 };
 
-const classifyReadError = createReadErrorClassifier({
-  FILE_TOO_LARGE: "FILE_TOO_LARGE",
-  "not-file": "IS_DIRECTORY",
-  ENOENT: "NOT_FOUND",
-  EACCES: "PERMISSION_DENIED",
-  EPERM: "PERMISSION_DENIED",
-  EISDIR: "IS_DIRECTORY",
-} as const);
-
-function classifyFsError(error: unknown) {
-  return error instanceof FsSafeError && error.code === "too-large"
-    ? "FILE_TOO_LARGE"
-    : classifyReadError(error);
+function classifyFsError(err: unknown) {
+  if (err instanceof FsSafeError && err.code === "too-large") {
+    return "FILE_TOO_LARGE";
+  }
+  const safeCode = classifyFsSafeReadError(err);
+  if (safeCode) {
+    return safeCode;
+  }
+  const code = (err as { code?: string } | null)?.code;
+  if (code === "FILE_TOO_LARGE") {
+    return code;
+  }
+  if (code === "not-file") {
+    return "IS_DIRECTORY";
+  }
+  if (code === "ENOENT") {
+    return "NOT_FOUND";
+  }
+  if (code === "EACCES" || code === "EPERM") {
+    return "PERMISSION_DENIED";
+  }
+  if (code === "EISDIR") {
+    return "IS_DIRECTORY";
+  }
+  return "READ_ERROR";
 }
 
 function isLikelyPlainText(buffer: Buffer): boolean {

@@ -4,7 +4,6 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
-import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { modelKey, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import {
@@ -250,11 +249,6 @@ export async function applySessionModelSelectionInternal(
   if (prepared.status === "rejected") {
     return prepared;
   }
-  const agentDir = resolveAgentDir(params.cfg, params.agentId);
-  const pinnedProfile = !request.profileOverride && startingEntry.authProfileOverride?.trim();
-  const recordedProvider = pinnedProfile
-    ? await prepareAuthProfileProvider({ agentDir, profileId: pinnedProfile })
-    : undefined;
   const validateSelection = () =>
     validateOperatorSelection() ??
     params.validateAuthProfileSelection?.() ??
@@ -269,13 +263,12 @@ export async function applySessionModelSelectionInternal(
   const nextEntry = { ...startingEntry };
   const modelChange = applyModelOverrideWithAuthProfileCompatibility({
     cfg: params.cfg,
-    agentDir,
+    agentDir: resolveAgentDir(params.cfg, params.agentId),
     entry: nextEntry,
     currentProvider: params.currentProvider,
     selection: request,
     explicitDefaultSelection: request.isDefault,
     profileOverride: request.profileOverride,
-    recordedProvider,
     markLiveSwitchPending: params.markLiveSwitchPending,
   });
   const runtimeChange = applyModelRuntimeDirective(nextEntry, runtime);
@@ -293,14 +286,14 @@ export async function applySessionModelSelectionInternal(
     : undefined;
   using _ = { [Symbol.dispose]: () => placementAuthority?.release() };
   const placement = placementAuthority?.placement;
-  const placementRuntime = await prepareWorkerPlacementSessionRuntime({
+  using placementRuntime = await prepareWorkerPlacementSessionRuntime({
     cfg: params.cfg,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     entry: nextEntry,
   });
   const readRuntimeCapabilities = () =>
-    resolveWorkerPlacementCapabilities(placementRuntime(params.cfg, nextEntry));
+    resolveWorkerPlacementCapabilities(placementRuntime.read(params.cfg, nextEntry));
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
   nextEntry.updatedAt = Date.now();
   let persistedEntry: SessionEntry;

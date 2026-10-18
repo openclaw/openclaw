@@ -104,11 +104,7 @@ export class LogbookService {
       throw new Error("Logbook service cannot be started again");
     }
     this.starting = this.trackOperation(async () => {
-      const store = await LogbookStore.open(
-        this.deps.dataDir,
-        this.deps.workerModuleUrl,
-        this.deps.fullConfig,
-      );
+      const store = await LogbookStore.open(this.deps.dataDir, this.deps.workerModuleUrl);
       this.store = store;
       try {
         if (this.deps.scheduler.signal.aborted) {
@@ -361,6 +357,7 @@ export class LogbookService {
     }
     this.analysisInFlight = true;
     return this.trackOperation(async () => {
+      let handedOff = false;
       try {
         // Explicit user action is the retry path for failed batches; automatic
         // retries could loop model spend on a persistently failing batch.
@@ -372,11 +369,15 @@ export class LogbookService {
           }
         }
         this.requireStore();
-      } finally {
         this.analysisInFlight = false;
+        void this.analysisTick();
+        handedOff = true;
+        return { started: true };
+      } finally {
+        if (!handedOff) {
+          this.analysisInFlight = false;
+        }
       }
-      void this.analysisTick();
-      return { started: true };
     });
   }
 
@@ -391,19 +392,8 @@ export class LogbookService {
     if (!this.resolveVisionModel().ref) {
       const now = Date.now();
       if (now - this.lastModelMissingLogMs > MODEL_MISSING_LOG_INTERVAL_MS) {
-        try {
-          const hasPendingWork =
-            (await store.countUnbatchedActiveFrames()) > 0 ||
-            Boolean(await store.nextPendingBatch());
-          if (hasPendingWork && !this.deps.scheduler.signal.aborted) {
-            this.lastModelMissingLogMs = now;
-            this.deps.logger.warn(`logbook: analysis paused; ${MODEL_MISSING_MESSAGE}`);
-          }
-        } catch (error) {
-          if (!this.deps.scheduler.signal.aborted) {
-            this.deps.logger.error(`logbook: analysis tick failed: ${String(error)}`);
-          }
-        }
+        this.lastModelMissingLogMs = now;
+        this.deps.logger.warn(`logbook: analysis paused; ${MODEL_MISSING_MESSAGE}`);
       }
       return;
     }
@@ -606,7 +596,12 @@ export class LogbookService {
         purpose: "logbook.standup",
         maxTokens: 800,
       });
-      return await store.saveStandup(day, result.text.trim());
+      await store.saveStandup(day, result.text.trim());
+      const saved = await store.getStandup(day);
+      if (!saved) {
+        throw new Error("standup save failed");
+      }
+      return saved;
     });
   }
 

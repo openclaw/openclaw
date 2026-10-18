@@ -212,38 +212,33 @@ export async function restoreGatewayOperatorRecovery(params: {
     assertSourcePolicy();
     identity = await prepareUserProfileIdentity(snapshot.profileId);
     const profileIdentity = identity;
-    let githubAccountIds: readonly number[] | undefined;
     const assertFacts = () => {
       const cfg = assertSourcePolicy();
       const profile = profileIdentity.readCurrentFacts(snapshot.aliasBindingIds).profile;
       if (
         profile.profileId !== snapshot.profileId ||
         profile.assignedRole !== snapshot.assignedRole ||
-        (profile.githubLogin ?? null) !== snapshot.githubLogin ||
-        githubAccountIds?.some((accountId) => !profile.githubAccountIds?.includes(accountId))
+        (profile.githubLogin ?? null) !== snapshot.githubLogin
       ) {
         throw new Error("Restart recovery operator identity changed.");
       }
-      githubAccountIds ??= profile.githubAccountIds ?? [];
       return { cfg, profile };
     };
     let accessAuthority: ReturnType<typeof resumeGatewayOperatorAccessGrant>;
     assertPolicy = () => {
       try {
         const { profile, cfg } = assertFacts();
-        const access = resumeGatewayOperatorAccessGrant(
-          profile,
-          cfg,
-          snapshot.grant,
-          accessAuthority,
-        );
+        const access = resumeGatewayOperatorAccessGrant(profile, cfg, snapshot.grant);
         if (access && !accessAuthority) {
           accessAuthority = access;
           const onAbort = () => revoke(access.signal.reason);
           access.signal.addEventListener("abort", onAbort, { once: true });
           subscriptions.push(() => access.signal.removeEventListener("abort", onAbort));
         }
-        // The grant assertion can synchronously abort its signal.
+        // Retain the first exact resumed owner before recovery yields. Later
+        // policy checks cannot replace a revoked source with a fresh authority.
+        accessAuthority?.signal.throwIfAborted();
+        accessAuthority?.assertCurrent();
         accessAuthority?.signal.throwIfAborted();
         // A policy callback can change committed identity/config synchronously.
         return assertFacts().cfg;

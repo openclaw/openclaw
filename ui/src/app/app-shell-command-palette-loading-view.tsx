@@ -6,12 +6,21 @@ import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loa
 
 export function CommandPaletteLoading(props: {
   state: CommandPaletteLoadingState;
+  revision: number;
   onClose: () => void;
 }) {
+  const current = createMemo(() => {
+    void props.revision;
+    return {
+      defined: Boolean(customElements.get("openclaw-modal-dialog")),
+      value: props.state.value,
+      readOnly: props.state.submitRequested,
+    };
+  });
   // An unrelated shell refresh must not rewrite the live field's selection.
-  const value = createMemo(() => props.state.value());
+  const value = createMemo(() => current().value);
   return (
-    <Show when={props.state.defined()}>
+    <Show when={current().defined}>
       <openclaw-modal-dialog
         class="cmd-palette-overlay palette"
         label={t("palette.placeholder")}
@@ -31,7 +40,7 @@ export function CommandPaletteLoading(props: {
             onInputRef={(element, previous) => props.state.inputRef(element, previous)}
             onValueChange={(nextValue, event) => props.state.captureInput(nextValue, event)}
             onPaste={(event) => props.state.handlePaste(event)}
-            readOnly={props.state.submitRequested()}
+            readOnly={current().readOnly}
           />
           <div class="cmd-palette__empty" role="status">
             {t("common.loading")}

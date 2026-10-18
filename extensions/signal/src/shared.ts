@@ -47,14 +47,14 @@ export const signalConfigAdapter = {
     cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
     accountId?: string | null;
   }) {
-    const raw = resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim();
-    if (!raw) {
+    const raw = resolveSignalAccount({ cfg, accountId }).config.defaultTo;
+    if (typeof raw !== "string" || !raw.trim()) {
       return undefined;
     }
     try {
-      return resolveSignalTarget({ cfg, accountId, input: raw })?.to ?? raw;
+      return resolveSignalTarget({ cfg, accountId, input: raw })?.to ?? raw.trim();
     } catch {
-      return raw;
+      return raw.trim();
     }
   },
 };

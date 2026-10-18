@@ -38,7 +38,7 @@ export function listDiscordVoiceParticipantStates(params: {
   channelId: string;
 }): APIVoiceState[] | null {
   const gateway = params.client.getPlugin("gateway");
-  if (!gateway) {
+  if (!gateway || typeof gateway.listVoiceChannelStates !== "function") {
     return null;
   }
   return gateway.listVoiceChannelStates(params.guildId, params.channelId);
@@ -72,12 +72,12 @@ export function createDiscordVoiceOccupancyWatcher(
   };
 }
 
-function retainParticipant(
-  selected: DiscordVoiceParticipantState[],
-  participant: DiscordVoiceParticipantState,
-): void {
-  selected.push(participant);
-  selected.sort((left, right) => left.userId.localeCompare(right.userId));
+function retainParticipantId(selected: string[], userId: string): void {
+  if (selected.includes(userId)) {
+    return;
+  }
+  selected.push(userId);
+  selected.sort((left, right) => left.localeCompare(right));
   if (selected.length > MAX_PARTICIPANTS) {
     selected.pop();
   }
@@ -89,7 +89,7 @@ export function collectDiscordVoiceParticipants(params: {
   additionalUserId?: string;
   additionalUserIds?: Iterable<string>;
 }): DiscordVoiceParticipantRoster {
-  const participants: DiscordVoiceParticipantState[] = [];
+  const selectedUserIds: string[] = [];
   const additionalUserIds = new Set<string>();
   const addAdditionalUserId = (rawUserId: string | undefined) => {
     const userId = rawUserId?.trim();
@@ -116,14 +116,25 @@ export function collectDiscordVoiceParticipants(params: {
     }
     totalCount += 1;
     additionalUserIds.delete(userId);
-    retainParticipant(participants, { userId, state });
+    retainParticipantId(selectedUserIds, userId);
   }
   for (const additionalUserId of additionalUserIds) {
     // A speaking event proves presence even if the initial Gateway roster raced startup.
     totalCount += 1;
-    retainParticipant(participants, { userId: additionalUserId });
+    retainParticipantId(selectedUserIds, additionalUserId);
   }
-  return { participants, totalCount };
+  const selected = new Set(selectedUserIds);
+  const statesByUserId = new Map<string, APIVoiceState>();
+  for (const state of params.states) {
+    const userId = state.user_id?.trim();
+    if (userId && selected.has(userId)) {
+      statesByUserId.set(userId, state);
+    }
+  }
+  return {
+    participants: selectedUserIds.map((userId) => ({ userId, state: statesByUserId.get(userId) })),
+    totalCount,
+  };
 }
 
 export function countDiscordVoiceHumanParticipants(params: {
@@ -157,7 +168,7 @@ export function countDiscordVoiceHumanParticipants(params: {
 }
 
 function formatDiscordVoiceParticipantLine(userId: string, displayName?: string): string {
-  const label = displayName ?? userId;
+  const label = normalizeLabel(displayName) ?? userId;
   return `- user_id=${JSON.stringify(userId)} display_name=${JSON.stringify(label)}`;
 }
 

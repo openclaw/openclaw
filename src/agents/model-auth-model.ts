@@ -20,7 +20,11 @@ import {
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 import * as cliCredentials from "./cli-credentials.js";
-import { isNonSecretApiKeyMarker, isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
+import {
+  CUSTOM_LOCAL_AUTH_MARKER,
+  isNonSecretApiKeyMarker,
+  isSecretRefHeaderValueMarker,
+} from "./model-auth-markers.js";
 import { isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import {
@@ -40,7 +44,7 @@ const log = createSubsystemLogger("model-auth");
 
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 
-/** @deprecated Use resolveModelAuthModeAsync. Supported through 2026-12-31. */
+/** @deprecated Use resolveModelAuthModeAsync. Retained until an announced stable removal window. */
 export function resolveModelAuthMode(
   provider?: string,
   cfg?: OpenClawConfig,
@@ -146,9 +150,6 @@ export async function hasAvailableAuthForProvider(params: {
   const authOverride = authConfig.resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
-  }
-  if (authOverride === "none") {
-    return authConfig.hasSyntheticLocalProviderAuthConfig({ ...params, cfg });
   }
   const store =
     params.store ??
@@ -260,23 +261,52 @@ export async function getApiKeyForModelCore(params: {
   agentDir?: string;
   workspaceDir?: string;
   lockedProfile?: boolean;
-  forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
   allowAuthProfileFallback?: boolean;
   skipSetupProviderFallback?: boolean;
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
-  const { model, ...authParams } = params;
   return resolveApiKeyForProviderCore({
-    ...authParams,
-    provider: model.provider,
-    modelId: model.id,
-    modelApi: model.api,
-    modelBaseUrl: model.baseUrl,
+    provider: params.model.provider,
+    cfg: params.cfg,
+    profileId: params.profileId,
+    preferredProfile: params.preferredProfile,
+    store: params.store,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    lockedProfile: params.lockedProfile,
+    credentialPrecedence: params.credentialPrecedence,
+    allowAuthProfileFallback: params.allowAuthProfileFallback,
+    skipSetupProviderFallback: params.skipSetupProviderFallback,
+    modelId: params.model.id,
+    modelApi: params.model.api,
+    modelBaseUrl: params.model.baseUrl,
+    secretSentinels: params.secretSentinels,
   });
 }
 
-export { applyLocalNoAuthHeaderOverride } from "./model-auth-markers.js";
+/** Clears auth for local OpenAI-compatible servers that explicitly use no auth. */
+export function applyLocalNoAuthHeaderOverride<T extends Model>(
+  model: T,
+  auth: ResolvedProviderAuth | null | undefined,
+): T {
+  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || model.api !== "openai-completions") {
+    return model;
+  }
+
+  // OpenAI's SDK always generates Authorization from apiKey. Keep the non-secret
+  // placeholder so construction succeeds, then clear the header at request build
+  // time for local servers that intentionally do not require auth.
+  const headers = {
+    ...model.headers,
+    Authorization: null,
+  } as unknown as Record<string, string>;
+
+  return {
+    ...model,
+    headers,
+  };
+}
 
 export function applySecretRefHeaderSentinels<T extends Model>(
   model: T,

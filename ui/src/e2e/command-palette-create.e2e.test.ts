@@ -315,7 +315,6 @@ suite.define(() => {
 
   it.each([
     { mode: "dark", width: 1280 },
-    { mode: "dark", width: 390 },
     { mode: "light", width: 390 },
   ] as const)(
     "aligns settings and preserves keyboard focus in $mode at $width",
@@ -520,7 +519,7 @@ suite.define(() => {
         );
         const module = await holdModuleResponse(
           page,
-          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
+          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
         );
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, foregroundKey));

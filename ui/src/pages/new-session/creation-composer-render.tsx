@@ -82,26 +82,38 @@ export function CreationComposer(props: {
   });
   return (
     <Show when={visible()}>
-      {(composer) => {
-        const prepared = createMemo(() => {
-          void props.renderRevision;
-          return prepareCreationComposer(composer(), props.onOpenImage);
-        });
-        const error = createMemo(() => {
-          void props.renderRevision;
-          return composer().error;
-        });
-        return (
-          <section class="creation-composer" aria-label={t("newSession.followUps")}>
-            <Show when={error()}>
-              <div class="callout danger" role="alert">
-                {composer().error}
-              </div>
-            </Show>
-            <ChatComposer {...prepared()} renderRevision={props.renderRevision} />
-          </section>
-        );
-      }}
+      {(composer) => (
+        <CreationComposerContent
+          composer={composer()}
+          onOpenImage={props.onOpenImage}
+          renderRevision={props.renderRevision}
+        />
+      )}
     </Show>
+  );
+}
+
+function CreationComposerContent(props: {
+  composer: CreationComposerOwner;
+  onOpenImage: (item: ImageLightboxItem) => void;
+  renderRevision?: object;
+}) {
+  const prepared = createMemo(() => {
+    void props.renderRevision;
+    return prepareCreationComposer(props.composer, props.onOpenImage);
+  });
+  const error = createMemo(() => {
+    void props.renderRevision;
+    return props.composer.error;
+  });
+  return (
+    <section class="creation-composer" aria-label={t("newSession.followUps")}>
+      <Show when={error()}>
+        <div class="callout danger" role="alert">
+          {props.composer.error}
+        </div>
+      </Show>
+      <ChatComposer {...prepared()} renderRevision={props.renderRevision} />
+    </section>
   );
 }

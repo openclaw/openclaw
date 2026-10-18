@@ -31,8 +31,6 @@ final class ControlUIDocumentHost {
     // A retained document may outlive its presentation while WebKit stops it.
     var isNativeAuthAvailable: () -> Bool = { false }
     var onAuthenticationFailure: ((Error) -> Void)?
-    var downloads: [ObjectIdentifier: DashboardBrowserDownload] = [:]
-    var expectsDownloadPolicyInterruption = false
 
     init(
         url: URL,
@@ -80,7 +78,6 @@ final class ControlUIDocumentHost {
 
     isolated deinit {
         self.nativeStartupObservation?.cancel()
-        self.cancelDownloads()
     }
 
     var hasCurrentNativeStartupCredentials: Bool {
@@ -156,13 +153,11 @@ final class ControlUIDocumentHost {
     }
 
     func retirePendingLoad() {
-        self.cancelDownloads()
         self.pendingLoad?.cancel()
         self.pendingLoad = nil
     }
 
     func retireDocument() {
-        self.cancelDownloads()
         self.generation &+= 1
         self.sourceID = UUID().uuidString
         self.hasLiveContent = false

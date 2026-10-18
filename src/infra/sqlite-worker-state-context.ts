@@ -3,12 +3,9 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import type { OpenClawStateIntegrityAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
-import { getDatabaseEngineSelection } from "./database-engine/context.js";
-import type { DatabaseEngineInput } from "./database-engine/types.js";
 
 /** Resolved host facts for the canonical shared-state owner, never authority. */
 export type SqliteWorkerStateContext = {
-  databaseEngineInput?: DatabaseEngineInput;
   environment: NodeJS.ProcessEnv & {
     OPENCLAW_STATE_DIR: string;
     OPENCLAW_SUPERVISOR_MODE?: "external";
@@ -28,9 +25,6 @@ export function captureSqliteWorkerStateContext(
   context: SqliteWorkerStateContext,
 ): SqliteWorkerStateContext {
   return {
-    databaseEngineInput: Object.hasOwn(context, "databaseEngineInput")
-      ? context.databaseEngineInput
-      : getDatabaseEngineSelection()?.input,
     environment: { ...context.environment },
     ...(context.initializationEnvironment
       ? { initializationEnvironment: { ...context.initializationEnvironment } }
@@ -39,11 +33,9 @@ export function captureSqliteWorkerStateContext(
       ? { initializationAgentPaths: [...context.initializationAgentPaths] }
       : {}),
     existingSchemaPath: context.existingSchemaPath,
-    ...(context.stateIntegrity ? { stateIntegrity: context.stateIntegrity } : {}),
+    stateIntegrity: context.stateIntegrity,
     artifactPreservingReads: context.artifactPreservingReads,
-    ...(context.scheduledMaintenanceSuspension
-      ? { scheduledMaintenanceSuspension: context.scheduledMaintenanceSuspension }
-      : {}),
+    scheduledMaintenanceSuspension: context.scheduledMaintenanceSuspension,
   };
 }
 
@@ -66,8 +58,6 @@ export function sqliteWorkerRequestBytes(
         bytes,
       ),
     input.byteLength +
-      Buffer.byteLength(context?.databaseEngineInput?.connection ?? "", "utf8") +
-      Buffer.byteLength(context?.databaseEngineInput?.schemaPrefix ?? "", "utf8") +
       (preparation?.byteLength ?? 0) +
       agentPathBytes +
       (context?.scheduledMaintenanceSuspension?.byteLength ?? 0),

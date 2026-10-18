@@ -140,11 +140,7 @@ export function createCodexAttemptLifecycleController(
       // Interrupt drops accepted pending input. Reject unconsumed steering first so
       // completion delivery can use its fallback path instead of reporting success.
       turnRuntime.steeringQueueRef.current?.cancel();
-      // Foreground yield may complete immediately, but subscription transfer must
-      // join the exact native turn's stop before another parent turn can start.
-      state.abortCleanup = turnRuntime
-        .interruptTurn(value.call.turnId, { locallyCompleted: true })
-        .then(() => {});
+      void turnRuntime.interruptTurn(value.call.turnId, { locallyCompleted: true });
       turnRuntime.completeTurn();
     });
     immediate.unref?.();

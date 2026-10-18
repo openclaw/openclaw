@@ -2,60 +2,37 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
+import type { ControllerHost } from "./page-controller.ts";
 
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
 
-type CoreLoadOptions = {
-  onStart: (reason: ModelProviderRefreshReason) => void;
-  onComplete: (result: { client: GatewayBrowserClient; data: ModelProvidersData }) => void;
-  onCatalogComplete: (result: ModelCatalogResult) => void;
+type CoreRequest = {
+  client: GatewayBrowserClient;
+  agentId: string;
+  reason: ModelProviderRefreshReason;
 };
 
-async function loadConnectedProviderData(
-  client: GatewayBrowserClient,
-  agentId: string,
-  target: { providerId?: string; data: ModelProvidersData },
-  signal: AbortSignal,
-): Promise<ModelProvidersData> {
-  // Read auth first so the catalog sees the newly connected runtime. This one
-  // shared refresh absorbs the intermediate catalog invalidations during login.
-  const refreshed = await loadModelProvidersData(client, { agentId, refresh: true, signal });
-  const authStatus = refreshed.authStatus;
-  return {
-    ...target.data,
-    providerOutcomes: refreshed.providerOutcomes,
-    catalogError: refreshed.catalogError,
-    error: authStatus ? refreshed.error : t("modelProviders.login.statusRefreshFailed"),
-    authStatus:
-      authStatus && target.providerId
-        ? {
-            ...authStatus,
-            providers: [
-              ...(target.data.authStatus?.providers ?? []).filter(
-                (provider) => canonicalModelAuthProviderId(provider.provider) !== target.providerId,
-              ),
-              ...authStatus.providers.filter(
-                (provider) => canonicalModelAuthProviderId(provider.provider) === target.providerId,
-              ),
-            ],
-          }
-        : (authStatus ?? target.data.authStatus),
-  };
-}
+type CoreLoadOptions = {
+  onStart: (reason: ModelProviderRefreshReason) => void;
+  onComplete: (result: CoreRequest & { data: ModelProvidersData }) => void;
+  onCatalogComplete: (result: ModelCatalogResult) => void;
+  refreshPublication: () => void;
+};
 
 export class ModelProviderCoreLoader {
   private active = false;
+  private publicationPending = false;
   private catalogRequest: AbortController | null = null;
   catalogError: string | null = null;
-  retryProvider: string | undefined;
+  // The latest explicit Retry includes one that has already settled.
+  catalogGeneration = 0;
   private request: AbortController | null = null;
-  private publicationPending = false;
 
   constructor(
-    private readonly notify: () => void,
+    private readonly host: ControllerHost,
     private readonly options: CoreLoadOptions,
   ) {}
 
@@ -72,7 +49,7 @@ export class ModelProviderCoreLoader {
     this.catalogRequest = null;
     this.catalogError = null;
     retired?.abort();
-    this.notify();
+    this.host.requestUpdate();
   }
 
   async discoverCatalog(
@@ -86,8 +63,9 @@ export class ModelProviderCoreLoader {
     const request = new AbortController();
     const ownsResult = () => this.catalogRequest === request && isCurrent();
     this.catalogRequest = request;
+    this.catalogGeneration += 1;
     this.catalogError = null;
-    this.notify();
+    this.host.requestUpdate();
     try {
       const result = await loadModelCatalog(client, {
         agentId,
@@ -108,8 +86,8 @@ export class ModelProviderCoreLoader {
     } finally {
       if (this.catalogRequest === request) {
         this.catalogRequest = null;
-        this.refreshPendingPublication(client, agentId);
-        this.notify();
+        this.host.requestUpdate();
+        this.flushPublication();
       }
     }
   }
@@ -118,13 +96,18 @@ export class ModelProviderCoreLoader {
     client: GatewayBrowserClient,
     agentId: string,
     reason: ModelProviderRefreshReason,
-    target?: { providerId?: string; data: ModelProvidersData },
   ): Promise<void> {
     if (reason === "publication" && (this.active || this.catalogLoading)) {
       this.publicationPending = true;
       return;
     }
-    this.publicationPending = false;
+    if (reason === "publication") {
+      if (this.publicationPending) {
+        // Auth refresh can create a display copy after this publication was queued.
+        invalidateModelCatalogCache(client, { agentId });
+      }
+      this.publicationPending = false;
+    }
     this.request?.abort();
     const request = new AbortController();
     this.request = request;
@@ -132,22 +115,17 @@ export class ModelProviderCoreLoader {
     if (reason !== "publication") {
       this.resetCatalog();
     }
-    if (!target) {
-      this.options.onStart(reason);
-    }
-    this.notify();
+    this.options.onStart(reason);
+    this.host.requestUpdate();
     try {
-      const data = target
-        ? await loadConnectedProviderData(client, agentId, target, request.signal)
-        : await loadModelProvidersData(client, {
-            agentId,
-            ...(reason === "forced" ? { refresh: true } : {}),
-            signal: request.signal,
-          });
+      const data = await loadModelProvidersData(client, {
+        agentId,
+        ...(reason === "forced" ? { refresh: true } : {}),
+        signal: request.signal,
+      });
       if (this.request === request) {
         this.active = false;
-        this.retryProvider = target && data.error ? target.providerId : undefined;
-        this.options.onComplete({ client, data });
+        this.options.onComplete({ client, agentId, reason, data });
       }
     } catch {
       // Each source reports its own error; a retired request has no result to publish.
@@ -155,25 +133,27 @@ export class ModelProviderCoreLoader {
       if (this.request === request) {
         this.request = null;
         this.active = false;
-        this.refreshPendingPublication(client, agentId);
-        this.notify();
+        this.host.requestUpdate();
+        this.flushPublication();
       }
     }
   }
 
-  private refreshPendingPublication(client: GatewayBrowserClient, agentId: string): void {
-    if (this.publicationPending && !this.active && !this.catalogLoading) {
-      void this.refresh(client, agentId, "publication");
-    }
-  }
-
   invalidate(): void {
-    this.publicationPending = false;
     this.resetCatalog();
-    this.retryProvider = undefined;
+    this.publicationPending = false;
     this.active = false;
     this.request?.abort();
     this.request = null;
-    this.notify();
+    this.host.requestUpdate();
+  }
+
+  private flushPublication(): void {
+    // Publish after the current completion has applied its data.
+    queueMicrotask(() => {
+      if (this.publicationPending && !this.active && !this.catalogLoading) {
+        this.options.refreshPublication();
+      }
+    });
   }
 }

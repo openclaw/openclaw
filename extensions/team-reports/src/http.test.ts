@@ -25,13 +25,20 @@ vi.mock("openclaw/plugin-sdk/database-engine-runtime", async (importOriginal) =>
     await importOriginal<typeof import("openclaw/plugin-sdk/database-engine-runtime")>();
   return {
     ...actual,
-    runEngineStoreOperation: async (...args: Parameters<typeof actual.runEngineStoreOperation>) => {
-      const result = await actual.runEngineStoreOperation(...args);
-      if (workerReads.enabled) {
-        workerReads.calls += 1;
-        workerReads.bytes += Buffer.byteLength(JSON.stringify(result) ?? "");
+    openEngineWorkerStore: async (...args: Parameters<typeof actual.openEngineWorkerStore>) => {
+      const worker = await actual.openEngineWorkerStore(...args);
+      if (worker) {
+        const execute = worker.execute.bind(worker);
+        vi.spyOn(worker, "execute").mockImplementation(async (command, options) => {
+          const result = await execute(command, options);
+          if (workerReads.enabled) {
+            workerReads.calls += 1;
+            workerReads.bytes += Buffer.byteLength(JSON.stringify(result) ?? "");
+          }
+          return result;
+        });
       }
-      return result;
+      return worker;
     },
   };
 });

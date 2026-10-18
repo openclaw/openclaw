@@ -285,6 +285,21 @@ struct OpenClawTypographyTests {
         #expect(onboardingWizard.contains("title: \"Same Machine (Dev)\""))
         #expect(onboardingWizard.contains("if lastMode == .developerLocal"))
         #expect(onboardingWizard.contains("self.developerModeEnabled = true"))
+        let onboardingSecurityPicker = try Self.extract(
+            onboardingWizard,
+            from: "private var manualConnectionSecurityRows",
+            to: "    private func onboardingLabeledContent")
+        let onboardingUnencryptedOption = try Self.extract(
+            onboardingSecurityPicker,
+            from: "Text(\"Unencrypted\")",
+            to: ".tag(false)")
+        let onboardingSecureOption = try Self.extract(
+            onboardingSecurityPicker,
+            from: "Text(\"Secure (TLS)\")",
+            to: ".tag(true)")
+        #expect(onboardingUnencryptedOption.contains(".font(OpenClawType.captionSemiBold)"))
+        #expect(onboardingSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
+
         #expect(settingsSections.contains(".font(OpenClawType.body)"))
         for label in ["Gateway", "Approvals", "Open Gateway"] {
             let text = try Self.extract(settingsHub, from: "Text(\"\(label)\")", to: "}")
@@ -345,16 +360,20 @@ struct OpenClawTypographyTests {
         #expect(gatewaySecureField.contains(".autocorrectionDisabled()"))
         #expect(settingsSections.contains("Picker(\"Default Agent\", selection: self.$selectedAgentPickerId)"))
         #expect(settingsSections.contains("Text(\"Default\")"))
-        let unencryptedOption = try Self.extract(
-            settingsSupport,
+        let settingsSecurityPicker = try Self.extract(
+            settingsSections,
+            from: "Picker(selection: self.manualGatewayTLSBinding)",
+            to: "            .pickerStyle(.segmented)")
+        let settingsUnencryptedOption = try Self.extract(
+            settingsSecurityPicker,
             from: "Text(\"Unencrypted\")",
             to: ".tag(false)")
-        let secureOption = try Self.extract(
-            settingsSupport,
+        let settingsSecureOption = try Self.extract(
+            settingsSecurityPicker,
             from: "Text(\"Secure (TLS)\")",
             to: ".tag(true)")
-        #expect(unencryptedOption.contains(".font(OpenClawType.captionSemiBold)"))
-        #expect(secureOption.contains(".font(OpenClawType.captionSemiBold)"))
+        #expect(settingsUnencryptedOption.contains(".font(OpenClawType.captionSemiBold)"))
+        #expect(settingsSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
 
         #expect(docs.contains(".font(OpenClawType.body)"))
 

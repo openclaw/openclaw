@@ -2,31 +2,16 @@ import { expect, it, vi } from "vitest";
 import { withTempHomeConfig } from "../config/test-helpers.js";
 import * as contributions from "../flows/doctor-health-contributions.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
-import { parseReleasedDoctorLintReport } from "../infra/test-fixtures/update-doctor-lint.v2026-9-5.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-it.each([
-  {
-    driver: "writable update parent",
-    checkId: "core/doctor/runtime-tool-schemas",
-    releasedPostPlugin: false,
-  },
-  {
-    driver: "released post-plugin updater",
-    checkId: "core/doctor/security",
-    releasedPostPlugin: true,
-  },
-])("keeps inspection findings advisory for a $driver", async ({ checkId, releasedPostPlugin }) => {
+it("keeps runtime tool schema findings advisory during updates", async () => {
   await withTempHomeConfig({}, async () => {
     clearHealthChecksForTest();
-    // Released 9.4/9.5 updaters lack the writable-parent marker and use both phase markers.
-    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", releasedPostPlugin ? "1" : "0");
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", releasedPostPlugin ? "1" : "0");
-    vi.stubEnv(
-      "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE",
-      releasedPostPlugin ? "0" : "1",
-    );
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "0");
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", "0");
+    vi.stubEnv("OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE", "1");
+    const checkId = "core/doctor/runtime-tool-schemas";
     const finding = {
       checkId,
       severity: "error" as const,
@@ -46,18 +31,10 @@ it.each([
         severityMin: "error",
         onlyIds: [checkId],
       });
-      const output = String(stdout.mock.calls.at(-1)?.[0]);
-      const payload = JSON.parse(output);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
       expect(exitCode).toBe(0);
       expect(payload.findings).toEqual([]);
       expect(payload.warnings).toEqual([{ ...finding, severity: "warning" }]);
-      if (releasedPostPlugin) {
-        expect(parseReleasedDoctorLintReport(output)).toMatchObject({
-          ok: true,
-          findings: [],
-          warnings: [{ ...finding, severity: "warning" }],
-        });
-      }
       expect(stderr.mock.calls.flat().join("")).toContain(
         `Doctor lint warning [${checkId}]: Synthetic detector finding.`,
       );

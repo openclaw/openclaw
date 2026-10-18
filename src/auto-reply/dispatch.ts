@@ -50,7 +50,7 @@ import {
   resolveReplyOperationRunState,
   type ReplyOperationRunState,
 } from "./reply/reply-operation-run-state.js";
-import type { FinalizedMsgContext, FinalizedRuntimeMsgContext, MsgContext } from "./templating.js";
+import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 
 type InternalDispatchReplyOptions = Omit<
   InternalGetReplyOptions,
@@ -152,9 +152,10 @@ function reserveForegroundReplyLease(
 }
 
 function resolveDispatcherSilentReplyContext(
-  finalized: FinalizedRuntimeMsgContext,
+  ctx: MsgContext | FinalizedMsgContext,
   cfg: OpenClawConfig,
 ) {
+  const finalized = finalizeInboundContext(ctx);
   const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
   const policySessionKey = commandTargetSessionKey ?? finalized.SessionKey;
   const chatType = normalizeChatType(finalized.ChatType);
@@ -203,8 +204,14 @@ function markReplyPayloadSendingBeforeDeliverInstalled(
 function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) {
   const commandTurn = resolveCommandTurnContext(ctx);
   return {
-    surface: ctx.Surface ?? ctx.Provider ?? "unknown",
-    hasSessionKey: ctx.SessionKey !== undefined || ctx.CommandTargetSessionKey !== undefined,
+    surface:
+      typeof ctx.Surface === "string"
+        ? ctx.Surface
+        : typeof ctx.Provider === "string"
+          ? ctx.Provider
+          : "unknown",
+    hasSessionKey:
+      typeof ctx.SessionKey === "string" || typeof ctx.CommandTargetSessionKey === "string",
     commandSource: commandTurn.source,
   };
 }
@@ -414,10 +421,9 @@ async function dispatchInboundMessageWithPlainDispatcherCore(
   params: PlainInboundDispatcherParams,
   messageSending: "legacy" | "projected",
 ): Promise<DispatchInboundResult> {
-  const finalized = finalizeInboundContext(params.ctx);
-  const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
+  const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
   const { replyPayloadRunState, replyPayloadBeforeDeliver, beforeDeliver } =
-    prepareInboundReplyHooks(finalized, params.replyOptions, params.dispatcherOptions, {
+    prepareInboundReplyHooks(params.ctx, params.replyOptions, params.dispatcherOptions, {
       messageSending,
     });
   const dispatcher = createReplyDispatcher({
@@ -427,7 +433,7 @@ async function dispatchInboundMessageWithPlainDispatcherCore(
   });
   markReplyPayloadSendingBeforeDeliverInstalled(dispatcher, replyPayloadBeforeDeliver);
   return await dispatchInboundMessage({
-    ctx: finalized,
+    ctx: params.ctx,
     cfg: params.cfg,
     dispatcher,
     toolsAllow: params.toolsAllow,

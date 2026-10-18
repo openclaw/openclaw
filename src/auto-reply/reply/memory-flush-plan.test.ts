@@ -19,22 +19,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-import { memoryFlushResultIsSilent, resolveMemoryFlushPlanForRun } from "./memory-flush-plan.js";
-
-it("uses the recorded memory-flush outcome rather than prepared text", () => {
-  expect(
-    memoryFlushResultIsSilent({
-      payloads: [{ text: "NO_REPLY" }],
-      meta: { terminalReply: { disposition: "visible", text: "NO_REPLY" } },
-    }),
-  ).toBe(false);
-  expect(
-    memoryFlushResultIsSilent({
-      payloads: [],
-      meta: { terminalReply: { disposition: "silent" } },
-    }),
-  ).toBe(true);
-});
+import { resolveMemoryFlushPlanForRun } from "./memory-flush-plan.js";
 
 describe("resolveMemoryFlushPlanForRun host timing", () => {
   const providerPlan = {

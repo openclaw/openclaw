@@ -24,10 +24,6 @@ beforeEach(() => {
   installIMessageStateRuntimeForTest();
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
-
 function createParams(
   overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
     message?: Partial<InboundDecisionParams["message"]>;
@@ -91,6 +87,10 @@ function useFakeTimersAt(iso = DEFAULT_FAKE_TIME): void {
 }
 
 describe("self-chat dedupe — #47830", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("does NOT drop a user message that matches recently-sent agent text (self-chat scope collision)", async () => {
     useFakeTimersAt();
 
@@ -119,6 +119,10 @@ describe("self-chat dedupe — #47830", () => {
 });
 
 describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("drops DM false positives even when participant lists include the local handle", async () => {
     const echoCache = createSentMessageCache();
     const selfChatCache = createSelfChatCache();

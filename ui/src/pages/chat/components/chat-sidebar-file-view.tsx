@@ -8,10 +8,9 @@ import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
-import type { FileCopyAction, FileCopyFeedback } from "./chat-file-copy.ts";
-import { FileDownloadButton } from "./chat-file-download-button.tsx";
-import { HtmlPreview, HtmlPreviewSourceFallback } from "./chat-html-preview-view.tsx";
+import type { FileCopyAction, FileCopyFeedback } from "./chat-file-copy-controller.ts";
 import type { FileHtmlPreviewControls } from "./chat-html-preview.ts";
 import type { FileSidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
 import { ChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.tsx";
@@ -172,19 +171,6 @@ export function SidebarFile(props: {
         <Show when={props.controls}>
           {(controls) => (
             <div class="sidebar-file-view__actions">
-              <Show when={props.content.download}>
-                {(download) => (
-                  <FileDownloadButton
-                    scopeKey={[
-                      props.content.sessionFileSource?.sessionKey ?? props.runtime?.sessionKey,
-                      props.content.path,
-                      props.runtime?.connectionEpoch,
-                    ].join("\0")}
-                    download={(signal) => download()(signal)}
-                    class="btn btn--sm sidebar-file-view__action"
-                  />
-                )}
-              </Show>
               <Show when={!controls().htmlPreview || controls().htmlPreview?.source}>
                 <FileAction
                   label={t(
@@ -332,9 +318,7 @@ export function SidebarFile(props: {
       <Show when={props.controls?.htmlPreview}>
         {(preview) => (
           <div class="chat-html-preview" hidden={preview().source}>
-            <Show when={preview().presentation}>
-              {(presentation) => <HtmlPreview {...presentation()} />}
-            </Show>
+            <LitContent value={preview().presentation} />
           </div>
         )}
       </Show>
@@ -343,7 +327,7 @@ export function SidebarFile(props: {
         hidden={Boolean(props.controls?.htmlPreview && !props.controls.htmlPreview.source)}
       >
         <Show when={props.controls?.htmlPreview?.sourceFallback}>
-          {(fallback) => <HtmlPreviewSourceFallback {...fallback()} />}
+          {(fallback) => <LitContent value={fallback()} />}
         </Show>
         <Show when={mountIdentity()} keyed>
           {(_identity) => <div class="file-view__mount" />}

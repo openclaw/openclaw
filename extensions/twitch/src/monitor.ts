@@ -227,7 +227,7 @@ export async function monitorTwitchProvider(options: TwitchMonitorOptions) {
   });
   ingress.start();
 
-  const unregisterHandler = clientManager.onMessage((message) => {
+  const unregisterHandler = clientManager.onMessage(account, (message) => {
     if (stopped) {
       return;
     }

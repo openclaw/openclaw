@@ -264,7 +264,7 @@ it("isolates delayed raw-global thinking claims by agent", async () => {
   sessions.dispose();
 });
 
-it.each(["success", "in-place", "failure", "replaced"])(
+it.each(["success", "failure", "replaced"])(
   "keeps recovery notifications, errors and refresh scoped to the connection (%s)",
   async (outcome) => {
     const recovery = createDeferred<unknown>();
@@ -275,16 +275,8 @@ it.each(["success", "in-place", "failure", "replaced"])(
     });
     const created = vi.fn();
     sessions.subscribeCreated(created);
-    const operation = sessions.recover({
-      key: "agent:main:expired",
-      agentId: "main",
-      ...(outcome === "in-place" ? { mode: "in-place" } : {}),
-    });
-    const successor = {
-      ok: true,
-      key: outcome === "in-place" ? "agent:main:expired" : "agent:main:recovered",
-      sessionId: "successor",
-    };
+    const operation = sessions.recover({ key: "agent:main:expired", agentId: "main" });
+    const successor = { ok: true, key: "agent:main:recovered", sessionId: "successor" };
 
     if (outcome === "replaced") {
       publish(false);
@@ -294,24 +286,16 @@ it.each(["success", "in-place", "failure", "replaced"])(
     } else {
       recovery.resolve(successor);
     }
-    if (outcome === "success" || outcome === "in-place") {
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith(
-          "sessions.list",
-          expect.objectContaining({ agentId: "main" }),
-        ),
+    if (outcome === "success") {
+      await waitForFast(() => expect(created).toHaveBeenCalledWith(successor.key));
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ agentId: "main" }),
       );
-      if (outcome === "success") {
-        expect(created).toHaveBeenCalledWith(successor.key);
-      } else {
-        expect(created).not.toHaveBeenCalled();
-      }
       list.resolve(sessionsResult([{ key: successor.key, kind: "direct", updatedAt: 1 }], 1));
     }
 
-    await expect(operation).resolves.toEqual(
-      outcome === "success" || outcome === "in-place" ? successor : null,
-    );
+    await expect(operation).resolves.toEqual(outcome === "success" ? successor : null);
     expect(sessions.state.error).toBe(outcome === "failure" ? "recovery rejected" : null);
     if (outcome === "failure" || outcome === "replaced") {
       expect(created).not.toHaveBeenCalled();

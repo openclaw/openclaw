@@ -6,7 +6,6 @@ import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { dispatchCronDelivery } from "../../cron/isolated-agent/delivery-dispatch.js";
 import { readCronRunHistoryPageForTests } from "../../cron/run-history.test-support.js";
@@ -136,10 +135,7 @@ describe("cron CLI delivery suppression readback", () => {
           if (phase === "execution-error") {
             throw new Error("fixture agent execution failed");
           }
-          const prepared = prepareAgentRunTerminalReply({
-            rawText: phase === "silent" ? "NO_REPLY" : "Actionable update",
-          });
-          const text = prepared.text;
+          const text = phase === "silent" ? "NO_REPLY" : "Actionable update";
           const sessionId = randomUUID();
           const sessionKey = `agent:main:cron:${job.id}:run:${sessionId}`;
           const now = Date.now();
@@ -180,7 +176,6 @@ describe("cron CLI delivery suppression readback", () => {
             deliveryPlan: resolveCronDeliveryPlan(job),
             deliveryRequested: phase !== "not-requested",
             undeliveredRunStatus: "ok",
-            skipDelivery: prepared.terminalReply.disposition === "silent" ? "silent" : undefined,
             spawnOnlyHandoff: false,
             sourceDeliveryOutcome: {
               visibleDeliveries: [],
@@ -189,7 +184,7 @@ describe("cron CLI delivery suppression readback", () => {
               unverifiedMessageToolDelivery: false,
             },
             deliveryBestEffort: job.delivery?.bestEffort === true,
-            deliveryPayloads: text ? [{ text }] : [],
+            deliveryPayloads: [{ text }],
             synthesizedText: text,
             summary: text,
             outputText: text,

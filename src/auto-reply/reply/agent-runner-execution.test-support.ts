@@ -382,7 +382,7 @@ export async function getExecuteAgentTurnForTest() {
         postCompactionModelFailure: outcome.postCompactionModelFailure,
       };
     }
-    const payload: ReplyPayload = {};
+    const payload: ReplyPayload = { text: "NO_REPLY" };
     return { kind: "final" as const, payload };
   };
 }

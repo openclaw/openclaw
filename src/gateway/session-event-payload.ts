@@ -134,7 +134,6 @@ export function buildGatewaySessionSnapshot(params: {
     category: sessionRow.category ?? null,
     boardPresentation: sessionRow.boardPresentation ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
-    titlePending: sessionRow.titlePending ?? false,
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,
@@ -152,7 +151,6 @@ export function buildGatewaySessionSnapshot(params: {
     systemSent: sessionRow.systemSent,
     abortedLastRun: sessionRow.abortedLastRun,
     restartRecoveryStatus: sessionRow.restartRecoveryStatus ?? null,
-    restartRecoveryCycleId: sessionRow.restartRecoveryCycleId ?? null,
     inputTokens: sessionRow.inputTokens,
     outputTokens: sessionRow.outputTokens,
     usageReport: sessionRow.usageReport,
@@ -177,7 +175,6 @@ export function buildGatewaySessionSnapshot(params: {
     runtimeSelectionLocked: sessionRow.runtimeSelectionLocked,
     status: status ?? sessionRow.status,
     lastRunError: sessionRow.lastRunError ?? null,
-    suppressErrorNotice: sessionRow.suppressErrorNotice ?? false,
     providerReview: sessionRow.providerReview ?? null,
     lastRunId: sessionRow.lastRunId ?? null,
     hasAutomation: sessionRow.hasAutomation ?? false,
@@ -209,16 +206,11 @@ export function buildGatewaySessionSnapshot(params: {
     }
   }
   const session: Record<string, unknown> | undefined = params.includeSession
-    ? sessionRow
+    ? Object.assign(
+        sessionRow,
+        Object.fromEntries(Object.entries(eventFields).filter(([, value]) => value !== undefined)),
+      )
     : undefined;
-  if (session) {
-    for (const key in eventFields) {
-      const value = eventFields[key];
-      if (value !== undefined) {
-        session[key] = value;
-      }
-    }
-  }
   if (session && sessionRow.key === "global" && !params.agentId) {
     delete session.goal;
   }

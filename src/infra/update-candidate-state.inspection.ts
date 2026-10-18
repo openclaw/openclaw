@@ -17,14 +17,6 @@ import { createUpdateStateInspectionDiagnostics } from "./update-candidate-state
 import { withUpdateStateInspectionWork } from "./update-candidate-state.process.js";
 import type { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 
-// Worker progress replaces these labels once the selected step reports its own phase.
-const WORKER_STARTUP_PHASES = new Map<unknown, string>([
-  ["versions", "schema inspection startup"],
-  ["database-generations", "database generation verification"],
-  ["database-backup", "database backup"],
-  ["database-restore-preparation", "database restore preparation"],
-]);
-
 export async function runUpdateStateInspectionWorker(params: {
   input: { stateDir: string; config: OpenClawConfig; env?: NodeJS.ProcessEnv } & Record<
     string,
@@ -38,10 +30,7 @@ export async function runUpdateStateInspectionWorker(params: {
   databases: Awaited<ReturnType<typeof readUpdateStateDatabaseSizes>>;
   timeoutMs?: number;
   readOnlySource?: string;
-  sources?: readonly string[];
   ioBudget?: "probe" | "deadline";
-  /** Best-effort callers continue after failure and compose their own guidance. */
-  retryAdvice?: boolean;
 }) {
   const selectedUrl = resolveRuntimeWorkerUrl({
     ...(params.readOnlySource
@@ -60,15 +49,13 @@ export async function runUpdateStateInspectionWorker(params: {
     : undefined;
   const inspection = createUpdateStateInspectionDiagnostics({
     operation: "State schema inspection",
-    phase: WORKER_STARTUP_PHASES.get(params.input.mode) ?? "shared database discovery",
-    // Size admission omits missing files, so callers that verify absence name their full scope.
+    phase:
+      params.input.mode === "versions" ? "schema inspection startup" : "shared database discovery",
     paths: params.readOnlySource
       ? [params.readOnlySource]
-      : (params.sources ??
-        (params.input.mode === "discover"
-          ? [path.resolve(params.input.stateDir, "state", "openclaw.sqlite")]
-          : params.databases.map((database) => database.path))),
-    retryAdvice: params.retryAdvice,
+      : params.input.mode === "versions"
+        ? params.databases.map((database) => database.path)
+        : [path.resolve(params.input.stateDir, "state", "openclaw.sqlite")],
   });
   try {
     const timeoutMs = Math.max(
@@ -90,7 +77,6 @@ export async function runUpdateStateInspectionWorker(params: {
             ? undefined
             : JSON.stringify({
                 ...params.input,
-                includeLocalStoreVersions: true,
                 env: {
                   HOME: params.sourceEnv.HOME,
                   OPENCLAW_HOME: params.sourceEnv.OPENCLAW_HOME,

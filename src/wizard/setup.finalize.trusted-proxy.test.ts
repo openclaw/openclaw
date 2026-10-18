@@ -13,12 +13,7 @@ type DefaultModelCatalogFacts = ReturnType<
 >;
 
 const readPin = vi.hoisted(() => vi.fn());
-// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
-vi.mock("../daemon/runtime-pin-state.js", () => ({
-  readDaemonRuntimePinForInstall: readPin,
-  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T): Promise<T> =>
-    read(),
-}));
+vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
 
 const runTui = vi.hoisted(() => vi.fn<(options: unknown) => Promise<void>>(async () => {}));
 const restoreTerminalState = vi.hoisted(() => vi.fn());
@@ -174,6 +169,14 @@ vi.mock("../commands/daemon-install-helpers.js", () => ({
 
 vi.mock("../commands/gateway-install-token.js", () => ({
   resolveGatewayInstallToken,
+}));
+
+vi.mock("../commands/daemon-runtime.js", () => ({
+  DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
+  GATEWAY_DAEMON_RUNTIME_OPTIONS: [
+    { value: "node", label: "Node" },
+    { value: "bun", label: "Bun 1.4+" },
+  ],
 }));
 
 vi.mock("../commands/health-format.js", async (importOriginal) => ({

@@ -21,6 +21,7 @@ const MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OFFLINE_MODEL_IDS = [
   "claude-opus-5",
   "gpt-5.6-sol",
+  "gpt-5-nano",
   "gemini-3.6-flash",
   "minimax-m3",
   "kimi-k3",
@@ -158,7 +159,7 @@ describe("opencode provider plugin", () => {
     const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode");
 
     expect(mediaProvider?.capabilities).toEqual(["image"]);
-    expect(mediaProvider?.defaultModels).toEqual({ image: "minimax-m3" });
+    expect(mediaProvider?.defaultModels).toEqual({ image: "gpt-5-nano" });
     expect(typeof mediaProvider?.describeImage).toBe("function");
     expect(typeof mediaProvider?.describeImages).toBe("function");
   });
@@ -555,8 +556,8 @@ describe("opencode provider plugin", () => {
     expect(
       provider.resolveDynamicModel?.({ modelId: "refreshed-model-fixture" } as never),
     ).toBeUndefined();
-    expect(provider.resolveDynamicModel?.({ modelId: "minimax-m3" } as never)).toMatchObject({
-      id: "minimax-m3",
+    expect(provider.resolveDynamicModel?.({ modelId: "gpt-5-nano" } as never)).toMatchObject({
+      id: "gpt-5-nano",
     });
   });
 
@@ -660,6 +661,37 @@ describe("opencode provider plugin", () => {
     ).resolves.toBe(expected);
   });
 
+  it.each([
+    ["off", undefined],
+    ["max", "max"],
+  ] as const)("keeps Kimi K3 reasoning %s exact", async (thinkingLevel, expectedEffort) => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedPayloads: Record<string, unknown>[] = [];
+    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+      const payload: Record<string, unknown> = { model: "kimi-k3", reasoning_effort: "max" };
+      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
+      capturedPayloads.push(payload);
+      return {} as never;
+    };
+    const streamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn as never,
+      providerId: "opencode",
+      modelId: "kimi-k3",
+      thinkingLevel,
+    } as never);
+
+    await streamFn?.(
+      { provider: "opencode", id: "kimi-k3", api: "openai-completions" } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedPayloads).toEqual([
+      expectedEffort === undefined
+        ? { model: "kimi-k3" }
+        : { model: "kimi-k3", reasoning_effort: expectedEffort },
+    ]);
+  });
+
   it("canonicalizes stale OpenCode Zen base URLs", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const normalizedConfig = requireRecord(
@@ -695,5 +727,14 @@ describe("opencode provider plugin", () => {
         baseUrl: "https://opencode.ai/zen",
       } as never),
     ).toEqual({ api: "openai-completions", baseUrl: "https://opencode.ai/zen/v1" });
+  });
+
+  it("exposes the thinking policy through the registered provider", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const profile = provider.resolveThinkingProfile?.({
+      provider: "opencode",
+      modelId: "claude-opus-4-7",
+    });
+    expect(profile?.levels.map((level) => level.id)).toContain("adaptive");
   });
 });

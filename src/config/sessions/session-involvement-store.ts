@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
@@ -15,6 +16,7 @@ export async function updateSessionProfileInvolvementAsync(
 ): Promise<boolean> {
   const captured = structuredClone(params);
   let catalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
+  let profiles: { profileId: string; aliases: string[] }[] | undefined;
   const selectProfiles = (prepared: NonNullable<typeof catalog>) =>
     [...new Set(captured.profileIds)].map((profileId) => {
       const identity = prepared.readCurrentIdentity(profileId);
@@ -42,10 +44,16 @@ export async function updateSessionProfileInvolvementAsync(
         }
         return result.accepted;
       },
-      assertCurrent,
+      () => {
+        assertCurrent?.();
+        if (catalog && profiles && !isDeepStrictEqual(selectProfiles(catalog), profiles)) {
+          throw new Error("Session involvement profile aliases changed before commit");
+        }
+      },
       async (_operation, capturedScope) => {
         catalog = await prepareUserProfileCatalog({ env: capturedScope.env });
-        return { scope: capturedScope, params: captured, profiles: selectProfiles(catalog) };
+        profiles = selectProfiles(catalog);
+        return { scope: capturedScope, params: captured, profiles };
       },
     );
   } finally {

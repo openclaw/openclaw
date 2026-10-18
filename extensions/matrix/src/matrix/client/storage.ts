@@ -288,14 +288,18 @@ export async function maybeMigrateLegacyStorage({
     return;
   }
   const syncCache = await import("./sync-cache-state.js");
-  const persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
-  if (!persisted) {
+  if (!(await syncCache.readLegacyMatrixSyncCacheState(rootDir))) {
     return;
   }
 
   const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
+  fs.mkdirSync(rootDir, { recursive: true });
   let migrated = false;
   try {
+    const persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
+    if (!persisted) {
+      return;
+    }
     const store = getMatrixRuntime().state.openKeyedStoreV2<
       import("./sync-cache-state.js").MatrixSyncCacheRecord
     >(syncCache.openMatrixSyncCacheStoreOptions(rootDir));

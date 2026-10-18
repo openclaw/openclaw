@@ -1,15 +1,8 @@
-import {
-  escapeHelp,
-  formatLabels,
-  formatPrometheusNumber,
-  metricKey,
-  type LabelSet,
-} from "./prometheus-format.js";
+import { formatLabels, metricKey, type LabelSet } from "./prometheus-format.js";
 
 type ScalarSample = {
   help: string;
-  name: string;
-  prefix: string;
+  labels: LabelSet;
   value: number;
 };
 
@@ -19,9 +12,7 @@ type HistogramSample = {
   counts: number[];
   count: number;
   help: string;
-  name: string;
-  sumPrefix: string;
-  countPrefix: string;
+  labels: string;
   sum: number;
 };
 
@@ -40,8 +31,6 @@ export function createPrometheusMetricStore() {
   const gauges = new Map<string, ScalarSample>();
   const histograms = new Map<string, HistogramSample>();
   let droppedSeries = 0;
-  // Reuse the scrape workspace; render overwrites it, and reset releases it.
-  const parts: string[] = [];
 
   const canCreateSeries = <T>(map: Map<string, T>, key: string): boolean => {
     if (map.has(key)) {
@@ -67,7 +56,7 @@ export function createPrometheusMetricStore() {
       existing.value += amount;
       return;
     }
-    counters.set(key, { help, name, prefix: `${name}${formatLabels(labels)} `, value: amount });
+    counters.set(key, { help, labels, value: amount });
   };
 
   const gauge = (name: string, help: string, labels: LabelSet, value: number | undefined) => {
@@ -78,12 +67,7 @@ export function createPrometheusMetricStore() {
     if (!canCreateSeries(gauges, key)) {
       return;
     }
-    const existing = gauges.get(key);
-    if (existing) {
-      existing.value = value;
-      return;
-    }
-    gauges.set(key, { help, name, prefix: `${name}${formatLabels(labels)} `, value });
+    gauges.set(key, { help, labels, value });
   };
 
   const counterValue = (name: string, help: string, labels: LabelSet, value: number) => {
@@ -91,15 +75,9 @@ export function createPrometheusMetricStore() {
       return;
     }
     const key = metricKey(name, labels);
-    if (!canCreateSeries(counters, key)) {
-      return;
+    if (canCreateSeries(counters, key)) {
+      counters.set(key, { help, labels, value: Math.max(counters.get(key)?.value ?? 0, value) });
     }
-    const existing = counters.get(key);
-    if (existing) {
-      existing.value = Math.max(existing.value, value);
-      return;
-    }
-    counters.set(key, { help, name, prefix: `${name}${formatLabels(labels)} `, value });
   };
 
   const clearGauges = (name: string) => {
@@ -135,9 +113,7 @@ export function createPrometheusMetricStore() {
         counts: buckets.map(() => 0),
         count: 0,
         help,
-        name,
-        sumPrefix: `${name}_sum${formatLabels(labels)} `,
-        countPrefix: `${name}_count${formatLabels(labels)} `,
+        labels: formatLabels(labels),
         sum: 0,
       };
       histograms.set(key, sample);
@@ -152,51 +128,23 @@ export function createPrometheusMetricStore() {
     }
   };
 
-  const render = () => {
-    let index = 0;
-    const write = (prefix: string, value: number) => {
-      parts[index++] = prefix;
-      parts[index++] = formatPrometheusNumber(value);
-      parts[index++] = "\n";
-    };
-    const emitted = new Set<string>();
-    const header = (name: string, type: string, help: string) => {
-      if (!emitted.has(name)) {
-        emitted.add(name);
-        parts[index++] = `# HELP ${name} ${escapeHelp(help)}\n# TYPE ${name} ${type}\n`;
-      }
-    };
-    for (const [type, samples] of [
-      ["counter", counters],
-      ["gauge", gauges],
-    ] as const) {
-      for (const [, sample] of [...samples].toSorted(([left], [right]) =>
-        left.localeCompare(right),
-      )) {
-        header(sample.name, type, sample.help);
-        write(sample.prefix, sample.value);
-      }
-      if (type === "counter" && droppedSeries > 0) {
-        header(
-          DROPPED_SERIES_COUNTER_NAME,
-          type,
-          "Prometheus metric series dropped because the exporter series cap was reached.",
-        );
-        write(`${DROPPED_SERIES_COUNTER_NAME} `, droppedSeries);
-      }
+  const snapshot = () => {
+    const counterSnapshot = [...counters];
+    if (droppedSeries > 0) {
+      counterSnapshot.push([
+        metricKey(DROPPED_SERIES_COUNTER_NAME, {}),
+        {
+          help: "Prometheus metric series dropped because the exporter series cap was reached.",
+          labels: {},
+          value: droppedSeries,
+        },
+      ]);
     }
-    for (const [, sample] of [...histograms].toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    )) {
-      header(sample.name, "histogram", sample.help);
-      sample.bucketPrefixes.forEach((prefix, bucketIndex) => {
-        write(prefix, sample.counts[bucketIndex] ?? sample.count);
-      });
-      write(sample.sumPrefix, sample.sum);
-      write(sample.countPrefix, sample.count);
-    }
-    parts.length = index;
-    return parts.join("");
+    return {
+      counters: counterSnapshot,
+      gauges: [...gauges],
+      histograms: [...histograms],
+    };
   };
 
   const reset = () => {
@@ -204,8 +152,7 @@ export function createPrometheusMetricStore() {
     gauges.clear();
     histograms.clear();
     droppedSeries = 0;
-    parts.length = 0;
   };
 
-  return { counter, counterValue, gauge, clearGauges, histogram, reset, render };
+  return { counter, counterValue, gauge, clearGauges, histogram, reset, snapshot };
 }

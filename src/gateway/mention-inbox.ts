@@ -17,10 +17,7 @@ import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { warnMentionInboxDeprecation } from "../plugins/compat/mention-inbox-deprecation.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
-import {
-  sessionChangeScopeAffectsStoredRows,
-  sessionChanges,
-} from "../sessions/session-row-changes.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   openClawStateDatabaseCache,
@@ -386,9 +383,6 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   // The inbox retains worker-prepared sharing facts. Committed row publications
   // invalidate them; direct reads and delayed pushes consume the same receipt-backed facts.
   const stopRows = sessionChanges.subscribeFacts((change) => {
-    if (!sessionChangeScopeAffectsStoredRows(change)) {
-      return;
-    }
     if (
       !("facts" in change) ||
       !change.facts ||

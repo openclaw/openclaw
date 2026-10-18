@@ -108,10 +108,8 @@ it.each(["legacy-running", "legacy-terminal", "started-terminal", "receiptless"]
         const recovered = (await loadCronStore(storePath)).jobs[0];
         expect(recovered).toMatchObject({
           enabled: false,
-          state: { lastRunStatus: "error", lastDeliveryStatus: "unknown" },
+          state: { lastRunStatus: "error", lastDeliveryStatus: "unknown", consecutiveErrors: 1 },
         });
-        expect(recovered?.state.consecutiveErrors).toBeUndefined();
-        expect(recovered?.state.autoDisabled).toBeUndefined();
         expect(recovered?.state.runningAtMs).toBeUndefined();
         expect(recovered?.state.nextRunAtMs).toBeUndefined();
         expect(recovered?.state.startupCatchupAtMs).toBeUndefined();

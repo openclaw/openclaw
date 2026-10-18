@@ -1,6 +1,7 @@
 import "./account-usage.tsx";
 import { createMemo, For, onCleanup, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { icons } from "../../components/icons.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -30,7 +31,7 @@ export function showProfileActionError(error: unknown): void {
   showToast({
     placement: "bottom",
     message: modelProviderErrorMessage(error),
-    icon: "alertTriangle",
+    icon: icons.alertTriangle,
     durationMs: 12_000,
   });
 }
@@ -39,7 +40,7 @@ export function showProfileLogoutSuccess(warning?: string): void {
   showToast({
     placement: "bottom",
     message: [t("modelProviders.logout.done"), warning].filter(Boolean).join(" "),
-    icon: "check",
+    icon: icons.check,
   });
 }
 
@@ -48,7 +49,6 @@ type ProviderProfile = ModelProviderCard["profiles"][number];
 export type ProviderProfilesViewProps = {
   usageClient?: GatewayBrowserClient | null;
   usageAgentId?: string;
-  registerAccountUsage?: (element: ModelAccountUsageElement) => () => void;
   busy: Record<string, boolean>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -513,11 +513,7 @@ function ProviderProfileRow(
   },
 ) {
   let cancelDrag: (() => void) | undefined;
-  let releaseUsage: (() => void) | undefined;
-  onCleanup(() => {
-    cancelDrag?.();
-    releaseUsage?.();
-  });
+  onCleanup(() => cancelDrag?.());
   const profile = () => props.row.profile;
   const group = () => props.row.group;
   const provider = () => group().provider;
@@ -619,7 +615,6 @@ function ProviderProfileRow(
       <ProfileIdentity profile={profile()} identity={props.identity} showDetails />
       {provider() === "openai" && profile().type !== "api_key" ? (
         <openclaw-model-account-usage
-          ref={(element) => (releaseUsage = props.registerAccountUsage?.(element))}
           prop:client={props.usageClient ?? null}
           prop:agentId={props.usageAgentId ?? ""}
           prop:profileId={profile().profileId}

@@ -109,8 +109,6 @@ async function loginAttempt(ctx: ProviderAuthContext, binaryPath: string): Promi
 }
 
 export async function runMuseLogin(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
-  ctx.signal?.throwIfAborted();
-  ctx.assertCurrent?.();
   const config = ctx.config.plugins?.entries?.muse?.config;
   const pluginConfig = isRecord(config) ? config : {};
   const binaryPath = typeof pluginConfig.binaryPath === "string" ? pluginConfig.binaryPath : "muse";

@@ -11,6 +11,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
+import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
@@ -31,7 +32,6 @@ type DraftProjectSelection =
 
 type DraftPlaceBrowserCallbacks = {
   requestUpdate: () => void;
-  updateComplete: () => Promise<unknown>;
   pickerIdPrefix?: string;
   onProjectMissing: () => void;
   onSelectProject: (projectId: string) => void;
@@ -53,9 +53,12 @@ export class DraftPlaceBrowser {
   private debouncedProjectQuery = "";
   private browserOpenValue = false;
   private browserProjectPathValue: string | null = null;
-  private browserRegistration: object | null = null;
+  private browserRegistrationId: number | null = null;
+  private browserRegistrationCounter = 0;
   private openPopoverValue: DraftPickerKind | null = null;
   private focusRequestId = 0;
+  // Independent hide animations can overlap; keep every trigger fenced until its own completes.
+  private readonly hidingPopovers = new Set<DraftPickerKind>();
   private projectSearchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   readonly browser: PlaceBrowserState;
@@ -67,6 +70,7 @@ export class DraftPlaceBrowser {
   private projectSearchFailure: unknown;
 
   constructor(
+    private readonly host: Pick<ControllerHost, "addController" | "updateComplete">,
     private readonly gateway: DraftGatewayState,
     private readonly read: () => DraftPlaceBrowserSnapshot,
     private readonly callbacks: DraftPlaceBrowserCallbacks,
@@ -103,14 +107,17 @@ export class DraftPlaceBrowser {
           .catch(() => undefined);
       },
     );
-  }
-
-  synchronize() {
-    this.bindProjectCatalog();
-    const args = this.projectSearchInput();
-    if (!args.every((arg, index) => Object.is(arg, this.projectSearchArgs[index]))) {
-      this.searchProjects(args);
-    }
+    // Draft lifetime can outlive the DOM during an instant-thread handoff.
+    // The page's disposeDraft owns disconnect; queued updates must not revive it.
+    host.addController({
+      hostUpdate: () => {
+        this.bindProjectCatalog();
+        const args = this.projectSearchInput();
+        if (!args.every((arg, index) => Object.is(arg, this.projectSearchArgs[index]))) {
+          this.searchProjects(args);
+        }
+      },
+    });
   }
 
   private projectSearchInput() {
@@ -261,16 +268,22 @@ export class DraftPlaceBrowser {
   }
 
   get browserRegistering(): boolean {
-    return this.browserRegistration !== null;
+    return this.browserRegistrationId !== null;
   }
 
   popoverOpen(kind: DraftPickerKind): boolean {
     return this.openPopoverValue === kind;
   }
 
+  popoverHiding(kind: DraftPickerKind): boolean {
+    return this.hidingPopovers.has(kind);
+  }
+
   popoverCallbacks(kind: DraftPickerKind) {
     return {
       popoverOpen: this.popoverOpen(kind),
+      popoverHiding: this.popoverHiding(kind),
+      onGuardTransition: (event: MouseEvent) => this.guardPopoverTransition(event, kind),
       onPopoverShow: () => this.transitionPopover(kind, true),
       onPopoverHide: () => this.transitionPopover(kind, false),
       onPopoverAfterHide: () => this.onPopoverAfterHide(kind),
@@ -438,12 +451,15 @@ export class DraftPlaceBrowser {
     ) {
       return;
     }
-    const listing = this.browser.listing;
-    const operation = {};
-    this.browserRegistration = operation;
+    const generation = this.browser.listingGeneration;
+    const id = ++this.browserRegistrationCounter;
+    this.browserRegistrationId = id;
+    // Navigation/loading/errors hide the project path; IDs retire reset or superseded work.
+    // Plain filtering preserves both, so a valid registration can finish.
+    // A replaced listing retires registration even when the same folder is loaded again.
     const isCurrentRegistration = () =>
-      this.browserRegistration === operation &&
-      this.browser.listing === listing &&
+      this.browserRegistrationId === id &&
+      this.browser.listingGeneration === generation &&
       this.browserProjectPath === path &&
       client === this.gateway.client;
     this.browser.error = null;
@@ -464,8 +480,8 @@ export class DraftPlaceBrowser {
         this.browser.error = formatUiError(error);
       }
     } finally {
-      if (this.browserRegistration === operation) {
-        this.browserRegistration = null;
+      if (this.browserRegistrationId === id) {
+        this.browserRegistrationId = null;
         this.callbacks.requestUpdate();
       }
     }
@@ -477,8 +493,11 @@ export class DraftPlaceBrowser {
       if (kind === "where") {
         this.environmentQueryValue = "";
       }
-    } else if (this.openPopoverValue === kind) {
-      this.openPopoverValue = null;
+    } else {
+      if (this.openPopoverValue === kind) {
+        this.openPopoverValue = null;
+      }
+      this.hidingPopovers.add(kind);
     }
     if (kind === "project") {
       this.showRoot();
@@ -488,6 +507,7 @@ export class DraftPlaceBrowser {
   }
 
   onPopoverAfterHide(kind: DraftPickerKind) {
+    this.hidingPopovers.delete(kind);
     const id = `${this.callbacks.pickerIdPrefix ?? "new-session"}-${kind}-trigger`;
     const active = this.callbacks.activeElement();
     const popover = this.callbacks.querySelector(`.new-session-page__${kind}-popover`);
@@ -495,6 +515,19 @@ export class DraftPlaceBrowser {
     if (!active || active === body || popover?.contains(active)) {
       (this.callbacks.querySelector(`#${id}`) as HTMLButtonElement | null)?.focus();
     }
+    this.callbacks.requestUpdate();
+  }
+
+  guardPopoverTransition(event: Event, kind: DraftPickerKind) {
+    if (!this.hidingPopovers.has(kind)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  clearPopoverHiding() {
+    this.hidingPopovers.clear();
     this.callbacks.requestUpdate();
   }
 
@@ -515,7 +548,7 @@ export class DraftPlaceBrowser {
     this.browser.reset();
     this.browserOpenValue = false;
     this.browserProjectPathValue = null;
-    this.browserRegistration = null;
+    this.browserRegistrationId = null;
     if (closePopover) {
       this.openPopoverValue = null;
     }
@@ -530,8 +563,12 @@ export class DraftPlaceBrowser {
   private focusProjectView(selector: string) {
     const requestId = ++this.focusRequestId;
     const origin = this.callbacks.activeElement();
-    void this.callbacks.updateComplete().then(() => {
-      if (requestId !== this.focusRequestId || this.openPopoverValue !== "project") {
+    void this.host.updateComplete.then(() => {
+      if (
+        requestId !== this.focusRequestId ||
+        this.openPopoverValue !== "project" ||
+        this.hidingPopovers.has("project")
+      ) {
         return;
       }
       const active = this.callbacks.activeElement();

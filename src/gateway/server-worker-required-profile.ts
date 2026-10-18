@@ -88,14 +88,13 @@ export function createRequiredWorkerSessionPreparation(options: {
           signal: source.signal,
           waitForReady: preparation?.waitForReady,
           retainDispatch: preparation?.retainDispatch,
-          prepareWorkspace: async (canPrepare) => {
-            source.entry = await ensureSessionWorkspaceForPlacement({
+          prepareWorkspace: (canPrepare) =>
+            ensureSessionWorkspaceForPlacement({
               cfg: options.getConfig(),
               ...source,
               assertCurrent,
               canPrepare,
-            });
-          },
+            }),
         });
         try {
           placement.assertCurrent();

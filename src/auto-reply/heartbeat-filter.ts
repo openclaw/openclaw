@@ -3,7 +3,6 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
-import { isSilentAssistantTranscriptMessage } from "../shared/chat-message-content.js";
 import {
   collectToolCallIds,
   isContractToolCallBlock,
@@ -166,11 +165,7 @@ export function isHeartbeatOkResponse(
     return false;
   }
   const { text, hasNonTextContent } = resolveMessageText(message.content);
-  return (
-    !hasNonTextContent &&
-    (isSilentAssistantTranscriptMessage(message) ||
-      isHeartbeatAcknowledgementText(text, ackMaxChars))
-  );
+  return !hasNonTextContent && isHeartbeatAcknowledgementText(text, ackMaxChars);
 }
 
 function advancePastAdjacentToolResults(

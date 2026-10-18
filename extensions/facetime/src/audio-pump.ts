@@ -198,46 +198,17 @@ async function terminateProcess(proc: ChildProcess, signal: NodeJS.Signals = "SI
   }
 }
 
-function createAudioReadiness() {
-  const deferred = createDeferred<void>();
-  let settled = false;
-  let timer: NodeJS.Timeout | undefined;
-  void deferred.promise.catch(() => {});
-  return {
-    promise: deferred.promise,
-    start(timeoutMs: number, onTimeout: () => void) {
-      if (settled || timer) {
-        return;
-      }
-      timer = setTimeout(onTimeout, timeoutMs);
-      timer.unref?.();
-    },
-    settle(error?: Error) {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      timer = undefined;
-      if (error) {
-        deferred.reject(error);
-      } else {
-        deferred.resolve();
-      }
-    },
-  };
-}
-
 export function startFaceTimeAudioPump(params: {
   captureBinary: string;
   logger: RuntimeLogger;
   onInputAudio: (audio: Buffer) => void;
   onError?: (error: Error) => boolean | void | Promise<boolean | void>;
   onSuppressionLost?: (error: Error) => void | Promise<void>;
-  onPlaybackDrained?: () => void;
+  onPlaybackDrained?: (event: { generation: number; playedFrames: number }) => void;
 }): FaceTimeAudioPump {
   const childEnv = sanitizedAudioChildEnv();
   const playbackClock = new PlaybackClock();
+  let playbackGeneration = 1;
   let drainTimer: NodeJS.Timeout | undefined;
   let outputProcess: ChildProcess;
   const captureProcess = spawnAudioProcess(
@@ -248,9 +219,44 @@ export function startFaceTimeAudioPump(params: {
   let mediaSuspended = false;
   let captureSuppressionActive = false;
   let captureFailureReported = false;
+  let captureReadySettled = false;
+  let routeReadySettled = false;
+  let routeReadyTimer: NodeJS.Timeout | undefined;
   let captureStderr = "";
-  const captureReady = createAudioReadiness();
-  const routeReady = createAudioReadiness();
+  const captureReady = createDeferred<void>();
+  const routeReady = createDeferred<void>();
+  const captureReadyPromise = captureReady.promise;
+  const routeReadyPromise = routeReady.promise;
+  void captureReadyPromise.catch(() => {});
+  void routeReadyPromise.catch(() => {});
+
+  const settleCaptureReady = (error?: Error) => {
+    if (captureReadySettled) {
+      return;
+    }
+    captureReadySettled = true;
+    clearTimeout(captureReadyTimer);
+    if (error) {
+      captureReady.reject(error);
+    } else {
+      captureReady.resolve();
+    }
+  };
+  const settleRouteReady = (error?: Error) => {
+    if (routeReadySettled) {
+      return;
+    }
+    routeReadySettled = true;
+    if (routeReadyTimer) {
+      clearTimeout(routeReadyTimer);
+      routeReadyTimer = undefined;
+    }
+    if (error) {
+      routeReady.reject(error);
+    } else {
+      routeReady.resolve();
+    }
+  };
   const reportFailure = (error: Error, suppressionLost: boolean) => {
     if (stopped) {
       return;
@@ -259,8 +265,8 @@ export function startFaceTimeAudioPump(params: {
       captureSuppressionActive = false;
       void params.onSuppressionLost?.(error);
     }
-    captureReady.settle(error);
-    routeReady.settle(error);
+    settleCaptureReady(error);
+    settleRouteReady(error);
     params.logger.warn(`[facetime] native audio bridge failed: ${formatErrorMessage(error)}`);
     void Promise.resolve(params.onError?.(error)).then((safeToStop) => {
       if (safeToStop !== false) {
@@ -298,15 +304,26 @@ export function startFaceTimeAudioPump(params: {
     return proc;
   };
   outputProcess = spawnOutput();
-  captureReady.start(10_000, () => {
+  const captureReadyTimer = setTimeout(() => {
     reportFailure(new Error("FaceTime process tap was not ready within 10 seconds"), true);
-  });
+  }, 10_000);
+  captureReadyTimer.unref?.();
+  const startRouteReadyTimer = () => {
+    if (routeReadySettled || routeReadyTimer) {
+      return;
+    }
+    routeReadyTimer = setTimeout(() => {
+      reportFailure(new Error("FaceTime input route was not verified within 15 seconds"), true);
+    }, 15_000);
+    routeReadyTimer.unref?.();
+  };
   const clearPlayback = () => {
     if (stopped || mediaSuspended) {
       return;
     }
     const previous = outputProcess;
     outputProcess = spawnOutput();
+    playbackGeneration += 1;
     cancelDrainTimer();
     playbackClock.reset();
     void terminateProcess(previous, "SIGKILL");
@@ -317,8 +334,8 @@ export function startFaceTimeAudioPump(params: {
     }
     mediaSuspended = true;
     captureSuppressionActive = false;
-    captureReady.settle(new Error("FaceTime native audio bridge stopped before readiness"));
-    routeReady.settle(new Error("FaceTime input route stopped before verification"));
+    settleCaptureReady(new Error("FaceTime native audio bridge stopped before readiness"));
+    settleRouteReady(new Error("FaceTime input route stopped before verification"));
     cancelDrainTimer();
     playbackClock.reset();
     try {
@@ -351,10 +368,10 @@ export function startFaceTimeAudioPump(params: {
     for (const line of captureStderr.split(/\r?\n/u).slice(0, -1)) {
       if (line.includes("started FaceTime process tap")) {
         captureSuppressionActive = true;
-        captureReady.settle();
+        settleCaptureReady();
       }
       if (line.includes("verified OpenClaw-Mic input route")) {
-        routeReady.settle();
+        settleRouteReady();
       }
       const fatal = line.match(/facetime-audio-capture: fatal(?:-safety-retained)?:\s*(.*)$/u);
       if (!captureFailureReported && fatal) {
@@ -382,12 +399,10 @@ export function startFaceTimeAudioPump(params: {
   });
 
   return {
-    suppressionReady: async () => await captureReady.promise,
+    suppressionReady: async () => await captureReadyPromise,
     routeReady: async () => {
-      routeReady.start(15_000, () => {
-        reportFailure(new Error("FaceTime input route was not verified within 15 seconds"), true);
-      });
-      await routeReady.promise;
+      startRouteReadyTimer();
+      await routeReadyPromise;
     },
     processOutputSuppressed: () => captureSuppressionActive,
     writeOutputAudio(audio, metadata) {
@@ -420,8 +435,9 @@ export function startFaceTimeAudioPump(params: {
         return;
       }
       cancelDrainTimer();
+      const generation = playbackGeneration;
       const notifyWhenDrained = () => {
-        if (stopped || mediaSuspended) {
+        if (stopped || mediaSuspended || generation !== playbackGeneration) {
           return;
         }
         const delayMs = Math.ceil(playbackClock.millisecondsUntilDrained());
@@ -432,7 +448,10 @@ export function startFaceTimeAudioPump(params: {
         }
         drainTimer = undefined;
         playbackClock.retireItems();
-        params.onPlaybackDrained?.();
+        params.onPlaybackDrained?.({
+          generation,
+          playedFrames: Math.floor(playbackClock.playedFrames()),
+        });
       };
       notifyWhenDrained();
     },

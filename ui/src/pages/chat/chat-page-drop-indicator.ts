@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from "solid-js";
+import type { ReactiveControllerHost } from "lit";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
 import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import {
@@ -11,12 +11,13 @@ import {
 export type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
 
 function resolveDropIndicator(
-  container: HTMLElement | undefined,
+  host: ParentNode,
   pane: ChatPaneElement,
   x: number,
   y: number,
 ): DropIndicator | null {
   const paneId = pane.paneId ?? pane.dataset.unboundPaneId;
+  const container = host.querySelector<HTMLElement>(".chat-split-view__drop-container");
   if (!paneId || !container) {
     return null;
   }
@@ -36,29 +37,47 @@ function resolveDropIndicator(
   };
 }
 
-export function createChatPageDropIndicator(
-  host: HTMLElement,
-  options: {
-    sessionSplitAvailable: () => boolean;
-    narrow: () => boolean;
-    applySessionDrop: (sessionKey: string, paneId: string, zone: SplitDropZone) => void;
-  },
-) {
-  const [indicator, setIndicator] = createSignal<DropIndicator | null>(null);
-  let container: HTMLElement | undefined;
-  let dragDepth = 0;
-  let dragFrame = 0;
-  let pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
+export class ChatPageDropIndicator {
+  indicator: DropIndicator | null = null;
+  private dragDepth = 0;
+  private dragFrame = 0;
+  private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
 
-  const handleDragEnter = (event: DragEvent) => {
-    if (!options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
+  constructor(
+    private readonly host: HTMLElement & Pick<ReactiveControllerHost, "requestUpdate">,
+    private readonly options: {
+      sessionSplitAvailable: () => boolean;
+      narrow: () => boolean;
+      applySessionDrop: (sessionKey: string, paneId: string, zone: SplitDropZone) => void;
+    },
+  ) {}
+
+  connect(): void {
+    this.host.addEventListener("dragenter", this.handleDragEnter);
+    this.host.addEventListener("dragover", this.handleDragOver);
+    this.host.addEventListener("dragleave", this.handleDragLeave);
+    this.host.addEventListener("drop", this.handleDrop);
+    window.addEventListener("dragend", this.clear);
+  }
+
+  disconnect(): void {
+    this.host.removeEventListener("dragenter", this.handleDragEnter);
+    this.host.removeEventListener("dragover", this.handleDragOver);
+    this.host.removeEventListener("dragleave", this.handleDragLeave);
+    this.host.removeEventListener("drop", this.handleDrop);
+    window.removeEventListener("dragend", this.clear);
+    this.clear();
+  }
+
+  private readonly handleDragEnter = (event: DragEvent) => {
+    if (!this.options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
       return;
     }
-    dragDepth += 1;
+    this.dragDepth += 1;
   };
 
-  const handleDragOver = (event: DragEvent) => {
-    if (!options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
+  private readonly handleDragOver = (event: DragEvent) => {
+    if (!this.options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
       return;
     }
     event.preventDefault();
@@ -67,94 +86,78 @@ export function createChatPageDropIndicator(
     }
     const target = event.target instanceof Element ? event.target : null;
     const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane, [data-unbound-pane-id]");
-    if (!pane || !host.contains(pane)) {
-      clear();
+    if (!pane || !this.host.contains(pane)) {
+      this.clear();
       return;
     }
-    pendingDragOver = { pane, x: event.clientX, y: event.clientY };
-    if (dragFrame) {
+    this.pendingDragOver = { pane, x: event.clientX, y: event.clientY };
+    if (this.dragFrame) {
       return;
     }
-    dragFrame = window.requestAnimationFrame(() => {
-      dragFrame = 0;
-      const pending = pendingDragOver;
-      pendingDragOver = null;
-      if (!pending || options.narrow() || !host.isConnected) {
+    this.dragFrame = window.requestAnimationFrame(() => {
+      this.dragFrame = 0;
+      const pending = this.pendingDragOver;
+      this.pendingDragOver = null;
+      if (!pending || this.options.narrow() || !this.host.isConnected) {
         return;
       }
-      const next = resolveDropIndicator(container, pending.pane, pending.x, pending.y);
-      if (!next) {
-        clear();
+      const indicator = resolveDropIndicator(this.host, pending.pane, pending.x, pending.y);
+      if (!indicator) {
+        this.clear();
         return;
       }
-      setIndicator((current) =>
-        current?.paneId === next.paneId &&
-        current.zone.kind === next.zone.kind &&
-        (next.zone.kind === "center" ||
-          (current.zone.kind === "edge" && current.zone.edge === next.zone.edge))
-          ? current
-          : next,
-      );
+      const current = this.indicator;
+      if (
+        current?.paneId === indicator.paneId &&
+        current.zone.kind === indicator.zone.kind &&
+        (indicator.zone.kind === "center" ||
+          (current.zone.kind === "edge" && current.zone.edge === indicator.zone.edge))
+      ) {
+        return;
+      }
+      this.indicator = indicator;
+      this.host.requestUpdate();
     });
   };
 
-  const handleDragLeave = (event: DragEvent) => {
-    if (!options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
+  private readonly handleDragLeave = (event: DragEvent) => {
+    if (!this.options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
       return;
     }
-    dragDepth = Math.max(0, dragDepth - 1);
-    if (dragDepth === 0) {
-      clear();
+    this.dragDepth = Math.max(0, this.dragDepth - 1);
+    if (this.dragDepth === 0) {
+      this.clear();
     }
   };
 
-  const handleDrop = (event: DragEvent) => {
-    if (!options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
+  private readonly handleDrop = (event: DragEvent) => {
+    if (!this.options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
       return;
     }
     event.preventDefault();
     const sessionKey = readSessionDragData(event.dataTransfer);
     const target = event.target instanceof Element ? event.target : null;
     const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane, [data-unbound-pane-id]");
-    const destination =
-      pane && host.contains(pane)
-        ? resolveDropIndicator(container, pane, event.clientX, event.clientY)
+    const indicator =
+      pane && this.host.contains(pane)
+        ? resolveDropIndicator(this.host, pane, event.clientX, event.clientY)
         : null;
-    clear();
-    if (sessionKey && destination) {
-      options.applySessionDrop(sessionKey, destination.paneId, destination.zone);
+    this.clear();
+    if (sessionKey && indicator) {
+      this.options.applySessionDrop(sessionKey, indicator.paneId, indicator.zone);
     }
   };
 
-  const clear = () => {
-    dragDepth = 0;
-    pendingDragOver = null;
-    if (dragFrame) {
-      window.cancelAnimationFrame(dragFrame);
-      dragFrame = 0;
+  readonly clear = () => {
+    this.dragDepth = 0;
+    this.pendingDragOver = null;
+    if (this.dragFrame) {
+      window.cancelAnimationFrame(this.dragFrame);
+      this.dragFrame = 0;
     }
-    setIndicator(null);
-  };
-
-  const listeners = new AbortController();
-  const optionsWithSignal = { signal: listeners.signal };
-  host.addEventListener("dragenter", handleDragEnter, optionsWithSignal);
-  host.addEventListener("dragover", handleDragOver, optionsWithSignal);
-  host.addEventListener("dragleave", handleDragLeave, optionsWithSignal);
-  host.addEventListener("drop", handleDrop, optionsWithSignal);
-  window.addEventListener("dragend", clear, optionsWithSignal);
-  onCleanup(() => {
-    listeners.abort();
-    pendingDragOver = null;
-    if (dragFrame) {
-      window.cancelAnimationFrame(dragFrame);
+    if (this.indicator) {
+      this.indicator = null;
+      this.host.requestUpdate();
     }
-  });
-  return {
-    indicator,
-    clear,
-    containerRef: (element: HTMLElement) => {
-      container = element;
-    },
   };
 }

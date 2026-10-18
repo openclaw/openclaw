@@ -90,7 +90,6 @@ type CronHarnessOptions = {
 };
 type DreamingPluginApi = Parameters<typeof registerShortTermPromotionDreaming>[0];
 type DreamingPluginApiTestDouble = DreamingPluginApi & {
-  backgroundTasks: Promise<unknown>[];
   scheduler: ReturnType<typeof createTestPluginServiceScheduler>;
   logger: ReturnType<typeof createLogger>;
   on: ReturnType<typeof vi.fn>;
@@ -213,7 +212,6 @@ function createDreamingTestContext(
 ) {
   const logger = createLogger();
   const harness = createCronHarness(params.initialJobs, params.cronOptions);
-  const backgroundTasks: Promise<unknown>[] = [];
   const api: DreamingPluginApiTestDouble = {
     ...createTestPluginApi({
       config: params.config ?? createDreamingConfig(),
@@ -221,17 +219,9 @@ function createDreamingTestContext(
       logger,
     }),
     logger,
-    backgroundTasks,
     on: vi.fn<DreamingPluginApi["on"]>(),
     scheduler: createTestPluginServiceScheduler(),
     registerService: vi.fn<DreamingPluginApi["registerService"]>(),
-  };
-  api.lifecycle.runInBackgroundContext = (run) => {
-    const result = run();
-    if (result instanceof Promise) {
-      backgroundTasks.push(result);
-    }
-    return result;
   };
   Object.assign(api.runtime, { agent: createPluginRuntimeMock().agent }, params.runtime);
   return { api, harness, logger };
@@ -302,7 +292,6 @@ async function triggerDreamingServiceStart(
     logger: api.logger,
   } as OpenClawPluginServiceContext;
   await getDreamingService(api).start({ ...context, scheduler: api.scheduler });
-  await Promise.all(api.backgroundTasks);
 }
 
 async function triggerDreamingServiceStop(api: DreamingPluginApiTestDouble): Promise<void> {
@@ -325,15 +314,15 @@ function registerShortTermPromotionDreamingForTest(api: DreamingPluginApiTestDou
 }
 
 describe("dreaming service reconciliation", () => {
-  it("starts before reconciliation settles and drains it on stop without arming runtime recovery", async () => {
+  it("drains pending reconciliation on service stop without arming runtime recovery", async () => {
     vi.useFakeTimers();
     let rejectStartupList: (reason?: unknown) => void = () => undefined;
-    const startupListPromise = new Promise<never>((_resolve, reject) => {
+    const startupListPromise = new Promise<CronJobLike[]>((_resolve, reject) => {
       rejectStartupList = reject;
     });
     let listCalls = 0;
-    const add = vi.fn(async () => ({}));
-    const cron = {
+    const addCalls: CronAddInput[] = [];
+    const cron: CronParam = {
       async list() {
         listCalls += 1;
         if (listCalls === 1) {
@@ -341,26 +330,23 @@ describe("dreaming service reconciliation", () => {
         }
         return [];
       },
-      add,
+      async add(input) {
+        addCalls.push(input);
+        return {};
+      },
       async update() {
         return {};
       },
       async remove() {
         return { removed: false };
       },
-      async removeStaleJobFamily() {
-        return 0;
-      },
-    } satisfies NonNullable<ReturnType<NonNullable<OpenClawPluginServiceContext["getCron"]>>>;
+    };
     const { api, logger } = createDreamingTestContext();
 
     try {
       registerShortTermPromotionDreamingForTest(api);
-      await getDreamingService(api).start({
+      const startup = triggerDreamingServiceStart(api, {
         config: api.config,
-        stateDir: ".",
-        logger,
-        scheduler: api.scheduler,
         getCron: () => cron,
       });
 
@@ -371,11 +357,11 @@ describe("dreaming service reconciliation", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(stopped).toBe(false);
       rejectStartupList(new Error("startup list failed"));
-      await stopping;
+      await Promise.all([startup, stopping]);
       await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
       expect(listCalls).toBe(1);
-      expect(add).not.toHaveBeenCalled();
+      expect(addCalls).toHaveLength(0);
       expectLogContains(logger.error, "dreaming startup reconciliation failed");
     } finally {
       rejectStartupList(new Error("test cleanup"));

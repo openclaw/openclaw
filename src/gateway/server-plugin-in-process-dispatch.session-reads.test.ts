@@ -124,11 +124,7 @@ async function withSyntheticReader(
             entered: catalogEntered.promise,
             readEntered: readEntered.promise.then(() => {
               expect(readiness).toHaveBeenCalledOnce();
-              expect(readiness).toHaveBeenCalledWith({
-                metadataOnly: true,
-                includeCatalog: true,
-                yieldForCatalog: true,
-              });
+              expect(readiness).toHaveBeenCalledWith({ yieldForCatalog: true });
             }),
             release: () => catalogGate?.resolve(),
           };

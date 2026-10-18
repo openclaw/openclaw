@@ -1,5 +1,4 @@
 import { types as utilTypes } from "node:util";
-import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { SCHEMA_MAP_KEYS } from "./schema-walk.js";
@@ -33,7 +32,6 @@ type PublishedRuntimeToolInputSchema = {
   readonly projection: RuntimeToolInputSchemaProjection;
   readonly json: string;
   readonly fingerprint: string;
-  readonly canonicalFingerprint: string;
 };
 
 const publishedSchemas = new WeakMap<object, PublishedRuntimeToolInputSchema>();
@@ -74,12 +72,7 @@ export function publishRuntimeToolInputSchema(
   Object.freeze(projection);
   publishedSchemas.set(
     projection.schema,
-    Object.freeze({
-      projection,
-      json,
-      fingerprint: sha256Hex(json),
-      canonicalFingerprint: sha256Hex(stableStringify(projection.schema)),
-    }),
+    Object.freeze({ projection, json, fingerprint: sha256Hex(json) }),
   );
   return projection;
 }

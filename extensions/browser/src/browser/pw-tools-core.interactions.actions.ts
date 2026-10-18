@@ -1,8 +1,11 @@
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Locator, Page } from "playwright-core";
 import { ACT_MAX_CLICK_DELAY_MS, resolveActInteractionTimeoutMs } from "./act-policy.js";
 import type { BrowserFormField } from "./client-actions.types.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
+import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import {
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
@@ -88,7 +91,7 @@ export async function clickCoordsViaPlaywright(
     await page.mouse.click(opts.x, opts.y, {
       button: opts.button,
       clickCount: opts.doubleClick ? 2 : 1,
-      delay: opts.delayMs ?? 0,
+      delay: resolveBoundedDelayMs(opts.delayMs, "clickCoords delayMs", ACT_MAX_CLICK_DELAY_MS),
     });
   });
 }
@@ -152,7 +155,8 @@ async function runElementInteraction(
 }
 
 export async function hoverViaPlaywright(opts: ElementInteractionOptions): Promise<void> {
-  await runElementInteraction(opts, opts, (locator, options) => locator.hover(options));
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
+  await runElementInteraction(opts, resolved, (locator, options) => locator.hover(options));
 }
 
 export async function dragViaPlaywright(
@@ -164,15 +168,14 @@ export async function dragViaPlaywright(
     timeoutMs?: number;
   },
 ): Promise<void> {
+  const resolvedStart = requireRefOrSelector(opts.startRef, opts.startSelector);
+  const resolvedEnd = requireRefOrSelector(opts.endRef, opts.endSelector);
   const page = await getRestoredPageForTarget(opts);
-  const { label: startLabel, locator: startLocator } = resolveInteractionElement(page, {
-    ref: opts.startRef,
-    selector: opts.startSelector,
-  });
-  const { label: endLabel, locator: endLocator } = resolveInteractionElement(page, {
-    ref: opts.endRef,
-    selector: opts.endSelector,
-  });
+  const { label: startLabel, locator: startLocator } = resolveInteractionElement(
+    page,
+    resolvedStart,
+  );
+  const { label: endLabel, locator: endLocator } = resolveInteractionElement(page, resolvedEnd);
   await runCancellablePageInteraction(
     page,
     opts,
@@ -190,7 +193,11 @@ export async function selectOptionViaPlaywright(
     values: string[];
   },
 ): Promise<void> {
-  await runElementInteraction(opts, opts, (locator, options) =>
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
+  if (!opts.values?.length) {
+    throw new Error("values are required");
+  }
+  await runElementInteraction(opts, resolved, (locator, options) =>
     locator.selectOption(opts.values, options),
   );
 }
@@ -201,10 +208,14 @@ export async function pressKeyViaPlaywright(
     delayMs?: number;
   },
 ): Promise<void> {
+  const key = normalizeOptionalString(opts.key) ?? "";
+  if (!key) {
+    throw new Error("key is required");
+  }
   const page = await getPageForTargetId(opts);
   await runGuardedPageInteraction(page, opts, async () => {
-    await page.keyboard.press(opts.key, {
-      delay: opts.delayMs ?? 0,
+    await page.keyboard.press(key, {
+      delay: resolveNonNegativeIntegerOption(opts.delayMs, 0),
     });
   });
 }
@@ -233,7 +244,9 @@ export async function typeViaPlaywright(
     slowly?: boolean;
   },
 ): Promise<void> {
-  await runElementInteraction(opts, opts, async (locator, { timeout, signal }) => {
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
+  const text = opts.text ?? "";
+  await runElementInteraction(opts, resolved, async (locator, { timeout, signal }) => {
     if (opts.slowly) {
       await locator.click({ timeout, signal });
       const assertion = assertInteractionCurrent(opts);
@@ -241,9 +254,9 @@ export async function typeViaPlaywright(
         await assertion;
       }
       throwIfInteractionAborted(opts.signal);
-      await locator.type(opts.text, { timeout, signal, delay: 75 });
+      await locator.type(text, { timeout, signal, delay: 75 });
     } else {
-      await locator.fill(opts.text, { timeout, signal });
+      await locator.fill(text, { timeout, signal });
     }
     if (opts.submit) {
       const assertion = assertInteractionCurrent(opts);
@@ -265,8 +278,18 @@ export async function fillFormViaPlaywright(
   const page = await getRestoredPageForTarget(opts);
   const timeout = resolveActInteractionTimeoutMs(opts.timeoutMs);
   for (const field of opts.fields) {
-    const { ref, type, value: rawValue } = field;
-    const value = String(rawValue ?? "");
+    const ref = field.ref.trim();
+    if (!ref) {
+      continue;
+    }
+    const type = (field.type || DEFAULT_FILL_FIELD_TYPE).trim() || DEFAULT_FILL_FIELD_TYPE;
+    const rawValue = field.value;
+    const value =
+      typeof rawValue === "string"
+        ? rawValue
+        : typeof rawValue === "number" || typeof rawValue === "boolean"
+          ? String(rawValue)
+          : "";
     const locator = refLocator(page, ref);
     await runCancellablePageInteraction(
       page,
@@ -292,8 +315,12 @@ export async function evaluateViaPlaywright(
     timeoutMs?: number;
   },
 ): Promise<unknown> {
+  const fnText = normalizeOptionalString(opts.fn) ?? "";
+  if (!fnText) {
+    throw new Error("function is required");
+  }
   const fnSource = normalizeBrowserEvaluateFunctionSource(
-    opts.fn,
+    fnText,
     opts.ref ? { argumentName: "el" } : undefined,
   );
   const page = await getRestoredPageForTarget(opts);
@@ -386,9 +413,10 @@ export async function evaluateViaPlaywright(
 }
 
 export async function scrollIntoViewViaPlaywright(opts: ElementInteractionOptions): Promise<void> {
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
   await runElementInteraction(
     opts,
-    opts,
+    resolved,
     (locator, options) => locator.scrollIntoViewIfNeeded(options),
     undefined,
     (timeoutMs) => normalizeTimeoutMs(timeoutMs, 20_000),

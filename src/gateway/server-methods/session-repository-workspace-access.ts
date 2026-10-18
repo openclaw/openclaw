@@ -165,7 +165,6 @@ export async function resolveRepositoryWorkspaceAccess(
     };
     return {
       kind: "active" as const,
-      assertCurrent: () => assertCurrent(repository.revision),
       repository,
       [Symbol.dispose]: release,
       async inspect<T extends Operation>(

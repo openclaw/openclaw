@@ -10,6 +10,7 @@ import { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionCallbacks } from "./draft-submission-contract.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 type FixtureOptions = {
   gateway?: ApplicationContext["gateway"];
@@ -59,7 +60,6 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   };
   // The roster carries the placement policy; a scripted policy arrives with a roster refresh.
   const agents = {
-    subscribe: () => () => undefined,
     state: {
       agentsList: options.placementPolicy ? roster : { ...roster, sessionPlacement: {} },
     },
@@ -101,7 +101,6 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     },
     agents,
     sessions: {
-      subscribe: () => () => undefined,
       state: { result: null },
       createResult: vi.fn(),
       describe: ((params, describeOptions) => {
@@ -117,10 +116,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     },
     chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
-    config: {
-      subscribe: () => () => undefined,
-      current: { cliAgentsEnabled: true, terminalEnabled: true },
-    },
+    config: { current: { cliAgentsEnabled: true, terminalEnabled: true } },
     basePath: "",
     replace: vi.fn(),
     navigateAndWait: vi.fn(async () => undefined),
@@ -132,7 +128,9 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   vi.mocked(context.gateway.setSessionKey).mockImplementation((sessionKey) => {
     context.gateway.snapshot.sessionKey = sessionKey;
   });
+  const host = new TestReactiveControllerHost();
   const gateway = new DraftGatewayState(
+    host,
     () => ({
       context,
       data: options.data,
@@ -165,6 +163,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     },
   );
   const browser = new DraftPlaceBrowser(
+    host,
     gateway,
     () => ({
       context,
@@ -172,7 +171,6 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     }),
     {
       requestUpdate: vi.fn(),
-      updateComplete: () => Promise.resolve(),
       onProjectMissing: () => place?.clearProjectSelection(),
       onSelectProject: (projectId) => place?.selectProjectId(projectId),
       onApprovedListing: (listing) => place?.recordGatewayApprovedListing(listing),

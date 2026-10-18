@@ -72,19 +72,14 @@ describe.skipIf(!hasBrowserLayout)("dream diary browser layout", () => {
       onRefreshImports: () => {},
       onRefreshWikiOverview: () => {},
       onOpenConfig: () => {},
-      onOpenWikiPage: async () => {},
-      onCloseWikiPreview: () => {},
-      wikiPreview: null,
+      onOpenWikiPage: async () => null,
       onBackfillDiary: () => {},
       onCopyDreamingArchivePath: () => {},
       onDedupeDreamDiary: () => {},
       onResetDiary: () => {},
       onResetGroundedShortTerm: () => {},
       onRepairDreamingArtifacts: () => {},
-      onViewStateChange: (update) => {
-        update(viewState);
-        renderDreamingView(props, host!);
-      },
+      onViewStateChange: () => renderDreamingView(props, host!),
     };
     renderDreamingView(props, host);
 

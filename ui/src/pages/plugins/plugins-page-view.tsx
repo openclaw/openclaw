@@ -360,7 +360,7 @@ export function PluginsPageView(props: { page: PluginsPageController; revision: 
         )}
       </SettingsWorkspace>
       <PluginSkillPreview controller={page().skillPreview} state={page().skillPreview.state} />
-      <WizardLogin controller={props.page.mcpLogin.dialog} />
+      <WizardLogin controller={props.page.mcpLogin.dialog} revision={props.revision} />
       <Show when={page().consentController.consent}>
         {(consent) => {
           const icon = createMemo(() => {

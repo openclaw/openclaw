@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   handleA2uiHttpRequestWithRootResolver,
   type A2uiHttpRequest,
@@ -95,7 +94,7 @@ export async function readPublicA2uiResource(
   }
   try {
     return {
-      body: await readFileHandleBounded(opened.handle, Infinity),
+      body: await opened.handle.readFile(),
       contentType: "application/javascript; charset=utf-8",
     };
   } finally {

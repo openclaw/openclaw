@@ -11,7 +11,7 @@ import { createCodexTestHostCapabilities } from "./host-capability.test-support.
 import { listCodexAppServerModels } from "./models.js";
 import { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import {
-  captureCodexAppServerClientLifetime,
+  captureSharedCodexAppServerCatalogLifetime,
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
@@ -27,16 +27,16 @@ export function registerSharedClientIdleTests() {
     start.mockResolvedValueOnce(first.client).mockResolvedValueOnce(second.client);
     const read = () => listCodexAppServerModels();
     expect((await read()).models).toMatchObject([{ id: "fixture-model" }]);
-    const assertCurrent = captureCodexAppServerClientLifetime(first.client, "connection");
+    const current = captureSharedCodexAppServerCatalogLifetime(first.client);
     await vi.advanceTimersByTimeAsync(29_999);
     expect(first.client.getCloseError()).toBeUndefined();
     expect((await read()).models).toMatchObject([{ id: "fixture-model" }]);
     expect(start).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(29_999);
-    expect(assertCurrent).not.toThrow();
+    expect(current()).toBe(true);
     await vi.advanceTimersByTimeAsync(1);
     expect(first.client.getCloseError()).toBeDefined();
-    expect(assertCurrent).toThrow("connection changed");
+    expect(current()).toBe(false);
     expect((await read()).models).toMatchObject([{ id: "fixture-model" }]);
     expect(start).toHaveBeenCalledTimes(2);
   });

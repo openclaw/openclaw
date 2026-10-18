@@ -87,6 +87,7 @@ async function prepareCliHistoryBoundaryOnce(
   let assertPhysicalSource = () => {
     memory?.owner?.assertCurrent();
     memory?.binding?.actor.assertReadable();
+    memory?.authority.assertCurrent();
   };
   const plan = memory
     ? await planCliHistoryBoundary(
@@ -122,7 +123,6 @@ async function prepareCliHistoryBoundaryOnce(
   const { target, snapshot, watermark, boundary, allowed, writerRunId } = plan;
   const assertCurrent = composeSessionSourceAssertion([assertRunCurrent], (assertSource) => {
     assertSource();
-    memory?.authority.assertCurrent();
     assertPhysicalSource();
   });
   assertCurrent();
@@ -238,10 +238,7 @@ async function prepareCliHistoryBoundaryOnce(
     throw new Error("CLI history writer is no longer active");
   }
   bindAgentRunTerminalWriteContext(authority, {
-    // Terminal bookkeeping keeps the admitted account/row facts after execution
-    // is cancelled. The transcript writer still checks those facts at commit.
-    run: (write) =>
-      runWithCliHistoryWriter({ ...writer, assertCurrent: assertPhysicalSource }, write),
+    run: (write) => runWithCliHistoryWriter(writer, write),
   });
   return writer;
 }

@@ -430,14 +430,8 @@ async function readWindowsTaskCommand(
         }
         continue;
       }
-      // Redirection targets are shell syntax, not executable argv or cwd.
-      const parsedCommand = lower.startsWith("cd /d ") ? line : stripTrailingCmdRedirections(line);
-      if (parsedCommand === null && requireEffective) {
-        throw new Error("Ambiguous Scheduled Task launcher command");
-      }
-      const effectiveLine = parsedCommand ?? line;
       // Managed literals are encoded; unresolved CMD expansion cannot prove argv or cwd.
-      if (requireEffective && /[%!]/.test(effectiveLine.replace(/%%|\^!/g, ""))) {
+      if (requireEffective && /[%!]/.test(line.replace(/%%|\^!/g, ""))) {
         throw new Error("Dynamic Scheduled Task launcher command");
       }
       if (lower.startsWith("cd /d ")) {
@@ -451,7 +445,13 @@ async function readWindowsTaskCommand(
         workingDirectory = cdArguments[2] ?? "";
         continue;
       }
-      commandLine = effectiveLine;
+      // Generated stdin and operator-added output redirections are shell syntax,
+      // not arguments of the process whose ownership lifecycle controls verify.
+      const parsedCommand = stripTrailingCmdRedirections(line);
+      if (parsedCommand === null && requireEffective) {
+        throw new Error("Ambiguous Scheduled Task launcher command");
+      }
+      commandLine = parsedCommand ?? line;
     }
     if (!commandLine) {
       throw new Error("Missing Scheduled Task command");

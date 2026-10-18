@@ -7,11 +7,7 @@ import {
   readGeminiCliCredentialsCached,
   resolveCodexCliHomePath,
 } from "../agents/cli-credentials.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import {
-  resolveConfiguredRouteModelLabel,
-  resolveDefaultModelForAgent,
-} from "../agents/model-selection.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -127,12 +123,7 @@ export async function detectInferenceBackends(
       cfg: options.config ?? {},
       ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
     });
-    const profileId = splitTrailingAuthProfile(existingModel).profile;
-    const modelRef = resolveConfiguredRouteModelLabel({
-      configuredRef: existingModel,
-      resolved,
-      ...(profileId ? { profileId } : {}),
-    });
+    const modelRef = `${resolved.provider}/${resolved.model}`;
     candidates.push({
       kind: "existing-model",
       // Approval and activation bind to the executable target, not a mutable

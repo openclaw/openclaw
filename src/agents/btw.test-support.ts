@@ -9,6 +9,7 @@ import {
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import {
   streamSimpleMock,
+  readFileMock,
   parseSessionEntriesMock,
   migrateSessionEntriesMock,
   buildSessionContextMock,
@@ -399,6 +400,7 @@ export function setupBtwTestHooks() {
 
   beforeEach(() => {
     streamSimpleMock.mockReset();
+    readFileMock.mockReset();
     parseSessionEntriesMock.mockReset();
     migrateSessionEntriesMock.mockReset();
     buildSessionContextMock.mockReset();
@@ -460,6 +462,7 @@ export function setupBtwTestHooks() {
     };
     preparedRuntimeSnapshotState.useSnapshotPluginRegistry = false;
 
+    readFileMock.mockResolvedValue("mock transcript");
     loadTranscriptEventsMock.mockResolvedValue([]);
     mockTranscriptEntries([
       createTranscriptEntry({

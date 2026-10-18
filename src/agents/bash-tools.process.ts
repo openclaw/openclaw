@@ -435,21 +435,16 @@ export function createProcessTool(
             if (signal?.aborted) {
               throw createAbortError(signal.reason);
             }
-            // The wait budget is elapsed time, so a wall-clock step cannot end it early
-            // or stretch it past the requested timeout.
-            const deadline = performance.now() + pollWaitMs;
+            const deadline = Date.now() + pollWaitMs;
             // Interactive children cannot progress until their pending prompt reaches the model.
             while (
               !scopedSession.exited &&
               !hasPendingPollDelivery(scopedSession) &&
               scopedSession.pendingOutput.length === 0 &&
               !scopedSession.pendingOutputDropped &&
-              performance.now() < deadline
+              Date.now() < deadline
             ) {
-              await sleepPollInterval(
-                Math.max(0, Math.min(250, deadline - performance.now())),
-                signal,
-              );
+              await sleepPollInterval(Math.max(0, Math.min(250, deadline - Date.now())), signal);
             }
           }
           return await runWithAgentToolSourceExecutionScope(assertSourceCurrent, async () => {
@@ -604,7 +599,6 @@ export function createProcessTool(
                   `Unable to ${removing ? "remove" : "terminate"} session ${sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
                 );
               }
-              await scopedSession.clearExitNotification?.();
               if (removing) {
                 // Hide the record now; the supervisor still owns process settlement.
                 scopedSession.backgrounded = false;
@@ -623,7 +617,6 @@ export function createProcessTool(
             }
             if (scopedFinished) {
               resetPollRetrySuggestion(sessionId);
-              await scopedFinished.clearExitNotification?.();
               deleteSession(sessionId);
               return textResult(
                 `${params.action === "clear" ? "Cleared" : "Removed"} session ${sessionId}.`,

@@ -142,17 +142,6 @@ describe("public yielded settle replay with real Gateway admission", () => {
     );
   }
 
-  function publishWake(entry: SubagentRunRecord, state: SubagentRunRecord["requesterSettleWake"]) {
-    const next = { ...entry, requesterSettleWake: state };
-    persistChild(next);
-    subagentRuns.set(next.runId, next);
-    bindGatewayContextResolver(next, () => kernel.gatewayRequestContext);
-    if (next.runId === child.runId) {
-      child = next;
-    }
-    return next;
-  }
-
   const finalResult = (): Exclude<Awaited<ReturnType<typeof agentCommandMock>>, void> => ({
     payloads: [{ text: "Requester synthesis is complete.", mediaUrl: null }],
     meta: { durationMs: 1, finalAssistantVisibleText: "Requester synthesis is complete." },
@@ -213,8 +202,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
         requesterSessionKey,
         settledEntry,
         transitionBatch: (batch, state, onPublished) => {
-          const next = batch.map((entry) => publishWake(entry, state));
-          onPublished(next);
+          for (const entry of batch) {
+            entry.requesterSettleWake = state;
+            persistChild(entry);
+          }
+          onPublished(batch);
         },
         completeBatch,
       }),
@@ -340,11 +332,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
       child.execution.interruptionReason = "gateway-restart";
       child.execution.outcome = { status: "error", error: "Interrupted by Gateway restart" };
       child.cleanupCompletedAt = child.execution.endedAt;
-      child.completion = {
-        required: true,
-        terminalReply: { disposition: "visible", text: `retained result ${child.runId}` },
-        resultText: `retained result ${child.runId}`,
-      };
+      child.completion = { required: true, resultText: `retained result ${child.runId}` };
       if (scenario === "legacy") {
         child.completionRequesterSessionId = undefined;
         child.completionRequesterLifecycleRevision = undefined;
@@ -380,11 +368,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
           runId: `${child.runId}-current`,
           childSessionKey: `${child.childSessionKey}-current`,
           completionRequesterLifecycleRevision: loadSessionEntryReadOnly(scope)?.lifecycleRevision,
-          completion: {
-            required: true,
-            terminalReply: { disposition: "visible", text: "current child result" },
-            resultText: "current child result",
-          },
+          completion: { required: true, resultText: "current child result" },
         });
       }
       const runIds = cohort.map((entry) => entry.runId).toSorted();
@@ -484,10 +468,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
         if (revoked && acceptedMessages.length === 2) {
           // A newer yield revokes the frozen wave during asynchronous
           // Gateway preparation, before the real SQLite owner admits it.
-          publishWake(child, {
+          child.requesterSettleWake = {
             ...child.requesterSettleWake!,
             rearmGeneration: 2,
-          });
+          };
+          persistChild();
         }
         const receipt = await realStage(scope, options);
         admittedSources.push(receipt?.message.provenance?.sourceSessionKey);
@@ -506,8 +491,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
         requesterSessionKey,
         settledEntry,
         transitionBatch: (members, state, onPublished) => {
-          const next = members.map((entry) => publishWake(entry, state));
-          onPublished(next);
+          for (const entry of members) {
+            entry.requesterSettleWake = state;
+            persistChild(entry);
+          }
+          onPublished(members);
         },
         // Model the crash window after Gateway input completion commits but
         // before lifecycle durably acknowledges the dispatching wake.

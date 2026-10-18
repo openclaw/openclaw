@@ -1,5 +1,6 @@
 // Moonshot API module exposes the plugin public contract.
 export {
+  applyMoonshotNativeStreamingUsageCompat,
   buildMoonshotProvider,
   isNativeMoonshotBaseUrl,
   MOONSHOT_BASE_URL,

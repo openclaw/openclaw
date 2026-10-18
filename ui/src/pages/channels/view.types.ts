@@ -1,9 +1,9 @@
 import type { ChannelsPairingRequest, NostrProfile } from "../../api/types.ts";
 import type { ChannelsState } from "../../lib/channels/index.ts";
 import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
-import type { ChannelPluginPresentation } from "./plugin-presentation-loader.ts";
+import type { ChannelPluginPresentationController } from "./plugin-presentation-controller.ts";
 import type { NostrProfileFormState } from "./view.nostr-profile-form.tsx";
-import type { ChannelSetup } from "./wizard-setup.ts";
+import type { ChannelWizardHost } from "./wizard-host.ts";
 
 export type ChannelPairingPrompt = {
   kind: "approve" | "dismiss";
@@ -15,8 +15,8 @@ export type ChannelPairingPrompt = {
 export type ChannelsProps = {
   channels: ChannelsState;
   config: RuntimeConfigState;
-  presentation: Pick<ChannelPluginPresentation, "pluginCatalog" | "pluginIconUrls">;
-  wizardHost: ChannelSetup;
+  presentation: ChannelPluginPresentationController;
+  wizardHost: ChannelWizardHost;
   pairingChannelFilter: string | null;
   pairingAccountFilter: string | null;
   pairingPrompt: ChannelPairingPrompt | null;
@@ -32,7 +32,6 @@ export type ChannelsProps = {
   onStartSetup: (channelId: string | null) => void;
   onRefresh: (probe: boolean) => void;
   onPairingRefresh: () => void;
-  onPairingRoot: (element: HTMLDivElement) => void;
   onPairingFilterChange: (channel: string | null, accountId: string | null) => void;
   onPairingReviewAccount: (channel: string, accountId: string) => void;
   onPairingApprove: (request: ChannelsPairingRequest) => void;

@@ -204,13 +204,13 @@ extension GatewayProcessManager {
 
     func retainManagedServiceForResume(
         expectedServiceAuthority: GatewayLaunchAgentManager.ServiceAuthority? = nil) async throws
-        -> (authority: GatewayLaunchAgentManager.ServiceAuthority, migrationPending: Bool)
+        -> GatewayLaunchAgentManager.ServiceAuthority
     {
         let custody = try expectedServiceAuthority ?? GatewayLaunchAgentManager.gatewayServiceAuthority()
         // A missing plist is a known state; a present record that cannot be captured must survive Pause.
         if custody.definition.plist == nil {
             if let error = custody.currentError() { throw GatewayHostingError(message: error) }
-            return (custody, false)
+            return custody
         }
         guard self.installation == .managed,
               let snapshot = GatewayLaunchAgentManager.launchdConfigSnapshot(),
@@ -230,7 +230,7 @@ extension GatewayProcessManager {
         _ = try GatewayLaunchAgentManager.retainedServiceIntent(
             from: GatewayLaunchAgentManager.resumeData(for: cli), stateDirectory: state)
         self.retainedServiceCLI = cli
-        return (custody, pin?.status == .migrationPending)
+        return custody
     }
 
     struct PausedServiceUpdate {

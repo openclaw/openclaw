@@ -111,12 +111,7 @@ function hasUnimportedSessionIdentity(params: {
           const index = receipt.sources.find((source) => source.path === path.resolve(storePath));
           if (
             !index ||
-            !resolveVerifiedSessionSource(
-              index,
-              { agentId, storePath, sqlitePath },
-              params.env,
-              new Map(),
-            )
+            !resolveVerifiedSessionSource(index, { agentId, storePath, sqlitePath }, params.env)
           ) {
             throw new Error(`Retained plugin session index requires Doctor repair: ${storePath}`);
           }

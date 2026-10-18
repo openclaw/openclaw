@@ -1,34 +1,26 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { projectUpdateRun } from "../app/update-run-projection.ts";
-import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture as run } from "../test-helpers/update-run.ts";
-import { UpdateRunView } from "./update-run-view.tsx";
+import "./update-run-view.ts";
 
-function mount(record: UpdateRunRecord) {
-  const [current, setRecord] = createSignal(record);
-  const [connected, setConnected] = createSignal(true);
-  const { container } = mountSolid(() =>
-    createComponent(UpdateRunView, {
-      get run() {
-        return current();
-      },
-      get connected() {
-        return connected();
-      },
-    }),
-  );
-  flush();
-  const element = container.querySelector<HTMLElement>("openclaw-update-run-view")!;
-  return { element, setRecord, setConnected };
+type RunViewElement = HTMLElement & {
+  run: UpdateRunRecord | null;
+  connected: boolean;
+  updateComplete: Promise<boolean>;
+};
+
+async function mount(record: UpdateRunRecord) {
+  const element = document.createElement("openclaw-update-run-view") as RunViewElement;
+  element.run = record;
+  document.body.append(element);
+  await element.updateComplete;
+  return element;
 }
 
 afterEach(() => {
-  cleanupSolid();
   document.body.replaceChildren();
   vi.useRealTimers();
 });
@@ -144,8 +136,8 @@ describe("update run projection", () => {
 });
 
 describe("update run view", () => {
-  it("presents diagnostic receipts as readable details without inventing installation steps", () => {
-    const { element, setRecord } = mount(
+  it("presents diagnostic receipts as readable details without inventing installation steps", async () => {
+    const element = await mount(
       run({
         steps: [
           {
@@ -181,12 +173,10 @@ describe("update run view", () => {
     expect(
       element.querySelector('[data-step="warning:snapshot-space-preflight:2"]')?.textContent,
     ).toContain("Warning:");
-    setRecord((record) =>
-      run({
-        steps: [...record.steps, { step: "updater-runtime-retention", status: "in_progress" }],
-      }),
-    );
-    flush();
+    element.run = run({
+      steps: [...element.run!.steps, { step: "updater-runtime-retention", status: "in_progress" }],
+    });
+    await element.updateComplete;
     expect(element.querySelector(".update-run-view__details")?.textContent).not.toContain(
       "Recovery backup needs 18 GiB.",
     );
@@ -221,7 +211,7 @@ describe("update run view", () => {
   it("follows installation progress on opening and updates but preserves scrollback", async () => {
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     const record = run({ steps: [{ step: "build", status: "in_progress" }] });
-    const { element, setRecord } = mount(record);
+    const element = await mount(record);
     const disclosure = element.querySelector<HTMLDetailsElement>(".update-run-view__step-list")!;
     const list = element.querySelector<HTMLElement>(".update-run-view__step-scroll")!;
     Object.defineProperties(list, {
@@ -238,16 +228,16 @@ describe("update run view", () => {
 
     list.scrollTop = 0;
     list.dispatchEvent(new Event("scroll"));
-    setRecord({ ...record, updatedAtMs: record.updatedAtMs + 1 });
-    flush();
+    element.run = { ...record, updatedAtMs: record.updatedAtMs + 1 };
+    await element.updateComplete;
     await vi.runOnlyPendingTimersAsync();
     expect(list.scrollTop).toBe(0);
 
     list.scrollTop = 840;
     list.dispatchEvent(new Event("scroll"));
     Object.defineProperty(list, "scrollHeight", { value: 1200 });
-    setRecord({ ...record, updatedAtMs: record.updatedAtMs + 2 });
-    flush();
+    element.run = { ...record, updatedAtMs: record.updatedAtMs + 2 };
+    await element.updateComplete;
     await vi.runOnlyPendingTimersAsync();
     expect(list.scrollTop).toBe(1200);
   });
@@ -279,8 +269,8 @@ describe("update run view", () => {
     },
   ])(
     "reports $label consistently in the verification badge and report",
-    ({ observed, state, detail }) => {
-      const { element } = mount(
+    async ({ observed, state, detail }) => {
+      const element = await mount(
         run({
           status: "failed",
           phase: "finished",
@@ -296,42 +286,38 @@ describe("update run view", () => {
     },
   );
 
-  it("keeps the view mounted across a restart and replaces progress with a visible success report", () => {
-    const { element, setRecord, setConnected } = mount(run({ phase: "restarting" }));
+  it("keeps the view mounted across a restart and replaces progress with a visible success report", async () => {
+    const element = await mount(run({ phase: "restarting" }));
     const container = element.querySelector(".update-run-view");
-    setConnected(false);
-    flush();
+    element.connected = false;
+    await element.updateComplete;
     expect(element.querySelector("h3")?.textContent).toBe("Gateway restarting…");
     expect(element.querySelector('[aria-label="Update report"]')).toBeNull();
-    setConnected(true);
-    setRecord(
-      run({
-        phase: "verifying",
-        verification: { serviceRunning: true, versionMatch: true },
-      }),
-    );
-    flush();
+    element.connected = true;
+    element.run = run({
+      phase: "verifying",
+      verification: { serviceRunning: true, versionMatch: true },
+    });
+    await element.updateComplete;
     expect(element.querySelector(".update-run-view")).toBe(container);
     expect(element.querySelector("h3")?.textContent).toContain("verifying");
-    setRecord(
-      run({
-        phase: "finished",
-        status: "succeeded",
-        finishedAtMs: 30,
-        after: { version: "2026.9.2" },
-        verification: {
-          serviceRunning: true,
-          versionMatch: true,
-          channelsReady: true,
-          pluginErrors: [],
-        },
-        steps: [
-          { step: "staging", status: "completed" },
-          { step: "verifying", status: "completed" },
-        ],
-      }),
-    );
-    flush();
+    element.run = run({
+      phase: "finished",
+      status: "succeeded",
+      finishedAtMs: 30,
+      after: { version: "2026.9.2" },
+      verification: {
+        serviceRunning: true,
+        versionMatch: true,
+        channelsReady: true,
+        pluginErrors: [],
+      },
+      steps: [
+        { step: "staging", status: "completed" },
+        { step: "verifying", status: "completed" },
+      ],
+    });
+    await element.updateComplete;
     const report = element.querySelector('[aria-label="Update report"]');
     expect(report?.textContent).toContain("✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).");
     expect(report?.textContent).toContain("service running; version verified; channels ready");
@@ -339,8 +325,8 @@ describe("update run view", () => {
     expect(element.querySelector('[data-step="repairing"]')).toBeNull();
   });
 
-  it("shows failure details and report text without interpreting diagnostic markup", () => {
-    const { element } = mount(
+  it("shows failure details and report text without interpreting diagnostic markup", async () => {
+    const element = await mount(
       run({
         status: "failed",
         phase: "finished",

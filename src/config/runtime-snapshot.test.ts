@@ -5,6 +5,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   applyConfigEnvVars,
   collectConfigRuntimeEnvOwnership,
+  getPublishedConfigRuntimeEnvState,
   initializePublishedConfigRuntimeEnv,
   prepareConfigRuntimeEnv,
 } from "./config-env-vars.js";
@@ -61,6 +62,30 @@ afterEach(() => {
 });
 
 describe("runtime snapshot state", () => {
+  it.each<[string, OpenClawConfig, string]>([
+    [
+      "sidebar preferences",
+      { ui: { prefs: { sidebarEntries: ["sessions"] } } },
+      "config-presentation",
+    ],
+    [
+      "agent identity",
+      { agents: { entries: { main: { identity: { name: "Renamed" } } } } },
+      "config-profiles",
+    ],
+  ])("publishes the projection impact of %s", (_label, change, scope) => {
+    const initial: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(initial);
+    const published = vi.fn();
+    const stop = sessionChanges.subscribe(published);
+    try {
+      setRuntimeConfigSnapshot({ ...initial, ...change });
+      expect(published).toHaveBeenCalledExactlyOnceWith({ all: true, scope });
+    } finally {
+      stop();
+    }
+  });
+
   it("pins the first successful load in memory until the snapshot is cleared", () => {
     let freshPort = 18789;
     let loadCount = 0;
@@ -113,7 +138,27 @@ describe("runtime snapshot state", () => {
     expect(getAuthoredConfigSecretRef(getRuntimeConfigSnapshot(), "gateway.auth.token")).toBeNull();
   });
 
-  it("keeps model projections across display writes but invalidates authored values and resolution changes", () => {
+  it("tracks snapshot metadata and cache keys across runtime refreshes", () => {
+    const firstConfig: OpenClawConfig = { gateway: { port: 18789 } };
+    const secondConfig: OpenClawConfig = { gateway: { port: 19001 } };
+
+    setRuntimeConfigSnapshot(firstConfig);
+    const firstMetadata = getRuntimeConfigSnapshotMetadata();
+    expect(firstMetadata?.revision).toBe(1);
+    expect(resolveRuntimeConfigCacheKey(firstConfig)).toBe(
+      `runtime:${firstMetadata?.revision}:${firstMetadata?.fingerprint}`,
+    );
+
+    setRuntimeConfigSnapshot(secondConfig);
+    const secondMetadata = getRuntimeConfigSnapshotMetadata();
+    expect(secondMetadata?.revision).toBe(2);
+    expect(secondMetadata?.fingerprint).not.toBe(firstMetadata?.fingerprint);
+    expect(resolveRuntimeConfigCacheKey(secondConfig)).toBe(
+      `runtime:${secondMetadata?.revision}:${secondMetadata?.fingerprint}`,
+    );
+  });
+
+  it("keeps model projections across display writes but invalidates source and resolution changes", () => {
     const initial: OpenClawConfig = {
       agents: { entries: { main: {} }, defaults: { model: "test/first" } },
     };
@@ -141,7 +186,6 @@ describe("runtime snapshot state", () => {
     ).toBe(true);
     const sourceKey = resolveRuntimeModelConfigCacheKey(getRuntimeConfigSnapshot()!);
     expect(sourceKey).not.toBe(modelKey);
-    expect(getRuntimeConfigSourceSnapshot()).toBe(source);
 
     const resolved = { ...display };
     setConfigResolutionFacts(resolved, new Set());
@@ -662,46 +706,23 @@ describe("prepared runtime snapshots", () => {
       },
       emits: true,
     },
-    {
-      name: "publishes original values after the live snapshot was edited in place",
-      next: (published: OpenClawConfig) => {
-        published.gateway = { ...published.gateway, port: 19001 };
-        return withTokenFacts(tokenConfig(), ["gateway.auth.token"]);
-      },
-      emits: true,
-    },
-    {
-      name: "publishes original provenance after the live snapshot was edited in place",
-      next: (published: OpenClawConfig) => {
-        setConfigResolutionFacts(published, createConfigResolutionFacts([]));
-        return withTokenFacts(tokenConfig(), ["gateway.auth.token"]);
-      },
-      emits: true,
-    },
   ])("$name", ({ initial, next, followup, emits }) => {
     const changes = vi.fn();
     unregister.push(sessionChanges.subscribe(changes));
     const published = initial?.() ?? withTokenFacts(tokenConfig(), ["gateway.auth.token"]);
     setRuntimeConfigSnapshot(published);
-    const metadata = getRuntimeConfigSnapshotMetadata();
     expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
     changes.mockClear();
 
-    const nextConfig = next(published);
-    setRuntimeConfigSnapshot(nextConfig);
-    // a same-value publication is a full no-op; revision is internal and keys caches
-    expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(emits ? 2 : 1);
+    setRuntimeConfigSnapshot(next(published));
+    expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(2);
     expect(changes).toHaveBeenCalledTimes(emits ? 1 : 0);
     if (emits) {
-      expect(getRuntimeConfigSnapshot()).toBe(nextConfig);
       expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
-    } else {
-      expect(getRuntimeConfigSnapshot()).toBe(published);
-      expect(getRuntimeConfigSnapshotMetadata()).toBe(metadata);
     }
     if (followup) {
       setRuntimeConfigSnapshot(followup());
-      expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(emits ? 3 : 2);
+      expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(3);
       expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
     }
   });
@@ -715,9 +736,7 @@ describe("prepared runtime snapshots", () => {
         { gateway: { port: 18789 }, meta: { lastTouchedVersion: version } },
         unresolvedPaths,
       );
-    const advance = (sourceConfig: OpenClawConfig, changed = true) => {
-      const previousSource = getRuntimeConfigSourceSnapshot();
-      const previousMetadata = getRuntimeConfigSnapshotMetadata();
+    const advance = (sourceConfig: OpenClawConfig) => {
       changes.mockClear();
       expect(
         setRuntimeConfigSourceSnapshotIfCurrent({
@@ -725,17 +744,13 @@ describe("prepared runtime snapshots", () => {
           sourceConfig,
         }),
       ).toBe(true);
-      expect(getRuntimeConfigSourceSnapshot()).toBe(changed ? sourceConfig : previousSource);
-      if (!changed) {
-        expect(getRuntimeConfigSnapshot()).toBe(runtime);
-        expect(getRuntimeConfigSnapshotMetadata()).toBe(previousMetadata);
-      }
+      expect(getRuntimeConfigSourceSnapshot()).toBe(sourceConfig);
       return changes.mock.calls.length;
     };
     setRuntimeConfigSnapshot(runtime, source("1"));
 
     // A value-identical config.apply only restamps the source's meta, so no row can change.
-    expect(advance(source("2"), false)).toBe(0);
+    expect(advance(source("2"))).toBe(0);
     // Changed provenance is copied onto the published object in place, so rows refresh.
     expect(advance(source("3", ["gateway.port"]))).toBe(1);
     // So does an in-place edit of the published object made since its last publication.
@@ -924,7 +939,6 @@ describe("captured async runtime reads", () => {
     async (change) => {
       const runtime: OpenClawConfig = { gateway: { port: 19001 } };
       const firstSource: OpenClawConfig = { gateway: { port: 19002 } };
-      const nextSource: OpenClawConfig = { gateway: { port: 19003 } };
       setRuntimeConfigSnapshot(runtime, firstSource);
       const selected = change === "captured source" ? captureRuntimeConfig(runtime) : runtime;
       setRuntimeConfigSnapshot(selected, firstSource);
@@ -933,7 +947,7 @@ describe("captured async runtime reads", () => {
       if (change === "reset") {
         resetConfigRuntimeState();
       } else {
-        setRuntimeConfigSnapshot(selected, nextSource);
+        setRuntimeConfigSnapshot(selected, { gateway: { port: 19003 } });
       }
       vi.stubEnv("CONFIG_CAPTURE_TEST", "replacement");
       const captured = await pending;
@@ -944,7 +958,9 @@ describe("captured async runtime reads", () => {
         const next = await loadPinnedRuntimeConfigAsync(async () => ({ config: {} }), {
           capture: true,
         });
-        expect(projectConfigOntoRuntimeSourceSnapshot(next.config)).toEqual(nextSource);
+        expect(projectConfigOntoRuntimeSourceSnapshot(next.config)).toEqual({
+          gateway: { port: 19003 },
+        });
       }
     },
   );
@@ -1035,5 +1051,18 @@ describe("config environment across in-process restart", () => {
     const publication = prepareConfigRuntimeEnv({ previousConfig: next, nextConfig: {} }).publish();
     publication.commit();
     expect(process.env.OPENCLAW_TEST_RESTART_VALUE).toBeUndefined();
+  });
+
+  it("still clears environment ownership on an explicit full runtime reset", () => {
+    vi.stubEnv("OPENCLAW_TEST_RESTART_VALUE", "owned");
+    const initial = { env: { vars: { OPENCLAW_TEST_RESTART_VALUE: "owned" } } };
+    initializePublishedConfigRuntimeEnv(initial, {
+      ownedEnv: { OPENCLAW_TEST_RESTART_VALUE: "owned" },
+    });
+
+    resetConfigRuntimeState();
+
+    expect(getPublishedConfigRuntimeEnvState().ownedEnv).toEqual({});
+    expect(getPublishedConfigRuntimeEnvState().sourceConfig).toBeNull();
   });
 });

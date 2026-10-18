@@ -57,7 +57,7 @@ export class SessionsCleanupFailureError extends Error {
   }
 }
 
-type SessionsCleanupPartialErrorDetail = {
+export type SessionsCleanupPartialErrorDetail = {
   failingAgentId: string;
   failingStorePath: string;
   message: string;
@@ -71,7 +71,7 @@ type SessionsCleanupAggregateResult = {
   stores: SessionCleanupSummary[];
 };
 
-type SessionsCleanupPartialResult = SessionsCleanupAggregateResult & {
+export type SessionsCleanupPartialResult = SessionsCleanupAggregateResult & {
   partialError: SessionsCleanupPartialErrorDetail;
 };
 

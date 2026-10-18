@@ -1,9 +1,8 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-// Gateway Protocol schema module defines protocol validation shapes.
-import { stringLiteralUnion } from "./string-literal-union.js";
 import { UpdateRunRecordSchema } from "./update-runs.js";
 
 /**
@@ -113,12 +112,12 @@ const GitUpdateStatusSchema = Type.Union([
   closedObject({
     ...GitInstallMetadataProperties,
     status: Type.Literal("unavailable"),
-    reason: stringLiteralUnion([
-      "fetch-failed",
-      "no-upstream",
-      "no-upstream-sha",
-      "comparison-failed",
-      "git-unavailable",
+    reason: Type.Union([
+      Type.Literal("fetch-failed"),
+      Type.Literal("no-upstream"),
+      Type.Literal("no-upstream-sha"),
+      Type.Literal("comparison-failed"),
+      Type.Literal("git-unavailable"),
     ]),
   }),
 ]);
@@ -153,19 +152,19 @@ const UpdateImmutableInstallSchema = closedObject({
   activation: Type.Optional(
     closedObject({
       operationId: ImmutableOperationId,
-      phase: stringLiteralUnion([
-        "prepared",
-        "draining",
-        "stopping",
-        "stopped",
-        "publishing",
-        "starting",
-        "verifying",
-        "rollback-stopping",
-        "rollback-publishing",
-        "rollback-starting",
-        "rolled-back",
-        "recovery-required",
+      phase: Type.Union([
+        Type.Literal("prepared"),
+        Type.Literal("draining"),
+        Type.Literal("stopping"),
+        Type.Literal("stopped"),
+        Type.Literal("publishing"),
+        Type.Literal("starting"),
+        Type.Literal("verifying"),
+        Type.Literal("rollback-stopping"),
+        Type.Literal("rollback-publishing"),
+        Type.Literal("rollback-starting"),
+        Type.Literal("rolled-back"),
+        Type.Literal("recovery-required"),
       ]),
       previousSha: ImmutableGenerationSha,
       candidateSha: ImmutableGenerationSha,
@@ -176,7 +175,7 @@ const UpdateImmutableInstallSchema = closedObject({
   lastActivation: Type.Optional(
     closedObject({
       operationId: ImmutableOperationId,
-      outcome: stringLiteralUnion(["succeeded", "rolled-back"]),
+      outcome: Type.Union([Type.Literal("succeeded"), Type.Literal("rolled-back")]),
       selectedSha: ImmutableGenerationSha,
       verifiedAtMs: Type.Integer({ minimum: 0 }),
       gateway: Type.Optional(
@@ -205,7 +204,12 @@ export const UpdateScheduleStateSchema = closedObject({
   autoEnabled: Type.Boolean(),
   install: Type.Optional(
     closedObject({
-      kind: stringLiteralUnion(["package", "git", "immutable", "unknown"]),
+      kind: Type.Union([
+        Type.Literal("package"),
+        Type.Literal("git"),
+        Type.Literal("immutable"),
+        Type.Literal("unknown"),
+      ]),
       git: Type.Optional(GitUpdateStatusSchema),
       immutable: Type.Optional(UpdateImmutableInstallSchema),
     }),
@@ -227,7 +231,11 @@ export const UpdateScheduleStateSchema = closedObject({
   campaign: Type.Optional(
     closedObject({
       id: NonEmptyString,
-      state: stringLiteralUnion(["waiting-for-idle", "countdown", "applying"]),
+      state: Type.Union([
+        Type.Literal("waiting-for-idle"),
+        Type.Literal("countdown"),
+        Type.Literal("applying"),
+      ]),
       announcedAtMs: Type.Integer({ minimum: 0 }),
       applyAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
       holdUntilMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -243,7 +251,14 @@ export const UpdateStatusResultSchema = closedObject({
   updateAvailable: Type.Union([UpdateAvailableSchema, Type.Null()]),
   activeRun: Type.Optional(UpdateRunRecordSchema),
   lastRun: Type.Optional(UpdateRunRecordSchema),
-  effectiveChannel: Type.Optional(stringLiteralUnion(["stable", "extended-stable", "beta", "dev"])),
+  effectiveChannel: Type.Optional(
+    Type.Union([
+      Type.Literal("stable"),
+      Type.Literal("extended-stable"),
+      Type.Literal("beta"),
+      Type.Literal("dev"),
+    ]),
+  ),
   schedule: Type.Optional(UpdateScheduleStateSchema),
 });
 
@@ -354,7 +369,6 @@ const ConfigUiHintSchema = closedObject({
   advanced: Type.Optional(Type.Boolean()),
   sensitive: Type.Optional(Type.Boolean()),
   placeholder: Type.Optional(Type.String()),
-  multiline: Type.Optional(Type.Boolean()),
   presentation: Type.Optional(Type.Literal("phone-number")),
   itemTemplate: Type.Optional(Type.Unknown()),
 });
@@ -374,7 +388,9 @@ const ConfigSchemaLookupChildSchema = closedObject({
   type: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())])),
   required: Type.Boolean(),
   hasChildren: Type.Boolean(),
-  reloadKind: Type.Optional(stringLiteralUnion(["restart", "hot", "none"])),
+  reloadKind: Type.Optional(
+    Type.Union([Type.Literal("restart"), Type.Literal("hot"), Type.Literal("none")]),
+  ),
   hint: Type.Optional(ConfigUiHintSchema),
   hintPath: Type.Optional(Type.String()),
 });

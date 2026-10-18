@@ -2,19 +2,18 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const SessionGoalSchema = closedObject({
   schemaVersion: Type.Literal(1),
   id: NonEmptyString,
   objective: Type.String(),
-  status: stringLiteralUnion([
-    "active",
-    "paused",
-    "blocked",
-    "usage_limited",
-    "budget_limited",
-    "complete",
+  status: Type.Union([
+    Type.Literal("active"),
+    Type.Literal("paused"),
+    Type.Literal("blocked"),
+    Type.Literal("usage_limited"),
+    Type.Literal("budget_limited"),
+    Type.Literal("complete"),
   ]),
   createdAt: Type.Number(),
   updatedAt: Type.Number(),
@@ -51,20 +50,33 @@ export const SessionsGoalUpdateParamsSchema = Type.Union([
   }),
   closedObject({
     ...GoalOperationIdentity,
-    action: stringLiteralUnion(["pause", "resume", "complete", "block"]),
+    action: Type.Union([
+      Type.Literal("pause"),
+      Type.Literal("resume"),
+      Type.Literal("complete"),
+      Type.Literal("block"),
+    ]),
     note: Type.Optional(Type.String({ maxLength: 2_000 })),
   }),
 ]);
 export const SessionsGoalClearParamsSchema = closedObject(GoalOperationIdentity);
 export const SessionsGoalMutationResultSchema = closedObject({
   operationId: NonEmptyString,
-  action: stringLiteralUnion(["start", "edit", "pause", "resume", "complete", "block", "clear"]),
+  action: Type.Union([
+    Type.Literal("start"),
+    Type.Literal("edit"),
+    Type.Literal("pause"),
+    Type.Literal("resume"),
+    Type.Literal("complete"),
+    Type.Literal("block"),
+    Type.Literal("clear"),
+  ]),
   sessionId: NonEmptyString,
   goalId: NonEmptyString,
   goal: Type.Optional(SessionGoalSchema),
   runId: Type.Optional(NonEmptyString),
   replayed: Type.Optional(Type.Literal(true)),
-  status: stringLiteralUnion(["started", "updated", "cleared"]),
+  status: Type.Union([Type.Literal("started"), Type.Literal("updated"), Type.Literal("cleared")]),
 });
 
 export type SessionsGoalUpdateParams = Static<typeof SessionsGoalUpdateParamsSchema>;

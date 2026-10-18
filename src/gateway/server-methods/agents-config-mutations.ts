@@ -93,6 +93,10 @@ export async function updateAgentConfigEntry(
   params: AgentConfigUpdate & { assertCurrent?: () => void },
   writeOptions?: ConfigWriteOptions,
 ): Promise<void> {
+  const selectionError = validateAgentModelSelectionUpdate(params);
+  if (selectionError) {
+    throw new AgentModelSelectionError(selectionError);
+  }
   const selectionModules = params.agentRuntime
     ? await Promise.all([
         import("../../agents/model-runtime-choice.js"),

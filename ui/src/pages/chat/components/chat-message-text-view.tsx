@@ -1,13 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  getOwner,
-  onCleanup,
-  runWithOwner,
-  Show,
-  useContext,
-} from "solid-js";
+import { createEffect, createMemo, getOwner, onCleanup, runWithOwner, Show } from "solid-js";
 import {
   createMarkdownRef,
   type MarkdownContentValue,
@@ -19,7 +11,6 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MarkdownDomMedia } from "../../../lib/markdown-dom-reconciler.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { mountLitContent } from "../../../lit/solid-content.tsx";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
@@ -162,29 +153,22 @@ function DisclosureContent(props: {
   forwarded: boolean;
   children: JSX.Element;
 }) {
-  const presented = useContext(ContentPresentation);
   let element!: HTMLDivElement;
   let previous: ((element?: Element) => void) | undefined;
   const dependencies = createMemo(
-    () => ({
-      parts: props.parts,
-      expanded: props.expanded,
-      forwarded: props.forwarded,
-      connected: presented(),
-    }),
+    () => ({ parts: props.parts, expanded: props.expanded, forwarded: props.forwarded }),
     {
       equals: (before, next) =>
         before.expanded === next.expanded &&
         before.forwarded === next.forwarded &&
-        before.connected === next.connected &&
         before.parts.length === next.parts.length &&
         before.parts.every((value, index) => value === next.parts[index]),
     },
   );
-  createEffect(dependencies, ({ expanded, forwarded, connected }) => {
+  createEffect(dependencies, ({ expanded, forwarded }) => {
     previous?.(undefined);
-    previous = connected ? messageOverflowRef(expanded, forwarded) : undefined;
-    previous?.(element);
+    previous = messageOverflowRef(expanded, forwarded);
+    previous(element);
   });
   onCleanup(() => previous?.(undefined));
   return (
@@ -208,23 +192,19 @@ type MarkdownContentProps = {
 /** Both transcript text and legacy slots share the same incremental DOM owner. */
 export function MarkdownContent(props: MarkdownContentProps) {
   const solidOwner = getOwner();
-  const presented = useContext(ContentPresentation);
   const fragment = document.createDocumentFragment();
   const markdown = createMarkdownRef(() => {
-    const connected = presented();
     const media = props.media;
     const renderer: MarkdownDomMedia | undefined = media && {
       prefix: media.prefix,
       render(index, container) {
         const item = media.items[index];
         return item
-          ? runWithOwner(solidOwner, () =>
-              mountLitContent(media.render(item, index), container, { isConnected: connected }),
-            )
+          ? runWithOwner(solidOwner, () => mountLitContent(media.render(item, index), container))
           : undefined;
       },
     };
-    return { content: props.content, media: renderer, incremental: props.incremental, connected };
+    return { content: props.content, media: renderer, incremental: props.incremental };
   });
   markdown(fragment);
   return Array.from(fragment.childNodes);

@@ -9,7 +9,6 @@ import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 /** Retained inputs share the broker budget before they become queued jobs. */
 export class SqliteWorkerInputAdmission {
   private bytes = 0;
-  private readonly opens = new Set<Promise<void>>();
   private readonly inputPreparations = new Set<Promise<void>>();
   private readonly openQueue = new Map<string, StoreWriterQueue>();
 
@@ -20,7 +19,6 @@ export class SqliteWorkerInputAdmission {
       maxQueuedBytes: number;
       maxQueuedInputBytes: number;
       maxMessageBytes: number;
-      maxPendingOpens: number;
     },
   ) {}
 
@@ -39,14 +37,8 @@ export class SqliteWorkerInputAdmission {
     };
   }
 
-  open<T>(
-    bytes: number,
-    dispatch: () => Promise<T>,
-    signal?: AbortSignal,
-    reuse?: () => Promise<T | undefined>,
-  ): Promise<T> {
+  open<T>(bytes: number, dispatch: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (
-      this.opens.size >= this.owner.maxPendingOpens ||
       bytes > this.owner.maxMessageBytes ||
       this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes
     ) {
@@ -54,37 +46,19 @@ export class SqliteWorkerInputAdmission {
         new SqliteWorkerError("SQLite worker open input capacity reached", "overloaded"),
       );
     }
-    const settled = createDeferredCore();
-    this.opens.add(settled.promise);
     const release = this.retain(bytes);
     // Physical-file identity must be published before admitting another open alias.
-    const enqueue = () =>
-      runQueuedStoreWrite({
-        queues: this.openQueue,
-        storePath: "sqlite-open",
-        label: "SQLite worker open",
-        fn: dispatch,
-        signal,
-      });
-    // Unknown actors enter the FIFO synchronously. A published actor can attach
-    // independently, but still retains its input budget and participates in drainage.
-    return (
-      reuse
-        ? Promise.resolve()
-            .then(reuse)
-            .then((store) => (store === undefined ? enqueue() : store))
-        : enqueue()
-    ).finally(() => {
-      this.opens.delete(settled.promise);
-      release();
-      settled.resolve();
-    });
+    return runQueuedStoreWrite({
+      queues: this.openQueue,
+      storePath: "sqlite-open",
+      label: "SQLite worker open",
+      fn: dispatch,
+      signal,
+    }).finally(release);
   }
 
-  async joinOpens(): Promise<void> {
-    while (this.opens.size > 0) {
-      await Promise.allSettled(this.opens);
-    }
+  joinOpens(): Promise<void> {
+    return this.openQueue.get("sqlite-open")?.drainPromise ?? Promise.resolve();
   }
 
   async joinPreparations(): Promise<void> {

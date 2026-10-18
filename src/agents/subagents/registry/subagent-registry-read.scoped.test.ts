@@ -4,13 +4,13 @@ import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/age
 import { countUntrackedActiveAcpRunsForOwner } from "../spawn/acp-spawn-admission.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import {
-  buildScopedSubagentRunReadIndexFromRuns,
+  countActiveDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
   listRunsForControllerFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import type { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 const mocks = vi.hoisted(() => {
   const liveRuns = new Map<string, SubagentRunRecord>();
@@ -37,13 +37,8 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-// mock-isolation: Scoped reads use fixture rows without initializing the live registry owner.
 vi.mock("./subagent-registry-memory.js", () => ({
   getSubagentRunsForChildSession: mocks.getSubagentRunsForChildSession,
-  getSubagentSessionReadLookup: (runs: ReadonlyMap<string, SubagentRunRecord>) =>
-    new SubagentSessionReadLookup(runs),
-  immutableSubagentRunSessionList: (entry: SubagentRunRecord) =>
-    projectSubagentRunForSessionList(entry),
   subagentRuns: mocks.liveRuns,
 }));
 
@@ -54,8 +49,13 @@ vi.mock("./subagent-registry-state.js", () => ({
     mocks.getSubagentSessionListRunsSnapshotForChildSessions,
   getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
-  prepareSubagentSessionListReadCache: async () => {},
-  getSubagentSessionListRunsSnapshotForSessions: () => mocks.readSnapshot,
+  withSubagentRunReadSnapshot: (async (_runs, select, consume) => {
+    const selected = select(mocks.readSnapshot);
+    return consume(
+      selected,
+      new Map([...mocks.readSnapshot].filter(([runId]) => selected.runIds.includes(runId))),
+    );
+  }) satisfies typeof withSubagentRunReadSnapshot,
 }));
 
 function createRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
@@ -164,29 +164,24 @@ describe("subagent registry scoped reads", () => {
           })
           .map((run) => run.runId),
       ).toEqual(ids);
-      expect(
-        buildScopedSubagentRunReadIndexFromRuns(
-          mocks.liveRuns,
-          root,
-          "main",
-          storePath,
-        ).countActiveDescendantRuns(root),
-      ).toBe(active);
+      expect(countActiveDescendantRunsFromRuns(mocks.liveRuns, root, "main", storePath)).toBe(
+        active,
+      );
       expect(
         hasDescendantRunAwaitingSettleFromRuns(mocks.liveRuns, root, excluded, "main", storePath),
       ).toBe(waiting);
     },
   );
 
-  it("keeps the latest live generation authoritative without retaining its payload in display", () => {
+  it("keeps the latest raw live generation authoritative in compact display", () => {
     const childSessionKey = "agent:main:subagent:child";
     const older = createRun({ runId: "older", childSessionKey, generation: 1, createdAt: 200 });
     const latest = createRun({ runId: "latest", childSessionKey, generation: 2, createdAt: 100 });
     mocks.liveRuns.set(older.runId, older);
     mocks.liveRuns.set(latest.runId, latest);
 
-    expect(mod.buildSubagentSessionListReadIndex().getDisplaySubagentRun(childSessionKey)).toEqual(
-      projectSubagentRunForSessionList(latest),
+    expect(mod.buildSubagentSessionListReadIndex().getDisplaySubagentRun(childSessionKey)).toBe(
+      latest,
     );
     expect(mocks.getSubagentRunsSnapshotForChildSession).not.toHaveBeenCalled();
   });
@@ -353,20 +348,14 @@ describe("subagent registry scoped reads", () => {
     mocks.getSubagentRunsSnapshotForChildSession.mockResolvedValue(childSnapshot);
     mocks.getSubagentSessionListRunsSnapshotForRead.mockReturnValue(snapshot);
 
-    expect(
-      buildScopedSubagentRunReadIndexFromRuns(snapshot, root).countActiveDescendantRuns(root),
-    ).toBe(2);
-    expect(
-      buildScopedSubagentRunReadIndexFromRuns(snapshot, root, "main").countActiveDescendantRuns(
-        root,
-      ),
-    ).toBe(1);
+    expect(countActiveDescendantRunsFromRuns(snapshot, root)).toBe(2);
+    expect(countActiveDescendantRunsFromRuns(snapshot, root, "main")).toBe(1);
     mocks.readSnapshot = snapshot;
     expect(await mod.countPendingDescendantRuns(root, () => {})).toBe(4);
     expect(hasDescendantRunAwaitingSettleFromRuns(snapshot, root, pendingRun.runId)).toBe(true);
     expect(await mod.getLatestSubagentRunByChildSessionKey(reusedChild)).toBe(freshTerminal);
-    expect(mod.buildSubagentSessionListReadIndex(now).getDisplaySubagentRun(reusedChild)).toEqual(
-      projectSubagentRunForSessionList(freshTerminal),
+    expect(mod.buildSubagentSessionListReadIndex(now).getDisplaySubagentRun(reusedChild)).toBe(
+      freshTerminal,
     );
     expect(mod.getLatestLiveSubagentRunByChildSessionKey(reusedChild)).toBe(freshTerminal);
     expect(mod.isSubagentSessionRunActive(parent)).toBe(false);

@@ -75,7 +75,6 @@ function emptyMetrics() {
     cssTemplates: 0,
     waTags: 0,
     requestUpdate: 0,
-    controllerPatterns: 0,
     stateDecorators: 0,
     propertyDecorators: 0,
     tasks: 0,
@@ -322,14 +321,6 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
     const metrics = emptyMetrics();
     const canonicalName = createLitNameResolver(tree);
     const visit = (node: ts.Node): void => {
-      if (
-        (ts.isIdentifier(node) &&
-          /^(?:hostConnected|hostDisconnected|requestUpdate)$/u.test(node.text)) ||
-        ((ts.isClassDeclaration(node) || ts.isClassExpression(node)) &&
-          node.name?.text.endsWith("Controller"))
-      ) {
-        metrics.controllerPatterns++;
-      }
       // Count module references, including side-effect imports, exports, import types,
       // and dynamic imports. Comments and ordinary strings never become imports.
       if (
@@ -532,7 +523,6 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       "htmlTemplates",
       "waTags",
       "requestUpdate",
-      "controllerPatterns",
       "stateDecorators",
       "tasks",
       "reactiveControllers",

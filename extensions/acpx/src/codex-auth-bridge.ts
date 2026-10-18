@@ -25,7 +25,10 @@ import {
   LEGACY_CODEX_ACP_PACKAGE,
   OPENCLAW_CODEX_CONFIG_ARG,
 } from "./codex-adapter.js";
-import { renderIsolatedCodexConfig } from "./codex-trust-config.js";
+import {
+  extractTrustedCodexProjectPaths,
+  renderIsolatedCodexConfig,
+} from "./codex-trust-config.js";
 import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
 import type { ResolvedAcpxPluginConfig } from "./config.js";
@@ -228,13 +231,17 @@ async function prepareIsolatedCodexHome(params: {
 }): Promise<string> {
   const sourceCodexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   const sourceConfig = await readSourceCodexConfig(sourceCodexHome);
+  const trustedProjectPaths = [
+    ...(sourceConfig ? extractTrustedCodexProjectPaths(sourceConfig) : []),
+    params.workspaceDir,
+  ];
   const codexHome = path.join(params.baseDir, "codex-home");
   await fs.mkdir(codexHome, { recursive: true });
   await fs.writeFile(
     path.join(codexHome, "config.toml"),
     renderIsolatedCodexConfig({
       sourceConfigToml: sourceConfig,
-      projectPaths: [params.workspaceDir],
+      projectPaths: trustedProjectPaths,
     }),
     "utf8",
   );

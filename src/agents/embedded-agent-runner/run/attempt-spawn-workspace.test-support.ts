@@ -37,7 +37,6 @@ import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
-import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
 import {
   createTestPromptContextQueue,
@@ -531,6 +530,10 @@ vi.mock("../../system-prompt-params.js", () => ({
   }),
 }));
 
+vi.mock("../../system-prompt-report.js", () => ({
+  buildSystemPromptReport: () => undefined,
+}));
+
 vi.mock("../../system-prompt-config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../system-prompt-config.js")>();
   return {
@@ -854,7 +857,7 @@ export function resetEmbeddedAttemptHarness(
   });
   hoisted.subscribeEmbeddedAgentSessionMock
     .mockReset()
-    .mockImplementation(params.subscribeImpl ?? (() => createSubscriptionMock()));
+    .mockImplementation(() => createSubscriptionMock());
   hoisted.installToolResultContextGuardMock.mockReset().mockReturnValue(() => {});
   hoisted.installContextEngineLoopHookMock.mockReset().mockReturnValue(() => {});
   hoisted.flushPendingToolResultsAfterIdleMock.mockReset().mockResolvedValue(undefined);
@@ -881,6 +884,9 @@ export function resetEmbeddedAttemptHarness(
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
   resetSessionManagerMocks(hoisted.sessionManager, params.sessionMessages);
+  if (params.subscribeImpl) {
+    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
+  }
 }
 
 export async function cleanupTempPaths(tempPaths: string[]) {
@@ -901,7 +907,6 @@ export function createDefaultEmbeddedSession(params?: {
   ) => Promise<void>;
 }): MutableSession {
   let activeToolNames: string[] = [];
-  let configuredTools: Agent["state"]["tools"] = [];
   const promptContextQueue = createTestPromptContextQueue((message) => {
     session.messages = [...session.messages, message];
   });
@@ -929,9 +934,8 @@ export function createDefaultEmbeddedSession(params?: {
         await session.agent.streamFn?.(
           testModel,
           {
-            systemPrompt: session.agent.state.systemPrompt,
+            systemPrompt: session.agent.state.systemPrompt ?? "",
             messages: session.messages as Parameters<StreamFn>[1]["messages"],
-            tools: session.agent.state.tools,
           },
           {},
         );
@@ -952,14 +956,6 @@ export function createDefaultEmbeddedSession(params?: {
       // session double never emits them.
       subscribe: () => () => {},
       state: {
-        systemPrompt: "",
-        get tools() {
-          return configuredTools.filter((tool) => activeToolNames.includes(tool.name));
-        },
-        set tools(tools) {
-          configuredTools = [...tools];
-          activeToolNames = tools.map((tool) => tool.name);
-        },
         get messages() {
           return session.messages;
         },
@@ -1150,12 +1146,6 @@ export async function createContextEngineAttemptRunner(params: {
         initialMessages: seedMessages,
         prompt: params.sessionPrompt,
       });
-    session.agent.state.systemPrompt = options.systemPrompt;
-    hoisted.systemPromptTexts.push(options.systemPrompt);
-    session.agent.state.tools = (options.customTools ?? [])
-      .filter((tool) => options.tools.includes(tool.name))
-      .map((tool) => wrapToolDefinition(tool));
-    session.setActiveToolsByName(session.agent.state.tools.map((tool) => tool.name));
     // Nested tool observations append through the same manager the runner prepared.
     session.sessionManager = options.sessionManager;
     if (session.agent.streamFn) {

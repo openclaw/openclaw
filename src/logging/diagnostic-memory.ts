@@ -7,7 +7,6 @@ import {
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
-import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
 const WARNING_RATIO = 0.8;
@@ -49,7 +48,6 @@ function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage
     externalBytes: memory.external,
     arrayBuffersBytes: memory.arrayBuffers,
     ...sampleTrackedWorkerMemory(),
-    workerMessages: getWorkerMessageMetrics(),
   };
 }
 

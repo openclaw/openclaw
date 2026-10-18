@@ -24,7 +24,6 @@ import {
   type BackupManifest,
 } from "../commands/backup-verify-manifest.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
-import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -72,8 +71,6 @@ import { isUpdateCapturePath } from "./update-capture-paths.js";
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
 
 export type BackupCreateOptions = {
-  /** Internal lifecycle cancellation for backup preparation, not admitted repairs. */
-  signal?: AbortSignal;
   output?: string;
   dryRun?: boolean;
   includeWorkspace?: boolean;
@@ -376,10 +373,6 @@ async function createConsistentStateSnapshotPlan(params: {
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
-  return await withCommandProcessScope(() => createBackupArchiveInScope(opts), opts.signal);
-}
-
-async function createBackupArchiveInScope(opts: BackupCreateOptions): Promise<BackupCreateResult> {
   const nowMs = resolveDateTimestampMs(opts.nowMs);
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
@@ -563,11 +556,10 @@ async function createBackupArchiveInScope(opts: BackupCreateOptions): Promise<Ba
         opaqueSqliteSourcePaths.clear();
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
-          createArchiveStream: (reportProgress, signal) =>
+          createArchiveStream: (reportProgress) =>
             appendBackupManifest(
               walkBackupTar({
                 tar,
-                signal,
                 paths: [...requiredSourcePaths],
                 skip: (sourcePath) => {
                   if (!requiredSourcePaths.has(sourcePath) && inventory.isVolatile(sourcePath)) {

@@ -23,35 +23,38 @@ type Selection = {
 };
 
 /** Owns private editor drafts across the selected target's presentation lifetime. */
-export function createAgentSelectionDrafts(
-  host: AgentSelectionDraftHost,
-  resetSelection: () => void,
-) {
-  const retainedFiles = new Map<string, RetainedAgentFileDrafts>();
-  let ownerProfileId: string | null = null;
-  let retainedIdentity: {
+export class AgentSelectionDrafts {
+  private readonly files = new Map<string, RetainedAgentFileDrafts>();
+  private profileId: string | null = null;
+  private identity: {
     agentId: string;
     profileId: string | null;
     intentRevision: number;
     draft: AgentIdentityDraft;
   } | null = null;
 
-  function observeGateway(snapshot: Pick<ApplicationGatewaySnapshot, "phase" | "selfUser">) {
+  constructor(
+    private readonly host: AgentSelectionDraftHost,
+    private readonly resetSelection: () => void,
+  ) {}
+
+  observeGateway(snapshot: Pick<ApplicationGatewaySnapshot, "phase" | "selfUser">) {
     if (snapshot.phase !== "connected") {
       return;
     }
     const profileId = snapshot.selfUser?.id ?? null;
-    if (profileId !== ownerProfileId) {
-      retainedIdentity = null;
-      resetIdentityDraft(host);
-      ownerProfileId = profileId;
+    if (profileId !== this.profileId) {
+      this.identity = null;
+      resetIdentityDraft(this.host);
+      this.profileId = profileId;
     }
   }
 
-  function select(selection: Selection) {
+  select(selection: Selection) {
+    const { host } = this;
     const { selectedId, intentRevision, awaitingRoster, profileId } = selection;
-    if (retainedIdentity?.intentRevision !== intentRevision) {
-      retainedIdentity = null;
+    if (this.identity?.intentRevision !== intentRevision) {
+      this.identity = null;
     }
     if (selectedId === host.agentsSelectedId) {
       return;
@@ -59,33 +62,33 @@ export function createAgentSelectionDrafts(
     if (host.agentsSelectedId) {
       const drafts = retainAgentFileDrafts(host);
       if (drafts) {
-        retainedFiles.set(host.agentsSelectedId, drafts);
+        this.files.set(host.agentsSelectedId, drafts);
       }
       // Retire the editor with discovery, retaining only its private unsaved draft.
-      retainedIdentity =
+      this.identity =
         !selectedId &&
         awaitingRoster &&
         Object.values(host.identityDraft).some((value) => value !== null)
           ? {
               agentId: host.agentsSelectedId,
-              profileId: ownerProfileId,
+              profileId: this.profileId,
               intentRevision,
               draft: host.identityDraft,
             }
           : null;
     }
     host.agentsSelectedId = selectedId;
-    resetSelection();
+    this.resetSelection();
     if (selectedId) {
-      const identity = retainedIdentity;
-      retainedIdentity = null;
+      const identity = this.identity;
+      this.identity = null;
       if (identity?.agentId === selectedId && identity.profileId === profileId) {
         host.identityDraft = identity.draft;
       }
     }
-    const files = selectedId ? retainedFiles.get(selectedId) : undefined;
+    const files = selectedId ? this.files.get(selectedId) : undefined;
     if (files && selectedId) {
-      retainedFiles.delete(selectedId);
+      this.files.delete(selectedId);
       host.agentFileEditors = files.editors;
       host.agentFileActive = files.active;
       host.agentFileConflict = files.conflict;
@@ -93,9 +96,8 @@ export function createAgentSelectionDrafts(
     }
   }
 
-  function clear() {
-    retainedFiles.clear();
-    retainedIdentity = null;
+  clear() {
+    this.files.clear();
+    this.identity = null;
   }
-  return { observeGateway, select, clear };
 }

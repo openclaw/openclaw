@@ -48,6 +48,8 @@ async function setDarkTheme(page: Page) {
     const root = document.documentElement;
     root.dataset.themeMode = "dark";
     root.dataset.themeResolved = "dark";
+    root.classList.remove("wa-light");
+    root.classList.add("wa-dark");
     root.style.colorScheme = "dark";
   });
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
@@ -305,7 +307,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await gateway.emitGatewayEvent("update.available", {
       schedule: {
         autoEnabled: false,
-        channel: "beta",
+        channel: "dev",
         install: { kind: "git", git: { status: "behind", commitsBehind: 246 } },
         target: {
           kind: "git",
@@ -315,7 +317,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
         },
       },
       updateAvailable: {
-        channel: "beta",
+        channel: "dev",
         commitsBehind: 246,
         currentSha: "1111111111111111111111111111111111111111",
         currentVersion: "2026.8.1",

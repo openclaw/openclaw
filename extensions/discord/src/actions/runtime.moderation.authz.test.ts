@@ -1,7 +1,6 @@
 import { PermissionFlagsBits } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
-import type { DiscordModerationAction } from "./runtime.moderation-shared.js";
 import { handleDiscordModerationAction } from "./runtime.moderation.js";
 
 const { banMemberDiscord, kickMemberDiscord, timeoutMemberDiscord, hasAnyGuildPermissionDiscord } =
@@ -22,7 +21,7 @@ vi.mock("../send.js", async (importOriginal) => ({
 
 const cfg = EMPTY_DISCORD_TEST_CONFIG;
 const target = { guildId: "guild-1", userId: "user-1", senderUserId: "sender-1" };
-function moderate(action: DiscordModerationAction, params: Record<string, unknown> = {}) {
+function moderate(action: string, params: Record<string, unknown> = {}) {
   return handleDiscordModerationAction(action, { ...target, ...params }, () => true, cfg);
 }
 
@@ -37,7 +36,7 @@ describe("discord moderation sender authorization", () => {
       permission: PermissionFlagsBits.ModerateMembers,
       mutation: timeoutMemberDiscord,
     },
-  ] as const)(
+  ])(
     "rejects $action without its required permission",
     async ({ action, permission, mutation }) => {
       await expect(moderate(action, { durationMinutes: 60 })).rejects.toThrow(

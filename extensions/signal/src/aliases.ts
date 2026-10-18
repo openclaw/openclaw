@@ -44,6 +44,10 @@ function resolveAliasMap(params: {
   return aliases;
 }
 
+function resolveTargetKind(target: string): SignalResolvedTargetKind {
+  return normalizeLowercaseStringOrEmpty(target).startsWith("group:") ? "group" : "user";
+}
+
 function resolveRawSignalTarget(
   input: string,
 ): { to: string; kind: SignalResolvedTargetKind } | null {
@@ -53,7 +57,7 @@ function resolveRawSignalTarget(
   }
   return {
     to: normalized,
-    kind: normalized.startsWith("group:") ? "group" : "user",
+    kind: resolveTargetKind(normalized),
   };
 }
 
@@ -74,8 +78,8 @@ function resolveSignalAliasTargetFromMap(params: {
     }
     visited.add(alias);
 
-    const rawValue = params.aliases.get(alias)?.trim();
-    if (!rawValue) {
+    const rawValue = params.aliases.get(alias);
+    if (typeof rawValue !== "string" || !rawValue.trim()) {
       throw new Error(`Signal alias "${alias}" must point to a non-empty Signal target.`);
     }
 
@@ -152,7 +156,7 @@ export function listSignalAliasDirectoryEntries(params: {
 }): ChannelDirectoryEntry[] {
   const aliases = resolveAliasMap(params);
   const query = normalizeLowercaseStringOrEmpty(params.query);
-  const limit = params.limit != null && params.limit > 0 ? params.limit : undefined;
+  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
   const exactAlias = params.query ? normalizeAliasKey(params.query) : undefined;
   if (exactAlias && aliases.has(exactAlias)) {
     const target = resolveSignalAliasTargetFromMap({ aliases, input: exactAlias });
@@ -185,7 +189,7 @@ export function listSignalAliasDirectoryEntries(params: {
       continue;
     }
     entries.push({ kind: params.kind, id: target.to, name: alias });
-    if (limit !== undefined && entries.length >= limit) {
+    if (typeof limit === "number" && entries.length >= limit) {
       break;
     }
   }

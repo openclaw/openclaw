@@ -298,7 +298,7 @@ describe("StepFun manifest provider aliases", () => {
 });
 
 describe("Together manifest provider alias", () => {
-  const modelId = "zai-org/GLM-5.2";
+  const modelId = "moonshotai/Kimi-K2.6";
 
   beforeEach(() => {
     const rootDir = path.dirname(

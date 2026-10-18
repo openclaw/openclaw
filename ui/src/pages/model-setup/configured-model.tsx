@@ -105,14 +105,10 @@ const FAILURE_KEYS: Record<string, string> = {
   unknown: "unknown",
 };
 
-function renderModelSetupFailure(
-  status: string,
-  error: string,
-  ref?: (element: HTMLDivElement) => void,
-): JSX.Element {
+function renderModelSetupFailure(status: string, error: string): JSX.Element {
   const key = FAILURE_KEYS[status] ?? "unknown";
   return (
-    <div ref={ref} class="model-setup__failure" role="alert">
+    <div class="model-setup__failure" role="alert">
       <span class="model-setup__failure-icon" aria-hidden="true">
         <Icon name="alertTriangle" />
       </span>
@@ -220,19 +216,16 @@ export function ConfiguredModel(props: {
   );
 }
 
-export function renderActivationFeedback(
-  activation: ModelSetupActivationState,
-  ref?: (element: HTMLDivElement) => void,
-) {
+export function renderActivationFeedback(activation: ModelSetupActivationState) {
   // Feedback follows the activation attempt, including prepared models absent from discovery.
   if (activation.phase === "testing") {
     return (
-      <div ref={ref} class="model-setup__testing" role="status">
+      <div class="model-setup__testing" role="status">
         {t("modelSetup.testing")}
       </div>
     );
   }
   return activation.phase === "failure"
-    ? renderModelSetupFailure(activation.status, activation.error, ref)
+    ? renderModelSetupFailure(activation.status, activation.error)
     : undefined;
 }

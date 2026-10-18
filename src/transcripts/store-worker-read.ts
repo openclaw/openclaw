@@ -3,6 +3,7 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
+import { createPreparedTranscriptDateReader } from "./store-date-preparation.js";
 import {
   queryTranscriptReadEntries,
   readLatestTranscriptEntry,
@@ -46,7 +47,13 @@ export function executeTranscriptRead(
       case "transcripts.canonicalSessionRow":
         return ok(readTranscriptCanonicalSessionRow(database, command.input.params.selector));
       case "transcripts.readEntries":
-        return ok(queryTranscriptReadEntries(database, command.input.params));
+        return ok(
+          queryTranscriptReadEntries(
+            database,
+            command.input.params,
+            createPreparedTranscriptDateReader(),
+          ),
+        );
       case "transcripts.exportOwnership":
         return ok(readTranscriptExportOwnership(database, command.input.params.session));
       case "transcripts.exportPathCollisions":

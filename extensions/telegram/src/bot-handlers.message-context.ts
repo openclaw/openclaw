@@ -3,6 +3,11 @@ import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound"
 import { resolveStoredModelOverrideAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import {
+  getSessionEntryAsync,
+  readAmbientTranscriptWatermarkAsync,
+  resolveAmbientTranscriptWatermarkKey,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
@@ -143,16 +148,11 @@ export function createTelegramMessageSessionRuntime({
   accountId,
   resolveTelegramGroupConfig,
   telegramDeps,
-}: Pick<RegisterTelegramHandlerParams, "accountId" | "resolveTelegramGroupConfig"> & {
-  telegramDeps: Pick<
-    RegisterTelegramHandlerParams["telegramDeps"],
-    | "getSessionEntryAsync"
-    | "resolveStorePath"
-    | "resolveAmbientTranscriptWatermarkKey"
-    | "readAmbientTranscriptWatermarkAsync"
-  >;
-}) {
-  const loadSessionEntry = telegramDeps.getSessionEntryAsync;
+}: Pick<
+  RegisterTelegramHandlerParams,
+  "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
+>) {
+  const loadSessionEntry = telegramDeps.getSessionEntryAsync ?? getSessionEntryAsync;
   const resolveTelegramSessionState = async (params: ResolveTelegramSessionStateParams) => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
     const { topicConfig } = resolveTelegramGroupConfig(
@@ -213,13 +213,17 @@ export function createTelegramMessageSessionRuntime({
     if (!params.isGroup) {
       return undefined;
     }
-    const key = telegramDeps.resolveAmbientTranscriptWatermarkKey({
+    const key = (
+      telegramDeps.resolveAmbientTranscriptWatermarkKey ?? resolveAmbientTranscriptWatermarkKey
+    )({
       channel: "telegram",
       accountId,
       conversationId: String(params.chatId),
       ...(params.resolvedThreadId !== undefined ? { threadId: params.resolvedThreadId } : {}),
     });
-    return await telegramDeps.readAmbientTranscriptWatermarkAsync({
+    return await (
+      telegramDeps.readAmbientTranscriptWatermarkAsync ?? readAmbientTranscriptWatermarkAsync
+    )({
       storePath: params.storePath,
       sessionKey: params.sessionKey,
       key,

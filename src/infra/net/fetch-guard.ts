@@ -5,10 +5,12 @@ import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { captureEffectAuthority } from "../../shared/effect-authority.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
-import { normalizeRequestInitHeadersForFetch } from "../fetch-headers.js";
+import {
+  normalizeHeadersInitForFetch,
+  normalizeRequestInitHeadersForFetch,
+} from "../fetch-headers.js";
 import { cancelUnreadResponseBody } from "../http-body.js";
 import {
-  resolveConfiguredLocalOriginLinkLocalHopPolicy,
   shouldUseConfiguredLocalOriginManagedProxyBypass,
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
@@ -17,17 +19,12 @@ import { captureGuardedFetchRequestAuthority } from "./fetch-request-authority.j
 import { responseWithAbortSignal } from "./guarded-body-stream.js";
 import { PinnedDispatcherPool, type PinnedDispatcherLease } from "./pinned-dispatcher-pool.js";
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
-import {
-  dropBodyHeaders,
-  restoreRedirectAuthorization,
-  retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders,
-} from "./redirect-headers.js";
+import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   fetchWithRuntimeDispatcher,
   isMockedFetch,
   type DispatcherAwareRequestInit,
 } from "./runtime-fetch.js";
-import { hasTrustedHostPodmanGatewayLinkLocalExemption } from "./ssrf-trusted-host-linklocal-exemptions.js";
 import {
   assertHostnameAllowedWithPolicy,
   closeDispatcher,
@@ -83,8 +80,6 @@ export type GuardedFetchOptions = {
   /** Reject cross-origin redirects that would replay an unsafe body. Mutually exclusive with allow. */
   rejectCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
-  /** Header/body inactivity budget; does not impose a whole-stream or connect deadline. */
-  streamTimeoutMs?: number;
   signal?: AbortSignal;
   requireHttps?: boolean;
   policy?: SsrFPolicy;
@@ -134,8 +129,6 @@ type GuardedFetchInternalOptions = GuardedFetchOptions & {
 
 type GuardedFetchConfiguredLocalOriginOptions = GuardedFetchOptions & {
   configuredLocalOriginBaseUrl: string;
-  /** Check the exact configured Podman origin's host-only link-local exception. */
-  allowPodmanHostGatewayLinkLocal?: boolean;
 };
 
 type GuardedFetchPresetOptions = Omit<
@@ -207,21 +200,21 @@ function assertExplicitProxySupportsPinnedDns(
 function createPolicyDispatcherWithoutPinnedDns(
   dispatcherPolicy?: PinnedDispatcherPolicy,
   timeoutMs?: number,
-  streamTimeoutMs?: number,
 ): Dispatcher | null {
-  if (!dispatcherPolicy && streamTimeoutMs === undefined) {
+  if (!dispatcherPolicy) {
     return null;
   }
-  const streamTimeouts = { bodyTimeout: streamTimeoutMs, headersTimeout: streamTimeoutMs };
 
-  if (!dispatcherPolicy || dispatcherPolicy.mode === "direct") {
-    return createHttp1Agent({ ...streamTimeouts, connect: dispatcherPolicy?.connect }, timeoutMs);
+  if (dispatcherPolicy.mode === "direct") {
+    return createHttp1Agent(
+      dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : undefined,
+      timeoutMs,
+    );
   }
 
   if (dispatcherPolicy.mode === "env-proxy") {
     return createHttp1EnvHttpProxyAgent(
       {
-        ...streamTimeouts,
         ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
         ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
       },
@@ -232,7 +225,7 @@ function createPolicyDispatcherWithoutPinnedDns(
   const proxyUrl = dispatcherPolicy.proxyUrl.trim();
   const requestTls = dispatcherPolicy.proxyTls;
   return createHttp1ProxyAgent(
-    { ...streamTimeouts, uri: proxyUrl, ...(requestTls ? { requestTls: { ...requestTls } } : {}) },
+    { uri: proxyUrl, ...(requestTls ? { requestTls: { ...requestTls } } : {}) },
     timeoutMs,
   );
 }
@@ -338,6 +331,32 @@ function resolveRetainedAuthorizationForRedirect(params: {
   return new Headers(normalizedInit.headers).get("authorization") ?? undefined;
 }
 
+function restoreRedirectAuthorization(params: {
+  init?: RequestInit;
+  authorization?: string;
+}): RequestInit | undefined {
+  if (!params.authorization) {
+    return params.init;
+  }
+  const headers = new Headers(params.init?.headers);
+  headers.set("Authorization", params.authorization);
+  return { ...params.init, headers };
+}
+
+function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
+  if (!headers) {
+    return headers;
+  }
+  const nextHeaders = new Headers(normalizeHeadersInitForFetch(headers));
+  nextHeaders.delete("content-encoding");
+  nextHeaders.delete("content-language");
+  nextHeaders.delete("content-length");
+  nextHeaders.delete("content-location");
+  nextHeaders.delete("content-type");
+  nextHeaders.delete("transfer-encoding");
+  return nextHeaders;
+}
+
 function rewriteRedirectInit(params: {
   init?: RequestInit;
   status: number;
@@ -382,7 +401,6 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
 export async function fetchConfiguredLocalOriginWithSsrFGuard({
   configuredLocalOriginBaseUrl,
-  allowPodmanHostGatewayLinkLocal,
   ...params
 }: GuardedFetchConfiguredLocalOriginOptions): Promise<GuardedFetchResult> {
   return await fetchWithSsrFGuardInternal({
@@ -390,7 +408,6 @@ export async function fetchConfiguredLocalOriginWithSsrFGuard({
     managedProxyBypass: {
       kind: "configured-local-origin",
       baseUrl: configuredLocalOriginBaseUrl,
-      ...(allowPodmanHostGatewayLinkLocal === true ? { allowPodmanHostGatewayLinkLocal } : {}),
     },
   });
 }
@@ -480,12 +497,7 @@ async function fetchWithSsrFGuardInternal(
       await (dispatcherLease ? dispatcherLease.release() : closeDispatcher(dispatcher));
     };
     // Resolve inside the redirect loop so exact-origin trust never carries across origins.
-    // The link-local gateway exemption is applied per exact-origin hop on top.
-    const policyForUrl = resolveConfiguredLocalOriginLinkLocalHopPolicy({
-      url: parsedUrl,
-      policy: resolveSsrFPolicyForUrl(parsedUrl, params.policy),
-      managedProxyBypass: params.managedProxyBypass,
-    });
+    const policyForUrl = resolveSsrFPolicyForUrl(parsedUrl, params.policy);
     const dispatcherPolicy = params.resolveDispatcherPolicy?.(parsedUrl) ?? params.dispatcherPolicy;
     const resolvePinnedHostname = async () =>
       await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
@@ -533,8 +545,6 @@ async function fetchWithSsrFGuardInternal(
         !usesTrustedExplicitProxyMode &&
         params.pinDns !== false;
       const timeoutMs = params.timeoutMs;
-      const streamTimeoutMs = params.streamTimeoutMs;
-      const streamTimeouts = { bodyTimeout: streamTimeoutMs, headersTimeout: streamTimeoutMs };
 
       // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.
@@ -543,7 +553,7 @@ async function fetchWithSsrFGuardInternal(
       }
 
       if (canUseTrustedEnvProxy) {
-        dispatcher = createHttp1EnvHttpProxyAgent(streamTimeouts, timeoutMs);
+        dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (canUseManagedProxy) {
         if (shouldCheckManagedProxyBypass) {
           const pinned = await resolvePinnedHostname();
@@ -552,16 +562,9 @@ async function fetchWithSsrFGuardInternal(
             managedProxyBypass: params.managedProxyBypass,
             resolvedAddresses: pinned.addresses,
           })
-            ? createPinnedDispatcher(
-                pinned,
-                dispatcherPolicy,
-                policyForUrl,
-                timeoutMs,
-                streamTimeoutMs,
-              )
+            ? createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs)
             : createHttp1EnvHttpProxyAgent(
                 {
-                  ...streamTimeouts,
                   // An explicitly proxied loopback must not inherit Undici's ambient bypass list.
                   noProxy: "",
                   // Target certificate trust belongs to the tunneled endpoint,
@@ -573,28 +576,20 @@ async function fetchWithSsrFGuardInternal(
                 timeoutMs,
               );
         } else {
-          dispatcher = createHttp1EnvHttpProxyAgent(streamTimeouts, timeoutMs);
+          dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
         }
       } else if (usesTrustedExplicitProxyMode) {
         // Explicit proxy targets are still checked against the caller's hostname
         // policy, but the proxy does the DNS resolution for the final target.
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
-        dispatcher = createPolicyDispatcherWithoutPinnedDns(
-          dispatcherPolicy,
-          timeoutMs,
-          streamTimeoutMs,
-        );
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(dispatcherPolicy, timeoutMs);
       } else if (canUseMockedFetchWithoutDns) {
         // Test-installed fetch mocks should stay hermetic. Host/IP policy still runs;
         // real fetches continue through pinned DNS below.
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
       } else if (params.pinDns === false) {
         await resolvePinnedHostname();
-        dispatcher = createPolicyDispatcherWithoutPinnedDns(
-          dispatcherPolicy,
-          timeoutMs,
-          streamTimeoutMs,
-        );
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(dispatcherPolicy, timeoutMs);
       } else {
         const pinned = await resolvePinnedHostname();
         if (
@@ -607,12 +602,9 @@ async function fetchWithSsrFGuardInternal(
             origin: parsedUrl.origin,
             addresses: [...pinned.addresses].toSorted(),
             timeoutMs: timeoutMs ?? null,
-            streamTimeoutMs: timeoutMs ?? streamTimeoutMs ?? globalUndiciStreamTimeoutMs ?? null,
+            streamTimeoutMs: timeoutMs ?? globalUndiciStreamTimeoutMs ?? null,
             familyConnect: familyConnect ?? null,
             policy: policyForUrl ?? null,
-            // Host exemptions live outside the policy's JSON shape.
-            podmanGatewayLinkLocalExempt:
-              hasTrustedHostPodmanGatewayLinkLocalExemption(policyForUrl),
           });
           dispatcherLease = params.dispatcherPool.acquire({
             key,
@@ -622,24 +614,17 @@ async function fetchWithSsrFGuardInternal(
                 familyConnect ? { mode: "direct", connect: familyConnect } : undefined,
                 policyForUrl,
                 timeoutMs,
-                streamTimeoutMs,
               ),
           });
           dispatcher = dispatcherLease
             ? dispatcherLease.dispatcher
-            : createPinnedDispatcher(pinned, undefined, policyForUrl, timeoutMs, streamTimeoutMs);
+            : createPinnedDispatcher(pinned, undefined, policyForUrl, timeoutMs);
         } else {
-          dispatcher = createPinnedDispatcher(
-            pinned,
-            dispatcherPolicy,
-            policyForUrl,
-            timeoutMs,
-            streamTimeoutMs,
-          );
+          dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs);
         }
       }
 
-      const init: DispatcherAwareRequestInit & { duplex?: "half" } = {
+      const init: DispatcherAwareRequestInit = {
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
@@ -647,21 +632,6 @@ async function fetchWithSsrFGuardInternal(
           ? AbortSignal.any([signal, requestController.signal])
           : requestController.signal,
       };
-      if (init.body instanceof Blob && !init.keepalive && init.mode !== "no-cors") {
-        // This owner replays redirects. A per-hop stream avoids Fetch's unused body tee.
-        // Fetch forbids stream bodies for keepalive and no-cors requests.
-        const body = init.body;
-        const headers = new Headers(init.headers);
-        if (!headers.has("content-length")) {
-          headers.set("content-length", String(body.size));
-        }
-        if (!headers.has("content-type") && body.type) {
-          headers.set("content-type", body.type);
-        }
-        init.headers = headers;
-        init.body = body.stream();
-        init.duplex = "half";
-      }
 
       // Explicit caller stubs and test-installed fetch mocks should win.
       // Otherwise, fall back to undici's fetch whenever we attach a dispatcher,
@@ -726,11 +696,6 @@ async function fetchWithSsrFGuardInternal(
           hostnameAllowlist: params.retainAuthorizationRedirectHostnameAllowlist,
         });
         const crossOrigin = nextParsedUrl.origin !== parsedUrl.origin;
-        if (crossOrigin && hasTrustedHostPodmanGatewayLinkLocalExemption(policyForUrl)) {
-          throw new SsrFBlockedError(
-            "Blocked cross-origin redirect from configured Podman host gateway",
-          );
-        }
         const methodRedirectInit = rewriteRedirectInit({
           init: currentInit,
           status: response.status,

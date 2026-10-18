@@ -59,7 +59,9 @@ suite.define(() => {
         await expect.poll(() => secondShortcut.count()).toBe(1);
         // Finish the picker's opening scale before recording its baseline. The top
         // transform origin keeps the anchor gap stable while box geometry still grows.
-        await picker.locator(":scope > [data-anchored-overlay]").evaluate(finishElementAnimations);
+        await picker
+          .locator(':scope > wa-popup[data-anchored-overlay] > [part~="popup"]')
+          .evaluate(finishElementAnimations);
         const menuGeometry = () =>
           page.evaluate(() => {
             const anchor = document.querySelector('[data-chat-model-select="true"]');
@@ -825,7 +827,7 @@ suite.define(() => {
             path.join(suite.artifactDir, "new-session-catalog-retry", "01-cli-agents-retry.png"),
             await takeControlUiViewportScreenshot(
               page,
-              page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
+              page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
               [errorState],
             ),
           );
@@ -882,7 +884,7 @@ suite.define(() => {
             ),
             await takeControlUiViewportScreenshot(
               page,
-              page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
+              page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
               [page.locator('[data-chat-model-target="anthropic"]')],
             ),
           );

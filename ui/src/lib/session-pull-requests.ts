@@ -14,7 +14,6 @@ import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "./gateway-methods.ts";
 import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
-import { primarySessionPullRequest } from "./session-pull-request-presentation.ts";
 import { readSessionChangedEvent } from "./sessions/reconcile.ts";
 import { uiSessionEventMatches } from "./sessions/session-key.ts";
 
@@ -29,7 +28,12 @@ export function summarizeSessionPullRequests(
   pullRequests: readonly ControlUiSessionPullRequest[],
   previous?: SessionCatalogPullRequestSummary,
 ): SessionCatalogPullRequestSummary | undefined {
-  const current = primarySessionPullRequest(pullRequests);
+  // Keep active work ahead of newer merged/closed history, as the sidebar and PR menu do.
+  const current =
+    pullRequests.find(({ state }) => state === "open") ??
+    pullRequests.find(({ state }) => state === "draft") ??
+    pullRequests.find(({ state }) => state === "merged") ??
+    pullRequests[0];
   if (!current) {
     return undefined;
   }

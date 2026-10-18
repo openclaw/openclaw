@@ -1,5 +1,9 @@
 import type { Command } from "commander";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
+import {
+  buildCommandGroupEntries,
+  type CommandGroupDescriptorSpec,
+} from "./command-group-descriptors.js";
 import type { ProgramContext } from "./context.js";
 import {
   getCoreCliCommandDescriptors,
@@ -12,10 +16,7 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 
-const coreEntrySpecs: readonly (readonly [
-  commandNames: readonly string[],
-  register: (program: Command, ctx: ProgramContext) => Promise<void> | void,
-])[] = [
+const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>[] = [
   [
     ["setup", "crestodian"],
     async (program) => (await import("./register.setup.js")).registerSetupCommand(program),
@@ -86,14 +87,8 @@ const coreEntrySpecs: readonly (readonly [
 ];
 
 function resolveCoreCommandGroups(ctx: ProgramContext): CommandGroupEntry[] {
-  // Core registration order differs from descriptor order (audit precedes maintenance).
-  const descriptors = getCoreCliCommandDescriptors();
-  return coreEntrySpecs.flatMap(([names, register]) => {
-    const placeholders = descriptors.filter((descriptor) => names.includes(descriptor.name));
-    return placeholders.length === names.length
-      ? [{ names, placeholders, register: (program: Command) => register(program, ctx) }]
-      : [];
-  });
+  // Descriptor metadata and import specs stay separate so help can stay cheap.
+  return buildCommandGroupEntries(getCoreCliCommandDescriptors(), coreEntrySpecs, ctx);
 }
 
 export function getCoreCliCompletionGroups(ctx: ProgramContext): CommandGroupEntry[] {

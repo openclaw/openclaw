@@ -134,11 +134,14 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
   };
 }
 
-export async function retireLegacySessionCostUsageCache(params: {
+export async function deleteSessionCostUsageRollupsExcept(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
+  liveKeys: ReadonlySet<string>;
+  rows: readonly SessionCostUsageRollupSnapshot[];
 }): Promise<void> {
+  const existing = params.rows.filter((row) => !params.liveKeys.has(row.key));
   const writer = createCacheWriter(
     captureCacheDatabaseOptions({
       agentId: normalizeAgentId(params.agentId),
@@ -147,7 +150,7 @@ export async function retireLegacySessionCostUsageCache(params: {
     }),
   );
   try {
-    await writer.write("usageCache.retireLegacy", undefined);
+    await writer.write("usageCache.prune", existing);
   } finally {
     await writer.close();
   }

@@ -588,10 +588,7 @@ describe.skipIf(process.platform === "win32")(
           const transcriptBefore = await readVisibleSessionTranscriptMessageEntries(
             transcriptTarget(params),
           );
-          const assertSourceCurrent = sharedClients.captureCodexAppServerClientLifetime(
-            client,
-            "connection",
-          );
+          const sourceIsCurrent = sharedClients.captureSharedCodexAppServerCatalogLifetime(client);
           const nativeRequests = vi.spyOn(client, "request");
           const createClient = vi.spyOn(sharedClients, "createIsolatedCodexAppServerClient");
           const startClient = vi.spyOn(CodexAppServerClient, "start");
@@ -613,6 +610,7 @@ describe.skipIf(process.platform === "win32")(
           expect(nativeRequests).not.toHaveBeenCalled();
           expect(requests).toHaveLength(0);
           expect(context).toEqual({ source: "unavailable" });
+          expect(Object.isFrozen(context)).toBe(true);
           expect(captureContext).not.toHaveBeenCalled();
           expect(warn).toHaveBeenCalledWith(
             "codex settled-turn finalization context is unavailable",
@@ -630,7 +628,7 @@ describe.skipIf(process.platform === "win32")(
           expect(
             await readVisibleSessionTranscriptMessageEntries(transcriptTarget(params)),
           ).toEqual(transcriptBefore);
-          expect(assertSourceCurrent).not.toThrow();
+          expect(sourceIsCurrent()).toBe(true);
           expect(client.getCloseError()).toBeUndefined();
           expect(sharedClients.releaseLeasedSharedCodexAppServerClient(client)).toBe(false);
           await expect(
@@ -803,6 +801,7 @@ describe.skipIf(process.platform === "win32")(
             if (!(context instanceof settledContext.CodexSettledTurnContext)) {
               throw new Error("Native turn lost its settled-tool evidence");
             }
+            expect(Object.isFrozen(context)).toBe(true);
             if (hidden) {
               expect(context.data).toEqual(
                 expect.arrayContaining([

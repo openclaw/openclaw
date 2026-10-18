@@ -6,7 +6,6 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { QuestionAnswers, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -69,11 +68,6 @@ function recordQuestionResolution(state: QuestionPromptState, payload: unknown) 
   return handleQuestionPromptEvent(state, { event: "question.resolved", payload });
 }
 
-const detailedAnswer = { answers: { format: ["Detailed"] } };
-function answeredPayload(overrides: Record<string, unknown> = {}) {
-  return requestedPayload({ status: "answered", answers: detailedAnswer, ...overrides });
-}
-
 function resolvedQuestion(params?: unknown): QuestionResolveResult {
   const request = params as { answers?: QuestionAnswers; cancel?: true } | undefined;
   return request?.cancel
@@ -88,15 +82,12 @@ function createQuestionResolver() {
   return vi.fn<RequestFn>(async (_method, params) => resolvedQuestion(params));
 }
 
-function createConnectedState(
-  request: RequestFn | { request: RequestFn },
-  overrides: Record<string, unknown> | null = {},
-) {
+function createConnectedState(request: RequestFn | { request: RequestFn }, payload?: unknown) {
   const state = createState();
   const client = typeof request === "function" ? { request } : request;
   setQuestionPromptClient(state, client);
-  if (overrides !== null) {
-    requestQuestion(state, overrides);
+  if (payload !== undefined) {
+    handleQuestionPromptEvent(state, { event: "question.requested", payload });
   }
   return { state, client };
 }
@@ -122,12 +113,19 @@ function rejectAfterRequestDeadline(options?: GatewayProtocolRequestOptions): Pr
 }
 
 function createDeferredQuestionRequest() {
-  const pending = createDeferred<unknown>();
-  const request = vi.fn<RequestFn>(() => pending.promise);
+  let finishRequest: (value: unknown) => void = () => {};
+  let failRequest: (error: Error) => void = () => {};
+  const request = vi.fn<RequestFn>(
+    () =>
+      new Promise((resolve, reject) => {
+        finishRequest = resolve;
+        failRequest = reject;
+      }),
+  );
   return {
     request,
-    resolve: () => pending.resolve(resolvedQuestion(request.mock.calls.at(-1)?.[1])),
-    reject: () => pending.reject(new Error("stale gateway unavailable")),
+    resolve: () => finishRequest(resolvedQuestion(request.mock.calls.at(-1)?.[1])),
+    reject: () => failRequest(new Error("stale gateway unavailable")),
   };
 }
 
@@ -172,8 +170,11 @@ describe("question event parsing", () => {
     const state = createState();
     expect(requestQuestion(state, { id: "" })).toBe(false);
     expect(
-      requestQuestion(state, {
-        questions: [{ questionId: "Bad ID", header: "Bad", question: "Bad?", options: [] }],
+      handleQuestionPromptEvent(state, {
+        event: "question.requested",
+        payload: requestedPayload({
+          questions: [{ questionId: "Bad ID", header: "Bad", question: "Bad?", options: [] }],
+        }),
       }),
     ).toBe(false);
     expect(
@@ -228,8 +229,14 @@ describe("question prompt state", () => {
   });
 
   it("marks a locally submitted answer as local when its broadcast arrives", async () => {
-    const pending = createDeferredQuestionRequest();
-    const { state } = createConnectedState(pending.request);
+    let releaseRequest: () => void = () => {};
+    const request = vi.fn<RequestFn>(
+      () =>
+        new Promise((resolve) => {
+          releaseRequest = () => resolve(resolvedQuestion());
+        }),
+    );
+    const { state } = createConnectedState(request, requestedPayload());
 
     const submitting = submitQuestionPrompt(state, "question-1", { format: ["Compact"] });
     recordQuestionResolution(state, {
@@ -237,7 +244,7 @@ describe("question prompt state", () => {
       status: "answered",
       answers: { answers: { format: ["Compact"] } },
     });
-    pending.resolve();
+    releaseRequest();
     await submitting;
 
     expect(state.prompts.get("question-1")).toMatchObject({
@@ -249,9 +256,14 @@ describe("question prompt state", () => {
   });
 
   it("marks a concurrent winning answer from another surface", async () => {
-    const pending = createDeferred<unknown>();
-    const request = vi.fn<RequestFn>(() => pending.promise);
-    const { state } = createConnectedState(request);
+    let rejectRequest: (error: Error) => void = () => {};
+    const request = vi.fn<RequestFn>(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRequest = reject;
+        }),
+    );
+    const { state } = createConnectedState(request, requestedPayload());
 
     const submitting = submitQuestionPrompt(state, "question-1", { format: ["Compact"] });
     recordQuestionResolution(state, {
@@ -259,7 +271,7 @@ describe("question prompt state", () => {
       status: "answered",
       answers: { answers: { format: ["Detailed"] } },
     });
-    pending.reject(new Error("question already resolved"));
+    rejectRequest(new Error("question already resolved"));
     await submitting;
 
     expect(state.prompts.get("question-1")).toMatchObject({
@@ -272,9 +284,14 @@ describe("question prompt state", () => {
   });
 
   it("keeps local provenance when the accepted resolve response is lost", async () => {
-    const pending = createDeferred<unknown>();
-    const request = vi.fn<RequestFn>(() => pending.promise);
-    const { state } = createConnectedState(request);
+    let rejectRequest: (error: Error) => void = () => {};
+    const request = vi.fn<RequestFn>(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRequest = reject;
+        }),
+    );
+    const { state } = createConnectedState(request, requestedPayload());
 
     const submitting = submitQuestionPrompt(state, "question-1", { format: ["Compact"] });
     recordQuestionResolution(state, {
@@ -282,7 +299,7 @@ describe("question prompt state", () => {
       status: "answered",
       answers: { answers: { format: ["Compact"] } },
     });
-    pending.reject(new Error("connection closed"));
+    rejectRequest(new Error("connection closed"));
     await submitting;
 
     expect(state.prompts.get("question-1")).toMatchObject({
@@ -333,7 +350,7 @@ describe("question RPC helpers", () => {
         multiSelect: true,
       },
     ];
-    const { state } = createConnectedState(request, { questions });
+    const { state } = createConnectedState(request, requestedPayload({ questions }));
 
     await submitQuestionPrompt(state, "question-1", {
       format: ["Compact"],
@@ -402,7 +419,7 @@ describe("question RPC helpers", () => {
     const request = vi.fn<RequestFn>((_method, _params, options) =>
       rejectAfterRequestDeadline(options),
     );
-    const { state } = createConnectedState(request);
+    const { state } = createConnectedState(request, requestedPayload());
 
     const pending = answerQuestion(state);
     expect(state.prompts.get("question-1")?.submitting).toBe(true);
@@ -420,7 +437,10 @@ describe("question RPC helpers", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
     const request = createQuestionResolver();
-    const { state } = createConnectedState(request, { expiresAtMs: Date.now() + 1_250 });
+    const { state } = createConnectedState(
+      request,
+      requestedPayload({ expiresAtMs: Date.now() + 1_250 }),
+    );
 
     await answerQuestion(state);
 
@@ -436,7 +456,7 @@ describe("question resolution connection ownership", () => {
     async (outcome) => {
       const stale = createDeferredQuestionRequest();
       const current = createDeferredQuestionRequest();
-      const { state } = createConnectedState(stale.request);
+      const { state } = createConnectedState(stale.request, requestedPayload());
 
       const staleResolution = answerQuestion(state);
       setQuestionPromptClient(state, { request: current.request });
@@ -474,7 +494,7 @@ describe("question resolution connection ownership", () => {
         return requestCount === 1 ? stale.request(method, params) : current.request(method, params);
       }),
     };
-    const { state } = createConnectedState(client);
+    const { state } = createConnectedState(client, requestedPayload());
 
     const staleResolution = answerQuestion(state);
     // Socket closure rejects its pending requests before reconnect callbacks.
@@ -505,7 +525,7 @@ describe("question resolution connection ownership", () => {
         ? Promise.resolve({ questions: [requestedPayload()] })
         : pending.request(method, params),
     );
-    const { state, client } = createConnectedState(request);
+    const { state, client } = createConnectedState(request, requestedPayload());
 
     const resolution = answerQuestion(state);
     const original = state.prompts.get("question-1");
@@ -593,7 +613,7 @@ describe("refreshPendingQuestions", () => {
       }
       return { questions: [requestedPayload()] };
     });
-    const { state, client } = createConnectedState(request, null);
+    const { state, client } = createConnectedState(request);
 
     refreshPendingQuestionsWithRetry(state, client);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -606,8 +626,41 @@ describe("refreshPendingQuestions", () => {
   });
 
   it("preserves a resolution received while reconnect refresh is in flight", async () => {
-    const list = createDeferred<unknown>();
-    const request = vi.fn<RequestFn>(() => list.promise);
+    let finishList: (value: unknown) => void = () => {};
+    const request = vi.fn<RequestFn>(
+      () =>
+        new Promise((resolve) => {
+          finishList = resolve;
+        }),
+    );
+    const { state, client } = createConnectedState(request, requestedPayload());
+
+    refreshPendingQuestionsWithRetry(state, client);
+    recordQuestionResolution(state, {
+      id: "question-1",
+      status: "answered",
+      answers: { answers: { format: ["Detailed"] } },
+    });
+    finishList({ questions: [requestedPayload()] });
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
+
+    expect(state.prompts.get("question-1")?.status).toBe("answered");
+  });
+
+  it("retains a resolution that arrives before reconnect hydration", async () => {
+    let finishList: (value: unknown) => void = () => {};
+    const request = vi.fn<RequestFn>((method) =>
+      method === "question.list"
+        ? new Promise((resolve) => {
+            finishList = resolve;
+          })
+        : Promise.resolve({
+            question: requestedPayload({
+              status: "answered",
+              answers: { answers: { format: ["Detailed"] } },
+            }),
+          }),
+    );
     const { state, client } = createConnectedState(request);
 
     refreshPendingQuestionsWithRetry(state, client);
@@ -616,26 +669,7 @@ describe("refreshPendingQuestions", () => {
       status: "answered",
       answers: { answers: { format: ["Detailed"] } },
     });
-    list.resolve({ questions: [requestedPayload()] });
-    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
-
-    expect(state.prompts.get("question-1")?.status).toBe("answered");
-  });
-
-  it("retains a resolution that arrives before reconnect hydration", async () => {
-    const list = createDeferred<unknown>();
-    const request = vi.fn<RequestFn>((method) =>
-      method === "question.list" ? list.promise : Promise.resolve({ question: answeredPayload() }),
-    );
-    const { state, client } = createConnectedState(request, null);
-
-    refreshPendingQuestionsWithRetry(state, client);
-    recordQuestionResolution(state, {
-      id: "question-1",
-      status: "answered",
-      answers: { answers: { format: ["Detailed"] } },
-    });
-    list.resolve({ questions: [] });
+    finishList({ questions: [] });
     await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
     expect(request).toHaveBeenCalledWith(
@@ -690,9 +724,14 @@ describe("refreshPendingQuestions", () => {
       if (getAttempts === 1) {
         throw new Error("gateway unavailable");
       }
-      return { question: answeredPayload() };
+      return {
+        question: requestedPayload({
+          status: "answered",
+          answers: { answers: { format: ["Detailed"] } },
+        }),
+      };
     });
-    const { state, client } = createConnectedState(request);
+    const { state, client } = createConnectedState(request, requestedPayload());
 
     refreshPendingQuestionsWithRetry(state, client);
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
@@ -714,7 +753,7 @@ describe("refreshPendingQuestions", () => {
       }
       throw questionNotFoundError();
     });
-    const { state, client } = createConnectedState(request);
+    const { state, client } = createConnectedState(request, requestedPayload());
 
     refreshPendingQuestionsWithRetry(state, client);
     await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("unavailable"));
@@ -736,7 +775,7 @@ describe("refreshPendingQuestions", () => {
       }
       throw questionNotFoundError();
     });
-    const { state, client } = createConnectedState(request, null);
+    const { state, client } = createConnectedState(request);
     recordQuestionResolution(state, { id: "forgotten-question", status: "cancelled" });
     setQuestionPromptClient(state, null);
     await vi.advanceTimersByTimeAsync(15_000);
@@ -763,9 +802,14 @@ describe("refreshPendingQuestions", () => {
       if (getAttempts === 1) {
         throw new Error("gateway unavailable");
       }
-      return { question: answeredPayload() };
+      return {
+        question: requestedPayload({
+          status: "answered",
+          answers: { answers: { format: ["Detailed"] } },
+        }),
+      };
     });
-    const { state, client } = createConnectedState(request, null);
+    const { state, client } = createConnectedState(request);
     recordQuestionResolution(state, {
       id: "question-1",
       status: "answered",
@@ -794,9 +838,15 @@ describe("refreshPendingQuestions", () => {
       if ((params as { id: string }).id === "question-1") {
         return rejectAfterRequestDeadline(options);
       }
-      return Promise.resolve({ question: answeredPayload({ id: "question-2" }) });
+      return Promise.resolve({
+        question: requestedPayload({
+          id: "question-2",
+          status: "answered",
+          answers: { answers: { format: ["Detailed"] } },
+        }),
+      });
     });
-    const { state, client } = createConnectedState(request, null);
+    const { state, client } = createConnectedState(request);
     for (const id of ["question-1", "question-2"]) {
       requestQuestion(state, { id });
     }
@@ -849,14 +899,19 @@ describe("refreshPendingQuestions", () => {
   it("applies a question.get answer when the local timer expires in flight", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
-    const get = createDeferred<unknown>();
+    let finishGet: (value: unknown) => void = () => {};
     const request = vi.fn<RequestFn>((method) => {
       if (method === "question.list") {
         return Promise.resolve({ questions: [] });
       }
-      return get.promise;
+      return new Promise((resolve) => {
+        finishGet = resolve;
+      });
     });
-    const { state, client } = createConnectedState(request, { expiresAtMs: Date.now() + 1_000 });
+    const { state, client } = createConnectedState(
+      request,
+      requestedPayload({ expiresAtMs: Date.now() + 1_000 }),
+    );
 
     refreshPendingQuestionsWithRetry(state, client);
     await waitForFast(() =>
@@ -868,7 +923,12 @@ describe("refreshPendingQuestions", () => {
     );
     await vi.advanceTimersByTimeAsync(1_000);
     expect(state.prompts.get("question-1")?.locallyExpired).toBe(true);
-    get.resolve({ question: answeredPayload() });
+    finishGet({
+      question: requestedPayload({
+        status: "answered",
+        answers: { answers: { format: ["Detailed"] } },
+      }),
+    });
 
     await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
     expect(state.prompts.get("question-1")).toMatchObject({
@@ -881,18 +941,28 @@ describe("refreshPendingQuestions", () => {
   it("reconciles local expiry that occurs while question.list is in flight", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
-    const list = createDeferred<unknown>();
+    let finishList: (value: unknown) => void = () => {};
     const request = vi.fn<RequestFn>((method) => {
       if (method === "question.list") {
-        return list.promise;
+        return new Promise((resolve) => {
+          finishList = resolve;
+        });
       }
-      return Promise.resolve({ question: answeredPayload() });
+      return Promise.resolve({
+        question: requestedPayload({
+          status: "answered",
+          answers: { answers: { format: ["Detailed"] } },
+        }),
+      });
     });
-    const { state, client } = createConnectedState(request, { expiresAtMs: Date.now() + 1_000 });
+    const { state, client } = createConnectedState(
+      request,
+      requestedPayload({ expiresAtMs: Date.now() + 1_000 }),
+    );
 
     refreshPendingQuestionsWithRetry(state, client);
     await vi.advanceTimersByTimeAsync(1_000);
-    list.resolve({ questions: [] });
+    finishList({ questions: [] });
 
     await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
     expect(request).toHaveBeenCalledWith(
@@ -908,14 +978,16 @@ describe("refreshPendingQuestions", () => {
   });
 
   it("publishes listed questions before older reconciliation finishes", async () => {
-    const get = createDeferred<unknown>();
+    let finishGet: (value: unknown) => void = () => {};
     const request = vi.fn<RequestFn>((method) => {
       if (method === "question.list") {
         return Promise.resolve({
           questions: [requestedPayload({ id: "question-2", createdAtMs: 2_000 })],
         });
       }
-      return get.promise;
+      return new Promise((resolve) => {
+        finishGet = resolve;
+      });
     });
     const onChange = vi.fn();
     const state = createState(onChange);
@@ -936,7 +1008,7 @@ describe("refreshPendingQuestions", () => {
     expect(state.prompts.get("question-2")?.status).toBe("pending");
     expect(onChange).toHaveBeenCalled();
 
-    get.resolve({ question: requestedPayload({ status: "cancelled" }) });
+    finishGet({ question: requestedPayload({ status: "cancelled" }) });
     await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("cancelled"));
   });
 });

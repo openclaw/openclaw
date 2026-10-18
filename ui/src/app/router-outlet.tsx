@@ -3,19 +3,17 @@ import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from
 import { isSessionRouteId } from "../app-route-paths.ts";
 import type { SolidRouteProps } from "../app-route-types.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
+import { renderAgentStartupState, renderLazyViewError } from "../components/lazy-view-error.ts";
+import { renderLoadingState } from "../components/loading-state.ts";
 import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
-import { AgentStartupState, LazyViewError } from "../components/solid/lazy-view-error.tsx";
-import { LoadingState } from "../components/solid/loading-state.tsx";
+import { i18n } from "../i18n/index.ts";
 import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availability.ts";
-import { t } from "../lib/reactive/i18n.ts";
-import { ContentPresentation } from "../lib/solid/presentation.ts";
+import { projectI18n, t } from "../lib/reactive/i18n.ts";
+import { LitContent, SolidContentPresentation } from "../lit/solid-content.tsx";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { LitRouteHost } from "./lit-route-host.tsx";
-import {
-  createRouterOutletPresentation,
-  selectRenderedRouteMatch,
-} from "./router-outlet-controller.ts";
+import { RouterOutletController, selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -27,6 +25,7 @@ type ApplicationRouteMatch = ReturnType<ApplicationRouter["getState"]>["matches"
 type RouterOutletOptions = {
   retryContext?: ApplicationContext;
   presented?: boolean;
+  readTranslations?: () => void;
 };
 
 function measureRoutedRender<T>(routeId: string, render: () => T): T {
@@ -58,26 +57,27 @@ function markButtonReloading(button: HTMLButtonElement | null): () => void {
   };
 }
 
-type RouteErrorProps = {
-  router: ApplicationRouter;
-  retryContext?: ApplicationContext;
-  error: unknown;
-  routeId: ApplicationRouteMatch["routeId"];
-  inline?: boolean;
-};
-
-function RouteError(props: RouteErrorProps) {
-  const staleChunk = () => isStaleChunkImportError(props.error);
-  createEffect(staleChunk, (stale) => {
-    if (stale) {
-      // Reload also resets failed browser imports and Vite stylesheet preloads.
-      void scheduleStaleChunkReload();
-    }
-  });
+function renderError(
+  router: ApplicationRouter,
+  retryContext: ApplicationContext | undefined,
+  error: unknown,
+  routeId: ApplicationRouteMatch["routeId"],
+  render?: () => unknown,
+  inline?: boolean,
+) {
+  if (isAgentDatabaseInspectionPendingError(error)) {
+    return renderAgentStartupState();
+  }
+  const staleChunk = isStaleChunkImportError(error);
+  if (staleChunk) {
+    // Asset failures can mean an interrupted connection or a replaced build.
+    // Reload also resets failed browser imports and Vite stylesheet preloads.
+    void scheduleStaleChunkReload();
+  }
   const handleRetry = (event: Event) => {
-    if (!staleChunk()) {
-      if (props.retryContext !== undefined) {
-        void props.router.revalidate(props.retryContext, props.routeId).catch(() => undefined);
+    if (!staleChunk) {
+      if (retryContext !== undefined) {
+        void router.revalidate(retryContext, routeId).catch(() => undefined);
       }
       return;
     }
@@ -98,19 +98,7 @@ function RouteError(props: RouteErrorProps) {
     });
   };
   // Resource errors alone cannot establish that a newer build exists.
-  return (
-    <Show
-      when={!isAgentDatabaseInspectionPendingError(props.error)}
-      fallback={<AgentStartupState />}
-    >
-      <LazyViewError
-        error={props.error}
-        onRetry={handleRetry}
-        inline={props.inline}
-        stale={staleChunk()}
-      />
-    </Show>
-  );
+  return renderLazyViewError({ error, onRetry: handleRetry, render, inline, stale: staleChunk });
 }
 
 function renderRouterOutlet(
@@ -128,11 +116,17 @@ function renderRouterOutlet(
   }
 
   const routeId = renderedMatch.routeId;
-  const error = renderedMatch.error
-    ? { router, retryContext: options.retryContext, error: renderedMatch.error, routeId }
-    : undefined;
+  if (!renderedMatch.module || renderedMatch.error !== undefined) {
+    options.readTranslations?.();
+  }
   if (!renderedMatch.module) {
-    return error ? { legacy: null, error } : showPending ? { state: "loading" } : { legacy: null };
+    return {
+      legacy: renderedMatch.error
+        ? renderError(router, options.retryContext, renderedMatch.error, routeId)
+        : showPending
+          ? renderLoadingState()
+          : null,
+    };
   }
   const routeModule = renderedMatch.module;
   if (
@@ -149,7 +143,9 @@ function renderRouterOutlet(
         loaderPending: renderedMatch.isFetching === "loader",
         presented: options.presented !== false,
       },
-      error: error ? { ...error, inline: true } : undefined,
+      error: renderedMatch.error
+        ? renderError(router, options.retryContext, renderedMatch.error, routeId, undefined, true)
+        : null,
     };
   }
   const render = routeModule.render;
@@ -162,13 +158,15 @@ function renderRouterOutlet(
         )
     : undefined;
   return {
-    legacy:
-      error && (routeModule.retainOnNavigate || isAgentDatabaseInspectionPendingError(error.error))
-        ? null
-        : renderedPage?.(),
-    error: error
-      ? { ...error, inline: Boolean(renderedPage) && !routeModule.retainOnNavigate }
-      : undefined,
+    legacy: renderedMatch.error
+      ? renderError(
+          router,
+          options.retryContext,
+          renderedMatch.error,
+          routeId,
+          routeModule.retainOnNavigate ? undefined : renderedPage,
+        )
+      : renderedPage?.(),
   };
 }
 
@@ -185,13 +183,8 @@ export type RouterOutletProps = {
 };
 
 type RouteContent =
-  | {
-      render: (props: SolidRouteProps) => SolidJSX.Element;
-      props: SolidRouteProps;
-      error?: RouteErrorProps;
-    }
-  | { legacy: unknown; error?: RouteErrorProps }
-  | { state: "loading" | "startup" };
+  | { render: (props: SolidRouteProps) => SolidJSX.Element; props: SolidRouteProps; error: unknown }
+  | { legacy: unknown };
 
 type Presentation = { key: string; render: (presented: boolean) => RouteContent };
 
@@ -205,72 +198,48 @@ function RoutePresentation(props: {
     const current = value();
     return "render" in current ? current : undefined;
   };
-  const error = () => {
-    const current = value();
-    return "error" in current ? current.error : undefined;
-  };
-  const state = () => {
-    const current = value();
-    return "state" in current ? current.state : undefined;
-  };
-  const isLegacy = () => "legacy" in value();
-  const SolidPage = () => {
-    const page = (
-      <>
-        <Show when={native()}>
-          {(current) => (
-            <ContentPresentation value={() => props.presented !== false}>
-              <Show when={current().render} keyed>
-                {(View) => (
-                  <View
-                    data={current().props.data}
-                    loaderPending={current().props.loaderPending}
-                    presented={current().props.presented}
-                  />
-                )}
-              </Show>
-            </ContentPresentation>
-          )}
-        </Show>
-        <Show when={error()}>{(current) => <RouteError {...current()} />}</Show>
-        <Show when={state() === "startup"}>
-          <AgentStartupState />
-        </Show>
-        <Show when={state() === "loading"}>
-          <LoadingState />
-        </Show>
-      </>
-    );
-    return props.presentation ? (
-      <openclaw-route-presentation
-        style={{ display: props.presented ? "contents" : "none" }}
-        hidden={!props.presented}
-        inert={!props.presented}
-        aria-hidden={props.presented ? "false" : "true"}
-      >
-        {page}
-      </openclaw-route-presentation>
-    ) : (
-      <openclaw-route-fragment style={{ display: "contents" }}>{page}</openclaw-route-fragment>
-    );
-  };
   return (
-    <Show when={isLegacy()} fallback={<SolidPage />}>
-      <LitRouteHost
-        presentation={props.presentation}
-        presented={props.presented}
-        renderValue={() => {
-          const current = value();
-          return "legacy" in current ? current.legacy : null;
-        }}
-      />
-      <Show when={error()}>
-        {(current) => (
-          <openclaw-route-fragment style={{ display: "contents" }}>
-            <RouteError {...current()} />
-          </openclaw-route-fragment>
-        )}
-      </Show>
+    <Show
+      when={native()}
+      fallback={
+        <LitRouteHost
+          presentation={props.presentation}
+          presented={props.presented}
+          renderValue={() => {
+            const current = value();
+            return "legacy" in current ? current.legacy : null;
+          }}
+        />
+      }
+    >
+      {(current) => {
+        const page = (
+          <SolidContentPresentation value={() => props.presented !== false}>
+            <Show when={current().render} keyed>
+              {(View) => (
+                <View
+                  data={current().props.data}
+                  loaderPending={current().props.loaderPending}
+                  presented={current().props.presented}
+                />
+              )}
+            </Show>
+            <LitContent value={current().error} />
+          </SolidContentPresentation>
+        );
+        return props.presentation ? (
+          <openclaw-route-presentation
+            style={{ display: props.presented ? "contents" : "none" }}
+            hidden={!props.presented}
+            inert={!props.presented}
+            aria-hidden={props.presented ? "false" : "true"}
+          >
+            {page}
+          </openclaw-route-presentation>
+        ) : (
+          <openclaw-route-fragment style={{ display: "contents" }}>{page}</openclaw-route-fragment>
+        );
+      }}
     </Show>
   );
 }
@@ -285,6 +254,10 @@ declare module "@solidjs/web" {
 
 /** Solid owns route lifetimes; unported modules own only their Lit island children. */
 export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
+  const translations = projectI18n(i18n);
+  const readTranslations = () => {
+    translations.revision();
+  };
   let host!: HTMLElement;
   let disposed = false;
   let generation = 0;
@@ -305,12 +278,11 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     }
     notify();
   };
-  const outlet = createRouterOutletPresentation<
+  const outlet = new RouterOutletController<
     ApplicationRouteMatch["routeId"],
     ApplicationContext,
     NonNullable<ApplicationRouteMatch["module"]>
-  >(props);
-  let committedSnapshot: ReturnType<typeof outlet.snapshot> | undefined;
+  >(invalidate);
   const retainedGate = new McpAppUnmountGate<Presentation | null>({ requestUpdate: invalidate });
   const transientGate = new McpAppUnmountGate<Presentation | null>({ requestUpdate: invalidate });
   let retainedMatch: ApplicationRouteMatch | undefined;
@@ -376,19 +348,19 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
 
   const presentation = createMemo(() => {
     revision();
+    outlet.setInputs({
+      router: props.router,
+      onNotFound: props.onNotFound,
+      notFoundRecoveryReady: props.notFoundRecoveryReady,
+      retryContext: props.retryContext,
+      retryEnabled: props.retryEnabled,
+    });
     const router = props.router;
     if (!router) {
-      return {
-        retained: null,
-        transient: null,
-        presented: false,
-        waiting: false,
-        settled: false,
-        snapshot: outlet.snapshot(),
-      };
+      return { retained: null, transient: null, presented: false, waiting: false, settled: false };
     }
     synchronizeRetentionScope(router);
-    const snapshot = outlet.snapshot();
+    const snapshot = outlet.snapshot;
     const renderedMatch = selectRenderedRouteMatch(snapshot.active, snapshot.pending);
     const ready = renderedMatch?.status === "success" && renderedMatch.error === undefined;
     const retiredSession =
@@ -426,33 +398,33 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     const retainedKey = `${scopeGeneration}:${retainedOwnerKey ?? "empty"}`;
     const transientKey = presentRetained ? "empty" : (explicitOwnerKey ?? routeKey);
     const retryContext = props.retryContext;
-    const renderTransient = (): RouteContent => {
+    const renderTransient = () => {
       if (snapshot.startupPending) {
-        return { state: "startup" };
+        readTranslations();
+        return { legacy: renderAgentStartupState() };
       }
       if (isSessionRouteId(renderedMatch?.routeId) && !scopeReady) {
-        return !retiredSession && renderedMatch?.error !== undefined
-          ? {
-              legacy: null,
-              error: {
-                router,
-                retryContext,
-                error: renderedMatch.error,
-                routeId: renderedMatch.routeId,
-              },
-            }
-          : { state: "loading" };
+        readTranslations();
+        return {
+          legacy:
+            !retiredSession && renderedMatch?.error !== undefined
+              ? renderError(router, retryContext, renderedMatch.error, renderedMatch.routeId)
+              : renderLoadingState(),
+        };
       }
       if (module?.retainOnNavigate && waiting) {
         if (renderedMatch?.routeId === "chat" && snapshot.settled?.routeId === "new-session") {
           return renderRouterOutlet(router, snapshot.showPending, snapshot.settled, {
             retryContext,
+            readTranslations,
           });
         }
-        return { state: "loading" };
+        readTranslations();
+        return { legacy: renderLoadingState() };
       }
       return renderRouterOutlet(router, snapshot.showPending, renderedMatch, {
         retryContext,
+        readTranslations,
       });
     };
     const retainedValue = retainedGate.render(
@@ -488,23 +460,17 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
       presented: presentRetained && !retainedGate.retiring && retainedValue?.key === retainedKey,
       waiting: presentRetained && retainedGate.retiring,
       settled: settled && !retainedGate.retiring && !transientGate.retiring,
-      snapshot,
     };
   });
 
   createEffect(presentation, (value) => {
-    committedSnapshot = value.snapshot;
     committedSettled = value.settled;
     committedGeneration = generation;
     notify();
   });
 
   const isSettled = () =>
-    !disposed &&
-    host.isConnected &&
-    outlet.isCurrent(committedSnapshot) &&
-    committedGeneration === generation &&
-    committedSettled;
+    !disposed && host.isConnected && committedGeneration === generation && committedSettled;
   const settlePresentation = async (): Promise<boolean> => {
     while (true) {
       if (disposed || !host.isConnected) {
@@ -515,12 +481,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
       if (disposed || !host.isConnected) {
         return false;
       }
-      if (
-        outlet.isCurrent(committedSnapshot) &&
-        committedGeneration === generation &&
-        !retainedGate.retiring &&
-        !transientGate.retiring
-      ) {
+      if (committedGeneration === generation && !retainedGate.retiring && !transientGate.retiring) {
         return isSettled();
       }
       // Async render transactions may need a browser task before they can commit.
@@ -530,8 +491,10 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     }
   };
 
+  outlet.connect();
   onCleanup(() => {
     disposed = true;
+    outlet.disconnect();
     notify();
   });
 
@@ -565,9 +528,12 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
         />
       </Show>
       <Show when={presentation().waiting}>
-        <openclaw-route-fragment style={{ display: "contents" }}>
-          <LoadingState />
-        </openclaw-route-fragment>
+        <LitRouteHost
+          renderValue={() => {
+            readTranslations();
+            return renderLoadingState();
+          }}
+        />
       </Show>
     </openclaw-router-outlet>
   );

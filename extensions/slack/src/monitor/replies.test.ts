@@ -141,21 +141,6 @@ describe("deliverReplies identity passthrough", () => {
     triggerInternalHook.mockReset();
   });
 
-  it.each(["NO_REPLY", '{"text":"NO_REPLY"}', "No response is needed."])(
-    "delivers prepared text literally: %s",
-    async (text) => {
-      sendMock.mockResolvedValue({ messageId: "literal-ts", channelId: "C123" });
-      await deliverReplies(baseParams({ replies: [{ text }] }));
-      expect(sendMock).toHaveBeenCalledTimes(1);
-      expect(requireSendCall()[1]).toBe(text);
-    },
-  );
-
-  it("sends nothing when the producer supplies no payload", async () => {
-    await deliverReplies(baseParams({ replies: [] }));
-    expect(sendMock).not.toHaveBeenCalled();
-  });
-
   it.each([{ name: "current reply", replyToCurrent: true, isCompactionNotice: false }])(
     "routes $name without mistaking a child for its thread root",
     async ({ replyToCurrent, isCompactionNotice }) => {
@@ -365,6 +350,22 @@ describe("deliverReplies identity passthrough", () => {
   });
 });
 
+describe("createSlackReplyDeliveryPlan fallback classification", () => {
+  const threadTs = "1234567890.123456";
+  const messageTs = "9999999999.999999";
+
+  it("keeps legacy thread-stickiness for genuine replies when callers omit isThreadReply", () => {
+    expect(
+      createSlackReplyDeliveryPlan({
+        replyToMode: "off",
+        incomingThreadTs: threadTs,
+        messageTs,
+        hasRepliedRef: { value: false },
+      }).peekThreadTs(),
+    ).toBe(threadTs);
+  });
+});
+
 describe("createSlackReplyDeliveryPlan", () => {
   it("lets draft previews inspect first thread targets without consuming them", () => {
     const hasRepliedRef = { value: false };
@@ -395,21 +396,6 @@ describe("deliverSlackSlashReplies chunking", () => {
     messageHookRunner.runMessageSent.mockReset();
     triggerInternalHook.mockReset();
   });
-
-  it.each(["NO_REPLY", '{"text":"NO_REPLY"}', "No response is needed."])(
-    "delivers prepared slash text literally: %s",
-    async (text) => {
-      const respond = vi.fn(async () => undefined);
-      await deliverSlackSlashReplies({
-        replies: [{ text }],
-        respond,
-        ephemeral: true,
-        textLimit: 4000,
-      });
-      expect(respond).toHaveBeenCalledTimes(1);
-      expect(requireSlashMessage(respond).text).toBe(text);
-    },
-  );
 
   it("keeps a 4205-character reply in a single slash response by default", async () => {
     const respond = vi.fn(async () => undefined);

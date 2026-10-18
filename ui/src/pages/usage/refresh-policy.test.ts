@@ -33,11 +33,11 @@ describe("UsageRefreshPolicy", () => {
     const { policy, reload } = createPolicy();
     policy.setLastLoadedAtMs(NOW_MS - USAGE_PAYLOAD_TTL_MS);
 
-    void policy.request("reconnect");
+    policy.request("reconnect");
     expect(reload).not.toHaveBeenCalled();
 
     visibility.mockReturnValue("visible");
-    void policy.request("focus");
+    policy.request("focus");
     expect(reload).toHaveBeenCalledOnce();
   });
 
@@ -49,11 +49,11 @@ describe("UsageRefreshPolicy", () => {
     policy.interrupt();
     loading = false;
 
-    void policy.request("reconnect");
+    policy.request("reconnect");
     expect(reload).not.toHaveBeenCalled();
 
     visibility.mockReturnValue("visible");
-    void policy.request("focus");
+    policy.request("focus");
     expect(reload).toHaveBeenCalledOnce();
   });
 
@@ -68,12 +68,12 @@ describe("UsageRefreshPolicy", () => {
     policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
     expect(onIncompleteUsageExhausted).toHaveBeenCalledOnce();
 
-    void policy.request("manual");
+    policy.request("manual");
     policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(reload).toHaveBeenCalledTimes(5);
 
-    void policy.request("focus");
+    policy.request("focus");
     policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(reload).toHaveBeenCalledTimes(7);

@@ -153,7 +153,6 @@ export async function readChatHistoryPageKernel(
     );
     const project = (messages: unknown[]) =>
       projectChatDisplayMessagesWithState(messages, {
-        includePluginSteering: params.includePluginSteering,
         subagentCoordination: options.readers.subagentCoordination,
         includeCommentaryFallbacks: true,
         maxChars: effectiveMaxChars,
@@ -225,7 +224,6 @@ export async function readChatHistoryPageKernel(
     effectiveMaxChars,
     max,
     toolResultMaxChars: params.toolResultMaxChars,
-    includePluginSteering: params.includePluginSteering,
     maxBytes: maxHistoryBytes,
     isPageFull: (projection) =>
       prepareChatHistoryResponsePage(projection, params, options.readMessageSequence).omission

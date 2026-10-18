@@ -16,7 +16,6 @@ import { resolveSessionResetPolicy } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
-import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   createOpenClawTestState,
@@ -91,7 +90,6 @@ export function useQueuedCollectorFixture() {
       },
     });
     await captureRuntimeConfigAsyncReader()();
-    await loadOrCreateProcessDeviceIdentityAsync();
     spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
       dispatchGatewayMethodInProcess: async <T>(

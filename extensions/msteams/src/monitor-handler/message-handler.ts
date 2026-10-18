@@ -8,6 +8,7 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveMSTeamsAccountConfig } from "../accounts.js";
 import { formatUnknownError } from "../errors.js";
 import {
@@ -97,8 +98,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       .filter(Boolean)
       .join("\n");
     log.info("received message", {
-      rawTextLength: rawText.length,
-      textLength: text.length,
+      rawText: truncateUtf16Safe(rawText, 50),
+      text: truncateUtf16Safe(text, 50),
       attachments: attachments.length,
       attachmentTypes,
       from: from?.id,
@@ -216,7 +217,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       teamId,
       log,
     });
-    const { route } = threadRouting;
+    const { route, deadline: preprocessingDeadline } = threadRouting;
 
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
@@ -299,6 +300,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       mediaAllowHosts: currentMSTeamsCfg?.mediaAllowHosts,
       mediaAuthAllowHosts: currentMSTeamsCfg?.mediaAuthAllowHosts,
       graphMediaFallback: currentMSTeamsCfg?.graphMediaFallback,
+      deadline: preprocessingDeadline,
       log,
     });
     if (!content) {

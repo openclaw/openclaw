@@ -117,7 +117,6 @@ export async function retainBlockedMediaCompletion(params: {
 
 export type MediaGenerationCompletionWakeOutcome =
   | { status: "delivered" }
-  | { status: "queued" }
   | { status: "pending" }
   | { status: "permanent_failure" };
 
@@ -237,10 +236,11 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   if (delivery.delivered) {
     return { status: "delivered" };
   }
-  if (delivery.disposition === "session_queued") {
-    return { status: "queued" };
-  }
-  if (delivery.disposition === "retryable" || delivery.reason === "completion_handoff_pending") {
+  if (
+    delivery.disposition === "session_queued" ||
+    delivery.disposition === "retryable" ||
+    delivery.reason === "completion_handoff_pending"
+  ) {
     return { status: "pending" };
   }
   if (delivery.disposition === "ambiguous") {

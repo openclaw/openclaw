@@ -220,8 +220,7 @@ export class ShellChromeOwner {
         this.navDrawerSwipe.reset();
         const drawer = host.querySelector<HTMLElement>(".shell-nav");
         if (drawer) {
-          const target = navDrawerFocusableElements(drawer)[0] ?? drawer;
-          focusWithoutTooltip(target, { preventScroll: true });
+          (navDrawerFocusableElements(drawer)[0] ?? drawer).focus({ preventScroll: true });
         }
       });
       return;
@@ -600,7 +599,8 @@ export class ShellChromeOwner {
     this.requestLazyElement(KEYBOARD_SHORTCUTS_ELEMENT, descriptor);
   };
 
-  // Open overlays and editable controls own Escape before Settings.
+  // Open controls own Escape. Slotted items hide their menu/listbox in shadow DOM,
+  // so recognize the open control host before Settings can consume the key.
   shouldIgnoreSettingsEscape(event: KeyboardEvent): boolean {
     const host = this.host;
     const overlaySnapshot = host.context?.overlays.snapshot;
@@ -619,7 +619,7 @@ export class ShellChromeOwner {
     const control =
       target instanceof Element
         ? target.closest(
-            "input, textarea, select, [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
+            "input, textarea, select, wa-select[open], wa-dropdown[open], [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
           )
         : null;
     // The drawer owns Escape; its own dialog role is not a nested modal.
@@ -657,7 +657,7 @@ export class ShellChromeOwner {
     if (
       !event ||
       this.host.lazyCustomElements.visibleState ||
-      this.commandPaletteLoading.waitingForComposition()
+      this.commandPaletteLoading.waitingForComposition
     ) {
       return;
     }

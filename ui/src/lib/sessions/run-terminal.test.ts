@@ -30,7 +30,6 @@ describe("reconcileSessionRunTerminal yielded parent", () => {
         activeRunIds: ["run-1"],
         status: "running",
         startedAt: 100,
-        suppressErrorNotice: true,
       },
     ]);
 
@@ -52,7 +51,6 @@ describe("reconcileSessionRunTerminal yielded parent", () => {
           endedAt: 160,
           runtimeMs: 60,
           abortedLastRun: false,
-          suppressErrorNotice: false,
         },
       ],
     });

@@ -2,7 +2,6 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 /**
  * Command catalog protocol schemas.
@@ -23,17 +22,25 @@ export const COMMAND_LIST_MAX_ITEMS = 500;
 
 const BoundedNonEmptyString = (maxLength: number) => Type.String({ minLength: 1, maxLength });
 
-const CommandSourceSchema = stringLiteralUnion(["native", "skill", "plugin"]);
+const CommandSourceSchema = Type.Union([
+  Type.Literal("native"),
+  Type.Literal("skill"),
+  Type.Literal("plugin"),
+]);
 
-const CommandScopeSchema = stringLiteralUnion(["text", "native", "both"]);
+const CommandScopeSchema = Type.Union([
+  Type.Literal("text"),
+  Type.Literal("native"),
+  Type.Literal("both"),
+]);
 
-const CommandCategorySchema = stringLiteralUnion([
-  "session",
-  "options",
-  "status",
-  "management",
-  "media",
-  "tools",
+const CommandCategorySchema = Type.Union([
+  Type.Literal("session"),
+  Type.Literal("options"),
+  Type.Literal("status"),
+  Type.Literal("management"),
+  Type.Literal("media"),
+  Type.Literal("tools"),
 ]);
 
 const CommandArgChoiceSchema = closedObject({
@@ -44,7 +51,7 @@ const CommandArgChoiceSchema = closedObject({
 const CommandArgSchema = closedObject({
   name: BoundedNonEmptyString(COMMAND_ARG_NAME_MAX_LENGTH),
   description: Type.String({ maxLength: COMMAND_ARG_DESCRIPTION_MAX_LENGTH }),
-  type: stringLiteralUnion(["string", "number", "boolean"]),
+  type: Type.Union([Type.Literal("string"), Type.Literal("number"), Type.Literal("boolean")]),
   required: Type.Optional(Type.Boolean()),
   choices: Type.Optional(
     Type.Array(CommandArgChoiceSchema, { maxItems: COMMAND_ARG_CHOICES_MAX_ITEMS }),

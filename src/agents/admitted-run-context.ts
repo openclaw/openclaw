@@ -1,4 +1,5 @@
 /** Canonical operational instance and optional enabled execution-identity evidence. */
+import { randomUUID } from "node:crypto";
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import {
@@ -29,16 +30,13 @@ import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.typ
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
-import {
-  createOperationalRunInstanceRef,
-  type OperationalRunInstanceRef,
-} from "./operational-run-instance.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
-export {
-  createOperationalRunInstanceRef,
-  type OperationalRunInstanceRef,
-} from "./operational-run-instance.js";
+/** Operational lifecycle correlation. This is never identity or authorization evidence. */
+export type OperationalRunInstanceRef = Readonly<{
+  instanceId: string;
+  runId: string;
+}>;
 
 /** Exact context carried by one admitted execution and every retry/fallback it owns. */
 export type AdmittedRunContext = Readonly<{
@@ -504,6 +502,10 @@ export function createExecutionIdentityRecoveryAdmission(params: {
       return Object.freeze({ accepted: true, ...(token ? { token } : {}) });
     },
   });
+}
+
+export function createOperationalRunInstanceRef(runId: string): OperationalRunInstanceRef {
+  return Object.freeze({ instanceId: randomUUID(), runId });
 }
 
 /** Prepares a system-owned run without selecting its eventual execution runtime early. */

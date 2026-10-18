@@ -17,7 +17,7 @@ export async function settleExecProcessExit({
   session: ProcessSession;
   outcome: ExecProcessOutcome;
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void | Promise<void>;
-  notifyOnExit: (session: ProcessSession, status: "completed" | "failed") => void | Promise<void>;
+  notifyOnExit: (session: ProcessSession, status: "completed" | "failed") => void;
   failureOutcome: (error: unknown) => ExecProcessOutcome;
 }): Promise<ExecProcessOutcome> {
   let finalOutcome = outcome;
@@ -39,7 +39,7 @@ export async function settleExecProcessExit({
     }
     if (shouldNotify) {
       markProcessExited();
-      await notifyOnExit(session, finalOutcome.status);
+      notifyOnExit(session, finalOutcome.status);
     }
   } catch (error) {
     session.finalizationFailed = true;

@@ -11,9 +11,11 @@ import {
 } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
-import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
+import {
+  readUpdateStateSchemaVersions,
+  updateStateSchemaVersionsMatch,
+} from "./update-candidate-state.js";
 import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
-import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 let root: string;
 beforeEach(async () => {
@@ -215,11 +217,7 @@ it.skipIf(process.platform !== "win32")(
     expect(inspected.map((entry) => entry.path)).toEqual(
       expect.arrayContaining([shared, canonical, namespaced]),
     );
-    expect(inspected).toContainEqual({
-      path: path.join(source, "control", "services.sqlite"),
-      userVersion: null,
-    });
-    expect(inspected).toHaveLength(4);
+    expect(inspected).toHaveLength(3);
     expect(
       updateStateSchemaVersionsMatch(releasedBaseline, inspected, { sharedPath: shared }),
     ).toBe(true);

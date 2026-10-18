@@ -13,20 +13,19 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { EMPTY_MODEL_PROVIDERS_DATA } from "./model-providers/load.ts";
+import type { ModelProvidersData } from "./model-providers/load.ts";
 import {
-  createAuthStatus,
   createEmptyModelProvidersRouteData,
   createPage as createModelProvidersPage,
-  drainPageUpdates,
   mountPage as mountModelProvidersPage,
   unmountPage as unmountModelProvidersPage,
 } from "./model-providers/model-providers-page.test-support.tsx";
 import {
   createContext as createSessionsContext,
+  createPage as createSessionsPage,
   createSessions,
+  reconnectPage,
 } from "./sessions/sessions-page.test-support.ts";
-import { SessionsPage } from "./sessions/sessions-page.tsx";
 import { SkillsPage, type SkillsRouteData } from "./skills/skills-page.tsx";
 import { createSkill } from "./skills/view.test-support.ts";
 import type { UsageRouteData } from "./usage/types.ts";
@@ -66,6 +65,20 @@ type TestPage = HTMLElement & {
   render: () => unknown;
   readonly updateComplete: Promise<boolean>;
 };
+
+type TestGatewayController = {
+  applySnapshot: (
+    snapshot: ApplicationGatewaySnapshot,
+    binding: { initial: boolean; sourceChanged: boolean },
+  ) => void;
+};
+
+function applyPageGatewaySnapshot(
+  page: { gateway: TestGatewayController },
+  snapshot: ApplicationGatewaySnapshot,
+) {
+  page.gateway.applySnapshot(snapshot, { initial: false, sourceChanged: false });
+}
 
 function gatewayWithClient(
   client: GatewayBrowserClient,
@@ -336,16 +349,19 @@ describe("gateway source replacement across reconnect with a reused client", () 
       return usageRequestCount === 1 ? interrupted.promise : freshResult;
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const harness = contextWithMutableGateway(client);
-    const page = await createUsagePage(client, false, harness.context);
-    page.routeData = usageRouteData(harness.context, usageResult("cached"));
+    const context = contextWithClient(client, { connected: true });
+    const page = await createUsagePage(client, false, context);
+    page.routeData = usageRouteData(context, usageResult("cached"));
 
     document.body.append(page.element);
     await page.updateComplete;
-    void page.refresh();
+    page.refreshPolicy.request("manual");
     await waitForFast(() => expect(usageRequestCount).toBe(1));
-    harness.emitConnected(false);
-    harness.emitConnected(true);
+    applyPageGatewaySnapshot(page, {
+      ...context.gateway.snapshot,
+      phase: "stopped",
+    });
+    applyPageGatewaySnapshot(page, context.gateway.snapshot);
 
     await waitForFast(() =>
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2),
@@ -360,8 +376,6 @@ describe("gateway source replacement across reconnect with a reused client", () 
   });
 
   it("gates same-client usage reconnects by payload age and page visibility", async () => {
-    const loadedAt = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(loadedAt);
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const request = vi.fn(async (method: string) => {
@@ -390,7 +404,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     harness.emitConnected(true);
     expect(request).not.toHaveBeenCalled();
 
-    clock.mockReturnValue(loadedAt + USAGE_PAYLOAD_TTL_MS);
+    page.refreshPolicy.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
     visibility.mockReturnValue("hidden");
     harness.emitConnected(false);
     harness.emitConnected(true);
@@ -404,16 +418,16 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(initialMethods).toHaveLength(2);
     expect(initialMethods).toEqual(expect.arrayContaining(["sessions.usage", "usage.status"]));
 
-    void page.refresh();
+    page.refreshPolicy.request("manual");
     await waitForFast(() => expect(page.usageLoading).toBe(false));
     expect(request).toHaveBeenCalledTimes(4);
 
     const failedRefresh = deferred<never>();
     request.mockImplementationOnce(() => failedRefresh.promise);
-    clock.mockReturnValue(loadedAt + 2 * USAGE_PAYLOAD_TTL_MS);
-    void page.refresh();
+    page.refreshPolicy.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
+    page.refreshPolicy.request("manual");
     expect(request).toHaveBeenCalledTimes(6);
-    window.dispatchEvent(new Event("focus"));
+    page.refreshPolicy.request("focus");
     failedRefresh.reject(new Error("connection interrupted"));
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(8));
     await waitForFast(() => expect(page.usageLoading).toBe(false));
@@ -425,9 +439,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const request = vi.fn(async (method: string) => {
       if (method === "models.authStatus") {
         authCalls += 1;
-        return authCalls === 1
-          ? staleAuth.promise
-          : createAuthStatus([{ provider: "openai", displayName: "Fresh provider" }], 2);
+        return authCalls === 1 ? staleAuth.promise : { ts: 2, providers: [] };
       }
       if (method === "models.list") {
         return { models: [] };
@@ -465,20 +477,18 @@ describe("gateway source replacement across reconnect with a reused client", () 
     });
     mountModelProvidersPage(page);
     await page.updateComplete;
-    await waitForFast(() =>
-      expect(page.view.props.cards.map((card) => card.displayName)).toContain("Fresh provider"),
-    );
+    await waitForFast(() => expect(page.state.data?.authStatus?.ts).toBe(2));
 
-    staleAuth.resolve(createAuthStatus([{ provider: "openai", displayName: "Retired provider" }]));
-    await drainPageUpdates(page);
-    expect(page.view.props.cards.map((card) => card.displayName)).toContain("Fresh provider");
-    expect(page.view.props.cards.map((card) => card.displayName)).not.toContain("Retired provider");
+    staleAuth.resolve({ ts: 1, providers: [] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(page.state.data?.authStatus?.ts).toBe(2);
   });
 
   it("rejects Model Providers route data from an earlier same-client gateway epoch", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "models.authStatus") {
-        return createAuthStatus([{ provider: "openai", displayName: "Fresh provider" }], 2);
+        return { ts: 2, providers: [] };
       }
       if (method === "models.list") {
         return { models: [] };
@@ -499,10 +509,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       connected: true,
       selectedAgentId: "main",
     });
-    const staleData = {
-      ...EMPTY_MODEL_PROVIDERS_DATA,
-      authStatus: createAuthStatus([{ provider: "openai", displayName: "Retired provider" }]),
-    };
+    const staleData = { authStatus: { ts: 1, providers: [] } } as unknown as ModelProvidersData;
     const page = createModelProvidersPage(context);
     page.routeData = {
       gateway: context.gateway,
@@ -514,10 +521,8 @@ describe("gateway source replacement across reconnect with a reused client", () 
     };
 
     mountModelProvidersPage(page);
-    await waitForFast(() =>
-      expect(page.view.props.cards.map((card) => card.displayName)).toContain("Fresh provider"),
-    );
-    expect(page.view.props.cards.map((card) => card.displayName)).not.toContain("Retired provider");
+    await waitForFast(() => expect(page.state.data?.authStatus?.ts).toBe(2));
+    expect(page.state.data).not.toBe(staleData);
   });
 
   it("hydrates linked skill verdicts without reloading accepted route data", async () => {
@@ -629,48 +634,24 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
   it("clears sessions loaded by the previous provider", async () => {
     const client = {} as GatewayBrowserClient;
+    const context = () => createSessionsContext(gatewayWithClient(client, false), createSessions());
+    const page = await createSessionsPage(context());
     const row = { key: "old", sessionId: "old-session", kind: "direct" as const };
-    const stopList = vi.fn();
-    const context = createSessionsContext(
-      gatewayWithClient(client, true),
-      createSessions({
-        listSnapshot: () => ({
-          result: sessionsResult([row], 1),
-          agentId: null,
-          loading: false,
-          error: null,
-        }),
-        subscribeList: () => stopList,
-      }),
-    );
-    const provider = createSolidApplicationContextProvider(context);
-    const mounted = mountSolid(() => createComponent(SessionsPage, {}), {
-      wrapper: provider.wrapper,
-    });
-    const page = () => mounted.container.querySelector<HTMLElement>("openclaw-sessions-page")!;
-    const checkbox = () =>
-      page().querySelector<HTMLInputElement>('input[aria-label="Select session: old"]');
-    await waitForSolid(() => expect(checkbox()).not.toBeNull());
-    const previousPage = page();
-    checkbox()!.click();
-    await waitForSolid(() =>
-      expect(page().querySelector(".data-table-bulk-bar")?.textContent).toContain("1 selected"),
-    );
+    page.result = sessionsResult([row], 1);
+    page.selectedSessions = new Map([[row.key, row]]);
 
-    const previous = context.gateway.snapshot;
+    const previous = page.context.gateway.snapshot;
     createGatewayMetadataObserver(() => true).synchronize(previous, {
       ...previous,
       phase: "stopped",
     });
-    // Application contexts are owner-scoped: the keyed provider retires the old page tree.
-    provider.setContext(createSessionsContext(gatewayWithClient(client, false), createSessions()));
-    await waitForSolid(() => {
-      expect(page()).not.toBe(previousPage);
-      expect(previousPage.isConnected).toBe(false);
-      expect(checkbox()).toBeNull();
-      expect(page().querySelector(".data-table-bulk-bar")).toBeNull();
-      expect(stopList).toHaveBeenCalledOnce();
-    });
+    page.remove();
+    page.context = context();
+    reconnectPage(page);
+    await page.updateComplete;
+
+    expect(page.result).toBeNull();
+    expect(page.selectedSessions.size).toBe(0);
   });
 
   it("clears usage loaded by the previous provider", async () => {
@@ -687,12 +668,6 @@ describe("gateway source replacement across reconnect with a reused client", () 
       if (method === "usage.status") {
         return providerUsage;
       }
-      if (method === "sessions.usage.timeseries") {
-        return null;
-      }
-      if (method === "sessions.usage.logs") {
-        return { logs: [] };
-      }
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
@@ -703,19 +678,18 @@ describe("gateway source replacement across reconnect with a reused client", () 
     );
     document.body.append(page.element);
     await page.updateComplete;
-    await page.refresh();
+    await page.loadUsage();
     expect(page.usageResult).toMatchObject({
       totals: result.totals,
       sessions: result.sessions,
     });
-    expect(page.read().data.providerUsage).toEqual(providerUsage.providers);
-    page.read().callbacks.details.onSelectSession("old", false, ["old"]);
-    expect(page.usageSelectedSessions).toEqual(["old"]);
+    expect(page.providerUsageSummary).toBe(providerUsage);
+    page.usageSelectedSessions = ["old"];
 
     await replaceContext(page, page.element, client);
 
     expect(page.usageResult).toBeNull();
-    expect(page.read().data.providerUsage).toEqual([]);
+    expect(page.providerUsageSummary).toBeNull();
     expect(page.usageSelectedSessions).toEqual([]);
   });
 

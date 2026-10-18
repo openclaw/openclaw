@@ -48,14 +48,7 @@ export default {
   } }],
 };
 `;
-const candidateConfig = baseConfig
-  .replace("level: 0", "level: 9")
-  .replace("export function createControlUi", "export async function createControlUi")
-  .replace(
-    'name: "fixture-precompression", writeBundle',
-    'name: "fixture-precompression", async writeBundle',
-  )
-  .replace("for (const variant of createControlUi", "for (const variant of await createControlUi");
+const candidateConfig = baseConfig.replace("level: 0", "level: 9");
 const css = (count: number) =>
   Array.from({ length: count }, (_, index) => {
     const hash = createHash("sha256").update(String(index)).digest("hex");

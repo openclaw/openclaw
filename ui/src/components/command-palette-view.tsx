@@ -88,14 +88,13 @@ export type CommandPaletteProps = {
   composing: boolean;
   mentionMenu: HumanMentionMenu;
   mentionHost: HumanMentionMenuHost;
-  onMentionChange: () => void;
+  requestUpdate: () => void;
   onActiveIdChange: (id: string) => void;
   onNavigate?: ApplicationContext["navigate"];
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
   pluginIconUrls: Readonly<Record<string, string>>;
   onPluginIconError: (pluginId: string) => void;
-  onPluginIconVisible: (pluginId: string) => void;
   desktopAvailable: boolean;
   custodianAvailable: boolean;
   onInputRef: (element: Element | undefined, previous?: HTMLTextAreaElement) => void;
@@ -182,7 +181,7 @@ function handleKeydown(event: KeyboardEvent, readProps: () => CommandPaletteProp
     !event.altKey &&
     !event.metaKey &&
     !event.ctrlKey &&
-    props.mentionMenu.handleKeydown(event, props.mentionHost, props.onMentionChange)
+    props.mentionMenu.handleKeydown(event, props.mentionHost, props.requestUpdate)
   ) {
     event.stopPropagation();
     return;
@@ -313,7 +312,6 @@ function PaletteOption(props: {
         identity={current().agentIdentity?.get(agentId())}
         pluginIconUrls={current().pluginIconUrls}
         onPluginIconError={current().onPluginIconError}
-        onPluginIconVisible={current().onPluginIconVisible}
       />
     </div>
   );
@@ -470,7 +468,7 @@ function PaletteActions(props: { readProps: () => CommandPaletteProps }) {
   );
 }
 
-export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
+function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
   const current = () => props.readProps();
   const hideSearch = () =>
     current().promptMode || current().mentionMenu.open || current().draft.mentions.length > 0;
@@ -492,7 +490,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             event.preventDefault();
             if (!current().composing) {
               current().mentionMenu.close();
-              current().onMentionChange();
+              current().requestUpdate();
             }
             return;
           }
@@ -552,7 +550,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                 mentions={current().draft.mentions}
                 onRemove={() => {
                   current().draft.setMessage(current().query, []);
-                  current().onMentionChange();
+                  current().requestUpdate();
                   current().mentionHost.getTextarea()?.focus({ preventScroll: true });
                 }}
                 avatarUrls={current().mentionMenu.selectedAvatarUrls}
@@ -561,7 +559,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
           </Show>
           <PaletteSessionAttachments draft={current().draft} revision={current()} />
           <HumanMentionMenuView
-            args={[current().mentionMenu, current().mentionHost, current().onMentionChange]}
+            args={[current().mentionMenu, current().mentionHost, current().requestUpdate]}
           />
           <span
             id={mentionAnnouncementId()}
@@ -595,5 +593,13 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
       </openclaw-modal-dialog>
       <PaletteSessionAuxiliary draft={current().draft} revision={current()} />
     </>
+  );
+}
+
+export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
+  return (
+    <Show when={props.readProps().open}>
+      <OpenPalette readProps={props.readProps} />
+    </Show>
   );
 }

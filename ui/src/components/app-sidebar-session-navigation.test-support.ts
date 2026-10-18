@@ -1,5 +1,4 @@
 import type { GatewaySessionRow } from "../api/types.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
 import { buildSidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
@@ -20,7 +19,6 @@ export function projectSidebarSession(
     },
     sessions: {
       isPreparedWorkSession: () => false,
-      isRunVisuallyActive: isSessionRunActive,
       pullRequestSummary: () => undefined,
     },
   } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];

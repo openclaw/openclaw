@@ -80,7 +80,7 @@ OpenClaw normalizes Claude shorthand model refs at runtime:
 | `vercel-ai-gateway/opus-4.6`        | `vercel-ai-gateway/anthropic/claude-opus-4-6` |
 
 <Tip>
-Use either form in your configuration; OpenClaw resolves the full
+Use either form in your configuration; OpenClaw resolves the canonical
 `anthropic/...` ref automatically.
 </Tip>
 
@@ -94,7 +94,7 @@ Use either form in your configuration; OpenClaw resolves the full
     <Warning>
     A key exported only in an interactive shell will not be visible to a
     launchd/systemd daemon unless that environment is explicitly imported. Set
-    the key in `~/.openclaw/.env` or via `env.shellEnv` so the gateway
+    the key in `~/.openclaw/.env` or via `env.shellEnv` to ensure the gateway
     process can read it.
     </Warning>
 

@@ -2,10 +2,7 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import {
-  defaultTelegramNativeCommandDeps,
-  type TelegramNativeCommandDeps,
-} from "./bot-native-command-deps.runtime.js";
+import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
   createNativeCommandTestParams as createBaseNativeCommandTestParams,
   createTelegramPrivateCommandContext,
@@ -104,10 +101,6 @@ export function createNativeCommandTestParams(
       }
     }) as TelegramNativeCommandDeps["syncTelegramMenuCommands"],
     sendMessageTelegram: vi.fn(async () => ({ messageId: "999", chatId: "100" })),
-    runModelsAuthLoginFlow: defaultTelegramNativeCommandDeps.runModelsAuthLoginFlow,
-    async editMessageTelegram() {
-      throw new Error("Native menu fixtures do not edit progress messages");
-    },
   };
   return {
     ...createBaseNativeCommandTestParams({

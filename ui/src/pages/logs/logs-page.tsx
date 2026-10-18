@@ -16,6 +16,7 @@ import {
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import {
   DEFAULT_LOG_LEVEL_FILTERS,
   parseLogLine,
@@ -23,14 +24,6 @@ import {
   type LogLevel,
 } from "./log-lines.ts";
 import { LogsView } from "./view.tsx";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-logs-page": HTMLAttributes<HTMLElement>;
-    }
-  }
-}
 
 const LOG_BUFFER_LIMIT = 2000;
 const LOGS_POLL_INTERVAL_MS = 2000;
@@ -43,8 +36,7 @@ type LogsPayload = {
   reset?: boolean;
 };
 
-export function LogsPage() {
-  let host!: HTMLElement;
+function LogsPageContent(props: { host: HTMLElement }) {
   const context = useApplication();
   const [status, setStatus] = createSignal(createPanelRefreshStatus(), { ownedWrite: true });
   const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });
@@ -60,9 +52,9 @@ export function LogsPage() {
   });
   const [forceFollow, setForceFollow] = createSignal(0);
   let cursor: number | null = null;
-  let cursorBootId: string | undefined;
   let request: AbortController | null = null;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
+  let connected = false;
   let disposed = false;
   let atBottom = true;
   let stream: HTMLElement | undefined;
@@ -74,8 +66,7 @@ export function LogsPage() {
     setRequestState("idle");
   };
   const updatePolling = () => {
-    const shouldPoll =
-      gateway.connected && gateway.client !== null && document.visibilityState !== "hidden";
+    const shouldPoll = connected && document.visibilityState !== "hidden";
     if (!shouldPoll && pollTimer !== undefined) {
       clearInterval(pollTimer);
       pollTimer = undefined;
@@ -89,7 +80,6 @@ export function LogsPage() {
     getGateway: () => context.gateway,
     onIdentityChange: () => {
       cursor = null;
-      cursorBootId = undefined;
       setStatus(createPanelRefreshStatus());
       setFile(null);
       setEntries([]);
@@ -97,12 +87,13 @@ export function LogsPage() {
       atBottom = true;
     },
     invalidateRequests: cancelRequest,
-    onSnapshot: updatePolling,
+    onSnapshot: (change) => {
+      connected = change.snapshot.phase === "connected" && change.snapshot.client !== null;
+      updatePolling();
+    },
     ensureInitialData: (change) => {
       const quiet = !change.identityChanged && untrack(status).hasLoaded;
-      // A same-Gateway reconnect resumes the cursor; a full window costs a busy Gateway one
-      // file read and redaction pass per reconnect.
-      void loadLogs({ reset: !quiet || cursor === null, quiet }).then((current) => {
+      void loadLogs({ reset: true, quiet }).then((current) => {
         if (current && !quiet) {
           setForceFollow((revision) => revision + 1);
         }
@@ -121,9 +112,7 @@ export function LogsPage() {
     request = current;
     setRequestState(options.quiet ? "quiet" : "visible");
     setStatus((previous) => beginPanelRefresh(previous, { clearError: !options.quiet }));
-    const bootId = gateway.snapshot?.hello?.server?.bootId;
-    const resetCursor = options.reset || bootId !== cursorBootId;
-    const previousCursor = resetCursor ? null : cursor;
+    const previousCursor = options.reset ? null : cursor;
     const previousFile = untrack(file);
     const isCurrent = () =>
       !disposed && request === current && context.gateway === source && gateway.isCurrent(scope);
@@ -138,9 +127,9 @@ export function LogsPage() {
       if (!isCurrent()) {
         return false;
       }
-      // Cursors belong to one server boot and file. Finish the reset before publishing a new source.
+      // Cursors belong to one file. Finish the reset before publishing a new source.
       const sourceChanged =
-        !resetCursor &&
+        !options.reset &&
         previousFile !== null &&
         payload.file !== undefined &&
         payload.file !== previousFile;
@@ -153,13 +142,12 @@ export function LogsPage() {
       const nextEntries = Array.isArray(payload.lines)
         ? payload.lines.filter((line): line is string => typeof line === "string").map(parseLogLine)
         : [];
-      const reset = resetCursor || sourceChanged || payload.reset || previousCursor === null;
+      const reset = options.reset || sourceChanged || payload.reset || previousCursor === null;
       setEntries((previous) =>
         reset ? nextEntries : [...previous, ...nextEntries].slice(-LOG_BUFFER_LIMIT),
       );
       if (typeof payload.cursor === "number") {
         cursor = payload.cursor;
-        cursorBootId = bootId;
       }
       if (typeof payload.file === "string") {
         setFile(payload.file);
@@ -246,9 +234,9 @@ export function LogsPage() {
     document.removeEventListener("visibilitychange", visibilityChanged);
   });
   onSettled(() => {
-    stream = host.querySelector<HTMLElement>(".log-stream") ?? undefined;
+    stream = props.host.querySelector<HTMLElement>(".log-stream") ?? undefined;
     const resetContentScroll = () => {
-      const content = host.closest<HTMLElement>(".content");
+      const content = props.host.closest<HTMLElement>(".content");
       if (content) {
         content.scrollTop = 0;
         content.scrollLeft = 0;
@@ -260,47 +248,51 @@ export function LogsPage() {
   });
 
   return (
-    <openclaw-logs-page ref={(element) => (host = element)}>
-      <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <div class="page-title">{t("tabs.logs")}</div>
-          </div>
-        </section>
-        <SettingsWorkspace fillHeight>
-          <LogsView
-            loading={requestState() === "visible"}
-            refreshDisabled={!gateway.connected || requestState() !== "idle"}
-            status={status()}
-            file={file()}
-            entries={entries()}
-            filterText={filterText()}
-            levelFilters={levelFilters()}
-            autoFollow={autoFollow()}
-            truncated={truncated()}
-            onFilterTextChange={setFilterText}
-            onLevelToggle={(level, enabled) =>
-              setLevelFilters((previous) => ({ ...previous, [level]: enabled }))
-            }
-            onToggleAutoFollow={setAutoFollow}
-            onRefresh={() =>
-              void loadLogs({ reset: true }).then((current) => {
-                if (current) {
-                  setForceFollow((revision) => revision + 1);
-                }
-              })
-            }
-            onExport={(lines, label) => {
-              const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-              downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
-            }}
-            onScroll={(event) => {
-              const target = event.currentTarget;
-              atBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 120;
-            }}
-          />
-        </SettingsWorkspace>
-      </ShellLayoutBoundary>
-    </openclaw-logs-page>
+    <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
+      <section class="content-header">
+        <div>
+          <div class="page-title">{t("tabs.logs")}</div>
+        </div>
+      </section>
+      <SettingsWorkspace fillHeight>
+        <LogsView
+          loading={requestState() === "visible"}
+          refreshDisabled={!gateway.connected || requestState() !== "idle"}
+          status={status()}
+          file={file()}
+          entries={entries()}
+          filterText={filterText()}
+          levelFilters={levelFilters()}
+          autoFollow={autoFollow()}
+          truncated={truncated()}
+          onFilterTextChange={setFilterText}
+          onLevelToggle={(level, enabled) =>
+            setLevelFilters((previous) => ({ ...previous, [level]: enabled }))
+          }
+          onToggleAutoFollow={setAutoFollow}
+          onRefresh={() =>
+            void loadLogs({ reset: true }).then((current) => {
+              if (current) {
+                setForceFollow((revision) => revision + 1);
+              }
+            })
+          }
+          onExport={(lines, label) => {
+            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+            downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
+          }}
+          onScroll={(event) => {
+            const target = event.currentTarget;
+            atBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 120;
+          }}
+        />
+      </SettingsWorkspace>
+    </ShellLayoutBoundary>
   );
 }
+
+export const LogsPage = defineSolidBridge(
+  "openclaw-logs-page",
+  (_props, host) => <LogsPageContent host={host} />,
+  { properties: {} },
+);

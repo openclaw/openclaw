@@ -33,6 +33,7 @@ it("commits execution, delivery, and history once despite an owner edit and a du
       claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
+        resolveAgentId: () => "main",
       }),
     );
     job.state.runningReceiptId = receipt.receiptId;

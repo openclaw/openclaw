@@ -15,7 +15,8 @@ import type { MenuItem } from "./menu.tsx";
 
 afterEach(cleanup);
 
-// These cases preserve owner-boundary contracts from the original dropdown suites.
+// These cases carry the remaining owner-boundary contracts from the frozen
+// dropdown suites; direct Web Awesome callers still use the original suites.
 describe("Solid menu frozen dropdown contracts", () => {
   it("keeps native autofocus on an input inside grouped content", async () => {
     mountMenu({

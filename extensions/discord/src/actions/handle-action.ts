@@ -130,7 +130,7 @@ async function dispatchDiscordMessageAction(
       return result;
     }
     discordInboundEventDelivery.notify({
-      sessionKey: ctx.sessionKey ?? fallbackSessionKey,
+      sessionKey: ctx.sessionKey ?? fallbackSessionKey ?? undefined,
       to,
       accountId,
       inboundEventKind: ctx.inboundEventKind,
@@ -252,14 +252,14 @@ async function dispatchDiscordMessageAction(
       to,
       content: deliveryContent,
       ...(threadName ? { threadName } : {}),
-      mediaUrl,
-      filename,
-      replyTo,
+      mediaUrl: mediaUrl ?? undefined,
+      filename: filename ?? undefined,
+      replyTo: replyTo ?? undefined,
       ...(action === "send" ? { components, embeds, asVoice } : {}),
       silent,
       ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
-      __sessionKey: sessionKey,
-      __agentId: agentId,
+      __sessionKey: sessionKey ?? undefined,
+      __agentId: agentId ?? undefined,
     });
     return completeOutbound(result, to, sessionKey);
   }
@@ -356,7 +356,7 @@ async function dispatchDiscordMessageAction(
       messageId,
       content,
       autoArchiveMinutes,
-      appliedTags,
+      appliedTags: appliedTags ?? undefined,
     });
     const details =
       result.details && typeof result.details === "object" && !Array.isArray(result.details)

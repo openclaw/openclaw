@@ -119,9 +119,10 @@ export async function executeParallelWebSearchProviderTool(
     endpoint,
     args,
     searchConfig,
+    signal,
     search: async (request, timeoutSeconds): Promise<ParallelSearchResponse> => {
       const body: Record<string, unknown> = {
-        search_queries: request.searchQueries,
+        search_queries: [...request.searchQueries],
         advanced_settings: { max_results: request.count },
       };
       if (request.objective) {

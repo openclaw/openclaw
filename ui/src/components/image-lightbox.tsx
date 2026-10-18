@@ -8,13 +8,9 @@ import {
   Show,
   untrack,
 } from "solid-js";
+import { BROWSER_IMAGE_MIME_TYPES } from "../../../src/shared/browser-image-mime-types.js";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import {
-  downloadLightboxImage,
-  externalLightboxImageUrl,
-  resolveLightboxOriginalUrl,
-} from "./image-lightbox-files.ts";
 import {
   canSwipeLightboxVideo,
   ImageLightboxGalleryController,
@@ -22,12 +18,7 @@ import {
   trapLightboxTabFocus,
 } from "./image-lightbox-gallery.ts";
 import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
-import {
-  LightboxAction,
-  LightboxChrome,
-  LightboxImageQualityStatus,
-  lightboxImageStyle,
-} from "./image-lightbox-view.tsx";
+import { LightboxAction, LightboxHeader, lightboxImageStyle } from "./image-lightbox-view.tsx";
 import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
 import imageLightboxStyles from "./image-lightbox.css?inline";
@@ -42,8 +33,7 @@ const SLIDE_DURATION_MS = 180;
 type ImageLightboxProps = {
   connectVideo?: ImageLightboxItem["connectVideo"];
   gallery?: ImageLightboxGallery;
-  loadDisplayImage?: ImageLightboxItem["loadDisplayImage"];
-  readOriginalBlob?: ImageLightboxItem["readOriginalBlob"];
+  loadFullResolution?: ImageLightboxItem["loadFullResolution"];
   mediaKind: "image" | "video";
   src: string;
   originalSrc: string;
@@ -53,6 +43,15 @@ type ImageLightboxProps = {
 };
 
 type ImageLightboxElement = SolidBridgeElement<ImageLightboxProps>;
+
+function mimeTypeEssence(value: string): string {
+  return value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
+
+function dataUrlMimeType(source: string): string | undefined {
+  const mediaType = /^data:([^,]*)/i.exec(source)?.[1];
+  return mediaType === undefined ? undefined : mimeTypeEssence(mediaType);
+}
 
 function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElement) {
   // The view lifecycle synchronously publishes controller and media-state changes.
@@ -361,7 +360,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
     const request = ++originalUrlRequest;
     revokeOriginalBlobUrl();
     setResolvingOriginal(false);
-    if (controller.current?.kind !== "video" || controller.current?.loadDisplayImage) {
+    if (controller.current?.loadFullResolution) {
       setOpenOriginalUrl("");
       return;
     }
@@ -371,21 +370,46 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
         ? (video()?.getAttribute("src") ?? "")
         : current?.originalSrc || current?.src || fallbackOriginalSrc || fallbackSrc
     ).trim();
+    if (!source) {
+      setOpenOriginalUrl("");
+      return;
+    }
+    const sourcePrefix = source.slice(0, 5).toLowerCase();
+    const isDataUrl = sourcePrefix === "data:";
+    const isBlobUrl = sourcePrefix === "blob:";
+    if (!isDataUrl && !isBlobUrl) {
+      setOpenOriginalUrl(source);
+      return;
+    }
     setOpenOriginalUrl("");
+    const sourceType = isDataUrl ? dataUrlMimeType(source) : undefined;
+    // Reject active data formats before fetching. Incoming blob URLs still need
+    // their fetched MIME checked because top-level blobs inherit the app origin.
+    if (isDataUrl && (!sourceType || !BROWSER_IMAGE_MIME_TYPES.has(sourceType))) {
+      return;
+    }
     setResolvingOriginal(true);
     try {
-      const prepared = await resolveLightboxOriginalUrl(
-        source,
-        () => host.isConnected && !disposed && request === originalUrlRequest,
-      );
-      if (prepared && request === originalUrlRequest && !disposed) {
-        originalBlobUrl = prepared.blobUrl ?? "";
-        setOpenOriginalUrl(prepared.url);
+      const response = await fetch(source);
+      const blob = await response.blob();
+      if (
+        !host.isConnected ||
+        disposed ||
+        request !== originalUrlRequest ||
+        !BROWSER_IMAGE_MIME_TYPES.has(mimeTypeEssence(blob.type))
+      ) {
+        return;
       }
+      if (isBlobUrl) {
+        setOpenOriginalUrl(source);
+        return;
+      }
+      originalBlobUrl = URL.createObjectURL(blob);
+      setOpenOriginalUrl(originalBlobUrl);
     } catch {
-      // The selected media remains viewable; omit an unusable external link.
+      // The image remains viewable inline; omit an unusable original-link action.
     } finally {
-      if (request === originalUrlRequest && !disposed) {
+      if (request === originalUrlRequest) {
         setResolvingOriginal(false);
       }
     }
@@ -429,16 +453,6 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
     trapLightboxTabFocus(event, host.querySelectorAll<HTMLElement>(".action, video[controls]"));
   };
 
-  const downloadCurrentImage = () => {
-    const item = controller.current ?? {
-      src: props.src,
-      originalSrc: props.originalSrc,
-      title: props.imageTitle,
-      readOriginalBlob: props.readOriginalBlob,
-    };
-    return downloadLightboxImage(item.originalSrc || item.src, item.title, item.readOriginalBlob);
-  };
-
   const emitClose = (event?: Event) => {
     if (event?.type === "modal-cancel" && exitLightboxVideoFullscreen(video(), event)) {
       return;
@@ -457,8 +471,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
         props.src,
         props.originalSrc,
         props.gallery,
-        props.loadDisplayImage,
-        props.readOriginalBlob,
+        props.loadFullResolution,
         props.connectVideo,
         props.imageWidth,
         props.imageHeight,
@@ -472,8 +485,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
       src,
       originalSrc,
       gallery,
-      loadDisplayImage,
-      readOriginalBlob,
+      loadFullResolution,
       connectVideo,
       imageWidth,
       imageHeight,
@@ -491,8 +503,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
         title: untrack(() => props.imageTitle),
         width: imageWidth,
         height: imageHeight,
-        loadDisplayImage,
-        readOriginalBlob,
+        loadFullResolution,
       });
       resetVersion += 1;
       setRevision((value) => value + 1);
@@ -558,19 +569,13 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
           element.addEventListener("keydown", handleKeydown, true);
         }}
       >
-        <LightboxChrome
-          title={title()}
-          originalUrl={openOriginalUrl()}
-          externalImageUrl={externalLightboxImageUrl(currentImage() ?? props)}
-          resolvingOriginal={hasGallery() && resolvingOriginal()}
-          isVideo={props.mediaKind === "video"}
-          onDownloadImage={downloadCurrentImage}
-          onClose={emitClose}
-        >
-          <LightboxImageQualityStatus
-            upgrading={galleryState().upgrading}
-            failed={galleryState().upgradeFailed}
-            onRetry={() => controller.retryDisplayImage()}
+        <section class="lightbox">
+          <LightboxHeader
+            title={title()}
+            originalUrl={openOriginalUrl()}
+            resolvingOriginal={hasGallery() && resolvingOriginal()}
+            isVideo={props.mediaKind === "video"}
+            onClose={emitClose}
           />
           <div
             class={
@@ -599,7 +604,6 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
                     src={currentImage()?.src ?? props.src}
                     alt={title()}
                     referrerpolicy="no-referrer"
-                    decoding="async"
                     onLoad={handleImageLoad}
                     onError={handleImageError}
                     onDragStart={(event) => event.preventDefault()}
@@ -699,7 +703,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
               </LightboxAction>
             </div>
           </Show>
-        </LightboxChrome>
+        </section>
       </openclaw-modal-dialog>
     </>
   );
@@ -712,8 +716,7 @@ export const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
     properties: {
       connectVideo: { default: undefined, attribute: false },
       gallery: { default: undefined, attribute: false },
-      loadDisplayImage: { default: undefined, attribute: false },
-      readOriginalBlob: { default: undefined, attribute: false },
+      loadFullResolution: { default: undefined, attribute: false },
       mediaKind: { default: "image" },
       src: { default: "" },
       originalSrc: { default: "" },

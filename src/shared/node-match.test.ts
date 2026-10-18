@@ -25,21 +25,24 @@ describe("shared/node-match", () => {
     expect(normalizations).toBe(0);
   });
 
-  it("keeps equally strong current and unspecified client ties ambiguous", () => {
-    for (const connected of [true, false, undefined]) {
-      const nodes = ["openclaw-macos", undefined].map((clientId, index) => ({
-        nodeId: `node-${index}`,
-        displayName: "Shared Desk",
-        clientId,
-        connected,
-      }));
-      for (const candidates of [nodes, nodes.toReversed()]) {
-        expect(() => resolveNodeIdFromCandidates(candidates, "Shared Desk")).toThrow(
-          /ambiguous node: Shared Desk/,
-        );
+  it.each([{ clientIds: ["openclaw-macos", undefined] }])(
+    "keeps equally strong client ties ambiguous for $clientIds",
+    ({ clientIds }) => {
+      for (const connected of [true, false, undefined]) {
+        const nodes = clientIds.map((clientId, index) => ({
+          nodeId: `node-${index}`,
+          displayName: "Shared Desk",
+          clientId,
+          connected,
+        }));
+        for (const candidates of [nodes, nodes.toReversed()]) {
+          expect(() => resolveNodeIdFromCandidates(candidates, "Shared Desk")).toThrow(
+            /ambiguous node: Shared Desk/,
+          );
+        }
       }
-    }
-  });
+    },
+  );
 
   it("throws clear unknown and ambiguous node errors", () => {
     expect(() =>

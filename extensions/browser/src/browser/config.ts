@@ -95,7 +95,7 @@ type ManagedBrowserHeadlessMode = {
 
 type ManagedBrowserMissingDisplayError = {
   message: string;
-  headlessSource: ManagedBrowserHeadlessSource;
+  headlessSource: Exclude<ManagedBrowserHeadlessSource, "linux-display-fallback">;
 };
 
 export type ManagedBrowserHeadlessOptions = {
@@ -317,7 +317,7 @@ export function resolveBrowserConfig(
     actionTimeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath,
-    headless: cfg?.headless ?? true,
+    headless: cfg?.headless === true,
     headlessSource: typeof cfg?.headless === "boolean" ? "config" : "default",
     noSandbox: cfg?.noSandbox === true,
     attachOnly: cfg?.attachOnly === true,
@@ -406,7 +406,7 @@ export function resolveProfile(
   }
 
   if (driver === "existing-session") {
-    const mcpArgs = normalizeOptionalTrimmedStringList(profile.mcpArgs);
+    const mcpArgs = normalizeOptionalTrimmedStringList(profile.mcpArgs) ?? undefined;
     const existingSessionCdp = normalizeExistingSessionCdpUrl(
       normalizeChromeMcpOptions({ ...profile, mcpArgs }).browserUrl,
       profileName,
@@ -420,7 +420,7 @@ export function resolveProfile(
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       mcpCommand: normalizeOptionalString(profile.mcpCommand),
       mcpArgs,
-      headless: headlessSource === "default" ? false : headless,
+      headless,
       headlessSource,
       attachOnly: true,
     };
@@ -465,11 +465,7 @@ export function resolveProfile(
     cdpUrl,
     cdpHost,
     cdpIsLoopback: isLoopbackHost(cdpHost),
-    headless:
-      headlessSource === "default" &&
-      (!isLoopbackHost(cdpHost) || (profile.attachOnly ?? resolved.attachOnly))
-        ? false
-        : headless,
+    headless,
     headlessSource,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };
@@ -489,6 +485,7 @@ export function resolveManagedBrowserHeadlessMode(
   }
 
   const env = params.env ?? process.env;
+  const platform = params.platform ?? process.platform;
   const envHeadless = parseBooleanValue(env[BROWSER_HEADLESS_ENV_KEY]);
   if (envHeadless !== undefined) {
     return { headless: envHeadless, source: "env" };
@@ -497,6 +494,10 @@ export function resolveManagedBrowserHeadlessMode(
   const profileHeadlessSource = profile.headlessSource ?? "default";
   if (profileHeadlessSource !== "default") {
     return { headless: profile.headless, source: profileHeadlessSource };
+  }
+
+  if (platform === "linux" && !hasLinuxDisplay(env)) {
+    return { headless: true, source: "linux-display-fallback" };
   }
 
   return { headless: resolved.headless, source: "default" };
@@ -521,7 +522,7 @@ export function getManagedBrowserMissingDisplayError(
     env,
     platform,
   });
-  if (mode.headless) {
+  if (mode.headless || mode.source === "linux-display-fallback") {
     return null;
   }
 

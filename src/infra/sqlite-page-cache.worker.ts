@@ -242,12 +242,12 @@ function* warm(
             progress.payloadBytes += chunk.payloadBytes;
             progress.payloadMessages += chunk.payloadMessages;
           }
-          const current = update();
+          update();
           if (Math.max(progress.readBytes, progress.diskBytes) >= input.maxBytes) {
             progress.limited = true;
             break;
           }
-          yield current;
+          yield update();
         }
       } finally {
         pages.return();

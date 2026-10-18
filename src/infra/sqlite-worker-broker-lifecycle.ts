@@ -5,11 +5,7 @@ import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
-import {
-  captureSqliteDatabaseAdmissions,
-  createSqliteDatabaseAdmissionCursor,
-  trackSqliteDatabaseAdmissionWorker,
-} from "./sqlite-database-admission.js";
+import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -152,9 +148,6 @@ export function createSqliteWorkerLifecycle({
     options.signal?.throwIfAborted();
     // Slot listeners share this closure scope; never capture the opening admission in it.
     const { carrierUrl } = options;
-    const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
-    // The Worker constructor inherits this exact synchronous snapshot.
-    captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
     const { worker, exited } = runInDetachedAsyncContext(() => ({
       worker: createCpuTrackedWorker(carrierUrl, {
         resourceLimits: { maxOldGenerationSizeMb: 512 },
@@ -166,7 +159,6 @@ export function createSqliteWorkerLifecycle({
     trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
       custody: new SqliteWorkerSlotCustody(),
-      databaseAdmissionCursor,
       runtimeGeneration: options.runtimeGeneration,
       ...(borrowedGenerationSlot ? { borrowedGenerationSlot: true as const } : {}),
       worker,
@@ -297,11 +289,7 @@ export function createSqliteWorkerLifecycle({
             actor.markNativeStopped();
           }
         } catch (error) {
-          // A close refused by an already failed slot never ran. Native exit owns
-          // its retirement; the original request still reports the slot failure.
-          if (error !== actor.slot.failed) {
-            errors.push(error);
-          }
+          errors.push(error);
           fail(actor.slot, error instanceof Error ? error : new Error(String(error)));
           await actor.slot.exit;
         }

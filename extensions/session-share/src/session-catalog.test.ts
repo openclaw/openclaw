@@ -401,10 +401,12 @@ describe("session-share receiver catalog", () => {
     expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([]);
   });
 
-  it("stops a multi-host publication when its catalog owner retires", async () => {
+  it.each([1, 2])("stops a %s-host publication when its catalog owner retires", async (count) => {
     const fixture = await catalogFixture();
     fixture.list.mockResolvedValue({
-      nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, connected: true, commands })),
+      nodes: ["alpha", "beta"]
+        .slice(0, count)
+        .map((nodeId) => ({ nodeId, connected: true, commands })),
     });
     const controller = new AbortController();
     const reason = new Error("catalog owner retired");

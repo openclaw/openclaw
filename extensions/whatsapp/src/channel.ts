@@ -56,7 +56,7 @@ function projectWhatsAppRuntimeStatus(runtime?: ChannelAccountSnapshot) {
     lastEventAt: runtime?.lastEventAt ?? null,
     busy: runtime?.busy ?? false,
     lastRunActivityAt: runtime?.lastRunActivityAt ?? null,
-    healthState: runtime?.healthState,
+    healthState: runtime?.healthState ?? undefined,
     ...(runtime?.terminalDisconnect ? { terminalDisconnect: runtime.terminalDisconnect } : {}),
   };
 }
@@ -307,8 +307,15 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             },
           );
         },
-        loginWithQrStart: async (params) =>
-          await (await loadWhatsAppChannelRuntime()).startWebLoginWithQr(params),
+        loginWithQrStart: async ({ accountId, force, timeoutMs, verbose }) =>
+          await (
+            await loadWhatsAppChannelRuntime()
+          ).startWebLoginWithQr({
+            accountId,
+            force,
+            timeoutMs,
+            verbose,
+          }),
         loginWithQrWait: async ({ accountId, timeoutMs, currentQrDataUrl }) =>
           await (
             await loadWhatsAppChannelRuntime()

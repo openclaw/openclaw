@@ -141,7 +141,6 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
             profile,
             force: params.force,
             timeoutMs: params.timeoutMs,
-            assertCredentialPersistenceCurrent: params.assertCredentialPersistenceCurrent,
           });
         },
         loginWithQrWait: async (params) => {

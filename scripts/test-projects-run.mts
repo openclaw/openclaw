@@ -45,7 +45,7 @@ import {
   readShardTimings,
   writeShardTimings,
 } from "./lib/vitest-shard-timings.mts";
-import { getVitestWorkerDescriptor } from "./lib/vitest-worker-descriptor.mts";
+import { getVitestWorkerDescriptor } from "./lib/vitest-worker-bootstrap.mts";
 import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "./run-vitest.mts";
 import {
@@ -188,11 +188,7 @@ async function runVitestSpec(
   }
 }
 
-function applyDefaultParallelVitestWorkerBudget(
-  specs: VitestRunSpec[],
-  env: NodeJS.ProcessEnv,
-  concurrency: number,
-) {
+function applyDefaultParallelVitestWorkerBudget(specs: VitestRunSpec[], env: NodeJS.ProcessEnv) {
   if (env.OPENCLAW_VITEST_MAX_WORKERS || env.OPENCLAW_TEST_WORKERS || isCiLikeEnv(env)) {
     return specs;
   }
@@ -201,10 +197,7 @@ function applyDefaultParallelVitestWorkerBudget(
     ...spec,
     env: {
       ...spec.env,
-      // Exclusive plans run alone, so they can spend the otherwise idle shard budget.
-      OPENCLAW_VITEST_MAX_WORKERS: String(
-        isExclusiveCiTestConfig(spec.config) ? concurrency : vitestMaxWorkers,
-      ),
+      OPENCLAW_VITEST_MAX_WORKERS: String(vitestMaxWorkers),
     },
   }));
 }
@@ -613,7 +606,6 @@ export async function runTestProjects(
             env: baseEnv,
           }),
           baseEnv,
-          concurrency,
         );
         console.error(
           `[test] running ${scheduledSpecs.length} Vitest shards with parallelism ${concurrency}`,
@@ -657,13 +649,11 @@ export async function runTestProjects(
     throw error;
   } finally {
     try {
-      await workers
-        ?.dispose({ interrupted: Boolean(termination.signal) })
-        .catch((error: unknown) => {
-          reportFailure ??= String(error);
-          process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
-          console.error(error);
-        });
+      await workers?.dispose().catch((error: unknown) => {
+        reportFailure ??= String(error);
+        process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
+        console.error(error);
+      });
       if (reports) {
         const reportCode = await reports.finish(
           async (mergeArgs) => {

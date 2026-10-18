@@ -63,8 +63,6 @@ import type { AgentCommandOpts } from "./types.js";
 export type PreparedAgentCommandRuntimeContext = Readonly<{
   config: OpenClawConfig;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
-  /** One-shot creation fact from the isolated child's in-process launch owner. */
-  freshChild?: boolean;
 }>;
 
 export async function prepareAgentCommandExecution(

@@ -4,7 +4,6 @@ import { messageClientSourcesKey } from "../../../../src/chat/message-client-sou
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
-import { extractThinkingCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import {
@@ -18,7 +17,7 @@ import {
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
-import { readChatThreadMessageIdentity, userTurnRunId } from "./chat-thread-items.ts";
+import { userTurnRunId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsForwardedBoundary,
@@ -29,7 +28,6 @@ import {
   readAutomationRun,
 } from "./chat-turn-boundary.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
-import type { ChatReasoning } from "./tool-stream-contract.ts";
 
 const TERMINAL_WORK_STATUSES = new Set(["done", "failed", "timeout", "killed"]);
 
@@ -192,21 +190,12 @@ export type ReplyAttributionContext = {
 export function groupMessages(
   items: ChatItem[],
   replyContext: ReplyAttributionContext = {},
-  reasoning?: ChatReasoning | null,
 ): Array<ChatItem | MessageGroup> {
-  const visibleReasoning = new Set(
-    reasoning?.items.flatMap(({ receipt }) =>
-      receipt?.persisted ? [JSON.stringify([receipt.runId, receipt.messageId])] : [],
-    ),
-  );
   const result = groupChatItems(
     items,
-    visibleReasoning,
     replyContext.items && rowsAfterHiddenTurns(items, replyContext.items),
   );
-  const context = replyContext.items
-    ? groupChatItems(replyContext.items, visibleReasoning)
-    : result;
+  const context = replyContext.items ? groupChatItems(replyContext.items) : result;
   return stampReplyAttribution(result, context, replyContext);
 }
 
@@ -228,7 +217,6 @@ function rowsAfterHiddenTurns(items: ChatItem[], context: ChatItem[]): Set<strin
 
 function groupChatItems(
   items: ChatItem[],
-  visibleReasoning: ReadonlySet<string>,
   rowsAfterHiddenTurn?: ReadonlySet<string>,
 ): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
@@ -248,22 +236,13 @@ function groupChatItems(
 
     const { item, normalized } = prepared;
     const record = asRecord(item.message);
-    const identity = visibleReasoning.size ? readChatThreadMessageIdentity(item.message) : null;
-    const hasVisibleReasoning =
-      identity?.role === "assistant" &&
-      !identity.isImported &&
-      visibleReasoning.has(JSON.stringify([identity.runId, identity.id])) &&
-      Boolean(extractThinkingCached(item.message));
     const hasAssistantText =
       record?.role === "assistant" &&
       record.stopReason === "toolUse" &&
       Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim());
-    // Saved reasoning stays visible until its live owner retires the receipts.
-    // Legacy mixed rows retain their tool grouping and file-link attribution.
-    const role =
-      hasAssistantText || hasVisibleReasoning
-        ? "assistant"
-        : normalizeRoleForGrouping(normalized.role);
+    // Tool-use narration stays visible between iterations. Legacy mixed rows
+    // retain their tool grouping and forwarded file-link attribution.
+    const role = hasAssistantText ? "assistant" : normalizeRoleForGrouping(normalized.role);
     // Classify after content projection and keep the fact with its group; later
     // presentation passes reuse it; replacing a message refreshes its facts.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
@@ -273,7 +252,6 @@ function groupChatItems(
       duplicateCount: item.duplicateCount,
       ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
-        hasVisibleReasoning ||
         visibleContent === "non-text" ||
         Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim()),
     };

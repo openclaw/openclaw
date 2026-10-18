@@ -60,7 +60,7 @@ describe("opencode provider policy public artifact", () => {
     expect(
       resolveThinkingProfile({
         provider: "opencode",
-        modelId: "max-only-fixture",
+        modelId: "kimi-k3",
         compat: { supportedReasoningEfforts: ["max"] },
       }),
     ).toEqual({ levels: [{ id: "off" }, { id: "max" }], defaultLevel: "off" });

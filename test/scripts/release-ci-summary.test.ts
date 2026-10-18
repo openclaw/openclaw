@@ -87,79 +87,6 @@ const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const hasUnzip = spawnSync("unzip", ["-v"], { stdio: "ignore" }).status === 0;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function completedStep(
-  name: string,
-  number: number,
-  start: number,
-  end: number,
-  conclusion = "success",
-) {
-  const time = (second: number) => `2026-08-28T12:01:0${second}.000Z`;
-  return {
-    name,
-    number,
-    status: "completed",
-    conclusion,
-    started_at: time(start),
-    completed_at: time(end),
-  };
-}
-
-function publicationPlanSteps(seal = "success", upload = "success", uploadNumber = 6) {
-  return [
-    completedStep("Seal immutable release execution plan", 5, 0, 1, seal),
-    completedStep("Upload immutable release execution plan", uploadNumber, 1, 3, upload),
-  ];
-}
-
-function planDigestStep(
-  conclusion = "success",
-  name = "Record immutable release execution plan digest",
-) {
-  return completedStep(name, 7, 3, 3, conclusion);
-}
-
-function verifierOptions(runId: string) {
-  return { runId, verifierSourceContent: readFileSync(SCRIPT), verifierSourceSha: "c".repeat(40) };
-}
-
-function manifestFixture(
-  overrides: Parameters<typeof rawManifest>[0] = {},
-  expected: Partial<Parameters<typeof validateParentManifest>[1]> = {},
-) {
-  const raw = rawManifest(overrides);
-  return validateParentManifest(raw, { runAttempt: 2, runId: raw.runId, ...expected });
-}
-
-function reuseManifest(
-  root: ReturnType<typeof validateParentManifest>,
-  {
-    runId = "29090000001",
-    selectedRunId = root.runId,
-    targetSha = root.targetSha,
-    changedPaths = [],
-    policy = "exact-target-full-validation-v1",
-  }: {
-    runId?: string;
-    selectedRunId?: string;
-    targetSha?: string;
-    changedPaths?: string[];
-    policy?: string;
-  } = {},
-) {
-  return manifestFixture({
-    evidenceReuse: {
-      changedPaths,
-      evidenceSha: root.targetSha,
-      policy,
-      runId: root.runId,
-      selectedRunId,
-    },
-    runId,
-    targetSha,
-  });
-}
-
 async function runInterruptedPlanFixture(
   args: string[],
   env: NodeJS.ProcessEnv,
@@ -386,12 +313,33 @@ describe("original publication admission reader", () => {
         status: "completed",
         conclusion: "success",
         steps: [
-          ...publicationPlanSteps(
-            "success",
-            fault === "skipped-original-upload" ? "skipped" : "success",
-          ),
+          {
+            name: "Seal immutable release execution plan",
+            number: 5,
+            status: "completed",
+            conclusion: "success",
+            started_at: "2026-08-28T12:01:00.000Z",
+            completed_at: "2026-08-28T12:01:01.000Z",
+          },
+          {
+            name: "Upload immutable release execution plan",
+            number: 6,
+            status: "completed",
+            conclusion: fault === "skipped-original-upload" ? "skipped" : "success",
+            started_at: "2026-08-28T12:01:01.000Z",
+            completed_at: "2026-08-28T12:01:03.000Z",
+          },
           ...(restoreContract
-            ? [planDigestStep(fault.endsWith("missing-witness") ? "skipped" : "success")]
+            ? [
+                {
+                  name: "Record immutable release execution plan digest",
+                  number: 7,
+                  status: "completed",
+                  conclusion: fault.endsWith("missing-witness") ? "skipped" : "success",
+                  started_at: "2026-08-28T12:01:03.000Z",
+                  completed_at: "2026-08-28T12:01:03.000Z",
+                },
+              ]
             : []),
         ],
       },
@@ -441,7 +389,11 @@ describe("original publication admission reader", () => {
       changed.binding.observationsDigest = `sha256:${createHash("sha256").update(publicationObservationJson(changed.observations)).digest("hex")}`;
       Object.assign(fixture.manifest, { publicationAdmission: changed });
     }
-    const strictOptions = verifierOptions(fixture.runId);
+    const strictOptions = {
+      runId: fixture.runId,
+      verifierSourceContent: readFileSync(SCRIPT),
+      verifierSourceSha: "c".repeat(40),
+    };
     const consumerCase = !["changed-admission", "skipped-original-upload"].includes(fault);
     if (fault.startsWith("continuation")) {
       const observed = structuredClone(fixture.plan);
@@ -858,23 +810,40 @@ try {
             status: "completed",
             conclusion: fault === "interrupted-sealer" ? "failure" : "success",
             steps: [
-              ...publicationPlanSteps(
-                fault === "skipped-seal"
-                  ? "skipped"
-                  : fault === "interrupted-sealer"
-                    ? "failure"
-                    : "success",
-                fault === "failed-upload" ? "failure" : "success",
-                fault === "upload-before-seal" ? 4 : 6,
-              ),
+              {
+                name: "Seal immutable release execution plan",
+                number: 5,
+                status: "completed",
+                conclusion:
+                  fault === "skipped-seal"
+                    ? "skipped"
+                    : fault === "interrupted-sealer"
+                      ? "failure"
+                      : "success",
+                started_at: "2026-08-28T12:01:00.000Z",
+                completed_at: "2026-08-28T12:01:01.000Z",
+              },
+              {
+                name: "Upload immutable release execution plan",
+                number: fault === "upload-before-seal" ? 4 : 6,
+                status: "completed",
+                conclusion: fault === "failed-upload" ? "failure" : "success",
+                started_at: "2026-08-28T12:01:01.000Z",
+                completed_at: "2026-08-28T12:01:03.000Z",
+              },
               ...(witnessContract
                 ? [
-                    planDigestStep(
-                      fault === "cached-plan-failed-witness" ? "failure" : "success",
-                      fault === "cached-plan-wrong-witness-step"
-                        ? "Unrelated successful step"
-                        : "Record immutable release execution plan digest",
-                    ),
+                    {
+                      name:
+                        fault === "cached-plan-wrong-witness-step"
+                          ? "Unrelated successful step"
+                          : "Record immutable release execution plan digest",
+                      number: 7,
+                      status: "completed",
+                      conclusion: fault === "cached-plan-failed-witness" ? "failure" : "success",
+                      started_at: "2026-08-28T12:01:03.000Z",
+                      completed_at: "2026-08-28T12:01:03.000Z",
+                    },
                   ]
                 : []),
             ],
@@ -1416,11 +1385,9 @@ if (args.includes("--allow-escape-sequences")) {
 process.stdout.write("\\u001b[31mlegacy log\\u001b[0m");
 `);
 
-    expect(result).toMatchObject({
-      status: 0,
-      stderr: "",
-      stdout: "\u001b[31mlegacy log\u001b[0m",
-    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe("\u001b[31mlegacy log\u001b[0m");
     expect(calls).toEqual([flaggedArgs, legacyArgs]);
   });
 
@@ -1430,7 +1397,8 @@ process.stderr.write("error: unknown flag: --allow-escape-sequences\\n");
 process.exit(1);
 `);
 
-    expect(result).toMatchObject({ status: 17, stderr: "" });
+    expect(result.status).toBe(17);
+    expect(result.stderr).toBe("");
     expect(JSON.parse(result.stdout)).toEqual(
       expect.objectContaining({
         message: expect.stringContaining("Command failed: gh"),
@@ -1548,7 +1516,9 @@ function verifyFixture(
 ) {
   return validateReleaseRunEvidence(
     {
-      ...verifierOptions(fixture.runId),
+      runId: fixture.runId,
+      verifierSourceContent: readFileSync(SCRIPT),
+      verifierSourceSha: "c".repeat(40),
     },
     fixture.client,
   );
@@ -2033,8 +2003,10 @@ describe("release CI summary child correlation", () => {
       ) =>
         validateReleaseRunEvidence(
           {
-            ...verifierOptions(runId),
+            runId,
             expectedRunAttempts,
+            verifierSourceContent: readFileSync(SCRIPT),
+            verifierSourceSha: "c".repeat(40),
           },
           fixture.client,
         ),
@@ -2184,7 +2156,11 @@ describe("release CI summary child correlation", () => {
 
   it("requires passing product performance in sealed npm stable evidence", async () => {
     const fixture = trustedMainNpmFixture("stable");
-    const options = verifierOptions(fixture.runId);
+    const options = {
+      runId: fixture.runId,
+      verifierSourceContent: readFileSync(SCRIPT),
+      verifierSourceSha: "c".repeat(40),
+    };
     const evidence = await validateReleaseRunEvidence(options, fixture.client);
     expect(evidence.children.map((child: { role: string }) => child.role).toSorted()).toEqual([
       "normalCi",
@@ -2254,15 +2230,22 @@ describe("release CI summary child correlation", () => {
         },
       );
       const getOriginalJobs = fixture.client.getRunAttemptJobs;
-      const result = validateReleaseRunEvidence(verifierOptions(fixture.runId), {
-        ...fixture.client,
-        getRunAttemptJobs: (childRunId: string, runAttempt: number) =>
-          childRunId === runId
-            ? runAttempt === 1
-              ? originalJobs
-              : retryJobs
-            : getOriginalJobs(childRunId),
-      });
+      const result = validateReleaseRunEvidence(
+        {
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        {
+          ...fixture.client,
+          getRunAttemptJobs: (childRunId: string, runAttempt: number) =>
+            childRunId === runId
+              ? runAttempt === 1
+                ? originalJobs
+                : retryJobs
+              : getOriginalJobs(childRunId),
+        },
+      );
       if (scenario === "carried-guard") {
         expect((await result).children).toContainEqual(
           expect.objectContaining({
@@ -2368,7 +2351,9 @@ describe("release CI summary child correlation", () => {
         validateReleaseRunEvidence(
           {
             reuseRequest,
-            ...verifierOptions(fixture.runId),
+            runId: fixture.runId,
+            verifierSourceContent: readFileSync(SCRIPT),
+            verifierSourceSha: "c".repeat(40),
           },
           fixture.client,
         ),
@@ -2436,7 +2421,9 @@ describe("release CI summary child correlation", () => {
           targetSha: changelog ? "7".repeat(40) : fixture.targetSha,
           validationInputs: { ...fixture.manifest.validationInputs },
         },
-        ...verifierOptions(fixture.runId),
+        runId: fixture.runId,
+        verifierSourceContent: readFileSync(SCRIPT),
+        verifierSourceSha: "c".repeat(40),
       };
       const evidence = await validateReleaseRunEvidence(options, fixture.client);
       expect(evidence.valid).toBe(true);
@@ -2622,7 +2609,9 @@ describe("release CI summary child correlation", () => {
         {
           expectedRunAttempts,
           repository: "openclaw/openclaw",
-          ...verifierOptions(fixture.runId),
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
         },
         fixture.client,
       );
@@ -3766,12 +3755,24 @@ describe("release CI summary child correlation", () => {
   });
 
   it("rejects unverified changed paths and cross-SHA exact-target reuse", () => {
-    const root = manifestFixture();
-    const changedPaths = reuseManifest(root, {
-      changedPaths: ["CHANGELOG.md"],
-      policy: "changelog-only-release-v1",
-      targetSha: "b".repeat(40),
+    const root = validateParentManifest(rawManifest({}), {
+      runAttempt: 2,
+      runId: "29090000000",
     });
+    const changedPaths = validateParentManifest(
+      rawManifest({
+        evidenceReuse: {
+          changedPaths: ["CHANGELOG.md"],
+          evidenceSha: root.targetSha,
+          policy: "changelog-only-release-v1",
+          runId: root.runId,
+          selectedRunId: root.runId,
+        },
+        runId: "29090000001",
+        targetSha: "b".repeat(40),
+      }),
+      { runAttempt: 2, runId: "29090000001" },
+    );
     expect(() =>
       validateEvidenceReuseChain(changedPaths, root, root, (base: string) => ({
         files: [{ filename: "src/index.ts" }],
@@ -3794,7 +3795,20 @@ describe("release CI summary child correlation", () => {
       })),
     ).toThrow("failed commit comparison");
 
-    const changedTarget = reuseManifest(root, { targetSha: "b".repeat(40) });
+    const changedTarget = validateParentManifest(
+      rawManifest({
+        evidenceReuse: {
+          changedPaths: [],
+          evidenceSha: root.targetSha,
+          policy: "exact-target-full-validation-v1",
+          runId: root.runId,
+          selectedRunId: root.runId,
+        },
+        runId: "29090000001",
+        targetSha: "b".repeat(40),
+      }),
+      { runAttempt: 2, runId: "29090000001" },
+    );
     expect(() => validateEvidenceReuseChain(changedTarget, root, root)).toThrow(
       "exact-target release evidence reuse requires no changed paths",
     );
@@ -3806,7 +3820,10 @@ describe("release CI summary child correlation", () => {
     const inputs = { ...rawManifest({}).validationInputs, targetVersion };
     const root = validateParentManifest(
       { ...rawManifest({}), validationInputs: inputs },
-      { runAttempt: 2, runId: "29090000000" },
+      {
+        runAttempt: 2,
+        runId: "29090000000",
+      },
     );
     const paths = ["CHANGELOG.md", "CHANGELOG/2026.7.1.md", "CHANGELOG/records/2026.7.1.md"];
     const makeCurrent = (changedPaths: string[]) =>
@@ -3887,8 +3904,24 @@ describe("release CI summary child correlation", () => {
   });
 
   it("rejects exact-target reuse without matching root policy and authorization", () => {
-    const root = manifestFixture();
-    const current = reuseManifest(root);
+    const root = validateParentManifest(rawManifest({}), {
+      runAttempt: 2,
+      runId: "29090000000",
+    });
+    const current = validateParentManifest(
+      rawManifest({
+        evidenceReuse: {
+          changedPaths: [],
+          evidenceSha: root.targetSha,
+          policy: "exact-target-full-validation-v1",
+          runId: root.runId,
+          selectedRunId: root.runId,
+        },
+        runId: "29090000001",
+        targetSha: root.targetSha,
+      }),
+      { runAttempt: 2, runId: "29090000001" },
+    );
     const mismatchedRoot = {
       ...root,
       validationInputs: {
@@ -3906,12 +3939,38 @@ describe("release CI summary child correlation", () => {
   });
 
   it("rejects any selected manifest that itself reuses evidence", () => {
-    const root = manifestFixture();
-    const intermediate = reuseManifest(root);
-    const current = reuseManifest(root, {
-      runId: "29090000002",
-      selectedRunId: intermediate.runId,
+    const root = validateParentManifest(rawManifest({}), {
+      runAttempt: 2,
+      runId: "29090000000",
     });
+    const intermediate = validateParentManifest(
+      rawManifest({
+        evidenceReuse: {
+          changedPaths: [],
+          evidenceSha: root.targetSha,
+          policy: "exact-target-full-validation-v1",
+          runId: root.runId,
+          selectedRunId: root.runId,
+        },
+        runId: "29090000001",
+        targetSha: root.targetSha,
+      }),
+      { runAttempt: 2, runId: "29090000001" },
+    );
+    const current = validateParentManifest(
+      rawManifest({
+        evidenceReuse: {
+          changedPaths: [],
+          evidenceSha: intermediate.targetSha,
+          policy: "exact-target-full-validation-v1",
+          runId: root.runId,
+          selectedRunId: intermediate.runId,
+        },
+        runId: "29090000002",
+        targetSha: intermediate.targetSha,
+      }),
+      { runAttempt: 2, runId: "29090000002" },
+    );
 
     expect(() => validateEvidenceReuseChain(current, intermediate, root)).toThrow(
       "evidence reuse must select a root execution manifest",
@@ -3919,9 +3978,13 @@ describe("release CI summary child correlation", () => {
   });
 
   it("binds each manifest workflow ref to the fetched parent branch", () => {
-    expect(() => manifestFixture({}, { workflowRef: "release/2026.7.1" })).toThrow(
-      "release validation manifest workflow ref mismatch",
-    );
+    expect(() =>
+      validateParentManifest(rawManifest({}), {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowRef: "release/2026.7.1",
+      }),
+    ).toThrow("release validation manifest workflow ref mismatch");
   });
 
   it("validates manifest child workflow, dispatch tuple, branch, and attempt", () => {
@@ -3962,15 +4025,22 @@ describe("release CI summary child correlation", () => {
       run_attempt: 1,
       triggering_actor: { login: "github-actions[bot]" },
     };
-    const validate = (candidate: typeof run) =>
-      validateManifestChildRun(candidate, child, "101", parentManifest, parentJobs, parentLog);
-    expect(validate(run)).toBe(run);
-    expect(() => validate({ ...run, head_branch: "release/2026.7.1" })).toThrow(
-      "manifest child dispatch tuple mismatch",
+    expect(validateManifestChildRun(run, child, "101", parentManifest, parentJobs, parentLog)).toBe(
+      run,
     );
-    expect(() => manifestFixture({}, { runAttempt: 3 })).toThrow(
-      "release validation manifest run attempt mismatch",
-    );
+    expect(() =>
+      validateManifestChildRun(
+        { ...run, head_branch: "release/2026.7.1" },
+        child,
+        "101",
+        parentManifest,
+        parentJobs,
+        parentLog,
+      ),
+    ).toThrow("manifest child dispatch tuple mismatch");
+    expect(() =>
+      validateParentManifest(rawManifest({}), { runAttempt: 3, runId: "29090000000" }),
+    ).toThrow("release validation manifest run attempt mismatch");
   });
 
   it("accepts strongly bound legacy and correlated children across parent attempts", () => {
@@ -4055,17 +4125,33 @@ describe("release CI summary child correlation", () => {
         ...(child.manifestKey === "productPerformance" ? ["-f publish_reports=false"] : []),
         `Dispatched ${child.workflow}: https://github.com/openclaw/openclaw/actions/runs/${runId} (attempt ${run.run_attempt})`,
       ].join("\n");
-      const validate = (log = parentLog) =>
-        validateManifestChildRun(run, child, String(runId), parentManifest, parentJobs, log);
       expect(resolveManifestChildOriginAttempt(run, child, parentManifest, parentJobs)).toBe(
         originAttempt,
       );
-      expect(validate()).toBe(run);
-      expect(validate(parentLog.replace(` (attempt ${run.run_attempt})`, ""))).toBe(run);
+      expect(
+        validateManifestChildRun(run, child, String(runId), parentManifest, parentJobs, parentLog),
+      ).toBe(run);
+      expect(
+        validateManifestChildRun(
+          run,
+          child,
+          String(runId),
+          parentManifest,
+          parentJobs,
+          parentLog.replace(` (attempt ${run.run_attempt})`, ""),
+        ),
+      ).toBe(run);
       if (child.manifestKey === "productPerformance") {
-        expect(() => validate(parentLog.replace("-f publish_reports=false\n", ""))).toThrow(
-          "release performance child is not dispatched in artifact-only mode",
-        );
+        expect(() =>
+          validateManifestChildRun(
+            run,
+            child,
+            String(runId),
+            parentManifest,
+            parentJobs,
+            parentLog.replace("-f publish_reports=false\n", ""),
+          ),
+        ).toThrow("release performance child is not dispatched in artifact-only mode");
       }
     }
 
@@ -4092,14 +4178,21 @@ describe("release CI summary child correlation", () => {
       `TARGET_SHA: ${parentManifest.targetSha}`,
       "Dispatched ci.yml: https://github.com/openclaw/openclaw/actions/runs/101 (attempt 1)",
     ].join("\n");
-    const validate = (candidate: typeof wrongParent) =>
-      validateManifestChildRun(candidate, ci, "101", parentManifest, ciJobs, ciLog);
-    expect(() => validate(wrongParent)).toThrow("manifest child dispatch tuple mismatch");
     expect(() =>
-      validate({
-        ...wrongParent,
-        display_title: `CI full-release-validation-${parentManifest.runId}-3-ci`,
-      }),
+      validateManifestChildRun(wrongParent, ci, "101", parentManifest, ciJobs, ciLog),
+    ).toThrow("manifest child dispatch tuple mismatch");
+    expect(() =>
+      validateManifestChildRun(
+        {
+          ...wrongParent,
+          display_title: `CI full-release-validation-${parentManifest.runId}-3-ci`,
+        },
+        ci,
+        "101",
+        parentManifest,
+        ciJobs,
+        ciLog,
+      ),
     ).toThrow("manifest child dispatch tuple mismatch");
     expect(
       resolveManifestChildOriginAttempt({ display_title: "CI nearby" }, ci, parentManifest, ciJobs),
@@ -4109,34 +4202,56 @@ describe("release CI summary child correlation", () => {
   it("keeps requested changelog reuse target and evidence SHAs separate", () => {
     const evidenceSha = "a".repeat(40);
     const targetSha = "b".repeat(40);
-    const current = {
-      evidenceReuse: {
-        changedPaths: ["CHANGELOG.md"],
-        evidenceSha,
-        policy: "changelog-only-release-v1",
-        runId: "101",
-        selectedRunId: "101",
-      },
-      runId: "101",
-      targetSha,
-    };
-    const options = {
-      expectedChangedPaths: ["CHANGELOG.md"],
-      expectedEvidencePolicy: "changelog-only-release-v1",
-      expectedEvidenceSha: evidenceSha,
-      expectedRootRunId: "101",
-      expectedSelectedRunId: "101",
-      expectedTargetSha: targetSha,
-    };
-    const validate = (sha: string) =>
+    expect(() =>
       validateRequestedEvidenceReuse(
-        current,
-        { runId: "101", targetSha: sha },
-        { runId: "101", targetSha: sha },
-        options,
-      );
-    expect(() => validate(evidenceSha)).not.toThrow();
-    expect(() => validate(targetSha)).toThrow("no longer matches");
+        {
+          evidenceReuse: {
+            changedPaths: ["CHANGELOG.md"],
+            evidenceSha,
+            policy: "changelog-only-release-v1",
+            runId: "101",
+            selectedRunId: "101",
+          },
+          runId: "101",
+          targetSha,
+        },
+        { runId: "101", targetSha: evidenceSha },
+        { runId: "101", targetSha: evidenceSha },
+        {
+          expectedChangedPaths: ["CHANGELOG.md"],
+          expectedEvidencePolicy: "changelog-only-release-v1",
+          expectedEvidenceSha: evidenceSha,
+          expectedRootRunId: "101",
+          expectedSelectedRunId: "101",
+          expectedTargetSha: targetSha,
+        },
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateRequestedEvidenceReuse(
+        {
+          evidenceReuse: {
+            changedPaths: ["CHANGELOG.md"],
+            evidenceSha,
+            policy: "changelog-only-release-v1",
+            runId: "101",
+            selectedRunId: "101",
+          },
+          runId: "101",
+          targetSha,
+        },
+        { runId: "101", targetSha },
+        { runId: "101", targetSha },
+        {
+          expectedChangedPaths: ["CHANGELOG.md"],
+          expectedEvidencePolicy: "changelog-only-release-v1",
+          expectedEvidenceSha: evidenceSha,
+          expectedRootRunId: "101",
+          expectedSelectedRunId: "101",
+          expectedTargetSha: targetSha,
+        },
+      ),
+    ).toThrow("no longer matches");
   });
 
   it("rejects carried parent jobs whose selected-attempt execution fingerprint changed", () => {

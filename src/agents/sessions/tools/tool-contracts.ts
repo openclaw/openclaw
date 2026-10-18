@@ -15,6 +15,8 @@ import type {
 } from "./tool-schemas.js";
 import type { TruncationResult } from "./truncate.js";
 
+export { ReadToolContinuationSchema } from "./tool-schemas.js";
+
 export type BashToolInput = Static<typeof bashSchema>;
 
 export interface BashToolDetails {

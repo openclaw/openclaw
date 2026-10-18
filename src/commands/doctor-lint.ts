@@ -13,7 +13,7 @@ export async function runDoctorLintCli(
       const { runUpdateDoctorLintProcess } = await import("./doctor-lint-process.js");
       const { resolveDoctorUpdateBudget } = await import("../flows/doctor-update-budget.js");
       const budget = await resolveDoctorUpdateBudget({ cfg: {}, env: process.env });
-      return runUpdateDoctorLintProcess(opts, budget);
+      return runUpdateDoctorLintProcess(opts, budget?.disposalDeadlineMs);
     }
   }
   const { runDoctorLintCliInProcess } = await import("./doctor-lint-runner.js");

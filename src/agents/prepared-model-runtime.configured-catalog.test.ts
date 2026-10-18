@@ -438,6 +438,7 @@ describe("synthetic configured context publication", () => {
       undefined,
       auth("account-a"),
       (provider) => provider,
+      new Map(),
     );
     const catalog = materializePreparedModelCatalog(
       publication.catalog,
@@ -539,6 +540,7 @@ describe("synthetic configured context publication", () => {
       undefined,
       auth("account-a"),
       (provider) => provider,
+      new Map(),
     );
     const catalog = materializePreparedModelCatalog(
       publication.catalog,
@@ -601,6 +603,7 @@ describe("synthetic configured context publication", () => {
       undefined,
       auth("account-a"),
       (provider) => provider,
+      new Map(),
     );
     const catalog = materializePreparedModelCatalog(
       publication.catalog,
@@ -624,6 +627,7 @@ describe("synthetic configured context publication", () => {
       undefined,
       auth("account-a"),
       (provider) => provider,
+      new Map(),
     );
     for (const account of ["account-a", "account-b"]) {
       const failed = prepareModelCatalogPublication(
@@ -636,6 +640,7 @@ describe("synthetic configured context publication", () => {
         { ...accepted, providers: new Map() },
         auth(account),
         (provider) => provider,
+        new Map(),
       );
       const catalog = materializePreparedModelCatalog(
         failed.catalog,

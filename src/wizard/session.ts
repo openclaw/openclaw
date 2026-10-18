@@ -201,11 +201,11 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
 
     progress(label: string): WizardProgress {
       let stopped = false;
-      session.pushProgress(label, undefined, label);
+      session.pushProgress(label);
       return {
         update: (message) => {
           if (!stopped) {
-            session.pushProgress(message, undefined, message);
+            session.pushProgress(message);
           }
         },
         stop: (message) => {
@@ -214,7 +214,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
           }
           stopped = true;
           if (message) {
-            session.pushProgress(message, undefined, message);
+            session.pushProgress(message);
           }
         },
       };
@@ -452,11 +452,7 @@ export class WizardSession {
     this.resolveStep(step);
   }
 
-  pushProgress(
-    message: string,
-    presentation?: Pick<WizardStep, "title" | "deviceCode">,
-    progressMessage?: string,
-  ) {
+  pushProgress(message: string, presentation?: Pick<WizardStep, "title" | "deviceCode">) {
     if (this.status !== "running") {
       return;
     }
@@ -477,7 +473,6 @@ export class WizardSession {
           ? `${this.devicePresentation.message}\n\n${message}`
           : message,
       executor: "gateway",
-      ...(progressMessage !== undefined ? { progressMessage } : {}),
       ...(this.pendingExternalUrl ? { externalUrl: this.pendingExternalUrl } : {}),
     };
     if (this.stepDeferred) {

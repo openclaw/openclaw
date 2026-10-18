@@ -1,4 +1,3 @@
-import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
@@ -7,11 +6,6 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
 import { isConfiguredPluginPathDiagnosticCode } from "../../plugins/discovery-availability.js";
 import { formatCommandOutput, formatCommandResult } from "../../process/command-error.js";
-import {
-  CommandProcessCleanupError,
-  hasCommandProcessCleanupError,
-  readCommandProcessFailure,
-} from "../../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
@@ -43,31 +37,22 @@ function readinessWarning(
   };
 }
 
-function createPostPluginReadinessExecutionWarning(
+function createPostPluginReadinessExecutionFailure(
   pluginUpdate: PostCorePluginUpdateResult,
   reason: string,
 ): PostCorePluginUpdateResult {
-  const diagnostic = redactSupportString(
-    reason,
-    { env: process.env, stateDir: resolveStateDir() },
-    { maxLength: 500 },
-  );
-  const warning = {
-    reason: "doctor-advisory",
-    message: `Updated plugin readiness checks could not be completed before restart. ${diagnostic}`,
-    guidance: ["Run `openclaw update repair` to retry post-update readiness checks."],
-  };
-  if (pluginUpdate.doctorLint) {
-    pluginUpdate.doctorLint.advisory = {
-      kind: "recoverable-maintenance",
-      message: warning.message,
-    };
-  }
   return {
     ...pluginUpdate,
-    status: pluginUpdate.status === "error" ? "error" : "warning",
-    reason: pluginUpdate.reason ?? "post-plugin-update-readiness-execution-failed",
-    warnings: [...(pluginUpdate.warnings ?? []), warning],
+    status: "error",
+    reason: "post-plugin-update-readiness-execution-failed",
+    warnings: [
+      ...(pluginUpdate.warnings ?? []),
+      {
+        reason,
+        message: "Updated plugin readiness checks could not be completed before restart.",
+        guidance: ["Run `openclaw update repair` to retry post-update readiness checks."],
+      },
+    ],
   };
 }
 
@@ -80,6 +65,7 @@ export async function applyPostPluginUpdateReadiness(params: {
   includeOptionalInspections?: boolean;
 }): Promise<PostCorePluginUpdateResult> {
   const args = [
+    params.entryPath,
     "doctor",
     "--lint",
     "--json",
@@ -92,7 +78,7 @@ export async function applyPostPluginUpdateReadiness(params: {
   const startedAt = Date.now();
   const doctorLint: UpdateStepResult = {
     name: "post-plugin-doctor-lint",
-    command: args.join(" "),
+    command: args.slice(1).join(" "),
     cwd: params.root,
     durationMs: 0,
     exitCode: null,
@@ -103,30 +89,22 @@ export async function applyPostPluginUpdateReadiness(params: {
   let executionFailure: string | undefined;
   let report: ReturnType<typeof parseUpdateDoctorLintReport>;
   try {
-    const invocation = resolveOpenClawCliInvocation({
-      execPath: params.nodeRunner ?? resolveNodeRunner(),
-      entryPath: params.entryPath,
-      execArgv: [],
-      args,
-    });
-    execution = await runUtf8CommandWithTimeout([invocation.command, ...invocation.args], {
-      cwd: params.root,
-      timeoutMs: params.timeoutMs,
-      killProcessTree: true,
-      requireProcessTreeExtinction: true,
-      input: "",
-      maxOutputBytes: 4 * 1024 * 1024,
-      outputCapture: "head",
-      terminateOnOutputLimit: true,
-      baseEnv,
-      env: {
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
+    execution = await runUtf8CommandWithTimeout(
+      [params.nodeRunner ?? resolveNodeRunner(), ...args],
+      {
+        cwd: params.root,
+        timeoutMs: params.timeoutMs,
+        input: "",
+        maxOutputBytes: 4 * 1024 * 1024,
+        outputCapture: "head",
+        terminateOnOutputLimit: true,
+        baseEnv,
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
+        },
       },
-    });
-    if (execution.cleanup === "uncertain") {
-      throw new CommandProcessCleanupError();
-    }
+    );
     doctorLint.exitCode = execution.code;
     doctorLint.termination = execution.termination;
     doctorLint.signal = execution.signal;
@@ -148,14 +126,7 @@ export async function applyPostPluginUpdateReadiness(params: {
     }
     report = parseUpdateDoctorLintReport(execution.stdout);
   } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
-      throw error;
-    }
-    if (readCommandProcessFailure(error)?.cleanup === "uncertain") {
-      throw new CommandProcessCleanupError({ cause: error });
-    }
-    // A settled lint execution failure is not evidence that installed state is unsafe.
-    return createPostPluginReadinessExecutionWarning(
+    return createPostPluginReadinessExecutionFailure(
       pluginUpdate,
       executionFailure ?? String(error),
     );
@@ -212,7 +183,7 @@ export async function applyPostPluginUpdateReadiness(params: {
     return pluginUpdate;
   }
   if (readinessFindings.length === 0) {
-    return createPostPluginReadinessExecutionWarning(
+    return createPostPluginReadinessExecutionFailure(
       pluginUpdate,
       report.checksRun === 0
         ? "Updated Doctor did not run a declared readiness check."

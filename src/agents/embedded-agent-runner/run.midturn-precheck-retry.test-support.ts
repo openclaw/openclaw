@@ -55,7 +55,6 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
   resultRecorded?: boolean;
   codeModeEngaged?: boolean;
   codeModeSuspended?: boolean;
-  steeredAfterResult?: boolean;
 }) {
   const activeCount = params?.activeCount ?? 0;
   const resultRecorded = params?.resultRecorded ?? true;
@@ -72,13 +71,7 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
     lastAssistant: settledExecAssistant,
     currentAttemptAssistant: settledExecAssistant,
     messagesSnapshot: resultRecorded
-      ? [
-          settledExecAssistant,
-          settledExecResult,
-          ...(params?.steeredAfterResult
-            ? [{ role: "user" as const, content: "also check the logs", timestamp: 3 }]
-            : []),
-        ]
+      ? [settledExecAssistant, settledExecResult]
       : [settledExecAssistant],
     toolMetas: [
       {
@@ -303,29 +296,6 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       truncate.mockImplementation(previousTruncate);
       clearEmbeddedSessionPromptStates([session.runParams.sessionId, successorId]);
     }
-  });
-
-  it("compacts a settled batch when a steering message follows its result", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow({ steeredAfterResult: true }))
-      .mockResolvedValueOnce(session.makeAttemptResult());
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted after steering",
-        firstKeptEntryId: "entry-steered-exec",
-        tokensBefore: 201_000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...session.runParams,
-      runId: "run-midturn-steered-exec",
-    });
-
-    expect(mockedCompactDirect).toHaveBeenCalledOnce();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectRetryContinuesFromTranscript();
-    expect(result.meta.error).toBeUndefined();
   });
 
   it("compacts while a code-mode exec still waits on nested tool work", async () => {

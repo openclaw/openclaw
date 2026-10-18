@@ -1,4 +1,3 @@
-import { IMAGE_BLOCK_TOKENS } from "openclaw/plugin-sdk/agent-core";
 import {
   assembleHarnessContextEngine,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
@@ -22,7 +21,6 @@ import {
   CodexContextAttachmentError,
   isCodexDurableCustomMessage,
   projectContextEngineAssemblyForCodex,
-  resolveProjectionPromptBudgetTokens,
   type CodexProjectedImageGroup,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
@@ -83,15 +81,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
-  // An authored exact-model cap is operator policy, not native capacity discovery.
-  // Supervised native sessions keep their existing independent ownership.
-  const configuredContextBudget =
-    activeContextEngine &&
-    !usesSupervisionConnection &&
-    params.authoredContextTokenCap &&
-    effectiveContextTokenBudget
-      ? effectiveContextTokenBudget
-      : undefined;
   const availableToolNames = () =>
     flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
       .map((tool) => tool.name)
@@ -207,31 +196,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         sessionKey: contextSessionKey,
         messages: historyState.messages,
         tokenBudget: effectiveContextTokenBudget,
-        ...(configuredContextBudget
-          ? {
-              promptBudget: {
-                contextTokens: configuredContextBudget,
-                reserveTokens:
-                  configuredContextBudget -
-                  resolveProjectionPromptBudgetTokens({
-                    contextTokenBudget: configuredContextBudget,
-                  }),
-                inputTokens: (params.images?.length ?? 0) * IMAGE_BLOCK_TOKENS,
-                systemPrompt: joinPresentSections(
-                  baseDeveloperInstructions,
-                  refreshableInstructions,
-                  buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
-                  JSON.stringify(toolBridge.specs),
-                ),
-                prompt: joinPresentSections(
-                  params.prompt,
-                  params.currentInboundContext?.text,
-                  buildOpenClawPromptContext(true),
-                  inputAttachmentNote,
-                ),
-              },
-            }
-          : {}),
         availableTools: new Set(availableToolNames()),
         citationsMode: params.config?.memory?.citations,
         sandboxed: sandbox?.enabled === true,
@@ -259,6 +223,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
                 { ...runtimeParams },
                 contextEngineProjection,
               ),
+              projection: contextEngineProjection,
               dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
               legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
             })

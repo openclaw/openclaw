@@ -24,6 +24,7 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "../../components/native-chrome-setup.ts";
 import "./device.css";
 
@@ -70,7 +71,7 @@ function settleCookieSyncEdit(
   }
 }
 
-export function DevicePage() {
+function DevicePageContent() {
   const capability = useApplication().nativeDeviceSettings;
   const projection = capability ? projectNativeDeviceSettings(capability) : null;
   const snapshot = () => projection?.read();
@@ -191,13 +192,13 @@ export function DevicePage() {
             onChange={(event) => capability?.set(props.setting, event.currentTarget.value)}
           >
             <For each={props.options} keyed={(option) => option.id}>
-              {(option) => (
+              {(_option, index) => (
                 <option
-                  value={option().id}
-                  selected={option().id === props.value}
-                  disabled={option().disabled}
+                  value={props.options[index()]!.id}
+                  selected={props.options[index()]!.id === props.value}
+                  disabled={props.options[index()]!.disabled}
                 >
-                  {option().name}
+                  {props.options[index()]!.name}
                 </option>
               )}
             </For>
@@ -659,7 +660,7 @@ export function DevicePage() {
     );
   }
   return (
-    <openclaw-device-page>
+    <>
       <SettingsPageHeader
         title={t(deviceSettingsGroupLabelKey(snapshot()))}
         subtitle={
@@ -690,6 +691,10 @@ export function DevicePage() {
           </Show>
         </SettingsPage>
       </SettingsWorkspace>
-    </openclaw-device-page>
+    </>
   );
 }
+
+export const DevicePage = defineSolidBridge("openclaw-device-page", DevicePageContent, {
+  properties: {},
+});

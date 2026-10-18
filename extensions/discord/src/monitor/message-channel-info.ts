@@ -13,6 +13,11 @@ export type DiscordChannelInfoClient = {
   fetchChannel(channelId: string): Promise<unknown>;
 };
 
+type DiscordMessageWithChannelId = Message & {
+  channel_id?: unknown;
+  rawData?: { channel_id?: unknown };
+};
+
 const DISCORD_CHANNEL_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
 const DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
 const DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES = 1000;
@@ -34,15 +39,23 @@ export function resolveDiscordMessageChannelId(params: {
   message: Message;
   eventChannelId?: string | number | null;
 }): string {
+  const message = params.message as DiscordMessageWithChannelId;
   return (
-    normalizeDiscordChannelId(params.message.channelId) ||
+    normalizeDiscordChannelId(message.channelId) ||
+    normalizeDiscordChannelId(message.channel_id) ||
+    normalizeDiscordChannelId(message.rawData?.channel_id) ||
     normalizeDiscordChannelId(params.eventChannelId)
   );
 }
 
-export function buildDiscordChannelInfo(channel: unknown): DiscordChannelInfo | null {
+export function buildDiscordChannelInfo(
+  channel: unknown,
+  options?: { rawTypeFallback?: boolean },
+): DiscordChannelInfo | null {
   const info = resolveDiscordChannelInfoSafe(channel);
-  const type = info.type as ChannelType | undefined;
+  const type =
+    (info.type as ChannelType | undefined) ??
+    (options?.rawTypeFallback ? (channel as { type?: ChannelType }).type : undefined);
   return type === undefined
     ? null
     : { type, name: info.name, topic: info.topic, parentId: info.parentId, ownerId: info.ownerId };
@@ -66,7 +79,7 @@ export async function resolveDiscordChannelInfo(
       cacheDiscordChannelInfo(channelId, null, DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS, now);
       return null;
     }
-    const payload = buildDiscordChannelInfo(channel);
+    const payload = buildDiscordChannelInfo(channel, { rawTypeFallback: true });
     if (!payload) {
       return null;
     }

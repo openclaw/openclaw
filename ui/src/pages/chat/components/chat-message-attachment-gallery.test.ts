@@ -1,11 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
-import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
-import { mountSolid } from "../../../test-helpers/solid-render.tsx";
-import { MessageGroup } from "./chat-message-group-view.tsx";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import {
   createAssistantMessage,
   createAttachmentBlock,
@@ -20,27 +19,23 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  cleanupSolid();
+  render(nothing, container);
   container.remove();
 });
 
 function renderAssistantMessage(
   target: HTMLElement,
   message: unknown,
-  options: Partial<Parameters<typeof MessageGroup>[0]["options"]>,
+  options: Partial<Parameters<typeof renderMessageGroup>[1]>,
 ) {
-  mountSolid(
-    MessageGroup,
-    {
-      group: createMessageGroup(message, "assistant"),
-      options: {
-        showReasoning: false,
-        showToolCalls: false,
-        assistantName: "OpenClaw",
-        assistantAvatar: null,
-        ...options,
-      },
-    },
+  render(
+    renderMessageGroup(createMessageGroup(message, "assistant"), {
+      showReasoning: false,
+      showToolCalls: false,
+      assistantName: "OpenClaw",
+      assistantAvatar: null,
+      ...options,
+    }),
     target,
   );
 }

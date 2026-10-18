@@ -1,9 +1,10 @@
 import { Show } from "solid-js";
-import { ConnectCommand } from "../../components/solid/connect-command.tsx";
+import { renderConnectCommand } from "../../components/connect-command.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { LitContent } from "../../lit/solid-content.tsx";
 import type { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 
 export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState["view"]>) {
@@ -48,7 +49,7 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
             <Show when={props.setup}>
               {(setup) => (
                 <>
-                  <ConnectCommand command={setup().command} />
+                  <LitContent value={renderConnectCommand(setup().command)} />
                   <p class="connect-machine-dialog__hint">
                     {t("newSession.connectMachineTeamHint")}
                   </p>
@@ -63,7 +64,7 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
                   </p>
                   <details>
                     <summary>{t("newSession.connectMachineCommandOnly")}</summary>
-                    <ConnectCommand command={setup().serviceCommand} />
+                    <LitContent value={renderConnectCommand(setup().serviceCommand)} />
                   </details>
                   <p class="connect-machine-dialog__hint">
                     {expiresAt()
@@ -74,7 +75,7 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
               )}
             </Show>
           </div>
-          <openclaw-modal-actions class="exec-approval-actions connect-machine-dialog__actions">
+          <footer class="exec-approval-actions connect-machine-dialog__actions">
             {props.setup?.command || props.error ? (
               <button
                 class="btn"
@@ -91,7 +92,7 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
             <button class="btn btn--ghost" type="button" onClick={() => props.onManageDevices()}>
               {t("newSession.connectMachineManageDevices")}
             </button>
-          </openclaw-modal-actions>
+          </footer>
         </section>
       </openclaw-modal-dialog>
     </Show>

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isMessageToolSendActionName } from "../../agents/embedded-agent-messaging.js";
 import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
@@ -22,15 +21,8 @@ import { missingMessageActionTargetError } from "./target-errors.js";
 
 export function resolveImplicitMessageActionTarget(
   toolContext: ChannelThreadingToolContext | undefined,
-  action?: ChannelMessageActionName,
 ): string | undefined {
-  // Content replies follow the effective delivery route; message resources still
-  // belong to the native conversation that supplied the inbound message.
-  const candidates =
-    isMessageToolSendActionName(action) || action === "poll"
-      ? [toolContext?.currentMessagingTarget, toolContext?.currentChannelId]
-      : [toolContext?.currentChannelId, toolContext?.currentMessagingTarget];
-  for (const value of candidates) {
+  for (const value of [toolContext?.currentChannelId, toolContext?.currentMessagingTarget]) {
     const target = normalizeOptionalString(value);
     if (!target || isInternalNonDeliveryChannel(target)) {
       continue;
@@ -109,7 +101,7 @@ export function normalizeMessageActionInput(params: {
       !deliveryAliasTarget &&
       (hasResourceReference || !actionHasTarget(action, normalizedArgs, targetAliasOptions))
     ) {
-      const inferredTarget = resolveImplicitMessageActionTarget(toolContext, action);
+      const inferredTarget = resolveImplicitMessageActionTarget(toolContext);
       if (inferredTarget) {
         normalizedArgs.target = inferredTarget;
       }

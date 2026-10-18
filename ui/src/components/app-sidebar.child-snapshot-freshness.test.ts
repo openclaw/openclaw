@@ -43,9 +43,8 @@ function result(sessions: SessionsListResult["sessions"]): SessionsListResult {
 async function mountParent() {
   const harness = createSessionsHarness("main", [parentKey]);
   const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
-  // Baseline the existing child before mounting; publishing it later now auto-expands.
-  harness.publishList({ result: result([parentRow]) });
   const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+  harness.publishList({ result: result([parentRow]) });
   await sidebar.updateComplete;
   const expand = () =>
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();

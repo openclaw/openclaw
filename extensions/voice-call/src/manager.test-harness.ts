@@ -14,7 +14,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { onTestFinished } from "vitest";
-import { normalizeVoiceCallConfig } from "./config.js";
+import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { CallManagerContext } from "./manager/context.js";
 import { persistCallRecord } from "./manager/store.js";
@@ -160,7 +160,7 @@ export async function createManagerHarness(
   provider: FakeProvider;
   storePath: string;
 }> {
-  const config = normalizeVoiceCallConfig({
+  const config = VoiceCallConfigSchema.parse({
     enabled: true,
     provider: "plivo",
     fromNumber: "+15550000000",
@@ -283,7 +283,7 @@ export function createEventManagerHarness() {
       processedEventIds: new Set(),
       rejectedProviderCallIds: new Set(),
       provider: null,
-      config: normalizeVoiceCallConfig({
+      config: VoiceCallConfigSchema.parse({
         enabled: true,
         provider: "plivo",
         fromNumber: "+15550000000",
@@ -326,7 +326,7 @@ export function createEventManagerHarness() {
   }
 
   function createInboundDisabledConfig() {
-    return normalizeVoiceCallConfig({
+    return VoiceCallConfigSchema.parse({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",

@@ -21,7 +21,6 @@ import {
   migrateNextcloudTalkLegacyReplayState,
   NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION,
   NextcloudTalkWebhookPayloadError,
-  parseNextcloudTalkFileSharedActivity,
   parseRawObject,
   requiredString,
   type NextcloudTalkIngressPayload,
@@ -42,7 +41,7 @@ function describeIgnoredWebhookEvent(rawEvent: string): string {
 
 // Activity Streams payload: https://nextcloud-talk.readthedocs.io/en/latest/bots/
 const NextcloudTalkWebhookPayloadSchema = z.object({
-  type: z.enum(["Create", "Update", "Delete", "Activity"]),
+  type: z.enum(["Create", "Update", "Delete"]),
   actor: z.object({
     type: z.literal("Person"),
     id: z.string().min(1),
@@ -65,22 +64,13 @@ const NextcloudTalkWebhookPayloadSchema = z.object({
 export type NextcloudTalkIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
 function parseClaimedMessage(payload: NextcloudTalkIngressPayload, claimedId: string) {
-  const rawEnvelope = parseRawObject(payload.rawEvent);
-  const result = NextcloudTalkWebhookPayloadSchema.safeParse(rawEnvelope);
-  const fileShare = parseNextcloudTalkFileSharedActivity(rawEnvelope);
-  if (!result.success) {
+  const result = NextcloudTalkWebhookPayloadSchema.safeParse(parseRawObject(payload.rawEvent));
+  if (!result.success || result.data.type !== "Create" || result.data.object.id !== claimedId) {
     throw new NextcloudTalkWebhookPayloadError(
       `Nextcloud Talk ingress row ${claimedId} has invalid message identity.`,
     );
   }
   const webhook = result.data;
-  const isSupportedEvent =
-    webhook.type === "Create" || (webhook.type === "Activity" && fileShare !== null);
-  if (!isSupportedEvent || webhook.object.id !== claimedId) {
-    throw new NextcloudTalkWebhookPayloadError(
-      `Nextcloud Talk ingress row ${claimedId} has invalid message identity.`,
-    );
-  }
   const roomId = requiredString(webhook.target.id, "target.id");
   const message: NextcloudTalkInboundMessage = {
     messageId: webhook.object.id,
@@ -88,14 +78,11 @@ function parseClaimedMessage(payload: NextcloudTalkIngressPayload, claimedId: st
     roomName: webhook.target.name,
     senderId: webhook.actor.id,
     senderName: webhook.actor.name,
-    text: fileShare ? fileShare.text : webhook.object.content || webhook.object.name,
-    ...(fileShare ? { mentionText: fileShare.mentionText } : {}),
+    text: webhook.object.content || webhook.object.name,
     mediaType: webhook.object.mediaType || "text/plain",
     timestamp: payload.receivedAt,
     // Activity Streams does not distinguish Talk room kinds. Runtime lookup refines this.
     isGroupChat: true,
-    ...(fileShare?.attachment ? { attachment: fileShare.attachment } : {}),
-    ...(fileShare?.attachmentIssue ? { attachmentIssue: fileShare.attachmentIssue } : {}),
   };
   return message;
 }

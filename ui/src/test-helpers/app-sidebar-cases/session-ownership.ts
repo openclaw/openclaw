@@ -283,10 +283,8 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
 
     let menu = await openSessionMenu(sidebar);
-    expect(await sessionMenuChoice(menu, "sort:people")).toBeNull();
-    expect((await sessionMenuChoice(menu, "sort:created"))?.getAttribute("aria-selected")).toBe(
-      "true",
-    );
+    expect(sessionMenuChoice(menu, "sort:people")).toBeNull();
+    expect(sessionMenuChoice(menu, "sort:created")?.getAttribute("aria-selected")).toBe("true");
     sidebar.dismissTransientMenus();
     await sidebar.updateComplete;
 
@@ -303,9 +301,7 @@ describe("AppSidebar session ownership", () => {
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
     menu = await openSessionMenu(sidebar);
-    expect((await sessionMenuChoice(menu, "sort:people"))?.getAttribute("aria-selected")).toBe(
-      "true",
-    );
+    expect(sessionMenuChoice(menu, "sort:people")?.getAttribute("aria-selected")).toBe("true");
     expect(visibleSessionKeys(sidebar)).toEqual(peopleOrder);
     sidebar.dismissTransientMenus();
     await sidebar.updateComplete;
@@ -317,9 +313,7 @@ describe("AppSidebar session ownership", () => {
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
     menu = await openSessionMenu(sidebar);
-    expect((await sessionMenuChoice(menu, "sort:people"))?.getAttribute("aria-selected")).toBe(
-      "true",
-    );
+    expect(sessionMenuChoice(menu, "sort:people")?.getAttribute("aria-selected")).toBe("true");
     expect(visibleSessionKeys(sidebar)).toEqual(peopleOrder);
     sidebar.dismissTransientMenus();
     await sidebar.updateComplete;
@@ -334,10 +328,8 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
 
     menu = await openSessionMenu(sidebar);
-    expect(await sessionMenuChoice(menu, "sort:people")).toBeNull();
-    expect((await sessionMenuChoice(menu, "sort:created"))?.getAttribute("aria-selected")).toBe(
-      "true",
-    );
+    expect(sessionMenuChoice(menu, "sort:people")).toBeNull();
+    expect(sessionMenuChoice(menu, "sort:created")?.getAttribute("aria-selected")).toBe("true");
     sidebar.dismissTransientMenus();
     result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
@@ -347,10 +339,8 @@ describe("AppSidebar session ownership", () => {
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
     menu = await openSessionMenu(sidebar);
-    expect(await sessionMenuChoice(menu, "sort:people")).not.toBeNull();
-    expect((await sessionMenuChoice(menu, "sort:created"))?.getAttribute("aria-selected")).toBe(
-      "true",
-    );
+    expect(sessionMenuChoice(menu, "sort:people")).not.toBeNull();
+    expect(sessionMenuChoice(menu, "sort:created")?.getAttribute("aria-selected")).toBe("true");
   });
 
   it("groups sessions by owner based on the live session-owner roster", async () => {
@@ -387,7 +377,7 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
 
     let menu = await openSessionMenu(sidebar);
-    expect(await sessionMenuChoice(menu, "grouping:person")).not.toBeNull();
+    expect(sessionMenuChoice(menu, "grouping:person")).not.toBeNull();
     sidebar.dismissTransientMenus();
     await sidebar.updateComplete;
 
@@ -419,9 +409,7 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
     expect(ownerSections()).toHaveLength(2);
     menu = await openSessionMenu(sidebar);
-    expect((await sessionMenuChoice(menu, "grouping:person"))?.getAttribute("aria-selected")).toBe(
-      "true",
-    );
+    expect(sessionMenuChoice(menu, "grouping:person")?.getAttribute("aria-selected")).toBe("true");
     sidebar.dismissTransientMenus();
     await sidebar.updateComplete;
 
@@ -439,10 +427,10 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
     expect(ownerSections()).toHaveLength(0);
     menu = await openSessionMenu(sidebar);
-    expect(await sessionMenuChoice(menu, "grouping:person")).toBeNull();
-    expect(
-      (await sessionMenuChoice(menu, "grouping:category"))?.getAttribute("aria-selected"),
-    ).toBe("true");
+    expect(sessionMenuChoice(menu, "grouping:person")).toBeNull();
+    expect(sessionMenuChoice(menu, "grouping:category")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
     sidebar.dismissTransientMenus();
 
     result.owners = [

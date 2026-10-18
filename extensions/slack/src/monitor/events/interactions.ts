@@ -11,6 +11,10 @@ export function registerSlackInteractionEvents(params: {
   registerSlackBlockActionHandler(params);
   registerSlackShortcutHandler(params);
 
+  if (typeof ctx.app.view !== "function") {
+    return;
+  }
+
   // Bolt routes both modal lifecycles through view constraints; there is no viewClosed API.
   for (const interactionType of ["view_submission", "view_closed"] as const) {
     registerModalLifecycleHandler({

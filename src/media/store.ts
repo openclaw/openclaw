@@ -1,11 +1,7 @@
 import crypto from "node:crypto";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import {
-  createAsyncLock,
-  readFileHandleBounded,
-  sanitizeUntrustedFileName,
-} from "@openclaw/fs-safe/advanced";
+import { createAsyncLock, sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { fileStore } from "@openclaw/fs-safe/store";
 import {
   basenameFromAnyPath,
@@ -732,7 +728,13 @@ export async function readMediaBuffer(
       `readMediaBuffer: media ID ${JSON.stringify(id)} is ${opened.stat.size} bytes; maximum is ${maxBytes} bytes`,
     );
   }
-  const buffer = await readFileHandleBounded(opened.handle, maxBytes);
+  const buffer = await opened.handle.readFile();
+  if (buffer.byteLength > maxBytes) {
+    throw new FsSafeError(
+      "too-large",
+      `readMediaBuffer: media ID ${JSON.stringify(id)} read ${buffer.byteLength} bytes; maximum is ${maxBytes} bytes`,
+    );
+  }
   return { id, path: opened.realPath, buffer, size: buffer.byteLength };
 }
 

@@ -12,7 +12,10 @@ import type {
   CleanupBookkeepingParams,
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
-import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
+import {
+  buildSafeLifecycleErrorMeta,
+  maskLifecycleIdentifier,
+} from "./subagent-registry-lifecycle-log.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
@@ -91,8 +94,8 @@ export async function completeCleanupBookkeeping(
             params.warn("failed to retire subagent bundle MCP runtime", {
               error: buildSafeLifecycleErrorMeta(error),
               sessionId,
-              runId: cleanupParams.runId,
-              childSessionKey: entry.childSessionKey,
+              runId: maskLifecycleIdentifier(cleanupParams.runId, "run"),
+              childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
             });
           },
         }),
@@ -184,9 +187,9 @@ export async function completeCleanupBookkeeping(
   // A replacement row or newer child generation still fences these effects.
   scheduleCleanupTails({ allowRetiredRow: retireAfterSettle, isDeleteCleanup });
   assertPublishedOwner();
+  context.resumeAncestorCleanup(entry);
   if (!entry.collect && !cleanupParams.skipRequesterSettleWake) {
     assertPublishedOwner();
-    scheduleRequesterSettleWake(context, entry.runId, entry, stateContext, true);
+    scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
   }
-  context.resumeAncestorCleanup(entry);
 }

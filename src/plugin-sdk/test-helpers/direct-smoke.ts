@@ -35,10 +35,7 @@ export async function runDirectImportSmoke(
   const { stdout } = await execFileAsync(execPath, [...runtimeArgs, "-e", code], {
     cwd: repoRoot,
     env: SHARED_IMPORT_ENV,
-    // A channel plugin seam reaches ~4,000 first-party modules, and a fresh
-    // runner transforms them all cold (~9s on a fast laptop). Size this CPU-bound
-    // compile for loaded 4-vCPU hosted runners, below the 120s test timeout.
-    timeout: 90_000,
+    timeout: 40_000,
   });
 
   return stdout;

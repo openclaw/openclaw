@@ -1,17 +1,16 @@
 /* @vitest-environment jsdom */
 
+import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readMarkdownCodeBlockCopyText } from "../../../components/markdown-code-blocks.ts";
 import { TOOL_OUTPUT_PREVIEW_CHARS } from "../../../lib/chat/tool-output.ts";
-import { mountSolid } from "../../../test-helpers/solid-render.tsx";
-import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { MessageGroup } from "./chat-message-group-view.tsx";
+import "./chat-tool-output.ts";
+import { renderGroupedMessage } from "./chat-message-bubble.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
-import { ChatToolOutput } from "./chat-tool-output.ts";
-import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { renderToolFixture, renderToolCard } from "./chat-tool-render.test-support.ts";
 
 // Keep these as literal source text: parsing expected values would repeat the
 // rounding and duplicate-key loss that the display must not introduce.
@@ -34,6 +33,7 @@ function createContainer() {
 
 afterEach(() => {
   for (const container of containers.splice(0)) {
+    render(nothing, container);
     container.remove();
   }
 });
@@ -41,20 +41,18 @@ afterEach(() => {
 describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role) => {
   async function renderMessage(text: string, isStreaming = false) {
     const container = createContainer();
-    mountSolid(
-      GroupedMessage,
-      {
-        preparation: prepareChatMessageRender({
+    await renderToolFixture(
+      renderGroupedMessage(
+        prepareChatMessageRender({
           role,
           content: text,
           ...(role === "toolResult" ? { toolName: "lookup", toolCallId: "json-result" } : {}),
         }),
-        messageKey: "json-message",
-        options: { isStreaming, showReasoning: false, isToolMessageExpanded: () => true },
-      },
+        "json-message",
+        { isStreaming, showReasoning: false, isToolMessageExpanded: () => true },
+      ),
       container,
     );
-    await settleToolBridges(container);
     return container;
   }
 
@@ -138,20 +136,18 @@ describe("tool JSON details", () => {
   async function openToolDetails(text: string) {
     const container = createContainer();
     const openSidebar = vi.fn<(content: SidebarContent) => void>();
-    mountSolid(
-      ChatToolCard,
-      {
-        card: { id: "json-tool", name: "lookup", outputText: text, completed: true },
-        options: {
+    await renderToolFixture(
+      renderToolCard(
+        { id: "json-tool", name: "lookup", outputText: text, completed: true },
+        {
           messageKey: "test-message",
           expanded: true,
           onToggleExpanded: vi.fn(),
           onOpenSidebar: openSidebar,
         },
-      },
+      ),
       container,
     );
-    await settleToolBridges(container);
     expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
       text.slice(0, TOOL_OUTPUT_PREVIEW_CHARS),
     );
@@ -164,7 +160,10 @@ describe("tool JSON details", () => {
     }
     expect(content.card.outputText).toBe(text);
     const panel = createContainer();
-    mountSolid(ChatToolOutput, { content }, panel);
+    render(
+      html`<openclaw-chat-tool-output .content=${content}></openclaw-chat-tool-output>`,
+      panel,
+    );
     await vi.waitFor(() =>
       expect(panel.querySelector(".chat-tool-output__text code")?.textContent).toBe(text),
     );
@@ -204,37 +203,26 @@ function expectElement<T extends Element>(
   return element;
 }
 
-const jsonGroups = new WeakMap<
-  HTMLElement,
-  ReturnType<typeof mountSolid<Parameters<typeof MessageGroup>[0]>>
->();
-
 function renderJsonMessageGroup(
   container: HTMLElement,
   message: unknown,
   role: string,
-  opts: Partial<Parameters<typeof MessageGroup>[0]["options"]>,
+  opts: Partial<Parameters<typeof renderMessageGroup>[1]>,
 ) {
   const group = createMessageGroup(message, role, {
     key: role + "-group",
     messages: [{ key: role + "-message", message }],
   });
-  const props = {
-    group,
-    options: {
+  render(
+    renderMessageGroup(group, {
       showReasoning: true,
       showToolCalls: true,
       assistantName: "OpenClaw",
       assistantAvatar: null,
       ...opts,
-    },
-  };
-  const view = jsonGroups.get(container);
-  if (view) {
-    view.update(props);
-  } else {
-    jsonGroups.set(container, mountSolid(MessageGroup, props, container));
-  }
+    }),
+    container,
+  );
 }
 
 describe("JSON group DOM retention", () => {

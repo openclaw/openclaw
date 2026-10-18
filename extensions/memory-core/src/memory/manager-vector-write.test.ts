@@ -2,7 +2,7 @@
 import { endianness } from "node:os";
 import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { writeMemoryVectors } from "./manager-search-knn.test-support.js";
+import { writeMemoryVectors } from "./manager-vector-write.js";
 
 function vectorHex(values: number[]): string {
   const view = new DataView(new ArrayBuffer(values.length * 4));
@@ -59,7 +59,7 @@ describe("memory vector dedupe", () => {
     ]);
   });
 
-  it("propagates DELETE preparation failure and permits a later retry", () => {
+  it("still inserts after DELETE preparation fails and retries that DELETE on reuse", () => {
     let denied = false;
     db.setAuthorizer((action, table) => {
       if (!denied && action === constants.SQLITE_DELETE && table === "memory_index_chunks_vec") {
@@ -69,9 +69,9 @@ describe("memory vector dedupe", () => {
       return constants.SQLITE_OK;
     });
     try {
-      expect(() => write("chunk-1", [1, 0, 0])).toThrow(/not authorized/);
+      write("chunk-1", [1, 0, 0]);
       expect(denied).toBe(true);
-      expect(rows()).toEqual([]);
+      expect(rows()).toEqual([{ id: "chunk-1", embedding: vectorHex([1, 0, 0]) }]);
       write("chunk-1", [0, 2, -0.5]);
       expect(rows()).toEqual([{ id: "chunk-1", embedding: vectorHex([0, 2, -0.5]) }]);
     } finally {
@@ -79,7 +79,7 @@ describe("memory vector dedupe", () => {
     }
   });
 
-  it("propagates DELETE step failure and reuses the writer after recovery", () => {
+  it("attempts INSERT after a DELETE step failure and reuses the writer after recovery", () => {
     write("chunk-1", [1, 0, 0]);
     db.exec(`
       CREATE TABLE delete_attempts (id TEXT);
@@ -90,7 +90,7 @@ describe("memory vector dedupe", () => {
         SELECT RAISE(FAIL, 'delete-step');
       END;
     `);
-    expect(() => write("chunk-1", [0, 1, 0])).toThrow("delete-step");
+    expect(() => write("chunk-1", [0, 1, 0])).toThrow("vector row not deleted before insert");
     expect(db.prepare("SELECT id FROM delete_attempts").all()).toEqual([{ id: "chunk-1" }]);
     expect(rows()).toEqual([{ id: "chunk-1", embedding: vectorHex([1, 0, 0]) }]);
     db.exec("DROP TRIGGER fail_vector_delete");

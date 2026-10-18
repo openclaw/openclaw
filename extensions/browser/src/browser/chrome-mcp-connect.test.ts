@@ -5,7 +5,11 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedChromeMcpProfileOptions } from "./chrome-mcp-contracts.js";
 import { withChromeMcpLease } from "./chrome-mcp-routing.js";
-import { closeChromeMcpSession, getChromeMcpPid } from "./chrome-mcp-session.js";
+import {
+  closeChromeMcpSession,
+  getChromeMcpPid,
+  resetChromeMcpSessionsForTest,
+} from "./chrome-mcp-session.js";
 
 const { warn } = vi.hoisted(() => ({ warn: vi.fn<(message: string) => void>() }));
 
@@ -24,6 +28,7 @@ describe("Chrome MCP subprocess startup diagnostics", () => {
   let expectsSubprocess = true;
 
   beforeEach(async () => {
+    await resetChromeMcpSessionsForTest();
     warn.mockClear();
     ownsDescendant = false;
     expectsSubprocess = true;
@@ -105,7 +110,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
 
   afterEach(async () => {
     try {
-      await closeChromeMcpSession(profileName);
+      await resetChromeMcpSessionsForTest();
       if (expectsSubprocess) {
         await expectSubprocessClosed();
       }

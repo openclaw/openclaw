@@ -1,7 +1,7 @@
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserFormField } from "./client-actions.types.js";
 
-const DEFAULT_FILL_FIELD_TYPE = "text";
+export const DEFAULT_FILL_FIELD_TYPE = "text";
 
 const FIELD_ENTRY_KEYS = new Set(["ref", "type", "value"]);
 

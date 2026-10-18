@@ -2,8 +2,7 @@ import { For, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context-types.ts";
-import { Icon } from "../../components/solid/icon.tsx";
-import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
+import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
@@ -13,9 +12,7 @@ import { registerAvatarGatewayReset } from "../../lib/identity-avatar-context.ts
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
-import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
-import { ClawsExplore } from "./claws-explore.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import "../../styles/agents-home.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
@@ -25,15 +22,12 @@ type AgentCard = Omit<ReturnType<typeof agentRosterCards>[number], "mainKey" | "
 };
 
 type AgentsHomeProps = {
-  canCreate: boolean;
   cards: AgentCard[];
   context: ApplicationContext;
   connected: boolean;
   loading: boolean;
   error: string | null;
-  showExplore: boolean;
-  onOpenCatalog: () => void;
-  onSelectClaw: (entry: ClawCatalogEntry) => void;
+  canCreate: boolean;
   onRetry: () => void;
 };
 
@@ -75,37 +69,24 @@ export function AgentsHomeView(props: AgentsHomeProps) {
           subtitle={subtitle()}
           actions={
             <>
-              {props.showExplore ? (
-                <button
-                  type="button"
-                  class="btn btn--icon"
-                  data-claws-open-catalog
-                  aria-label={t("clawsCatalog.search")}
-                  title={t("clawsCatalog.search")}
-                  aria-haspopup="dialog"
-                  disabled={!props.connected}
-                  onClick={props.onOpenCatalog}
-                >
-                  <Icon name="search" />
-                </button>
-              ) : undefined}
               {manage()}
-              <ReasonedDisabledControl
-                reason={!props.canCreate ? t("custodian.accessRequired") : undefined}
+              <a
+                class="btn primary"
+                href={
+                  props.canCreate
+                    ? `${pathForRoute("custodian", props.context.basePath)}?intent=new-agent`
+                    : pathForRoute("agents", props.context.basePath)
+                }
+                onClick={(event) =>
+                  navigate(
+                    event,
+                    props.canCreate ? "custodian" : "agents",
+                    props.canCreate ? { search: "?intent=new-agent" } : undefined,
+                  )
+                }
               >
-                <button
-                  class="btn primary"
-                  disabled={!props.canCreate}
-                  title={!props.canCreate ? t("custodian.accessRequired") : undefined}
-                  onClick={() => {
-                    if (props.canCreate) {
-                      props.context.navigate("custodian", { search: "?intent=new-agent" });
-                    }
-                  }}
-                >
-                  {t("agentsHome.create")}
-                </button>
-              </ReasonedDisabledControl>
+                {t("agentsHome.create")}
+              </a>
             </>
           }
         />
@@ -148,7 +129,12 @@ export function AgentsHomeView(props: AgentsHomeProps) {
               >
                 <div class="agents-home__identity">
                   <div class="agents-home__avatar" aria-hidden="true">
-                    <AgentIdentityAvatar agent={(avatarContext.revision(), card())} />
+                    <LitContent
+                      render={() => {
+                        avatarContext.revision();
+                        return renderAgentIdentityAvatar(card());
+                      }}
+                    />
                   </div>
                   <div class="agents-home__name">
                     <h2>{card().name}</h2>
@@ -184,7 +170,6 @@ export function AgentsHomeView(props: AgentsHomeProps) {
             )}
           </For>
         </div>
-        {props.showExplore ? <ClawsExplore onSelect={props.onSelectClaw} /> : undefined}
       </section>
     </>
   );

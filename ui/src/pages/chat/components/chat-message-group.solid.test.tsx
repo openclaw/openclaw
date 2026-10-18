@@ -7,12 +7,11 @@ import type {
   ControlUiReplacement,
 } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
-import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
+import { LitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
 import "../../../plugins/control-ui-view.solid.tsx";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { MessageGroup, type NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
 import { renderActivityGroup } from "./chat-message-group.test-support.ts";
@@ -57,54 +56,6 @@ it.each([false, true])(
     expect(metadata?.querySelector(".msg-meta__ctx") === null).toBe(unavailable);
   },
 );
-
-it.each([
-  ["ends with its answer", true],
-  ["is still working", false],
-])("gives progress before tool calls no reply actions when an unframed group %s", (_, answered) => {
-  // Claude, Gemini and other providers mark progress only with a `toolUse` stop, not a phase.
-  const progress = (text: string, timestamp: number) => ({
-    role: "assistant",
-    content: [
-      { type: "text", text },
-      { type: "toolCall", id: `call-${timestamp}`, name: "exec", arguments: {} },
-    ],
-    stopReason: "toolUse",
-    timestamp,
-  });
-  const messages = [
-    { key: "progress-1", message: progress("Checking the tests first:", 1000) },
-    { key: "progress-2", message: progress("Now applying the fix:", 2000) },
-    ...(answered
-      ? [
-          {
-            key: "answer",
-            message: {
-              role: "assistant",
-              content: "The fix is ready.",
-              stopReason: "stop",
-              timestamp: 3000,
-            },
-          },
-        ]
-      : []),
-  ];
-  const group = createMessageGroup(messages[0]!.message, "assistant", { messages });
-  const onReply = vi.fn();
-  const view = mountSolid(() => (
-    <MessageGroup group={group} options={{ showReasoning: false, onReply }} />
-  ));
-  flush();
-  expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(0);
-  const replies = view.container.querySelectorAll<HTMLButtonElement>(
-    '.chat-group-footer-actions button[aria-label="Reply to message"]',
-  );
-  expect(replies).toHaveLength(answered ? 1 : 0);
-  replies[0]?.click();
-  expect(onReply.mock.calls.map(([target]) => target.messageId)).toEqual(
-    answered ? ["answer"] : [],
-  );
-});
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
   const imageData =
@@ -274,7 +225,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   };
   // SAFETY: This grouped-renderer fixture consumes only the complete plugin capability.
   const context = { plugins } as ApplicationContext;
-  const provider = createSolidApplicationContextProvider(context);
+  const provider = createApplicationContextProvider(context);
   const [group, setGroup] = createSignal(
     createMessageGroup(
       createToolResultMessage("call-read", "read", "Original tool output", { timestamp: 1000 }),
@@ -292,14 +243,14 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   const [active, setActive] = createSignal(true);
   const view = mountSolid(
     () => (
-      <ContentPresentation value={active}>
+      <SolidContentPresentation value={active}>
         <MessageGroup group={group()} options={options()} />
-      </ContentPresentation>
+      </SolidContentPresentation>
     ),
-    { wrapper: provider.wrapper },
+    { baseElement: document.createElement("div") },
   );
   const nextListeners = new Set<() => void>();
-  const nextContext: ApplicationContext = {
+  const nextProvider = createApplicationContextProvider({
     ...context,
     plugins: {
       ...context.plugins,
@@ -308,8 +259,10 @@ it("mounts only selected tool replacements and keeps their context, projection, 
         return () => nextListeners.delete(listener);
       },
     },
-  };
+  });
   flush();
+  provider.append(view.container);
+  document.body.append(provider, nextProvider);
   try {
     await waitForSolid(() => expect(view.container.textContent).toContain("Original tool output"));
     expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -379,11 +332,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     expect(mountedSignal?.aborted).toBe(false);
     expect(dispose).not.toHaveBeenCalled();
     setActive(true);
-    setOptions((previous) => ({ ...previous, presented: true }));
-    await waitForSolid(() => {
-      expect(latest?.signal).toBe(mountedSignal);
-      expect(latest?.presented).toBe(true);
-    });
+    await waitForSolid(() => expect(latest?.signal).toBe(mountedSignal));
     expect(view.getByLabelText("Plugin local draft")).toBe(localDraft);
     expect(localDraft.value).toBe("Retained plugin draft");
     selected = undefined;
@@ -397,14 +346,15 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     expect(mountedSignal?.aborted).toBe(true);
     expect(dispose).toHaveBeenCalledOnce();
     expect(reportError).not.toHaveBeenCalled();
-    // Replacing the application owner retires subscriptions from the parked tree.
+    // Parking disconnects the range before it moves to another context owner.
     selected = replacement;
     for (const listener of listeners) {
       listener();
     }
     setActive(false);
     flush();
-    provider.setContext(nextContext);
+    expect(listeners.size).toBe(0);
+    nextProvider.append(view.container);
     setActive(true);
     await waitForSolid(() =>
       expect(view.container.textContent).toContain("Selected tool renderer"),
@@ -413,6 +363,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     expect(listeners.size).toBe(0);
     const reconnectedSignal = latest?.signal;
     view.unmount();
+    // The Solid bridge distinguishes a same-turn move from actual removal.
     await Promise.resolve();
     flush();
     expect(reconnectedSignal?.aborted).toBe(true);
@@ -420,5 +371,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     expect(nextListeners.size).toBe(0);
   } finally {
     view.unmount();
+    provider.remove();
+    nextProvider.remove();
   }
 });

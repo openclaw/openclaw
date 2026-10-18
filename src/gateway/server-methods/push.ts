@@ -94,26 +94,25 @@ function createWebPushRequestGuard(options: PushRequestOptions) {
       throw new Error("Web Push requester authority changed");
     }
   };
-  const assertCurrent = (expectedProfile: string | undefined) => {
-    if (authority.family === "worker") {
-      authority.assertWorkerCurrent();
-    } else {
-      authority.assertCurrent();
-    }
-    assertPolicyCurrent();
-    if (client?.authenticatedUserProfile?.profileId !== expectedProfile) {
-      throw new Error("Web Push requester profile changed");
-    }
-  };
   return {
     authority,
-    assertCurrent: () => assertCurrent(profileReference),
+    assertPolicyCurrent,
     prepareMutation: (): WebPushMutationGuard => {
       const currentReference = client?.authenticatedUserProfile?.profileId;
       return {
         family: "worker",
         profiles: { original: profileReference ?? null, current: currentReference ?? null },
-        assertCurrent: () => assertCurrent(currentReference),
+        assertCurrent: () => {
+          if (authority.family === "worker") {
+            authority.assertWorkerCurrent();
+          } else {
+            authority.assertCurrent();
+          }
+          assertPolicyCurrent();
+          if (client?.authenticatedUserProfile?.profileId !== currentReference) {
+            throw new Error("Web Push requester profile changed");
+          }
+        },
         assertProfiles: (facts: WebPushMutationProfileFacts) => {
           authority.expectedProfileBinding?.assertMatchesResolvedProfile(
             facts.profileId ?? undefined,
@@ -147,7 +146,17 @@ function withAuthorizedWebPushSubscription<T>(
   const requester = createWebPushRequestGuard(options);
   const deviceId = normalizeOptionalString(client?.connect.device?.id);
   const profileReference = client?.authenticatedUserProfile?.profileId;
-  const assertRequesterCurrent = requester.assertCurrent;
+  const assertRequesterCurrent = () => {
+    if (requester.authority.family === "worker") {
+      requester.authority.assertWorkerCurrent();
+    } else {
+      requester.authority.assertCurrent();
+    }
+    requester.assertPolicyCurrent();
+    if (client?.authenticatedUserProfile?.profileId !== profileReference) {
+      throw new Error("Web Push requester profile changed");
+    }
+  };
   return withBoundWebPushSubscriptionByEndpoint({ endpoint }, async (subscription) => {
     if (!deviceId || !subscription || subscription.deviceId !== deviceId) {
       respondWebPushForbidden(respond, "subscription is not bound to this device");

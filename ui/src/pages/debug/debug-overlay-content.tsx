@@ -2,16 +2,15 @@ import {
   createComponent,
   createEffect,
   createSignal,
-  createStore,
   For,
-  onSettled,
+  onCleanup,
   Show,
   untrack,
 } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { projectGatewayEventLog } from "../../lib/reactive/application.ts";
+import { projectGateway, projectGatewayEventLog } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { canReadSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
@@ -30,17 +29,20 @@ type SectionState = { status: "loading" | "unavailable" } | { status: "ready"; v
 function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
   // The keyed parent gives each Gateway source its own request lifetime.
   const source = untrack(() => props.gateway);
+  const gateway = projectGateway(source);
   const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
   const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
-  const [sections, setSections] = createStore<Record<string, SectionState>>({});
-  const [history, setHistory] = createSignal<readonly DebugOverlayStatusSample[]>([]);
+  const [sections, setSections] = createSignal(new Map<string, SectionState>(), {
+    ownedWrite: true,
+  });
+  const [history, setHistory] = createSignal<readonly DebugOverlayStatusSample[]>([], {
+    ownedWrite: true,
+  });
   const requests = new Map<string, AbortController>();
   let timer: ReturnType<typeof setInterval> | undefined;
 
   const updateSection = (id: string, state: SectionState) => {
-    setSections((draft) => {
-      draft[id] = state;
-    });
+    setSections((previous) => new Map(previous).set(id, state));
   };
   const stopPolling = () => {
     clearInterval(timer);
@@ -51,24 +53,24 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
       timer = setInterval(refresh, SYSTEM_INFO_POLL_INTERVAL_MS);
     }
   };
-  const abortRequests = () => {
+  const reset = () => {
     for (const controller of requests.values()) {
       controller.abort();
     }
     requests.clear();
-  };
-  const reset = () => {
-    abortRequests();
     setHistory([]);
-    setSections((draft) => {
-      for (const section of DEBUG_OVERLAY_SECTIONS) {
-        draft[section.id] = { status: lifecycle.capture() ? "loading" : "unavailable" };
-      }
-    });
+    setSections(
+      new Map(
+        DEBUG_OVERLAY_SECTIONS.map((section) => [
+          section.id,
+          {
+            status: lifecycle.capture() ? "loading" : "unavailable",
+          },
+        ]),
+      ),
+    );
   };
-
-  // Timer callbacks sample the current mode without owning its reactive subscription.
-  function refresh(minimized = untrack(() => props.minimized)) {
+  function refresh() {
     const scope = lifecycle.capture();
     if (!scope || document.visibilityState === "hidden") {
       return;
@@ -76,7 +78,7 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
     for (const section of DEBUG_OVERLAY_SECTIONS) {
       if (
         requests.has(section.id) ||
-        (section.id !== "status" && minimized) ||
+        (section.id !== "status" && untrack(() => props.minimized)) ||
         (section.id === "status" && !canReadSystemInfo(source.snapshot))
       ) {
         continue;
@@ -120,8 +122,9 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
     }
   }
   const visibilityChanged = () => setVisible(document.visibilityState !== "hidden");
-  function syncPolling(minimized: boolean, initial = false) {
-    const snapshot = source.snapshot;
+  document.addEventListener("visibilitychange", visibilityChanged);
+  function syncPolling(initial = false) {
+    const snapshot = gateway.read().snapshot;
     const changed = lifecycle.transition(snapshot);
     if (initial || changed) {
       reset();
@@ -136,38 +139,34 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
     if (
       document.visibilityState === "hidden" ||
       !lifecycle.capture() ||
-      (minimized && !statusAllowed)
+      (props.minimized && !statusAllowed)
     ) {
       stopPolling();
     } else {
       const starting = timer === undefined;
       startPolling();
       if (starting || initial || changed) {
-        refresh(minimized);
+        refresh();
       }
     }
   }
+  const stopGateway = gateway.subscribe(() => untrack(syncPolling));
   createEffect(
     () => ({ minimized: props.minimized, visible: visible() }),
     // Start after the previous keyed content has released shared requests.
-    (current, previous) => syncPolling(current.minimized, previous === undefined),
+    (_current, previous) => untrack(() => syncPolling(previous === undefined)),
   );
   const eventLog = projectGatewayEventLog(source);
   const eventRevision = () =>
     !props.minimized && visible() ? eventLog.read().revision : undefined;
-  onSettled(() => {
-    // Gateway notifications sample the current mode; the effect owns mode changes.
-    const stopGateway = source.subscribe(() => syncPolling(untrack(() => props.minimized)));
-    document.addEventListener("visibilitychange", visibilityChanged);
-    return () => {
-      stopPolling();
-      abortRequests();
-      stopGateway();
-      lifecycle.dispose();
-      document.removeEventListener("visibilitychange", visibilityChanged);
-    };
+  onCleanup(() => {
+    stopPolling();
+    reset();
+    stopGateway();
+    lifecycle.dispose();
+    document.removeEventListener("visibilitychange", visibilityChanged);
   });
-  const state = (id: string) => sections[id] ?? { status: "loading" as const };
+  const state = (id: string) => sections().get(id) ?? { status: "loading" as const };
   const value = (id: string) => {
     const current = state(id);
     return current.status === "ready" ? current.value : undefined;

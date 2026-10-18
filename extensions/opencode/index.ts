@@ -5,6 +5,7 @@ import {
   buildProviderReplayFamilyHooks,
   matchesExactOrPrefix,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { createOpenAICompatibleCompletionsThinkingOffWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyOpencodeZenProviderConfig, OPENCODE_ZEN_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -156,7 +157,21 @@ export default defineSingleProviderPluginEntry({
         ))
         ? "model_not_found"
         : undefined,
-    wrapStreamFn: wrapOpencodeProviderStream,
+    wrapStreamFn: (ctx) => {
+      if (!ctx.streamFn) {
+        return undefined;
+      }
+      const baseStreamFn = ctx.streamFn;
+      const thinkingOff = createOpenAICompatibleCompletionsThinkingOffWrapper(
+        baseStreamFn,
+        ctx.thinkingLevel,
+      );
+      const thinkingStreamFn: typeof baseStreamFn = (model, context, options) =>
+        model.provider === PROVIDER_ID && model.id === "kimi-k3"
+          ? thinkingOff(model, context, options)
+          : baseStreamFn(model, context, options);
+      return wrapOpencodeProviderStream({ ...ctx, streamFn: thinkingStreamFn });
+    },
   },
   register(api) {
     api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);

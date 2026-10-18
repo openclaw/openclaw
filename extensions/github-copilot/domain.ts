@@ -43,7 +43,8 @@ export function normalizeGithubCopilotOAuthScope(raw: string | undefined): strin
 }
 
 function readConfiguredGithubCopilotDomain(config?: OpenClawConfig): string | undefined {
-  const value = config?.models?.providers?.["github-copilot"]?.params?.githubDomain;
+  const params = config?.models?.providers?.["github-copilot"]?.params;
+  const value = params && typeof params === "object" ? params.githubDomain : undefined;
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 

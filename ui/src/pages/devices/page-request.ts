@@ -1,6 +1,7 @@
 /** Cancellable reads publish only while they still own this page request slot. */
-export function createPageRequest<Result>(options: {
-  task: (signal: AbortSignal) => Promise<Result> | undefined;
+export function createPageRequest<Args extends readonly unknown[], Result>(options: {
+  args: () => Args;
+  task: (args: Args, context: { signal: AbortSignal }) => Promise<Result> | undefined;
   onComplete: (result: Result) => void;
   onError: (error: unknown) => void;
 }) {
@@ -14,12 +15,12 @@ export function createPageRequest<Result>(options: {
       return current !== null;
     },
     cancel,
-    async run(): Promise<void> {
+    async run(args = options.args()): Promise<void> {
       cancel();
       const controller = new AbortController();
       current = controller;
       try {
-        const result = await options.task(controller.signal);
+        const result = await options.task(args, { signal: controller.signal });
         if (current === controller && result !== undefined) {
           options.onComplete(result);
         }

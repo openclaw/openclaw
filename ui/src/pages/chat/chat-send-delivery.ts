@@ -49,6 +49,12 @@ import {
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import {
+  chatSendAckServerTimingEventFields,
+  recordChatSendTiming,
+  registerChatSendTiming,
+  updateChatSendAckTiming,
+} from "./chat-send-timing.ts";
+import {
   captureChatNativeRuntimeRecovery,
   refreshChatSessionListForTarget,
 } from "./chat-session.ts";
@@ -56,7 +62,7 @@ import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
-import { controlUiNowMs } from "./performance.ts";
+import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
 import {
   adoptStartedChatRun,
   hasDirectSessionRun,
@@ -246,6 +252,8 @@ async function sendPreparedChatMessage(
     surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, OFFLINE_QUEUE_STORAGE_ERROR);
     return "pending";
   }
+  registerChatSendTiming(host, sendingItem, runId, requestStartedAtMs);
+  recordChatSendTiming(host, sendingItem, "request-start", sendingItem.sendSubmittedAtMs);
   const scope = {
     sessionKey,
     ...(prepared.agentId ? { agentId: prepared.agentId } : {}),
@@ -339,6 +347,12 @@ async function sendPreparedChatMessage(
     if (!requestConnectionIsCurrent()) {
       return "pending";
     }
+    updateChatSendAckTiming(host, runId, ack, sendingItem, requestStartedAtMs);
+    recordChatSendTiming(host, sendingItem, "ack", sendingItem.sendSubmittedAtMs, {
+      ackStatus: ack.status,
+      requestDurationMs: roundedControlUiDurationMs(controlUiNowMs() - requestStartedAtMs),
+      ...chatSendAckServerTimingEventFields(ack),
+    });
     if (isTerminalFailureChatSendAck(ack)) {
       if (ack.stopReason === "restart" && storageMode === "durable") {
         setState("waiting-reconnect");
@@ -382,6 +396,10 @@ async function sendPreparedChatMessage(
       }
       surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error, {
         inline: storageMode === "durable" && !restoreCommand,
+      });
+      recordChatSendTiming(host, sendingItem, "failed", sendingItem.sendSubmittedAtMs, {
+        error,
+        ackStatus: ack.status,
       });
       return "failed";
     }
@@ -493,6 +511,7 @@ async function sendPreparedChatMessage(
       // Keep the exact outbox input through confirmation; never retry a newer draft.
       finishScopedChatSending(host, scope);
       const failed = setState("failed", error);
+      recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
       const canRetry = allowNativeRecovery ? await recoverNativeRuntime?.(restriction) : undefined;
       if (canRetry?.() && requestConnectionIsCurrent() && isVisible()) {
         const current = readQueuedMessageById(host, id);

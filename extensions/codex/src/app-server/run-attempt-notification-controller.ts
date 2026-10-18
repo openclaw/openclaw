@@ -11,7 +11,9 @@ import {
   readRawResponseToolCallId,
   updateActiveTurnItemIds,
 } from "./attempt-notifications.js";
-import type { CodexPreparedServerNotification } from "./protocol.js";
+import { isCodexNotificationForTurn } from "./notification-correlation.js";
+import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
+import type { CodexServerNotification } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
@@ -60,7 +62,16 @@ export function createCodexAttemptNotificationController(
       signal.throwIfAborted();
     }
   };
-  const handleNotification = async (notification: CodexPreparedServerNotification) => {
+  const readTerminalTurn = (notification: CodexServerNotification, notificationTurnId: string) =>
+    notification.method === "turn/completed" &&
+    isCodexNotificationForTurn(
+      notification.params,
+      resourceState.thread.threadId,
+      notificationTurnId,
+    )
+      ? readCodexTurnCompletedNotification(notification.params)?.turn
+      : undefined;
+  const handleNotification = async (notification: CodexServerNotification) => {
     if (state.projectionClosed) {
       return;
     }
@@ -72,9 +83,12 @@ export function createCodexAttemptNotificationController(
       }
       return;
     }
-    const isCurrentTurn =
-      notification.threadId === resourceState.thread.threadId && notification.turnId === turnId;
-    const completedTurn = isCurrentTurn ? notification.completedTurn : undefined;
+    const isCurrentTurn = isCodexNotificationForTurn(
+      notification.params,
+      resourceState.thread.threadId,
+      turnId,
+    );
+    const completedTurn = readTerminalTurn(notification, turnId);
     if (
       (state.timeout || state.localCompletionRequested) &&
       completedTurn?.status === "interrupted"
@@ -214,7 +228,7 @@ export function createCodexAttemptNotificationController(
     }
   };
   const noteNotificationReceived = (
-    notification: CodexPreparedServerNotification,
+    notification: CodexServerNotification,
     scope: CodexThreadRouteScope,
     receivedAtMs: number,
   ) => {
@@ -224,7 +238,7 @@ export function createCodexAttemptNotificationController(
       return;
     }
     projector.recordMcpToolCallReceipt(notification);
-    const completedTurn = scope.turnId === turnId ? notification.completedTurn : undefined;
+    const completedTurn = readTerminalTurn(notification, turnId);
     if (completedTurn) {
       projector.settlement.terminalReceipt = completedTurn;
       state.terminalTurnNotificationQueued = true;
@@ -250,7 +264,7 @@ export function createCodexAttemptNotificationController(
     }
   };
   const enqueueNotification = async (
-    notification: CodexPreparedServerNotification,
+    notification: CodexServerNotification,
     scope: CodexThreadRouteScope,
   ) => {
     embeddedAgentLog.trace("codex app-server raw notification received", {

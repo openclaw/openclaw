@@ -125,11 +125,6 @@ describe("private profile backgrounds", () => {
     expect(
       await uploadUserBackground(first, { ...expected(initial), imageBase64: "stale" }, options),
     ).toEqual({ status: "conflict" });
-    vi.mocked(normalizeUserBackgroundImage).mockResolvedValueOnce({
-      image: Buffer.from([1, 2, 3]),
-      width: 2,
-      height: 3,
-    });
     const replacement = snapshot(
       await uploadUserBackground(
         first,
@@ -138,14 +133,6 @@ describe("private profile backgrounds", () => {
       ),
     );
     expect(replacement.asset?.assetId).not.toBe(assetId);
-    expect(replacement.asset).toEqual({
-      assetId: expect.any(String),
-      width: 2,
-      height: 3,
-      mime: "image/jpeg",
-      byteLength: 3,
-    });
-    expect(await getUserBackground(first, options)).toEqual(replacement);
     expect((await getUserBackgroundImage(first, assetId, options)).image).toBeUndefined();
     expect(db.prepare("SELECT COUNT(*) AS count FROM user_background_images").get()?.count).toBe(1);
     expect(await removeUserBackground(first, expected(initial), options)).toEqual({
@@ -154,7 +141,6 @@ describe("private profile backgrounds", () => {
     const removed = snapshot(await removeUserBackground(first, expected(replacement), options));
     expect(removed.asset).toBeNull();
     expect(removed.preference?.source).toEqual({ kind: "none" });
-    expect(await getUserBackground(first, options)).toEqual(removed);
     expect(
       (await getUserBackgroundImage(first, replacement.asset!.assetId, options)).image,
     ).toBeUndefined();

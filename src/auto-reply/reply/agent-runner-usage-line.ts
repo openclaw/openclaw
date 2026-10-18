@@ -29,16 +29,17 @@ const formatResponseUsageLine = (
   }
   const input = usage.input;
   const output = usage.output;
-  const hasSplitTokens = input !== undefined || output !== undefined;
-  const inputLabel = input !== undefined ? formatTokenCount(input) : "?";
-  const outputLabel = output !== undefined ? formatTokenCount(output) : "?";
+  const hasSplitTokens = typeof input === "number" || typeof output === "number";
+  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
+  const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
   const totalLabel =
-    !hasSplitTokens && usage.total !== undefined
+    !hasSplitTokens && typeof usage.total === "number"
       ? `${formatTokenCount(usage.total)} total`
       : undefined;
-  const cacheRead = usage.cacheRead;
-  const cacheWrite = usage.cacheWrite;
-  const canPriceUsage = usage.cost !== undefined || (input !== undefined && output !== undefined);
+  const cacheRead = typeof usage.cacheRead === "number" ? usage.cacheRead : undefined;
+  const cacheWrite = typeof usage.cacheWrite === "number" ? usage.cacheWrite : undefined;
+  const canPriceUsage =
+    usage.cost !== undefined || (typeof input === "number" && typeof output === "number");
   const cost = params.showCost && canPriceUsage ? estimateAggregateUsageCost(params) : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
   const cacheSuffix =
@@ -107,7 +108,6 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
     ...existing,
     text: `${existingText}${separator}${line}`,
   });
-  setReplyPayloadMetadata(next, { responseUsageLine: line });
   const mirror = getReplyPayloadMetadata(existing)?.sourceReplyTranscriptMirror;
   // Transcript mirrors must track the mutated text or source-reply delivery drifts.
   if (mirror) {

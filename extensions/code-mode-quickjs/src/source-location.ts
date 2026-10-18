@@ -49,7 +49,6 @@ export function readSourceLocation(vm: QuickJS): SourceLocation | undefined {
       endColumn,
     };
   } catch {
-    // Malformed optional guest metadata must not replace the execution error.
     return undefined;
   } finally {
     descriptor.value?.dispose();

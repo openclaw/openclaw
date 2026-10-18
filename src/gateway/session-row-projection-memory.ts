@@ -55,16 +55,23 @@ export async function withMemorySessionRows<T>(
         authority,
       )!;
       const { owner } = namespace;
-      // Queued publications outlive the turn handle, but never the session or caller's authority.
-      const actor = await owner?.acquireExisting(query.key, {
-        assertCurrent: () => authority.assertCurrent(),
-        assertReadable: () => authority.assertCurrent(),
-      });
+      const direct =
+        binding &&
+        query.agentId === binding.agentId &&
+        query.key === binding.actor.target.sessionKey;
+      const actor = direct
+        ? binding.actor
+        : await owner?.acquireExisting(query.key, {
+            assertCurrent: () => binding?.actor.assertReadable(),
+            assertReadable: () => binding?.actor.assertReadable(),
+          });
       if (!actor) {
         presentations.push({ ...query, present: () => undefined, relatedRows: {}, durable: [] });
         continue;
       }
-      releases.push(() => actor.release());
+      if (!direct) {
+        releases.push(() => actor.release());
+      }
       const selected = { actor, authority, agentId: namespace.agentId, path: namespace.path };
       const assertCurrent = () => {
         assertActive();

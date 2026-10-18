@@ -1,13 +1,11 @@
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
+  SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import {
-  createSpeechDirectiveParser,
-  resolveSpeechProviderApiKey,
-} from "openclaw/plugin-sdk/speech-provider";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
 import {
   asFiniteNumber,
   asOptionalRecord,
@@ -88,20 +86,35 @@ function readAzureSpeechProviderConfig(config: SpeechProviderConfig) {
   };
 }
 
-const parseDirectiveToken = createSpeechDirectiveParser({
-  voice: [
-    "allowVoice",
-    ["voice", "voiceid", "voice_id", "azure_voice", "azurevoice", "azure_speech_voice"],
-  ],
-  lang: [
-    "allowVoiceSettings",
-    ["lang", "language", "language_code", "languagecode", "azure_lang", "azure_language"],
-  ],
-  outputFormat: [
-    "allowVoiceSettings",
-    ["output_format", "outputformat", "azure_format", "azure_output_format"],
-  ],
-});
+function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
+  const key = [
+    "voice",
+    "voiceid",
+    "voice_id",
+    "azure_voice",
+    "azurevoice",
+    "azure_speech_voice",
+  ].includes(ctx.key)
+    ? "voice"
+    : [
+          "lang",
+          "language",
+          "language_code",
+          "languagecode",
+          "azure_lang",
+          "azure_language",
+        ].includes(ctx.key)
+      ? "lang"
+      : ["output_format", "outputformat", "azure_format", "azure_output_format"].includes(ctx.key)
+        ? "outputFormat"
+        : undefined;
+  if (!key) {
+    return { handled: false };
+  }
+  return (key === "voice" ? ctx.policy.allowVoice : ctx.policy.allowVoiceSettings)
+    ? { handled: true, overrides: { ...ctx.currentOverrides, [key]: ctx.value } }
+    : { handled: true };
+}
 
 function resolveApiKey(...candidates: Array<string | undefined>): string | undefined {
   return resolveSpeechProviderApiKey(
@@ -145,12 +158,6 @@ async function resolveAzureSpeechTtsRequest(
 }
 
 export function buildAzureSpeechProvider(): SpeechProviderPlugin {
-  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) => {
-    const config = readAzureSpeechProviderConfig(providerConfig);
-    return Boolean(
-      resolveApiKey(config.apiKey) && (config.baseUrl || config.region || config.endpoint),
-    );
-  };
   return {
     id: "azure-speech",
     label: "Azure Speech",
@@ -212,9 +219,12 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         timeoutMs: config?.timeoutMs ?? req.timeoutMs,
       });
     },
-    // Retained for synchronous SDK consumers through 2026-12-31.
-    isConfigured,
-    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    isConfigured: ({ providerConfig }) => {
+      const config = readAzureSpeechProviderConfig(providerConfig);
+      return Boolean(
+        resolveApiKey(config.apiKey) && (config.baseUrl || config.region || config.endpoint),
+      );
+    },
     synthesize: async (req) => {
       const params = await resolveAzureSpeechTtsRequest(req);
       const audioBuffer = await azureSpeechTTS(params);

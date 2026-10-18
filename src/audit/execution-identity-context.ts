@@ -129,21 +129,25 @@ function readRowByExecutionId(
   );
 }
 
-function selectRowsByRunId(
+function readRowsByRunId(
   db: EngineConnection,
   runId: string,
   now: number,
   offset: number,
   limit: number,
-) {
-  return executionIdentityDb(db)
-    .selectFrom("execution_identity_contexts")
-    .where("run_id", "=", runId)
-    .where("created_at", ">=", now - EXECUTION_IDENTITY_CONTEXT_RETENTION_MS)
-    .orderBy("created_at", "asc")
-    .orderBy("execution_id", "asc")
-    .offset(offset)
-    .limit(limit);
+): ExecutionIdentityRow[] {
+  return executeSqliteQuerySync(
+    db,
+    executionIdentityDb(db)
+      .selectFrom("execution_identity_contexts")
+      .selectAll()
+      .where("run_id", "=", runId)
+      .where("created_at", ">=", now - EXECUTION_IDENTITY_CONTEXT_RETENTION_MS)
+      .orderBy("created_at", "asc")
+      .orderBy("execution_id", "asc")
+      .offset(offset)
+      .limit(limit),
+  ).rows;
 }
 
 function deleteExpiredExecutionIdentityContexts(db: EngineConnection, now: number, limit: number) {
@@ -531,7 +535,7 @@ function inspectRunSelector(
   const runId = ensureBoundedExecutionIdentityRef(params.runId, "run id");
   const now = params.now;
   const firstMatches = schema.executionIdentityContexts
-    ? executeSqliteQuerySync(db, selectRowsByRunId(db, runId, now, 0, 2).selectAll()).rows
+    ? readRowsByRunId(db, runId, now, 0, 2)
     : [];
   if (firstMatches.length === 1) {
     let context: ExecutionIdentityContextV1;
@@ -563,14 +567,7 @@ function inspectRunSelector(
   if (firstMatches.length > 1) {
     const offset = params.executionOffset ?? 0;
     const limit = params.executionLimit ?? 50;
-    const page = executeSqliteQuerySync(
-      db,
-      selectRowsByRunId(db, runId, now, offset, limit + 1).select([
-        "execution_id",
-        "context_id",
-        "created_at",
-      ]),
-    ).rows;
+    const page = readRowsByRunId(db, runId, now, offset, limit + 1);
     const candidates = page.slice(0, limit).map((row) => ({
       executionId: row.execution_id,
       contextId: row.context_id,

@@ -230,11 +230,6 @@ export const UpdateRunRecordSchema = z.object({
   reason: text.nullable(),
   admission: admission.optional(),
   origin: z.object({
-    windowsUserSid: z
-      .string()
-      .max(184)
-      .regex(/^S-1-\d+(?:-\d+)+$/)
-      .optional(),
     admission: admission.optional(),
     candidateAdmission: candidateAdmission.optional(),
     updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),

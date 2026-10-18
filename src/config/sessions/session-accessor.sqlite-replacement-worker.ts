@@ -89,7 +89,6 @@ export async function withSessionEntryWorker<T>(
   releaseSource?: () => void | Promise<void>,
   operationMode: "write" | "prepared-read" = "write",
   expectedCreationIdentity?: DatabasePathIdentity,
-  concurrentBoardReads?: "transcript-only",
 ): Promise<T> {
   let execution: OpenClawAgentDatabaseExecution;
   let env: SessionEntryCommitContext["env"];
@@ -277,9 +276,6 @@ export async function withSessionEntryWorker<T>(
             },
             undefined,
             signal,
-            undefined,
-            undefined,
-            concurrentBoardReads,
           );
     if (operationMode === "prepared-read") {
       assertHeld();
@@ -547,7 +543,10 @@ export async function runSessionEntryWorkerMutation<T>(
             storePath: execution.path,
             databaseIdentity: identity,
           });
-          const outcome = await run(worker).then(ok, err<never, unknown>);
+          const outcome = await run(worker).then(
+            (value) => ({ ok: true as const, value }),
+            (error: unknown) => ({ ok: false as const, error }),
+          );
           if (outcome.ok) {
             completed = outcome.value;
           }

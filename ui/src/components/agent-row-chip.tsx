@@ -4,40 +4,44 @@ import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { resolveUiDefaultAgentId } from "../lib/sessions/session-key.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import "../styles/agent-row-chip.css";
 
-export function AgentRowChip(props: { agentId?: string }) {
-  const agentId = createMemo(() => props.agentId?.trim());
-  const context = projectSource(useOptionalApplication(), {
-    read: (value) => value,
-    subscribe: (value, notify) => {
-      const stops = [value?.agents, value?.agentIdentity, value?.gateway].map((source) =>
-        source?.subscribe(notify),
-      );
-      return () => stops.forEach((stop) => stop?.());
-    },
-    equality: "revision",
-  });
-  const view = createMemo(() => {
-    const app = context.read();
-    const agentsList = app?.agents.state.agentsList;
-    const id =
-      agentId() ||
-      resolveUiDefaultAgentId({
-        agentsList,
-        hello: app?.gateway.snapshot.hello,
-      });
-    const agent = agentsList?.agents.find((entry) => entry.id === id) ?? { id };
-    const identity = app?.agentIdentity.get(id);
-    const name = normalizeAgentLabel(agent, identity);
-    const label = name === id ? `agent:${id}` : `${name} (agent:${id})`;
-    const avatar = resolveAgentAvatarUrl(agent, identity);
-    const textAvatar = resolveAgentTextAvatar(agent, identity);
-    return { id, name, label, avatar, textAvatar };
-  });
-  return (
-    <openclaw-agent-row-chip>
+type AgentRowChipProps = { agentId?: string };
+
+type AgentRowChipElement = SolidBridgeElement<AgentRowChipProps>;
+defineSolidBridge<AgentRowChipProps>(
+  "openclaw-agent-row-chip",
+  (props) => {
+    const context = projectSource(useOptionalApplication(), {
+      read: (value) => value,
+      subscribe: (value, notify) => {
+        const stops = [value?.agents, value?.agentIdentity, value?.gateway].map((source) =>
+          source?.subscribe(notify),
+        );
+        return () => stops.forEach((stop) => stop?.());
+      },
+      equality: "revision",
+    });
+    const view = createMemo(() => {
+      const app = context.read();
+      const agentsList = app?.agents.state.agentsList;
+      const id =
+        props.agentId?.trim() ||
+        resolveUiDefaultAgentId({
+          agentsList,
+          hello: app?.gateway.snapshot.hello,
+        });
+      const agent = agentsList?.agents.find((entry) => entry.id === id) ?? { id };
+      const identity = app?.agentIdentity.get(id);
+      const name = normalizeAgentLabel(agent, identity);
+      const label = name === id ? `agent:${id}` : `${name} (agent:${id})`;
+      const avatar = resolveAgentAvatarUrl(agent, identity);
+      const textAvatar = resolveAgentTextAvatar(agent, identity);
+      return { id, name, label, avatar, textAvatar };
+    });
+    return (
       <span
         class="agent-row-chip"
         data-agent-id={view().id}
@@ -51,6 +55,12 @@ export function AgentRowChip(props: { agentId?: string }) {
         />
         <span class="agent-row-chip__name">{view().name}</span>
       </span>
-    </openclaw-agent-row-chip>
-  );
+    );
+  },
+  { properties: { agentId: { default: undefined, attribute: false } } },
+);
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-agent-row-chip": AgentRowChipElement;
+  }
 }

@@ -323,7 +323,7 @@ async function runPreparedUsageCostWorker(
     const failures = openUsageCostRefreshFailures(location.env);
     const failureKey = (sessionFile: string) =>
       JSON.stringify([location.databasePath, sessionFile]);
-    const uncommittedSessionFiles = new Set<string>();
+    let activeSessionFile: string | undefined;
     const hostErrors = new Map<number, unknown>();
     let errorSequence = 0;
     try {
@@ -369,7 +369,7 @@ async function runPreparedUsageCostWorker(
               switch (request.kind) {
                 case "refresh-session":
                   requireLock("refresh sessions");
-                  uncommittedSessionFiles.add(request.input.sessionFile);
+                  activeSessionFile = request.input.sessionFile;
                   break;
                 case "pricing":
                   output = request.input.map(resolveCost);
@@ -399,27 +399,20 @@ async function runPreparedUsageCostWorker(
                   break;
                 case "write":
                   output = await requireLock("write cache rows").writeRollup(
-                    request.input.map((row) => ({
-                      rollupId: row.key,
-                      valueJson: row.value,
-                      blob: row.blob,
-                      updatedAt: row.updatedAt,
-                      partitions: row.partitions,
-                      removedDates: row.removedDates,
-                      replacePartitions: row.replacePartitions,
-                    })),
+                    {
+                      rollupId: request.input.key,
+                      valueJson: request.input.value,
+                      blob: request.input.blob,
+                      updatedAt: request.input.updatedAt,
+                      partitions: request.input.partitions,
+                      removedDates: request.input.removedDates,
+                      replacePartitions: request.input.replacePartitions,
+                    },
                     context.signal,
                   );
-                  for (const row of request.input) {
-                    if (!output) {
-                      continue;
-                    }
-                    uncommittedSessionFiles.delete(row.key);
-                    if (!failedKeys.has(failureKey(row.key))) {
-                      continue;
-                    }
+                  if (output && failedKeys.has(failureKey(request.input.key))) {
                     await failures
-                      .delete(failureKey(row.key), {
+                      .delete(failureKey(request.input.key), {
                         assertCurrent: assertRequestCurrent,
                         signal: context.signal,
                       })
@@ -427,6 +420,7 @@ async function runPreparedUsageCostWorker(
                         logger.warn("Could not clear usage refresh failure fact", { error });
                       });
                   }
+                  activeSessionFile = undefined;
                   break;
                 default:
                   throw new Error("Unknown usage worker host request");
@@ -450,13 +444,13 @@ async function runPreparedUsageCostWorker(
       return result;
     } catch (error) {
       let failure = restoreWorkerFailure(error, hostErrors);
-      for (const sessionFile of signal?.aborted ? [] : uncommittedSessionFiles) {
+      if (activeSessionFile && !signal?.aborted) {
         try {
           await failures.register(
-            failureKey(sessionFile),
+            failureKey(activeSessionFile),
             {
               agentId: location.agentId,
-              sessionFile,
+              sessionFile: activeSessionFile,
               failedAt: Date.now(),
               reason: "Usage refresh failed; cached totals may be incomplete. Check Gateway logs.",
             },

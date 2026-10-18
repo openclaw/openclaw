@@ -27,12 +27,9 @@ import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as realtimeTalk from "../chat/talk/session.ts";
-import { extractQuickSettingsSecurity } from "./config-page-state.ts";
-import {
-  mountConfigPage,
-  mountConfigPageState,
-  publishConfigSource,
-} from "./config-page.test-support.ts";
+import { mountConfigPage, publishConfigSource } from "./config-page.test-support.ts";
+import { ConfigPageController, extractQuickSettingsSecurity } from "./config-page.ts";
+import type { ConfigViewState } from "./view-types.ts";
 
 const switchActiveRealtimeTalkCameras =
   vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();
@@ -136,7 +133,12 @@ describe("ConfigPage synced preference provenance", () => {
       scope: "ws://profile.test",
       onApplied: vi.fn(),
     });
-    const context = {
+    const page = new ConfigPageController({} as ApplicationContext, () => {}) as unknown as {
+      context: ApplicationContext;
+      settings: ReturnType<typeof loadSettings>;
+      resetSyncedPref: (key: "theme") => void;
+    };
+    page.context = {
       gateway: {
         connection: { gatewayUrl: "ws://profile.test" },
         snapshot: {
@@ -151,12 +153,12 @@ describe("ConfigPage synced preference provenance", () => {
       theme: { refresh: vi.fn() },
     } as unknown as ApplicationContext;
     const beforeReset = loadSettings();
-    const { state } = mountConfigPageState(context);
+    page.settings = beforeReset;
 
-    state.configProps().setTheme("dash");
+    page.resetSyncedPref("theme");
 
-    expect(loadSettings().theme).toBe("dash");
-    expect(changedServerUiPrefs(beforeReset, loadSettings())).toEqual({
+    expect(page.settings.theme).toBe("dash");
+    expect(changedServerUiPrefs(beforeReset, page.settings)).toEqual({
       theme: null,
       accent: "theme",
       fontUi: null,
@@ -199,7 +201,12 @@ describe("ConfigPage synced preference provenance", () => {
         pending = refreshProfileAppearancePrefs({ ...options, client: writer.state.client! });
         await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
       }
-      const context = {
+      const page = new ConfigPageController({} as ApplicationContext, () => {}) as unknown as {
+        context: ApplicationContext;
+        settings: ReturnType<typeof loadSettings>;
+        resetSyncedPref: (key: "accent") => void;
+      };
+      page.context = {
         gateway: {
           connection: { gatewayUrl: scope },
           snapshot: {
@@ -214,10 +221,10 @@ describe("ConfigPage synced preference provenance", () => {
         theme: { refresh: vi.fn() },
       } as unknown as ApplicationContext;
       const previous = loadSettings();
-      const { state } = mountConfigPageState(context);
-      state.configProps().setAccent(undefined);
-      expect(loadSettings().accent).toBe("#123456");
-      expect(changedServerUiPrefs(previous, loadSettings())).toBeNull();
+      page.settings = previous;
+      page.resetSyncedPref("accent");
+      expect(page.settings.accent).toBe("#123456");
+      expect(changedServerUiPrefs(previous, page.settings)).toBeNull();
 
       const reconnected = connected
         ? undefined
@@ -250,7 +257,12 @@ describe("ConfigPage synced preference provenance", () => {
         scope: gatewayUrl,
         onApplied: vi.fn(),
       });
-      const context = {
+      const page = new ConfigPageController({} as ApplicationContext, () => {}) as unknown as {
+        context: ApplicationContext;
+        settings: ReturnType<typeof loadSettings>;
+        setFont: (key: "fontUi" | "fontChat", font: undefined) => void;
+      };
+      page.context = {
         gateway: {
           connection: { gatewayUrl },
           snapshot: {
@@ -265,11 +277,11 @@ describe("ConfigPage synced preference provenance", () => {
         theme: { refresh: vi.fn() },
       } as unknown as ApplicationContext;
       const previous = loadSettings();
-      const { state } = mountConfigPageState(context);
-      state.configProps().setFontUi(undefined);
-      expect(loadSettings()[key]).toBeUndefined();
-      expect(changedServerUiPrefs(previous, loadSettings())).toEqual({ [key]: null });
-      expect(context.theme.refresh).toHaveBeenCalledOnce();
+      page.settings = previous;
+      page.setFont(key, undefined);
+      expect(page.settings[key]).toBeUndefined();
+      expect(changedServerUiPrefs(previous, page.settings)).toEqual({ [key]: null });
+      expect(page.context.theme.refresh).toHaveBeenCalledOnce();
     },
   );
 
@@ -370,54 +382,44 @@ describe("media permission lifetime: Settings", () => {
   ] as const)("%s: %s", async (kind, scenario) => {
     const initial = deferred<MediaDeviceInfo[]>();
     const second = deferred<MediaDeviceInfo[]>();
-    const enumerateDevices = vi.fn().mockResolvedValue([]);
-    const stop = vi.fn();
-    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
-    const devices = Object.assign(new EventTarget(), { enumerateDevices, getUserMedia });
-    vi.stubGlobal("navigator", { mediaDevices: devices });
-    // SAFETY: completeConfigContext supplies the unused capabilities for this fixture.
-    const context = {
-      gateway: { snapshot: { phase: "disconnected" } },
-    } as unknown as ApplicationContext;
-    const page = mountConfigPageState(context, { pageId: "appearance" });
-    const props = page.state.configProps;
-    await waitForSolid(() => {
-      expect(props().microphone?.loading).toBe(false);
-      expect(props().camera?.loading).toBe(false);
-    });
-    enumerateDevices.mockReset().mockResolvedValue([]);
-    const startsWithPermission = scenario.startsWith("permission-bearing");
-    // devicechange refreshes both pickers; only this scenario's picker is delayed.
-    if (!startsWithPermission && kind === "camera") {
-      enumerateDevices.mockResolvedValueOnce([]);
-    }
-    enumerateDevices.mockReturnValueOnce(initial.promise);
-    if (!startsWithPermission && kind === "microphone") {
-      enumerateDevices.mockResolvedValueOnce([]);
-    }
+    const enumerateDevices = vi.fn().mockReturnValueOnce(initial.promise);
     if (scenario === "second enumeration leaves Appearance") {
       enumerateDevices.mockReturnValueOnce(second.promise);
     }
-    const refresh = () =>
-      kind === "microphone" ? props().onMicrophoneRefresh?.() : props().onCameraRefresh?.();
-    if (startsWithPermission) {
-      refresh();
-    } else {
-      devices.dispatchEvent(new Event("devicechange"));
-      refresh();
+    enumerateDevices.mockResolvedValue([]);
+    const stop = vi.fn();
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
+    vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices, getUserMedia } });
+    const page = new ConfigPageController({} as ApplicationContext, () => {});
+    page.pageId = "appearance";
+    const state = page as unknown as {
+      refreshMediaDevices: (
+        kind: "microphone" | "camera",
+        requestPermission: boolean,
+      ) => Promise<void>;
+      mediaDevices: Record<"microphone" | "camera", { loading: boolean; error: string | null }>;
+    };
+    const refresh = (requestPermission: boolean) =>
+      state.refreshMediaDevices(kind, requestPermission);
+    const leaveAppearance = () => {
+      page.updateRoute("advanced", null);
+    };
+    const startsWithPermission = scenario.startsWith("permission-bearing");
+    const first = refresh(startsWithPermission);
+    if (!startsWithPermission) {
+      await refresh(true);
     }
-    const initialCalls = startsWithPermission ? 1 : 2;
-    expect(enumerateDevices).toHaveBeenCalledTimes(initialCalls);
+    expect(enumerateDevices).toHaveBeenCalledOnce();
     expect(getUserMedia).not.toHaveBeenCalled();
 
     if (scenario === "queued gesture disconnects") {
       page.dispose();
     } else if (scenario.startsWith("reentry")) {
-      page.update({ pageId: "advanced" });
-      page.update({ pageId: "appearance" });
-      if (scenario === "reentry with a fresh gesture") {
-        refresh();
-      }
+      leaveAppearance();
+    }
+    if (scenario.startsWith("reentry")) {
+      page.updateRoute("appearance", null);
+      await refresh(scenario === "reentry with a fresh gesture");
     }
     if (
       scenario === "failed passive enumeration keeps one upgrade" ||
@@ -429,17 +431,12 @@ describe("media permission lifetime: Settings", () => {
       initial.resolve([]);
     }
     if (scenario === "second enumeration leaves Appearance") {
-      await waitForSolid(() => expect(enumerateDevices).toHaveBeenCalledTimes(initialCalls + 1));
-      page.update({ pageId: "advanced" });
+      await vi.waitFor(() => expect(enumerateDevices).toHaveBeenCalledTimes(2));
+      leaveAppearance();
       second.resolve([]);
     }
-    if (scenario === "queued gesture disconnects") {
-      await initial.promise;
-      await Promise.resolve();
-      flush();
-    } else {
-      await waitForSolid(() => expect(props()[kind]?.loading).toBe(false));
-    }
+    await first;
+    await vi.waitFor(() => expect(state.mediaDevices[kind].loading).toBe(false));
     const permits = [
       "reentry with a fresh gesture",
       "failed passive enumeration keeps one upgrade",
@@ -453,55 +450,52 @@ describe("media permission lifetime: Settings", () => {
     }
     if (scenario === "permission-bearing enumeration fails once") {
       expect(enumerateDevices).toHaveBeenCalledOnce();
-      expect(props()[kind]?.error).toBeTruthy();
+      expect(state.mediaDevices[kind].error).toBeTruthy();
     }
   });
 });
 
 describe("ConfigPage camera selection", () => {
   it("persists only confirmed camera selections and ignores superseded failures", async () => {
-    const first = deferred();
+    let rejectFirst: (error: Error) => void = () => undefined;
+    const first = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
     switchActiveRealtimeTalkCameras
       .mockRejectedValueOnce(new Error("The selected camera is unavailable"))
-      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(first)
       .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("Another camera error"))
       .mockResolvedValueOnce(undefined);
-    // SAFETY: completeConfigContext supplies the unused capabilities for this fixture.
-    const context = {
-      gateway: { snapshot: { phase: "disconnected" } },
-      theme: { refresh: vi.fn() },
-    } as unknown as ApplicationContext;
-    const { state } = mountConfigPageState(context);
-    const props = state.configProps;
+    const page = new ConfigPageController({} as ApplicationContext, () => {});
+    const state = page as unknown as {
+      mediaDevices: { camera: { error: string | null } };
+      selectCamera: (deviceId: string) => Promise<void>;
+      applySettings: ReturnType<typeof vi.fn>;
+    };
+    state.applySettings = vi.fn();
 
-    props().onCameraSelect?.("missing-camera");
-    await waitForSolid(() =>
-      expect(props().camera?.error).toBe("The selected camera is unavailable"),
+    await state.selectCamera("missing-camera");
+    expect(state.mediaDevices.camera.error).toBe("The selected camera is unavailable");
+    expect(state.applySettings).not.toHaveBeenCalled();
+
+    const staleSelection = state.selectCamera("slow-camera");
+    expect(state.mediaDevices.camera.error).toBeNull();
+    await state.selectCamera("back-camera");
+    expect(state.applySettings).toHaveBeenCalledOnce();
+    expect(state.applySettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ realtimeTalkVideoDeviceId: "back-camera" }),
     );
-    expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
-    expect(context.theme.refresh).not.toHaveBeenCalled();
+    rejectFirst(new Error("The selected camera is unavailable"));
+    await staleSelection;
+    expect(state.mediaDevices.camera.error).toBeNull();
+    expect(state.applySettings).toHaveBeenCalledOnce();
 
-    props().onCameraSelect?.("slow-camera");
-    flush();
-    expect(props().camera?.error).toBeNull();
-    props().onCameraSelect?.("back-camera");
-    await waitForSolid(() => expect(props().camera?.selectedDeviceId).toBe("back-camera"));
-    expect(loadSettings().realtimeTalkVideoDeviceId).toBe("back-camera");
-    expect(context.theme.refresh).toHaveBeenCalledOnce();
-    first.reject(new Error("The selected camera is unavailable"));
-    await first.promise.catch(() => undefined);
-    flush();
-    expect(props().camera?.error).toBeNull();
-    expect(loadSettings().realtimeTalkVideoDeviceId).toBe("back-camera");
-    expect(context.theme.refresh).toHaveBeenCalledOnce();
-
-    props().onCameraSelect?.("another-missing-camera");
-    await waitForSolid(() => expect(props().camera?.error).toBe("Another camera error"));
-    props().onCameraSelect?.("");
-    await waitForSolid(() => expect(props().camera?.selectedDeviceId).toBe(""));
-    expect(props().camera?.error).toBeNull();
-    expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+    state.mediaDevices.camera.error = "Another camera error";
+    await state.selectCamera("");
+    expect(state.mediaDevices.camera.error).toBeNull();
+    expect(state.applySettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ realtimeTalkVideoDeviceId: undefined }),
+    );
   });
 });
 
@@ -551,7 +545,12 @@ describe("ConfigPage curated mutation eligibility", () => {
     ["read-only operator", { connected: true }, ["operator.read"], false, true],
     ["config.set absent", { connected: true }, ["operator.admin"], false, false],
   ])("locks server-backed controls for %s", (_name, statePatch, scopes, updateRunning, canSet) => {
-    const context = {
+    const page = new ConfigPageController({} as ApplicationContext, () => {});
+    const state = page as unknown as {
+      context: ApplicationContext;
+      isCuratedConfigMutationDisabled: () => boolean;
+    };
+    state.context = {
       runtimeConfig: {
         canSet,
         state: {
@@ -569,8 +568,7 @@ describe("ConfigPage curated mutation eligibility", () => {
       },
     } as unknown as ApplicationContext;
 
-    const { state } = mountConfigPageState(context);
-    expect(state.mutationDisabled()).toBe(true);
+    expect(state.isCuratedConfigMutationDisabled()).toBe(true);
   });
 });
 
@@ -755,38 +753,24 @@ describe("ConfigPage Updates integration", () => {
 });
 
 describe("ConfigPage runtime config lifecycle", () => {
-  function createRuntimeConfig() {
-    const state = {
-      configSnapshot: null,
-      configLoading: false,
-      configSchema: null,
-      configSchemaLoading: false,
+  it("loads Updates without requesting the admin-only config schema", async () => {
+    const page = new ConfigPageController({} as ApplicationContext, () => {});
+    page.pageId = "updates";
+    const state = page as unknown as {
+      synchronizeRuntimeConfig: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
     };
     const runtimeConfig = {
-      state,
-      ensureLoaded: vi.fn(async () => {
-        state.configLoading = true;
-        await Promise.resolve();
-        Object.assign(state, { configLoading: false, configSnapshot: { config: {} } });
-      }),
-      ensureSchemaLoaded: vi.fn(async () => {
-        Object.assign(state, { configSchema: {} });
-      }),
-    };
-    return runtimeConfig;
-  }
+      state: {
+        configSnapshot: null,
+        configLoading: false,
+        configSchema: null,
+        configSchemaLoading: false,
+      },
+      ensureLoaded: vi.fn(() => Promise.resolve()),
+      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
+    } as unknown as ApplicationContext["runtimeConfig"];
 
-  it("loads Updates without requesting the admin-only config schema", async () => {
-    const runtimeConfig = createRuntimeConfig();
-
-    // SAFETY: completeConfigContext supplies the unused capabilities for this fixture.
-    const context = {
-      gateway: { snapshot: { phase: "disconnected" } },
-      runtimeConfig,
-    } as unknown as ApplicationContext;
-    mountConfigPageState(context, { pageId: "updates" });
-    // SAFETY: mounting flushes owner setup and starts ensureLoaded before returning.
-    await runtimeConfig.ensureLoaded.mock.results[0]!.value;
+    state.synchronizeRuntimeConfig(runtimeConfig);
     await Promise.resolve();
 
     expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
@@ -794,32 +778,39 @@ describe("ConfigPage runtime config lifecycle", () => {
   });
 
   it("loads replacement sources and clears sensitive reveal state", async () => {
+    const page = new ConfigPageController({} as ApplicationContext, () => {});
+    const state = page as unknown as {
+      configViewState: ConfigViewState;
+      synchronizeRuntimeConfig: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
+    };
+    const createRuntimeConfig = () =>
+      ({
+        state: {
+          configSnapshot: null,
+          configLoading: false,
+          configSchema: null,
+          configSchemaLoading: false,
+        },
+        ensureLoaded: vi.fn(() => Promise.resolve()),
+        ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
+      }) as unknown as ApplicationContext["runtimeConfig"];
     const first = createRuntimeConfig();
     const second = createRuntimeConfig();
 
-    // SAFETY: completeConfigContext supplies the unused capabilities for this fixture.
-    const context = {
-      gateway: { snapshot: { phase: "disconnected" } },
-      runtimeConfig: first,
-    } as unknown as ApplicationContext;
-    const { state } = mountConfigPageState(context);
-    await waitForSolid(() => expect(first.ensureSchemaLoaded).toHaveBeenCalledOnce());
-    const viewState = state.configProps().viewState;
-    viewState.rawRevealed = true;
-    viewState.envRevealed = true;
-    viewState.revealedSensitivePaths.add("gateway.auth.token");
-    state.configProps().onViewStateChange();
-    flush();
-    Object.assign(context, { runtimeConfig: second });
-    publishConfigSource(context.gateway);
-    await waitForSolid(() => expect(second.ensureSchemaLoaded).toHaveBeenCalledOnce());
+    state.synchronizeRuntimeConfig(first);
+    await Promise.resolve();
+    state.configViewState.rawRevealed = true;
+    state.configViewState.envRevealed = true;
+    state.configViewState.revealedSensitivePaths.add("gateway.auth.token");
+    state.synchronizeRuntimeConfig(second);
+    await Promise.resolve();
 
     expect(first.ensureLoaded).toHaveBeenCalledOnce();
     expect(first.ensureSchemaLoaded).toHaveBeenCalledOnce();
     expect(second.ensureLoaded).toHaveBeenCalledOnce();
     expect(second.ensureSchemaLoaded).toHaveBeenCalledOnce();
-    expect(state.configProps().viewState.rawRevealed).toBe(false);
-    expect(state.configProps().viewState.envRevealed).toBe(false);
-    expect(state.configProps().viewState.revealedSensitivePaths.size).toBe(0);
+    expect(state.configViewState.rawRevealed).toBe(false);
+    expect(state.configViewState.envRevealed).toBe(false);
+    expect(state.configViewState.revealedSensitivePaths.size).toBe(0);
   });
 });

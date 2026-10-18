@@ -101,6 +101,7 @@ describe("agent internal events", () => {
         replyToCurrent: undefined,
         replyToTag: false,
         audioAsVoice: undefined,
+        isSilent: false,
       });
     }
   });

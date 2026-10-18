@@ -73,16 +73,15 @@ export function resolveReplyOperationAbortReason(
   error?: unknown,
   signal: AbortSignal | undefined = replyOperation?.abortSignal,
 ): "user" | "restart" | "superseded" | undefined {
-  const errorStopReason = resolveAgentRunErrorLifecycleFields(error, undefined).stopReason;
   // Operation-owned settlement precedes the caller signal, which precedes thrown markers.
   return hasReplyOperationAbort(replyOperation, "aborted_for_restart", isAgentRunRestartAbortReason)
     ? "restart"
     : isReplyOperationSuperseded(replyOperation)
       ? "superseded"
       : (resolveSignalAbortReason(signal) ??
-        (errorStopReason === "restart"
+        (isAgentRunRestartAbortReason(error)
           ? "restart"
-          : errorStopReason === "superseded"
+          : isAgentRunSupersededAbortReason(error)
             ? "superseded"
             : isAgentRunDirectAbortReason(error) || isReplyOperationUserAbort(replyOperation)
               ? "user"

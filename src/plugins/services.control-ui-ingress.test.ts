@@ -1,4 +1,3 @@
-import { queryObjects } from "node:v8";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { bindGatewayControlUiIngressHost } from "../gateway/remote-control-ui-ingress-host.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
@@ -132,20 +131,13 @@ describe("service Control UI ingress authority", () => {
     },
   );
 
-  it("revokes retained authority without retaining the caller that stopped the service", async () => {
-    class RetiringCaller {
-      stop(service: PluginServicesHandle) {
-        return service.stop();
-      }
-    }
+  it("revokes retained authority when the service stops", async () => {
     const { service, serviceContext } = await fixture();
     const factory = serviceContext.controlUiIngress!;
     const ingress = await factory.open(openOptions());
     const rpc = await factory.bindPrincipal(openOptions());
     expect(await readUi(ingress)).toBe("synthetic Control UI");
-    await new RetiringCaller().stop(service);
-    // Collect before error matchers can materialize the retained abort reason's stack.
-    expect(queryObjects(RetiringCaller)).toBe(0);
+    await service.stop();
     await expect(factory.open(openOptions())).rejects.toThrow(/stopped|active|closed/);
     await expect(rpc.request("users.self", {})).rejects.toThrow(/stopped|active|closed/);
     await expect(readUi(ingress)).rejects.toThrow(/stopped|active|closed/);

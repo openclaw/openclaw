@@ -121,14 +121,17 @@ const getBlockingReplacement = (input?: PreparedModelRuntimeInput) => {
   const agentIds = replacement?.agentIds;
   const owner =
     agentIds && input && !input.readOnly ? resolveConfiguredOwner(owners, input) : undefined;
-  return agentIds &&
+  if (
+    agentIds &&
     owner?.input.agentId &&
     !agentIds.has(owner.input.agentId) &&
     owner.snapshot &&
     !owner.needsRefresh &&
     !owner.pending
-    ? undefined
-    : replacement;
+  ) {
+    return undefined;
+  }
+  return replacement;
 };
 const getAdmissionReplacement = (input?: PreparedModelRuntimeInput) =>
   modelRuntimeDrain.pending ?? getBlockingReplacement(input);
@@ -137,7 +140,11 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
   retainOwner: retainPublishedModelRuntimeOwner,
   isGatewayLifecycleActive: () => gatewayLifecycleActive,
   getConfiguredOwner: (agentId) =>
-    resolveConfiguredOwner(owners, { agentId, agentDir: ".", config: {} }),
+    resolveConfiguredOwner(owners, {
+      agentId,
+      agentDir: ".",
+      config: {},
+    }),
   getPendingReplacement: (agentId) =>
     getAdmissionReplacement({ agentId, agentDir: ".", config: {} })?.promise,
   isStartupPending: () => pendingModelRuntimeReplacement?.degraded === true,
@@ -449,14 +456,10 @@ export function markPreparedModelRuntimeSnapshotsStale(
   } else {
     replyDispatchPublication.clear();
   }
-  const requestEpoch = ++refreshRequestEpoch;
   if (options.waitForReplacement) {
     const superseded = pendingModelRuntimeReplacement;
-    const replacement = createPreparedModelRuntimeReplacement(options.agentIds);
-    pendingModelRuntimeReplacement = replacement;
-    // Admission precedes queued work; retain its failure before retiring acquisition.
-    publicationQueue.admit(replacement.promise, () => requestEpoch === refreshRequestEpoch);
-    authPublication.adopt(replacement.gateId);
+    pendingModelRuntimeReplacement = createPreparedModelRuntimeReplacement(options.agentIds);
+    authPublication.adopt(pendingModelRuntimeReplacement.gateId);
     // Superseded readers retry against the newer replacement gate.
     superseded?.resolve();
   } else if (!options.preserveReplacementWait && pendingModelRuntimeReplacement) {
@@ -464,6 +467,7 @@ export function markPreparedModelRuntimeSnapshotsStale(
     pendingModelRuntimeReplacement = undefined;
     cancelled.resolve();
   }
+  refreshRequestEpoch += 1;
   const staleError = new Error(reason);
   updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
     retireStandalone: true,
@@ -562,7 +566,7 @@ export function refreshPreparedModelRuntimeSnapshots(
             void publicationQueue
               .enqueue(async () => {
                 if (isPublicationCurrent()) {
-                  await drainPendingAuthMutations(publish, options.pluginMetadataSnapshot);
+                  await drainPendingAuthMutations(publish);
                 }
               })
               .catch((error: unknown) => log.warn(`startup auth refresh failed: ${String(error)}`));
@@ -639,7 +643,6 @@ export function refreshPreparedModelRuntimeSnapshots(
           // The final queue check, dispatch rebuild, and replacement resolution are one synchronous
           // commit. A mutation before it is adopted; a mutation after it starts a new auth transaction.
           commitReplacement,
-          options.pluginMetadataSnapshot,
         );
       if (replacement?.degraded) {
         await publicationQueue.enqueue(drain);
@@ -662,10 +665,7 @@ export function refreshPreparedModelRuntimeSnapshots(
   return publicationQueue.complete(publication, isPublicationCurrent, options, startup);
 }
 
-async function drainPendingAuthMutations(
-  commit?: () => void,
-  pluginMetadataSnapshot?: PreparedModelRuntimeRefreshOptions["pluginMetadataSnapshot"],
-): Promise<void> {
+async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
   await authPublication.drain({
     owners,
     publish: async (ownersToPublish, includeCredentialProviders, reuseGenerations) =>
@@ -674,7 +674,6 @@ async function drainPendingAuthMutations(
         owners,
         agentBuildCompletions,
         buildTimeoutMs: modelRuntimeBuildTimeoutMs,
-        pluginMetadataSnapshot,
         ...(includeCredentialProviders ? { includeCredentialProviders: true } : {}),
         selectPluginGeneration: reuseGenerations ? (owner) => owner.pluginGeneration : undefined,
       }),

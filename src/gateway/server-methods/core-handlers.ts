@@ -16,8 +16,12 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "agent-identity": () =>
     import("./agent-identity.js").then((module) => module.agentIdentityHandlers),
   agents: () => import("./agents.js").then((module) => module.agentsHandlers),
-  claws: () => import("./claws.js").then((module) => module.clawsHandlers),
-  "claws-add": () => import("./claws-add.js").then((module) => module.clawsAddHandlers),
+  "claws-monitors": () =>
+    import("./claws-monitors.js").then((module) => module.clawsMonitorHandlers),
+  "claws-packages": () =>
+    import("./claws-packages.js").then((module) => module.clawsPackageHandlers),
+  "claws-removal-journal": () =>
+    import("./claws-removal-journal.js").then((module) => module.clawsRemovalJournalHandlers),
   "agents-workspace": () =>
     import("./agents-workspace.js").then((module) => module.agentsWorkspaceHandlers),
   artifacts: () => import("./artifacts.js").then((module) => module.artifactsHandlers),
@@ -72,7 +76,6 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./models-auth-status.js").then((module) => module.modelsAuthStatusHandlers),
   "models-auth-login": () =>
     import("./models-auth-login.js").then((module) => module.modelsAuthLoginHandlers),
-  "mcp-events": () => import("./mcp-events.js").then((module) => module.mcpEventsHandlers),
   "mcp-auth-login": () =>
     import("./mcp-auth-login.js").then((module) => module.mcpAuthLoginHandlers),
   "models-auth-order": () =>

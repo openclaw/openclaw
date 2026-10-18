@@ -108,7 +108,7 @@ vi.mock("../state/openclaw-state-lease-worker-storage.js", async (importOriginal
         const retained = admission.createAdmission({ settled: settled.promise });
         try {
           const attachment = withSqliteWorkerOperationAdmission(
-            retained.admission,
+            { port: retained.admission.port },
             takeSqliteWorkerOperationAdmissionAttachment,
           );
           if (

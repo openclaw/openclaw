@@ -62,6 +62,28 @@ const EMPTY_INPUT = {
 const redactedConfigValue = "[redacted]";
 
 describe("buildModelProviderCards", () => {
+  it("omits API-key-only auth rows without model-provider evidence", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "web-search",
+          displayName: "Web Search",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "WEB_SEARCH_API_KEY" },
+        },
+        {
+          provider: "web-extract",
+          displayName: "Web Extract",
+          status: "static",
+          profiles: [{ profileId: "extract", type: "api_key", status: "static" }],
+        },
+      ]),
+    });
+    expect(cards).toEqual([]);
+  });
+
   it.each([true])(
     "keeps environment-only model auth independently of API-key setup support (%s)",
     (apiKeySupported) => {
@@ -80,7 +102,7 @@ describe("buildModelProviderCards", () => {
               provider: "web-search",
               displayName: "Web Search",
               status: "static",
-              profiles: [{ profileId: "search", type: "api_key", status: "static" }],
+              profiles: [],
               apiKey: { source: "env", envVar: "WEB_SEARCH_API_KEY" },
             },
           ],
@@ -223,7 +245,6 @@ describe("buildModelProviderCards", () => {
           profiles: [{ profileId: "p1", type: "oauth", status: "ok" }],
           profileOrder: ["p2", "p1"],
           profileOrderStored: true,
-          profileOrderLocked: "provider-config",
         },
         {
           provider: "claude-cli",
@@ -242,9 +263,30 @@ describe("buildModelProviderCards", () => {
       profileOrders: { anthropic: ["p2", "p1"] },
       profileOrderExplicitProviders: ["anthropic"],
       profileOrderStoredProviders: ["anthropic"],
-      profileOrderLocks: { anthropic: "provider-config" },
     });
   });
+
+  it.each(["provider-config"] as const)(
+    "projects %s priority locks onto the owning card",
+    (profileOrderLocked) => {
+      const cards = buildModelProviderCards({
+        ...EMPTY_INPUT,
+        authStatus: authStatus([
+          {
+            provider: "openai",
+            authProvider: "openai",
+            displayName: "OpenAI",
+            status: "ok",
+            profiles: [{ profileId: "p1", type: "oauth", status: "ok", source: "config" }],
+            profileOrder: ["p1"],
+            profileOrderLocked,
+          },
+        ]),
+      });
+
+      expect(firstCard(cards).profileOrderLocks).toEqual({ openai: profileOrderLocked });
+    },
+  );
 
   it("keeps a credential-less missing route visible beside CLI OAuth", () => {
     const cards = buildModelProviderCards({
@@ -424,10 +466,7 @@ describe("model provider configuration data", () => {
     expect(
       readModelProviderConfig({
         models: {
-          providers: {
-            openai: providerConfig(redactedConfigValue),
-            anthropic: { auth: "oauth" },
-          },
+          providers: { openai: providerConfig(redactedConfigValue), anthropic: {} },
         },
         agents: {
           defaults: {
@@ -442,7 +481,7 @@ describe("model provider configuration data", () => {
     ).toEqual({
       providers: [
         { key: "openai", hasApiKey: true },
-        { key: "anthropic", hasApiKey: false, authMode: "oauth" },
+        { key: "anthropic", hasApiKey: false },
       ],
       defaults: {
         primary: "openai/gpt-5",
@@ -456,6 +495,14 @@ describe("model provider configuration data", () => {
     expect(
       readModelProviderConfig({ agents: { defaults: { utilityModel: "" } } }).defaults.utilityModel,
     ).toBe("");
+  });
+
+  it("retains explicit provider auth modes for API-key edit gating", () => {
+    expect(
+      readModelProviderConfig({
+        models: { providers: { OpenAI: { auth: "oauth" } } },
+      }).providers,
+    ).toEqual([{ key: "OpenAI", hasApiKey: false, authMode: "oauth" }]);
   });
 
   it("lists known providers that are not configured", () => {

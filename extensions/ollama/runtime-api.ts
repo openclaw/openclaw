@@ -2,6 +2,7 @@ export {
   buildAssistantMessage,
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
+  convertToOllamaMessages,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   isOllamaCompatProvider,

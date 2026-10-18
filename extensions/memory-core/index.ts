@@ -2,16 +2,11 @@ import { listAgentIds, resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/a
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
-  asToolParamsRecord,
   jsonResult,
   type MemoryPluginRuntime,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import {
-  readNonNegativeIntegerParam,
-  readPositiveIntegerParam,
-} from "openclaw/plugin-sdk/param-readers";
 import { normalizePluginsConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
@@ -133,14 +128,6 @@ function createLazyStandingIntentTool(
       },
       required: ["action"],
       additionalProperties: false,
-    },
-    prepareArguments: (args) => {
-      const params = asToolParamsRecord(args);
-      return {
-        ...params,
-        maxFires: readPositiveIntegerParam(params, "maxFires"),
-        cooldownSeconds: readNonNegativeIntegerParam(params, "cooldownSeconds"),
-      };
     },
     execute: async (toolCallId, params, signal, onUpdate) => {
       executorPromise ??= loadStandingIntentToolModule().then((module) =>

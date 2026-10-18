@@ -31,8 +31,11 @@ export function buildPluginCommandContext(params: HandleCommandsParams) {
     from: command.from,
     to: command.to,
     originatingTo: normalizeOptionalString(ctx.OriginatingTo),
-    accountId: ctx.AccountId,
-    messageThreadId: ctx.MessageThreadId,
+    accountId: ctx.AccountId ?? undefined,
+    messageThreadId:
+      typeof ctx.MessageThreadId === "string" || typeof ctx.MessageThreadId === "number"
+        ? ctx.MessageThreadId
+        : undefined,
     threadParentId: normalizeOptionalString(ctx.ThreadParentId),
   };
 }

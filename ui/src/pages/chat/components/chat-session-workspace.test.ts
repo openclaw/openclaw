@@ -1,15 +1,13 @@
-import { createComponent, createSignal, flush } from "solid-js";
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
 } from "../chat-pane.test-support.ts";
-import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
 import { getSessionWorkspace, loadSessionWorkspace } from "./chat-session-workspace-state.ts";
 import {
   loadedSidebarContent,
@@ -19,30 +17,12 @@ import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
   refreshSessionWorkspace,
+  renderSessionWorkspaceRail,
   revealSessionWorkspaceFile,
   resolveSessionDiffSidebarContent,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 import type { SidebarContent, SidebarSelection } from "./chat-sidebar-content-types.ts";
-
-function mountWorkspaceRail(container: HTMLElement, state: SessionWorkspaceHost) {
-  const [workspace, setWorkspace] = createSignal(
-    createSessionWorkspaceProps(state, { expanded: true }),
-  );
-  mountSolid(
-    () =>
-      createComponent(SessionWorkspaceRail, {
-        get workspace() {
-          return workspace();
-        },
-      }),
-    { container },
-  );
-  return () => {
-    setWorkspace(createSessionWorkspaceProps(state, { expanded: true }));
-    flush();
-  };
-}
 
 describe("session workspace state", () => {
   it("keeps filter changes in the current session and resets them for a new session", () => {
@@ -106,7 +86,10 @@ describe("session workspace state", () => {
     } as unknown as SessionWorkspaceHost;
     const mount = document.createElement("div");
 
-    const updateRail = mountWorkspaceRail(mount, state);
+    render(
+      renderSessionWorkspaceRail(createSessionWorkspaceProps(state, { expanded: true })),
+      mount,
+    );
 
     expect(listFiles).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledExactlyOnceWith("artifacts.list", {
@@ -130,7 +113,10 @@ describe("session workspace state", () => {
     expect(createSessionWorkspaceProps(state).list).toBeNull();
     resolveArtifacts({ artifacts: [] });
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
-    updateRail();
+    render(
+      renderSessionWorkspaceRail(createSessionWorkspaceProps(state, { expanded: true })),
+      mount,
+    );
 
     expect(mount.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     expect(mount.querySelector('button[aria-label="src/slow.ts"]')).not.toBeNull();
@@ -696,7 +682,10 @@ describe("openSessionWorkspaceFile", () => {
       await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
 
       const container = document.createElement("div");
-      const updateRail = mountWorkspaceRail(container, state);
+      render(
+        renderSessionWorkspaceRail(createSessionWorkspaceProps(state, { expanded: true })),
+        container,
+      );
       const row = container.querySelector<HTMLButtonElement>(
         ".chat-workspace-rail__list--browser .chat-workspace-rail__file-open",
       );
@@ -706,7 +695,10 @@ describe("openSessionWorkspaceFile", () => {
       await vi.waitFor(() => expect(getFile).toHaveBeenCalledOnce());
       expect(getFile.mock.calls[0]?.[1]).toBe(expected);
       const expectSelectedRow = (selectedPath = "src/readme.md") => {
-        updateRail();
+        render(
+          renderSessionWorkspaceRail(createSessionWorkspaceProps(state, { expanded: true })),
+          container,
+        );
         const browserSelected = container.querySelector(
           ".chat-workspace-rail__list--browser .chat-workspace-rail__file--active",
         );

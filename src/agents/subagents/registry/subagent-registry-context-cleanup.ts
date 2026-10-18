@@ -18,7 +18,10 @@ import {
   resolveSubagentRegistryContextEngine,
 } from "./subagent-registry-deps.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
-import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
+import {
+  buildSafeLifecycleErrorMeta,
+  maskLifecycleIdentifier,
+} from "./subagent-registry-lifecycle-log.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteOutcomeKnown,
@@ -85,7 +88,7 @@ export function createSubagentRegistryContextCleanup(config: {
     } catch (err) {
       warn(warning, {
         error: buildSafeLifecycleErrorMeta(err),
-        childSessionKey: params.childSessionKey,
+        childSessionKey: maskLifecycleIdentifier(params.childSessionKey, "session"),
         reason: params.reason,
       });
       return false;

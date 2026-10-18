@@ -48,7 +48,11 @@ export function renderPluginLifecycle(
           }
         }}
       >
-        {pending === kind ? <span class="btn__spinner" aria-hidden="true" /> : null}
+        {pending === kind ? (
+          <>
+            <span class="btn__spinner" aria-hidden="true" />
+          </>
+        ) : null}
         {label}
       </button>
     </ReasonedDisabledControl>

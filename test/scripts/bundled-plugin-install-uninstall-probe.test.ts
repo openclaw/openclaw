@@ -296,13 +296,12 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.stderr).toContain("invalid bundled plugin runtime index: 1e3");
   });
 
-  it.each([
-    ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS", "9007199254740992"],
-    ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS", "5chars"],
-  ])("rejects invalid %s=%s", async (name, value) => {
-    await expect(importRuntimeSmokeWithEnv({ [name]: value })).rejects.toThrow(
-      `invalid ${name}: ${value}`,
-    );
+  it("rejects unsafe bundled plugin runtime limit env values", async () => {
+    await expect(
+      importRuntimeSmokeWithEnv({
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS: String(Number.MAX_SAFE_INTEGER + 1),
+      }),
+    ).rejects.toThrow("invalid OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS: 9007199254740992");
   });
 
   it("rejects bundled plugin runtime ports outside the TCP range", async () => {
@@ -457,6 +456,14 @@ describe("bundled plugin install/uninstall probe", () => {
     });
   });
 
+  it("rejects loose runtime output limit env values instead of parsing prefixes", async () => {
+    await expect(
+      importRuntimeSmokeWithEnv({
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: "5chars",
+      }),
+    ).rejects.toThrow("invalid OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: 5chars");
+  });
+
   it("keeps runtime log tail reads bounded", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const root = makePackageRoot();
@@ -500,30 +507,18 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { label: "successful", firstStatus: 0 },
-    { label: "graceful fallback", firstStatus: 1 },
-  ])("signals Windows process trees with $label taskkill", async ({ firstStatus }) => {
+  it("signals Windows runtime child process trees with taskkill", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const child = {
       kill: vi.fn(),
       pid: 12345,
     };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: firstStatus })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
     runtimeSmoke.signalChildProcessTree(child, "SIGTERM", {
       platform: "win32",
       runTaskkill,
     });
-    if (firstStatus === 0) {
-      runtimeSmoke.signalChildProcessTree(child, "SIGKILL", {
-        platform: "win32",
-        runTaskkill,
-      });
-    }
     expect(runTaskkill).toHaveBeenNthCalledWith(
       1,
       resolveWindowsTaskkillPath(),
@@ -533,12 +528,52 @@ describe("bundled plugin install/uninstall probe", () => {
       },
     );
 
-    expect(runTaskkill).toHaveBeenCalledTimes(2);
+    runtimeSmoke.signalChildProcessTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
     expect(runTaskkill).toHaveBeenNthCalledWith(
       2,
       resolveWindowsTaskkillPath(),
       ["/PID", "12345", "/T", "/F"],
-      { stdio: "ignore" },
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows runtime child process trees when graceful taskkill fails", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    runtimeSmoke.signalChildProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      resolveWindowsTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      resolveWindowsTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
     );
     expect(child.kill).not.toHaveBeenCalled();
   });
@@ -676,9 +711,74 @@ describe("bundled plugin install/uninstall probe", () => {
   // Keep them serial so one teardown cannot signal another case's child tree.
   registerRuntimeCommandTimeoutTests(createPackageRoot);
 
-  it.runIf(process.platform !== "win32").for([false, true])(
-    "cleans runtime command groups on parent signal (command settled=%s)",
-    async (commandSettled, { signal, onTestFinished }) => {
+  (process.platform !== "win32" ? it : it.skip)(
+    "cleans detached runtime command groups when the parent is signaled",
+    async ({ signal, onTestFinished }) => {
+      const root = createPackageRoot();
+      const commandPath = path.join(root, "signaled-command.mjs");
+      const runnerPath = path.join(root, "run-runtime-command.mjs");
+      const descendantPidPath = path.join(root, "command-descendant.pid");
+      const descendantScript = [
+        "import fs from 'node:fs';",
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid) + "\\n");`,
+        fixtureReadySource(descendantPidPath),
+      ].join("\n");
+      fs.writeFileSync(
+        commandPath,
+        [
+          "import childProcess from 'node:child_process';",
+          `childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            descendantScript,
+          )}], { stdio: "ignore" });`,
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      fs.writeFileSync(
+        runnerPath,
+        [
+          `const runtimeSmoke = await import(${JSON.stringify(pathToFileURL(runtimeSmokePath).href)});`,
+          `void runtimeSmoke.runCommand(process.execPath, [${JSON.stringify(commandPath)}], {`,
+          "  timeoutMs: 60_000,",
+          "}).catch(() => undefined);",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const runner = spawn(process.execPath, [runnerPath], {
+        stdio: "ignore",
+      });
+      const closed = childClosed(runner);
+      let descendantPid: number | undefined;
+      const cleanup = registerFixtureCleanup(onTestFinished, async () => {
+        if (runner.pid && pidIsAlive(runner.pid)) {
+          runner.kill("SIGTERM");
+        }
+        await closed;
+        killPidIfAlive(descendantPid ?? readCompletedPidFile(descendantPidPath));
+        fs.rmSync(root, { force: true, recursive: true });
+      });
+      try {
+        descendantPid = await waitForPidFile(descendantPidPath, closed, signal);
+        expect(pidIsAlive(descendantPid)).toBe(true);
+
+        runner.kill("SIGTERM");
+
+        await waitForDead(descendantPid, signal);
+      } finally {
+        await cleanup();
+      }
+    },
+  );
+
+  (process.platform !== "win32" ? it : it.skip)(
+    "keeps closed runtime command groups tracked for parent cleanup",
+    async ({ signal, onTestFinished }) => {
       const root = createPackageRoot();
       const commandPath = path.join(root, "closed-command.mjs");
       const runnerPath = path.join(root, "run-closed-runtime-command.mjs");
@@ -698,7 +798,7 @@ describe("bundled plugin install/uninstall probe", () => {
           `const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
             descendantScript,
           )}], { stdio: "ignore" });`,
-          commandSettled ? "child.unref();" : "setInterval(() => {}, 1000);",
+          "child.unref();",
           "",
         ].join("\n"),
         "utf8",
@@ -710,14 +810,10 @@ describe("bundled plugin install/uninstall probe", () => {
           `const runtimeSmoke = await import(${JSON.stringify(pathToFileURL(runtimeSmokePath).href)});`,
           `runtimeSmoke.runCommand(process.execPath, [${JSON.stringify(commandPath)}], {`,
           "  timeoutMs: 60_000,",
-          ...(commandSettled
-            ? [
-                "}).finally(() => {",
-                `  fs.writeFileSync(${JSON.stringify(commandSettledPath)}, "1");`,
-                "  process.send('command-settled');",
-                "});",
-              ]
-            : ["}).catch(() => undefined);"]),
+          "}).finally(() => {",
+          `  fs.writeFileSync(${JSON.stringify(commandSettledPath)}, "1");`,
+          "  process.send('command-settled');",
+          "});",
           "setInterval(() => {}, 1000);",
           "",
         ].join("\n"),
@@ -741,12 +837,10 @@ describe("bundled plugin install/uninstall probe", () => {
       try {
         descendantPid = await waitForPidFile(descendantPidPath, closed, signal);
         expect(pidIsAlive(descendantPid)).toBe(true);
-        if (commandSettled) {
-          await withinTest(
-            awaitGateBeforeSettlement(settled, closed, `timeout waiting for ${commandSettledPath}`),
-            signal,
-          );
-        }
+        await withinTest(
+          awaitGateBeforeSettlement(settled, closed, `timeout waiting for ${commandSettledPath}`),
+          signal,
+        );
 
         runner.kill("SIGTERM");
 
@@ -877,8 +971,7 @@ describe("bundled plugin install/uninstall probe", () => {
       [
         "import fs from 'node:fs';",
         "fs.writeFileSync(process.env.OPENCLAW_TEST_RPC_STATE_PATH, process.env.OPENCLAW_STATE_DIR);",
-        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }, null, 2));",
-        "console.log(JSON.stringify({ level: 'warn', message: 'post-rpc diagnostic' }));",
+        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }));",
         "",
       ].join("\n"),
       "utf8",
@@ -899,6 +992,33 @@ describe("bundled plugin install/uninstall probe", () => {
     const rpcStateDir = fs.readFileSync(statePath, "utf8");
     expect(path.basename(rpcStateDir)).toMatch(/^openclaw-plugin-runtime-rpc-/u);
     expect(fs.existsSync(rpcStateDir)).toBe(false);
+  });
+
+  it("ignores structured logs after gateway RPC payloads", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const entrypoint = path.join(root, "dist", "rpc-with-structured-log.js");
+    fs.writeFileSync(
+      entrypoint,
+      [
+        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }, null, 2));",
+        "console.log(JSON.stringify({ level: 'warn', message: 'post-rpc diagnostic' }));",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(
+      runtimeSmoke.rpcCall(
+        "health",
+        {},
+        {
+          entrypoint,
+          env: {},
+          port: 19001,
+        },
+      ),
+    ).resolves.toEqual({ status: "ok" });
   });
 
   it("accepts successful runtime HTTP probes", async () => {
@@ -1197,21 +1317,13 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.status).toBe(0);
   });
 
-  it.each([
-    { defect: "mismatched root", error: "did not match selected root" },
-    { defect: "missing root", error: "does not exist" },
-  ])("rejects a bundled install source with a $defect", ({ defect, error }) => {
+  it("requires bundled install source paths to match the selected plugin root", () => {
     const root = makePackageRoot();
     const selectedRoot = path.join(root, "dist-runtime", "extensions", "nostr");
     const staleRoot = path.join(root, "dist-runtime", "extensions", "nostr-copy");
-    if (defect === "mismatched root") {
-      fs.mkdirSync(selectedRoot, { recursive: true });
-      fs.mkdirSync(staleRoot, { recursive: true });
-    }
-    const stateDir = writeInstalledPlugin(
-      root,
-      defect === "mismatched root" ? staleRoot : selectedRoot,
-    );
+    fs.mkdirSync(selectedRoot, { recursive: true });
+    fs.mkdirSync(staleRoot, { recursive: true });
+    const stateDir = writeInstalledPlugin(root, staleRoot);
 
     const result = runProbeCommand(
       root,
@@ -1223,7 +1335,25 @@ describe("bundled plugin install/uninstall probe", () => {
     );
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(error);
+    expect(result.stderr).toContain("did not match selected root");
+  });
+
+  it("requires bundled install source paths to exist", () => {
+    const root = makePackageRoot();
+    const selectedRoot = path.join(root, "dist-runtime", "extensions", "nostr");
+    const stateDir = writeInstalledPlugin(root, selectedRoot);
+
+    const result = runProbeCommand(
+      root,
+      ["assert-installed", "nostr", "nostr", "0", selectedRoot],
+      {
+        HOME: undefined,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("does not exist");
   });
 
   it("detects native Windows bundled load paths after uninstall", () => {

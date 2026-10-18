@@ -12,7 +12,6 @@ import {
 export type SessionProjectionGatewayRunEvent = {
   state?: unknown;
   yielded?: unknown;
-  suppressErrorNotice?: unknown;
   seq?: unknown;
   deltaText?: unknown;
   replace?: unknown;
@@ -69,7 +68,6 @@ export function reduceSessionProjectionRunEvent(
                   : stopReason === "error"
                     ? "error"
                     : "completed",
-          ...(event.suppressErrorNotice === true ? { suppressErrorNotice: true } : {}),
           ...(stopReason === null ? {} : { stopReason }),
           ...(errorKind === null ? {} : { errorKind }),
           ...(typeof event.errorMessage === "string" ? { errorMessage: event.errorMessage } : {}),

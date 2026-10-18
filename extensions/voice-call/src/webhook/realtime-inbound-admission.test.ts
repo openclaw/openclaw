@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeVoiceCallConfig } from "../config.js";
+import { VoiceCallConfigSchema } from "../config.js";
 import type { NormalizedEvent, WebhookContext } from "../types.js";
 import { acceptRealtimeInboundRequest } from "./realtime-inbound-admission.js";
 
@@ -41,7 +41,7 @@ describe("acceptRealtimeInboundRequest", () => {
         request,
         form,
         verifiedRequestKey: "twilio:req:test",
-        config: normalizeVoiceCallConfig({
+        config: VoiceCallConfigSchema.parse({
           provider: "twilio",
           inboundPolicy: "allowlist",
           allowFrom: ["+15550001111"],

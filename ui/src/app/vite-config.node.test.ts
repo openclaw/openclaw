@@ -127,15 +127,12 @@ async function executeControlUiLocaleModule(
 }
 
 describe("Control UI Vite config", () => {
-  it("emits Brotli and gzip variants only for bundled compressible assets", async () => {
+  it("emits Brotli and gzip variants only for bundled compressible assets", () => {
     const source = Array.from(
       { length: 200 },
       (_, index) => `console.log("startup-${index % 97}", ${index % 31});\n`,
     ).join("");
-    const variants = await createControlUiPrecompressedAssetVariants(
-      "assets/app-AbCd1234.js",
-      source,
-    );
+    const variants = createControlUiPrecompressedAssetVariants("assets/app-AbCd1234.js", source);
 
     expect(variants.map((variant) => variant.fileName)).toEqual([
       "assets/app-AbCd1234.js.br",
@@ -146,11 +143,9 @@ describe("Control UI Vite config", () => {
     expect(createHash("sha256").update(variants[1]!.source).digest("hex")).toBe(
       "32dab2f3598992a8a8b595f5da60f10907fc181c2abfa27380d562d9b539b85d",
     );
-    expect(await createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
-    expect(await createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
-    expect(await createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual(
-      [],
-    );
+    expect(createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
+    expect(createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
+    expect(createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual([]);
   });
 
   it("filters only a locale target and its matching config-hint preload", () => {

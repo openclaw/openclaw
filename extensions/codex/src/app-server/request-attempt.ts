@@ -50,16 +50,6 @@ export type CodexRequestAttempt = {
 export function remainingCodexRequestTime(
   method: string,
   signal: AbortSignal | undefined,
-  deadline: number,
-): number;
-export function remainingCodexRequestTime(
-  method: string,
-  signal: AbortSignal | undefined,
-  deadline?: number,
-): number | undefined;
-export function remainingCodexRequestTime(
-  method: string,
-  signal: AbortSignal | undefined,
   deadline?: number,
 ): number | undefined {
   if (signal?.aborted) {

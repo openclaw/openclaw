@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, Show } from "solid-js";
+import { createEffect, createMemo, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import type { LazyRenderer } from "./lazy-renderer.ts";
 
@@ -10,10 +10,18 @@ export type DevicePairSetupLoader = LazyRenderer<DevicePairSetupModule["DevicePa
 // Keep the pairing runtime lazy so opening the shell never fetches this chunk.
 export function DevicePairSetup(props: {
   loader: DevicePairSetupLoader;
+  revision: number;
   props: DevicePairSetupProps;
 }): SolidJSX.Element {
+  const state = createMemo(() => {
+    return {
+      revision: props.revision,
+      renderer: props.loader.renderer,
+      failed: props.loader.failed,
+    };
+  });
   createEffect(
-    () => props.props.open && !props.loader.renderer() && !props.loader.failed(),
+    () => props.props.open && !state().renderer && !state().failed,
     (shouldLoad) => {
       if (shouldLoad) {
         props.loader.load();
@@ -23,28 +31,25 @@ export function DevicePairSetup(props: {
   return (
     <Show when={props.props.open}>
       <Show
-        when={props.loader.renderer()}
+        when={state().renderer}
         keyed
         fallback={
           <openclaw-modal-dialog
             label={t("devices.pairing.title")}
-            description={t(props.loader.failed() ? "devices.pairing.loadFailed" : "common.loading")}
+            description={t(state().failed ? "devices.pairing.loadFailed" : "common.loading")}
             onModal-cancel={() => props.props.onClose()}
           >
-            <section
-              class="device-pair-setup"
-              aria-busy={props.loader.failed() ? undefined : "true"}
-            >
+            <section class="device-pair-setup" aria-busy={state().failed ? undefined : "true"}>
               <header class="device-pair-setup__header">
                 <div>
                   <h2>{t("devices.pairing.title")}</h2>
-                  <p role={props.loader.failed() ? undefined : "status"}>
-                    {t(props.loader.failed() ? "devices.pairing.loadFailed" : "common.loading")}
+                  <p role={state().failed ? undefined : "status"}>
+                    {t(state().failed ? "devices.pairing.loadFailed" : "common.loading")}
                   </p>
                 </div>
               </header>
-              <openclaw-modal-actions class="device-pair-setup__footer">
-                <Show when={props.loader.failed()}>
+              <footer class="device-pair-setup__footer">
+                <Show when={state().failed}>
                   <button
                     class="btn btn--primary"
                     type="button"
@@ -56,7 +61,7 @@ export function DevicePairSetup(props: {
                 <button class="btn btn--ghost" type="button" onClick={() => props.props.onClose()}>
                   {t("common.close")}
                 </button>
-              </openclaw-modal-actions>
+              </footer>
             </section>
           </openclaw-modal-dialog>
         }

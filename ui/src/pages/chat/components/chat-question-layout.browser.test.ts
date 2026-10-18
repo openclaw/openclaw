@@ -1,8 +1,7 @@
-import { createComponent } from "solid-js";
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { ComposerQuestionDock } from "./chat-composer-question.tsx";
+import { renderComposerQuestionDock } from "./chat-composer-question.test-support.ts";
 import { questionPanelIn } from "./chat-question-card.test-support.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
 import baseStyles from "../../../styles/base.css?inline";
@@ -20,6 +19,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  render(nothing, container);
   container.remove();
   styles.remove();
 });
@@ -61,7 +61,7 @@ it.each([320, 400, 440, 480])(
       },
       onSubmit: vi.fn(),
     };
-    mountSolid(() => createComponent(ComposerQuestionDock, { panel: props }), { container });
+    render(renderComposerQuestionDock(props), container);
     await questionPanelIn(container);
     await document.fonts.ready;
     for (const option of container.querySelectorAll<HTMLElement>('[role="radio"]')) {

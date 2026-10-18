@@ -257,7 +257,6 @@ export function createOpenClawStateLeaseWorkerStorage(
           cleanupContext,
           admission.assertCurrent,
           observed,
-          context.maintenanceScope,
         );
         if (!store) {
           throw new Error("State lease cleanup lost its original database");

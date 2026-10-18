@@ -14,10 +14,7 @@ import {
   resolveBunRuntimeInfo,
   resolvePinnedDaemonRuntimePath,
 } from "../../daemon/runtime-paths.js";
-import {
-  withDaemonRuntimePinMigration,
-  readDaemonRuntimePin,
-} from "../../daemon/runtime-pin-state.js";
+import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
 import {
   assertServiceDefinitionWritable,
   hasGatewayServiceEnvironmentDifference,
@@ -190,8 +187,9 @@ export async function repairLoadedGatewayServiceForStart(
     existingServiceEnv: existingEnvironment,
   });
   const wrapperPath = await resolveOpenClawWrapperPath(installEnv[OPENCLAW_WRAPPER_ENV_KEY]);
-  const pinSnapshot = await withDaemonRuntimePinMigration(installEnv, () =>
-    readDaemonRuntimePin({ kind: "gateway", env: installEnv }, params.state.command),
+  const pinSnapshot = readDaemonRuntimePin(
+    { kind: "gateway", env: installEnv },
+    params.state.command,
   );
   const pinnedRuntime = wrapperPath ? undefined : pinSnapshot.pin?.path;
   const installedRuntime = resolveGatewayDaemonRuntime(

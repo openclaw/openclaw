@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import { z } from "zod";
-import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
 import {
@@ -196,19 +195,14 @@ async function runPreparedUpdateFailureTriage(
         throw new Error("The installed OpenClaw entrypoint is unavailable.");
       }
       const args = [
+        entryPath,
         "triage",
         "--update-result",
         contextPath,
         prepared.mode === "json" ? "--json" : "--non-interactive",
       ];
       const nodeRunner = params.target.nodeRunner ?? process.execPath;
-      const invocation = resolveOpenClawCliInvocation({
-        execPath: nodeRunner,
-        entryPath,
-        execArgv: [],
-        args,
-      });
-      const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
+      const result = await runCommandWithTimeout([nodeRunner, ...args], {
         cwd: root,
         baseEnv: {},
         env,

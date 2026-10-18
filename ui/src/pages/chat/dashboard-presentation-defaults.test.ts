@@ -253,6 +253,17 @@ describe("dashboard default activation and personal layout persistence", () => {
     },
   );
 
+  it("opens a dashboard route in split only once and preserves a later panel choice", () => {
+    const h = createDashboardHarness();
+    h.state.updateSidebarLayout(openSlot(h.state.sidebarLayout, "terminal"));
+    h.sync();
+    expectPresentation(h.state.sidebarLayout, false);
+    h.state.updateSidebarLayout(openSlot(h.state.sidebarLayout, "terminal"));
+    h.sync();
+    expect(isSidebarSlotVisible(h.state.sidebarLayout, "terminal")).toBe(true);
+    expect(isSidebarSlotVisible(h.state.sidebarLayout, "dashboard")).toBe(false);
+  });
+
   it("waits for the selected authoritative row, then inherits without creating an override", () => {
     const h = createDashboardHarness({ metadataPending: true });
     h.sync();
@@ -326,7 +337,7 @@ describe("dashboard default activation and personal layout persistence", () => {
     await h.header();
     const focus = h.mount.querySelector<HTMLButtonElement>(".chat-panel-focus");
     expect(focus).not.toBeNull();
-    await select(h.mount.querySelector(".chat-pane__layout-menu")!, "focus");
+    select(h.mount.querySelector(".chat-pane__layout-menu")!, "focus");
     expectPresentation(h.state.sidebarLayout, false);
     expect(h.saved()?.dashboardPresentationOverride).toBe("split");
 
@@ -518,12 +529,16 @@ describe("dashboard shared default in the real header Layout menu", () => {
     expectPresentation(h.state.sidebarLayout, false);
   });
 
-  it.each(["builtin split", "narrow"] as const)(
+  it.each(["builtin split", "narrow", "read only", "restricted viewer"] as const)(
     "identifies the matching shared default for %s without offering a write",
     async (view) => {
       const h = createDashboardHarness({
+        scopes: view === "read only" ? ["operator.read"] : undefined,
         row: session({
           boardPresentation: view === "builtin split" ? undefined : "split",
+          ...(view === "restricted viewer"
+            ? { visibility: "read-only", sharingRole: "viewer" }
+            : {}),
         }),
       });
       h.sync();
@@ -535,7 +550,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
       expect(status?.textContent).toContain(t("chat.sidePanel.currentViewIsDefault"));
       expect(status?.textContent).toContain(t("chat.sidePanel.defaultViewDescription"));
       expect(menu.querySelector(defaultAction)).toBeNull();
-      await select(menu, "dashboard-default");
+      select(menu, "dashboard-default");
       expect(h.request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
       expectPresentation(h.state.sidebarLayout, false);
     },
@@ -604,7 +619,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
     const save = vi.spyOn(h.pane, "saveDashboardDefault");
     const patch = vi.spyOn(h.sessions, "patch");
     let menu = await h.header();
-    await select(menu, "dashboard-default");
+    select(menu, "dashboard-default");
     const operation = save.mock.results[0]?.value;
     expect(operation).toBeDefined();
     menu = await h.header();
@@ -612,7 +627,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
     expect(menu.querySelector(defaultAction)?.textContent).toContain(
       t("chat.sidePanel.savingDefault"),
     );
-    await select(menu, "dashboard-default");
+    select(menu, "dashboard-default");
     expect(patch).toHaveBeenCalledExactlyOnceWith(
       key,
       { boardFace: "dashboard", boardPresentation: "expanded" },
@@ -642,7 +657,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
     expect(menu.querySelector(defaultStatus)?.textContent).toContain(
       t("chat.sidePanel.currentViewIsDefault"),
     );
-    await select(menu, "dashboard-default");
+    select(menu, "dashboard-default");
     expect(patch).toHaveBeenCalledTimes(1);
     expect(showToast).toHaveBeenCalledWith({
       message: t("chat.sidePanel.defaultSaved"),
@@ -659,7 +674,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
     const before = structuredClone(h.saved());
     const reply = pendingSave(h);
     const save = vi.spyOn(h.pane, "saveDashboardDefault");
-    await select(await h.header(), "dashboard-default");
+    select(await h.header(), "dashboard-default");
     const operation = save.mock.results[0]?.value;
     expect(operation).toBeDefined();
     expect((await h.header()).querySelector(defaultAction)?.hasAttribute("disabled")).toBe(true);
@@ -739,7 +754,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
       } else {
         h.publishRow({ ...original, sessionId: "replacement-session", updatedAt: 30 });
       }
-      await select(menu, "dashboard-default");
+      select(menu, "dashboard-default");
       expect(h.request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
     },
   );

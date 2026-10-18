@@ -34,7 +34,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
 import {
-  runOpenClawAgentBoardReadAdmission,
+  runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../state/openclaw-agent-write-admission.js";
 import { BoardValidationError } from "./board-layout.js";
@@ -315,21 +315,23 @@ export class SqliteBoardStore implements BoardStore {
     };
     const identity = readDatabasePathIdentitySync(captured.path);
     if (!identity.key.startsWith("file:")) {
-      const result = await runOpenClawAgentBoardReadAdmission(captured, async () =>
-        accept(undefined),
-      );
+      const result = await runOpenClawAgentWorkerWrite(captured, async () => accept(undefined));
       return await result.value;
     }
     // FIFO-held reads and their failure cleanup use the writer-safe discovery lane.
     const result = await withSessionHistoryWorkerDatabase(
       { ...captured, path: identity.canonicalPath, requestedPaths: [captured.path] },
       (reader) =>
-        runOpenClawAgentBoardReadAdmission(captured, async () => {
-          this.assertTargetCurrent(capturedTarget, resolved);
-          const value = await worker(reader, captured.sessionKey, env, identity);
-          reader.assertCurrent();
-          return accept(value);
-        }),
+        runOpenClawAgentWriteAdmission(
+          captured,
+          async () => {
+            this.assertTargetCurrent(capturedTarget, resolved);
+            const value = await worker(reader, captured.sessionKey, env, identity);
+            reader.assertCurrent();
+            return accept(value);
+          },
+          true,
+        ),
       targetDiscoveryLane,
     ).catch((error: unknown) => {
       throw restoreBoardError(error);

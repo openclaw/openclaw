@@ -25,56 +25,68 @@ function readPosition(): Position | undefined {
   return undefined;
 }
 
-export function createDebugOverlayLayout(element: HTMLElement) {
-  const listeners = new AbortController();
-  const eventOptions = { signal: listeners.signal };
-  let mode: Mode | undefined;
-  let position = readPosition();
-  let frame = 0;
-  let transitionFrom: DOMRect | undefined;
-  let animation: Animation | undefined;
-  let observer: ResizeObserver | undefined;
-  let drag:
-    | {
-        id: number;
-        start: Position;
-        bounds: DOMRect;
-        previous?: Position;
-        moved: boolean;
-      }
-    | undefined;
+function sameBox(a: DOMRect, b: DOMRect | undefined): boolean {
+  return a.x === b?.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
 
-  function update(nextMode: Mode): void {
-    if (mode && mode !== nextMode) {
-      transitionFrom ??= element.getBoundingClientRect();
-      cancelAnimation();
+export class DebugOverlayLayout {
+  constructor(private readonly element: HTMLElement) {}
+  private mode?: Mode;
+  private position = readPosition();
+  private frame = 0;
+  private transitionFrom?: DOMRect;
+  private animation?: Animation;
+  private animationTarget?: DOMRect;
+  private observer?: ResizeObserver;
+  private drag?: {
+    id: number;
+    start: Position;
+    bounds: DOMRect;
+    previous?: Position;
+    moved: boolean;
+  };
+
+  update(mode: Mode): void {
+    const element = this.element;
+    if (this.mode && this.mode !== mode) {
+      this.transitionFrom ??= element.getBoundingClientRect();
+      this.cancelAnimation();
     }
-    mode = nextMode;
-    if (frame) {
+    this.mode = mode;
+    if (this.frame) {
       return;
     }
-    // The mode memo precedes the class binding: capture the old box above, then
+    // This directive precedes the class binding: capture the old box above, then
     // coalesce loading/live updates without losing the pending transition.
-    frame = requestAnimationFrame(() => {
-      frame = 0;
+    this.frame = requestAnimationFrame(() => {
+      this.frame = 0;
       if (!element.isConnected) {
         return;
       }
-      connect();
-      if (animation) {
-        // Body-size changes during the 160ms transition settle at its finish.
+      this.connect();
+      const running = this.animation;
+      if (running) {
+        // Unrelated shell renders repeat the mode mid-flight and must not restart it;
+        // retarget only when the committed body moved the settled box (e.g. loading
+        // content swapped for live content).
+        const current = element.getBoundingClientRect();
+        const target = this.measureSettled(running);
+        if (!sameBox(target, this.animationTarget)) {
+          this.cancelAnimation();
+          this.animate(current, target);
+        }
         return;
       }
-      place();
-      const before = transitionFrom;
-      transitionFrom = undefined;
+      this.place();
+      const before = this.transitionFrom;
+      this.transitionFrom = undefined;
       if (before) {
-        animate(before, element.getBoundingClientRect());
+        this.animate(before, element.getBoundingClientRect());
       }
     });
   }
 
-  function animate(before: DOMRect, after: DOMRect): void {
+  private animate(before: DOMRect, after: DOMRect): void {
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
       return;
     }
@@ -87,47 +99,65 @@ export function createDebugOverlayLayout(element: HTMLElement) {
       bottom: "auto",
       maxHeight: "none",
     });
-    const nextAnimation = element.animate([keyframe(before), keyframe(after)], {
+    this.animationTarget = after;
+    const animation = this.element.animate([keyframe(before), keyframe(after)], {
       duration: 160,
       easing: "cubic-bezier(0.2, 0, 0, 1)",
     });
-    animation = nextAnimation;
-    nextAnimation.onfinish = () => {
-      animation = undefined;
-      place();
+    this.animation = animation;
+    animation.onfinish = () => {
+      this.animation = undefined;
+      this.place();
     };
   }
 
-  function connect(): void {
-    element.addEventListener("pointerdown", pointerDown, eventOptions);
-    element.addEventListener("pointermove", pointerMove, eventOptions);
-    element.addEventListener("pointerup", pointerUp, eventOptions);
-    element.addEventListener("pointercancel", pointerCancel, eventOptions);
-    element.addEventListener("lostpointercapture", pointerCancel, eventOptions);
-    element.addEventListener("keydown", keyDown, eventOptions);
-    window.addEventListener("resize", resize, eventOptions);
-    window.addEventListener("blur", cancelDrag, eventOptions);
-    observer ??= new ResizeObserver(() => {
-      if (!animation && !frame) {
-        place();
+  // The running effect overrides the frame box; lift it so placement and measurement
+  // see the settled layout. Synchronous, so no frame is painted without it.
+  private measureSettled(animation: Animation): DOMRect {
+    const effect = animation.effect instanceof KeyframeEffect ? animation.effect : undefined;
+    if (effect) {
+      effect.target = null;
+    }
+    try {
+      this.place();
+      return this.element.getBoundingClientRect();
+    } finally {
+      if (effect) {
+        effect.target = this.element;
+      }
+    }
+  }
+
+  private connect(): void {
+    const element = this.element;
+    element.addEventListener("pointerdown", this.pointerDown);
+    element.addEventListener("pointermove", this.pointerMove);
+    element.addEventListener("pointerup", this.pointerUp);
+    element.addEventListener("pointercancel", this.pointerCancel);
+    element.addEventListener("lostpointercapture", this.pointerCancel);
+    element.addEventListener("keydown", this.keyDown);
+    window.addEventListener("resize", this.resize);
+    window.addEventListener("blur", this.cancelDrag);
+    this.observer ??= new ResizeObserver(() => {
+      if (!this.animation && !this.frame) {
+        this.place();
       }
     });
-    observer.observe(element);
+    this.observer.observe(element);
   }
 
-  function clamp(candidate: Position): Position {
+  private clamp(position: Position): Position {
+    const element = this.element;
     const margin = 8;
     return {
-      x: Math.max(margin, Math.min(candidate.x, window.innerWidth - element.offsetWidth - margin)),
-      y: Math.max(
-        margin,
-        Math.min(candidate.y, window.innerHeight - element.offsetHeight - margin),
-      ),
+      x: Math.max(margin, Math.min(position.x, window.innerWidth - element.offsetWidth - margin)),
+      y: Math.max(margin, Math.min(position.y, window.innerHeight - element.offsetHeight - margin)),
     };
   }
 
-  function place(): void {
-    if (!position) {
+  private place(): void {
+    const element = this.element;
+    if (!this.position) {
       element.style.removeProperty("left");
       element.style.removeProperty("top");
       element.style.removeProperty("right");
@@ -136,111 +166,113 @@ export function createDebugOverlayLayout(element: HTMLElement) {
     }
     // Clamping is presentation only: expanding or a smaller window must not erase
     // the user's preferred compact position.
-    const clamped = clamp(position);
-    element.style.left = clamped.x + "px";
-    element.style.top = clamped.y + "px";
+    const position = this.clamp(this.position);
+    element.style.left = position.x + "px";
+    element.style.top = position.y + "px";
     element.style.right = "auto";
     element.style.bottom = "auto";
   }
 
-  function save(): void {
-    if (!position) {
+  private save(): void {
+    if (!this.position) {
       return;
     }
     try {
-      getSafeLocalStorage()?.setItem(POSITION_KEY, JSON.stringify(position));
+      getSafeLocalStorage()?.setItem(POSITION_KEY, JSON.stringify(this.position));
     } catch {
       /* Storage is best-effort, as with other browser presentation preferences. */
     }
   }
 
-  function cancelAnimation(): void {
-    animation?.cancel();
-    animation = undefined;
+  private cancelAnimation(): void {
+    this.animation?.cancel();
+    this.animation = undefined;
   }
 
-  const resize = (): void => {
-    transitionFrom = undefined;
-    cancelAnimation();
-    place();
+  private readonly resize = (): void => {
+    this.transitionFrom = undefined;
+    this.cancelAnimation();
+    this.place();
   };
 
-  const pointerDown = (event: PointerEvent): void => {
+  private readonly pointerDown = (event: PointerEvent): void => {
     const target = event.target;
     if (
       event.button !== 0 ||
       !event.isPrimary ||
-      drag ||
+      this.drag ||
       !(target instanceof Element) ||
       !target.closest(".debug-overlay__header") ||
       target.closest("button")
     ) {
       return;
     }
-    cancelAnimation();
+    this.cancelAnimation();
+    const element = this.element;
     element.setPointerCapture(event.pointerId);
-    drag = {
+    this.drag = {
       id: event.pointerId,
       start: { x: event.clientX, y: event.clientY },
       bounds: element.getBoundingClientRect(),
-      previous: position,
+      previous: this.position,
       moved: false,
     };
     element.classList.add("debug-overlay--dragging");
     event.preventDefault();
   };
 
-  const pointerMove = (event: PointerEvent): void => {
-    const currentDrag = drag;
-    if (!currentDrag || event.pointerId !== currentDrag.id) {
+  private readonly pointerMove = (event: PointerEvent): void => {
+    const drag = this.drag;
+    if (!drag || event.pointerId !== drag.id) {
       return;
     }
-    const dx = event.clientX - currentDrag.start.x;
-    const dy = event.clientY - currentDrag.start.y;
-    if (!currentDrag.moved && Math.hypot(dx, dy) < 3) {
+    const dx = event.clientX - drag.start.x;
+    const dy = event.clientY - drag.start.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 3) {
       return;
     }
-    currentDrag.moved = true;
-    position = clamp({ x: currentDrag.bounds.x + dx, y: currentDrag.bounds.y + dy });
-    place();
+    drag.moved = true;
+    this.position = this.clamp({ x: drag.bounds.x + dx, y: drag.bounds.y + dy });
+    this.place();
   };
 
-  const pointerUp = (event: PointerEvent): void => {
-    if (event.pointerId !== drag?.id) {
+  private readonly pointerUp = (event: PointerEvent): void => {
+    if (event.pointerId !== this.drag?.id) {
       return;
     }
-    pointerMove(event);
-    if (drag?.moved) {
-      save();
+    this.pointerMove(event);
+    if (this.drag?.moved) {
+      this.save();
     }
-    finishDrag();
+    this.finishDrag();
   };
 
-  const pointerCancel = (event: PointerEvent): void => {
-    if (event.pointerId === drag?.id) {
-      cancelDrag();
+  private readonly pointerCancel = (event: PointerEvent): void => {
+    if (event.pointerId === this.drag?.id) {
+      this.cancelDrag();
     }
   };
 
-  const cancelDrag = (): void => {
-    if (!drag) {
+  private readonly cancelDrag = (): void => {
+    if (!this.drag) {
       return;
     }
-    position = drag.previous;
-    finishDrag();
-    place();
+    this.position = this.drag.previous;
+    this.finishDrag();
+    this.place();
   };
 
-  function finishDrag(): void {
-    const currentDrag = drag;
-    drag = undefined;
+  private finishDrag(): void {
+    const drag = this.drag;
+    this.drag = undefined;
+    const element = this.element;
     element.classList.remove("debug-overlay--dragging");
-    if (currentDrag && element.hasPointerCapture(currentDrag.id)) {
-      element.releasePointerCapture(currentDrag.id);
+    if (drag && element.hasPointerCapture(drag.id)) {
+      element.releasePointerCapture(drag.id);
     }
   }
 
-  const keyDown = (event: KeyboardEvent): void => {
+  private readonly keyDown = (event: KeyboardEvent): void => {
     if (
       !(event.target instanceof HTMLElement) ||
       !event.target.matches(".debug-overlay__header") ||
@@ -257,21 +289,33 @@ export function createDebugOverlayLayout(element: HTMLElement) {
       return;
     }
     event.preventDefault();
-    cancelAnimation();
-    const box = element.getBoundingClientRect();
-    position = clamp({ x: box.x + dx, y: box.y + dy });
-    place();
-    save();
+    this.cancelAnimation();
+    const box = this.element.getBoundingClientRect();
+    this.position = this.clamp({ x: box.x + dx, y: box.y + dy });
+    this.place();
+    this.save();
   };
 
-  function disconnect(): void {
-    cancelAnimationFrame(frame);
-    frame = 0;
-    transitionFrom = undefined;
-    cancelAnimation();
-    cancelDrag();
-    observer?.disconnect();
-    listeners.abort();
+  disconnect(): void {
+    cancelAnimationFrame(this.frame);
+    this.frame = 0;
+    this.transitionFrom = undefined;
+    this.cancelAnimation();
+    this.cancelDrag();
+    this.observer?.disconnect();
+    const element = this.element;
+    element?.removeEventListener("pointerdown", this.pointerDown);
+    element?.removeEventListener("pointermove", this.pointerMove);
+    element?.removeEventListener("pointerup", this.pointerUp);
+    element?.removeEventListener("pointercancel", this.pointerCancel);
+    element?.removeEventListener("lostpointercapture", this.pointerCancel);
+    element?.removeEventListener("keydown", this.keyDown);
+    window.removeEventListener("resize", this.resize);
+    window.removeEventListener("blur", this.cancelDrag);
   }
-  return { update, disconnect };
+
+  reconnect(): void {
+    this.connect();
+    this.place();
+  }
 }

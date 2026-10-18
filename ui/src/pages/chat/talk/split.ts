@@ -1,4 +1,3 @@
-import type { RealtimeVoiceCloseOptions } from "../../../../../src/talk/provider-types.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -22,7 +21,7 @@ export type SplitTalkOptions = {
 /** Split Talk uses the same capture, chat, and speech owners as the composer. */
 export class SplitTalkTransport implements RealtimeTalkTransport {
   private capture: ComposerDictationSession | null = null;
-  private closed: RealtimeVoiceCloseOptions["disposition"];
+  private closed = false;
   private runId: string | undefined;
   private chatAbort: AbortController | undefined;
 
@@ -40,20 +39,17 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     return this.closed ? "cancelled" : "ready";
   }
 
-  stop({ disposition = "abort" }: RealtimeVoiceCloseOptions = {}): void {
-    if (this.closed) {
-      return;
-    }
-    this.closed = disposition;
+  stop(): void {
+    this.closed = true;
     const capture = this.capture;
     this.capture = null;
     void capture?.cancel().catch(() => undefined);
     this.options.playback.stop();
     this.chatAbort?.abort();
-    if (this.runId && disposition === "abort") {
+    if (this.runId) {
       void this.abortRun(this.runId);
+      this.runId = undefined;
     }
-    this.runId = undefined;
     this.callbacks.onInputLevel?.(0);
   }
 
@@ -121,7 +117,6 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
       client: this.client,
       runId,
       timeoutMs: 120_000,
-      timeoutMessage: t("chat.voice.replyTimedOut"),
       signal: controller.signal,
     };
     // A terminal event can precede the admission ACK; subscribe before sending.
@@ -130,9 +125,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     try {
       const ack = await this.options.sendMessage(message, runId);
       if (this.closed) {
-        if (this.closed === "abort") {
-          await this.abortRun(ack.runId);
-        }
+        await this.abortRun(ack.runId);
         return "";
       }
       if (isTerminalFailureChatSendAck(ack)) {
@@ -161,8 +154,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     if (this.closed) {
       return;
     }
-    // Status callbacks can synchronously stop Talk; commit detachment first.
-    this.stop({ disposition: "detach" });
+    this.stop();
     this.callbacks.onStatus?.("error", formatUiError(error));
   }
 }

@@ -4,22 +4,28 @@ import {
   resolveRuntimeWorkerArgv,
   spawnOomScoreAdjusted as spawn,
 } from "openclaw/plugin-sdk/process-runtime";
-import { Guard } from "typebox/guard";
 import type { WorkerConfig } from "./config.js";
 import type { ClassificationInput, ClassificationResult } from "./models/types.js";
-import { OnnxWorkerError, type WorkerReply, type WorkerRequest } from "./protocol.js";
+import {
+  OnnxWorkerError,
+  parseWorkerReply,
+  parseWorkerRequest,
+  type WorkerReply,
+  type WorkerRequest,
+} from "./protocol.js";
 
 type Operation = Exclude<WorkerRequest, { kind: "init" }>;
-type OperationReply = Exclude<WorkerReply, { kind: "error" }>;
 type Task = {
   request: Operation;
   signal: AbortSignal;
+  sent: boolean;
   abort: () => void;
-  resolve: (reply: OperationReply) => void;
+  resolve: (reply: WorkerReply) => void;
   reject: (error: unknown) => void;
 };
 type Worker = {
   child: ChildProcess;
+  ready: boolean;
   retiring: boolean;
   failure?: unknown;
   closed: Promise<void>;
@@ -43,12 +49,13 @@ export class InferenceWorkerClient {
   private readonly queue: Task[] = [];
   private active?: Task;
   private worker?: Worker;
+  private nextId = 0;
   private closed = false;
   private stopping?: Promise<void>;
 
   constructor(options: { workerUrl: URL; config: WorkerConfig }) {
-    this.workerUrl = options.workerUrl;
-    this.config = options.config;
+    this.workerUrl = new URL(options.workerUrl.href);
+    this.config = { ...options.config };
   }
 
   async classify(
@@ -56,45 +63,23 @@ export class InferenceWorkerClient {
     inputs: ClassificationInput[],
     signal: AbortSignal,
   ): Promise<ClassificationResult[]> {
-    signal.throwIfAborted();
-    if (
-      !model.length ||
-      !Guard.IsMaxLength(model, 128) ||
-      inputs.length < 1 ||
-      inputs.length > 32
-    ) {
-      throw new OnnxWorkerError("unsupported-input");
-    }
-    let bytes = 0;
-    for (const input of inputs) {
-      bytes += Buffer.byteLength(JSON.stringify(input));
-      if (
-        !Guard.IsMaxLength(input.text, 262144) ||
-        input.labels.length < 2 ||
-        input.labels.length > 64 ||
-        input.labels.some((label) => !label.length || !Guard.IsMaxLength(label, 16384)) ||
-        !input.task.length ||
-        !Guard.IsMaxLength(input.task, 1024) ||
-        !Guard.IsMaxLength(input.instructions ?? "", 16384) ||
-        Object.values(input.descriptions ?? {}).some((value) => !Guard.IsMaxLength(value, 16384)) ||
-        bytes > 1024 * 1024
-      ) {
-        throw new OnnxWorkerError("unsupported-input");
-      }
-    }
     const reply = await this.enqueue(
       {
         kind: "classify",
+        id: ++this.nextId,
         model,
-        inputs,
+        inputs: inputs.map((input) => ({ ...input, labels: [...input.labels] })),
       },
       signal,
     );
+    if (reply.kind !== "results") {
+      throw new OnnxWorkerError("runtime");
+    }
     return reply.results;
   }
 
   async warm(models: string[], signal: AbortSignal): Promise<void> {
-    await this.enqueue({ kind: "warm", models }, signal);
+    await this.enqueue({ kind: "warm", id: ++this.nextId, models: [...models] }, signal);
   }
 
   stop(): Promise<void> {
@@ -112,16 +97,13 @@ export class InferenceWorkerClient {
     return this.stopping;
   }
 
-  private enqueue(
-    request: Extract<Operation, { kind: "classify" }>,
-    signal: AbortSignal,
-  ): Promise<Extract<OperationReply, { kind: "results" }>>;
-  private enqueue(
-    request: Extract<Operation, { kind: "warm" }>,
-    signal: AbortSignal,
-  ): Promise<Extract<OperationReply, { kind: "warmed" }>>;
-  private enqueue(request: Operation, signal: AbortSignal): Promise<OperationReply> {
+  private enqueue(request: Operation, signal: AbortSignal): Promise<WorkerReply> {
     signal.throwIfAborted();
+    try {
+      parseWorkerRequest(request);
+    } catch {
+      return Promise.reject(new OnnxWorkerError("unsupported-input"));
+    }
     if (this.closed || this.queue.length + (this.active ? 1 : 0) >= 4) {
       return Promise.reject(new OnnxWorkerError("runtime"));
     }
@@ -129,6 +111,7 @@ export class InferenceWorkerClient {
       const task: Task = {
         request,
         signal,
+        sent: false,
         resolve,
         reject,
         abort: () => this.cancel(task),
@@ -167,16 +150,19 @@ export class InferenceWorkerClient {
     this.active = task;
     if (!this.worker) {
       try {
-        this.start(task.request);
+        this.start();
       } catch {
         this.finish(undefined, new OnnxWorkerError("runtime"));
       }
       return;
     }
-    this.send(this.worker, task.request);
+    if (this.worker.ready) {
+      this.send(this.worker, task.request);
+      task.sent = true;
+    }
   }
 
-  private start(request: Operation): void {
+  private start(): void {
     const child = spawn(process.execPath, resolveRuntimeWorkerArgv(this.workerUrl), {
       env: workerEnv(),
       shell: false,
@@ -186,12 +172,13 @@ export class InferenceWorkerClient {
     const { promise: closed, resolve: resolveClosed } = createDeferred();
     const worker: Worker = {
       child,
+      ready: false,
       retiring: false,
       closed,
       resolveClosed,
     };
     this.worker = worker;
-    child.on("message", (reply: WorkerReply) => this.receive(worker, reply));
+    child.on("message", (message: unknown) => this.receive(worker, message));
     const onFailure = () => {
       if (this.worker === worker) {
         this.retire(new OnnxWorkerError("runtime"));
@@ -217,7 +204,6 @@ export class InferenceWorkerClient {
       worker.resolveClosed();
     });
     this.send(worker, { kind: "init", config: this.config });
-    this.send(worker, request);
   }
 
   private send(worker: Worker, request: WorkerRequest): void {
@@ -234,18 +220,51 @@ export class InferenceWorkerClient {
     }
   }
 
-  private receive(worker: Worker, reply: WorkerReply): void {
+  private receive(worker: Worker, message: unknown): void {
     if (this.worker !== worker || worker.retiring) {
+      return;
+    }
+    let reply: WorkerReply;
+    try {
+      reply = parseWorkerReply(message);
+    } catch {
+      this.retire(new OnnxWorkerError("runtime"));
+      return;
+    }
+    const task = this.active;
+    if (reply.kind === "ready" && !worker.ready && task) {
+      worker.ready = true;
+      task.sent = true;
+      this.send(worker, task.request);
+      return;
+    }
+    if (!worker.ready || !task?.sent || reply.kind === "ready" || reply.id !== task.request.id) {
+      this.retire(new OnnxWorkerError("runtime"));
       return;
     }
     if (reply.kind === "error") {
       this.finish(undefined, new OnnxWorkerError(reply.code));
       return;
     }
-    this.finish(reply);
+    const request = task.request;
+    if (
+      (reply.kind === "warmed" && request.kind === "warm") ||
+      (reply.kind === "results" &&
+        request.kind === "classify" &&
+        reply.results.length === request.inputs.length &&
+        reply.results.every(
+          (result, index) =>
+            result.logits.length === request.inputs[index]?.labels.length &&
+            result.logits.every(Number.isFinite),
+        ))
+    ) {
+      this.finish(reply);
+    } else {
+      this.retire(new OnnxWorkerError("runtime"));
+    }
   }
 
-  private finish(reply?: OperationReply, failure?: unknown): void {
+  private finish(reply?: WorkerReply, failure?: unknown): void {
     const task = this.active;
     if (!task) {
       return;

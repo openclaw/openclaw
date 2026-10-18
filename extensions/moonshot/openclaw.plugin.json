@@ -188,8 +188,8 @@
       "help": "Kimi base URL override."
     },
     "webSearch.model": {
-      "label": "Kimi Search Model (Deprecated)",
-      "help": "Deprecated and ignored. Kimi web search uses the search endpoint without a chat model; this key can be removed."
+      "label": "Kimi Search Model",
+      "help": "Kimi model override."
     }
   },
   "contracts": {
@@ -241,8 +241,7 @@
             "type": "string"
           },
           "model": {
-            "type": "string",
-            "description": "Deprecated and ignored. Kimi web search uses the search endpoint without a chat model."
+            "type": "string"
           }
         }
       }

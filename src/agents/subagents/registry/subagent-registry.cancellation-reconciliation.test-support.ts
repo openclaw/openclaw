@@ -155,7 +155,6 @@ export function registerCancellationReconciliationTests({
       captureEntered.resolve();
       return finishCapture.promise;
     });
-    // Leave producer metadata absent so reconciliation must await transcript capture.
     await mod.addSubagentRunForTests(
       makeKilledRun(killedAt, {
         runId,

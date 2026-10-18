@@ -14,11 +14,9 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
-import { PluginManager } from "./control-ui-manager.solid.tsx";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
+import "./control-ui-manager.solid.tsx";
 import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
 
@@ -61,12 +59,13 @@ it("renders customization inline and retains pending reload state", async () => 
   };
   const navigate = vi.fn();
   // SAFETY: this fixture supplies the application services consumed by the manager.
-  const provider = createSolidApplicationContextProvider({
+  const provider = createApplicationContextProvider({
     plugins,
     basePath: "/console",
     navigate,
   } as unknown as ApplicationContext);
-  const { container: manager } = mountSolid(PluginManager, { wrapper: provider.wrapper });
+  // The compatibility entry registers the Solid-backed custom element.
+  const manager = document.createElement("openclaw-plugin-manager");
   const button = (label: string) => {
     const found = [...manager.querySelectorAll("button")].find(
       (element) => element.textContent?.trim() === label,
@@ -76,7 +75,10 @@ it("renders customization inline and retains pending reload state", async () => 
     }
     return found;
   };
+  provider.append(manager);
+  document.body.append(provider);
   try {
+    await manager.updateComplete;
     expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
     expect(manager.querySelector('[role="alert"]')).toBeNull();

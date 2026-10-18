@@ -14,10 +14,7 @@ const externalDependencies = [
 
 const config = {
   clean: true,
-  dts:
-    process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1"
-      ? false
-      : { tsconfig: "tsconfig.packages.json" },
+  dts: process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== "1",
   hooks: createDeclarationBoundaryHooks(),
   entry: {
     index: "packages/ai/src/index.ts",

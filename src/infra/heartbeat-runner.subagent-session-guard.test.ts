@@ -6,10 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import {
-  setHeartbeatSilentCompletion,
-  withTempHeartbeatSandbox,
-} from "./heartbeat-runner.test-utils.js";
+import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -66,10 +63,7 @@ describe("runHeartbeatOnce", () => {
       enqueueSystemEvent("Exec completed (run-dm, code 0)", {
         sessionKey: mainSessionKey,
       });
-      replySpy.mockImplementation(async (_ctx, options) => {
-        setHeartbeatSilentCompletion(options);
-        return undefined;
-      });
+      replySpy.mockResolvedValue({ text: "NO_REPLY" });
 
       await runHeartbeatOnce({
         cfg,

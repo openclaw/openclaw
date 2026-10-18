@@ -1,6 +1,7 @@
 import { ChannelType } from "discord-api-types/v10";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import * as discordRest from "../internal/rest.js";
+import { RequestClient } from "../internal/rest.js";
+import * as discordRequestClient from "../proxy-request-client.js";
 import * as discordSend from "../send.js";
 import { createDiscordSendReceipt } from "../send.receipt.js";
 import {
@@ -33,14 +34,12 @@ const sent = {
   }),
 };
 function fixture() {
-  const rest = new discordRest.RequestClient("synthetic-token", {
+  const rest = new RequestClient("synthetic-token", {
     fetch: async () => {
       throw new Error("Unexpected network request");
     },
   });
-  vi.spyOn(discordRest, "RequestClient").mockImplementation(function () {
-    return rest;
-  });
+  vi.spyOn(discordRequestClient, "createDiscordRequestClient").mockReturnValue(rest);
   return {
     get: vi.spyOn(rest, "get"),
     bot: vi.spyOn(discordSend, "sendMessageDiscord").mockResolvedValue(sent),

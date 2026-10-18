@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread } from "./app-server/protocol.js";
@@ -37,7 +38,9 @@ describe("resident catalog cursor stability", () => {
         send({ id: request.id, result: { thread: { ...threads[1], recencyAt } } });
       },
     });
-    const readNative = vi.fn(async () => projectCodexCatalogPage({ data: threads }));
+    const readNative = vi.fn(async () =>
+      projectCodexCatalogPage({ data: threads }, { sanitize: sanitizeTerminalText }),
+    );
     const nativeReads = vi.spyOn(harness.client, "request");
     const index = new CodexCatalogIndex({
       homeId: await codexCatalogResidentHomeKey({ startOptions }),

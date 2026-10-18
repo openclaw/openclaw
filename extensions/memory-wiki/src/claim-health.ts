@@ -8,7 +8,6 @@ export const WIKI_AGING_DAYS = 30;
 const WIKI_STALE_DAYS = 90;
 
 const CONTESTED_CLAIM_STATUSES = new Set(["contested", "contradicted", "refuted", "superseded"]);
-const CLAIM_FRESHNESS_ORDER = ["stale", "aging", "fresh"];
 
 export type WikiFreshnessLevel = "fresh" | "aging" | "stale" | "unknown";
 
@@ -92,18 +91,6 @@ export function isClaimContestedStatus(status?: string): boolean {
   return CONTESTED_CLAIM_STATUSES.has(normalizeClaimStatus(status));
 }
 
-export function compareWikiClaimSummaries(
-  left: { text: string; confidence?: number; freshnessLevel?: string },
-  right: { text: string; confidence?: number; freshnessLevel?: string },
-): number {
-  return (
-    (right.confidence ?? -1) - (left.confidence ?? -1) ||
-    CLAIM_FRESHNESS_ORDER.indexOf(right.freshnessLevel ?? "") -
-      CLAIM_FRESHNESS_ORDER.indexOf(left.freshnessLevel ?? "") ||
-    left.text.localeCompare(right.text)
-  );
-}
-
 export function assessPageFreshness(page: WikiPageSummary, now?: Date): WikiFreshness {
   return buildFreshnessFromTimestamp({ timestamp: page.updatedAt, now });
 }
@@ -117,7 +104,9 @@ export function assessClaimFreshness(params: {
     params.claim.updatedAt,
     ...params.claim.evidence.map((entry) => entry.updatedAt),
   ];
-  const hasClaimTimestamp = candidates.some((value) => value?.trim());
+  const hasClaimTimestamp = candidates.some(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
   const latestTimestamp = resolveLatestTimestamp(candidates);
   return buildFreshnessFromTimestamp({
     timestamp: latestTimestamp ?? (hasClaimTimestamp ? undefined : params.page.updatedAt),
@@ -140,7 +129,7 @@ function buildWikiClaimHealth(params: {
     ...(claimId ? { claimId } : {}),
     text: params.claim.text,
     status: normalizeClaimStatus(params.claim.status),
-    ...(params.claim.confidence !== undefined ? { confidence: params.claim.confidence } : {}),
+    ...(typeof params.claim.confidence === "number" ? { confidence: params.claim.confidence } : {}),
     evidenceCount: params.claim.evidence.length,
     missingEvidence: params.claim.evidence.length === 0,
     freshness: assessClaimFreshness({ page: params.page, claim: params.claim, now: params.now }),

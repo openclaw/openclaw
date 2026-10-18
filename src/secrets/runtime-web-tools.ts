@@ -61,11 +61,11 @@ const loadRuntimeWebToolsFallbackProviders = createLazyRuntimeSurface(
   ({ runtimeWebToolsFallbackProviders }) => runtimeWebToolsFallbackProviders,
 );
 const loadRuntimeWebToolsPublicArtifacts = createLazyRuntimeSurface(
-  () => import("../plugins/web-provider-public-artifacts.js"),
+  () => import("./runtime-web-tools-public-artifacts.runtime.js"),
   (mod) => mod,
 );
 const loadRuntimeWebToolsManifest = createLazyRuntimeSurface(
-  () => import("../plugins/plugin-registry.js"),
+  () => import("./runtime-web-tools-manifest.runtime.js"),
   (mod) => mod,
 );
 

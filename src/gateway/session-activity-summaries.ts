@@ -209,6 +209,7 @@ export function createSessionActivitySummaries(deps: {
       state = undefined;
     }
     if (state) {
+      state.entry = projectActivitySummaryEntry(entry);
       return state;
     }
     if (states.size >= MAX_TRACKED) {
@@ -601,7 +602,7 @@ export function createSessionActivitySummaries(deps: {
     return prepareSessionActivitySummaryView({
       ...target,
       cfg: deps.getConfig(),
-      entry: state?.entry ?? entry,
+      entry,
       storePath: scope(target).storePath,
       admitted: state !== undefined,
     });

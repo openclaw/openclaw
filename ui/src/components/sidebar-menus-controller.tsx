@@ -7,9 +7,8 @@ import {
 } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
-import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
+import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
 import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -103,26 +102,24 @@ export class SidebarMenusController {
     },
   );
   readonly catalogMenu: SidebarCatalogMenuController;
-  // Leases survive view-root replacement; render() owns their reactive projection.
-  readonly agentMenuAvatars = createIdentityAvatars();
+  readonly agentMenuAvatars: IdentityAvatarController;
   pluginActionLifetime = new AbortController();
 
   constructor(readonly host: SidebarMenusControllerHost) {
     host.addController(this);
+    this.agentMenuAvatars = new IdentityAvatarController(host);
     this.catalogMenu = new SidebarCatalogMenuController(host, () => {
       this.dismissTransientMenus();
     });
   }
 
   hostConnected(): void {
-    this.agentMenuAvatars.connect();
     if (this.pluginActionLifetime.signal.aborted) {
       this.pluginActionLifetime = new AbortController();
     }
   }
 
   hostDisconnected(): void {
-    this.agentMenuAvatars.disconnect();
     this.pluginActionLifetime.abort();
     this.menuRendererImport.dispose();
     this.clearAgentMenuHoverTimers();
@@ -580,7 +577,6 @@ export class SidebarMenusController {
   }
 
   render() {
-    const avatars = projectOwner(this.agentMenuAvatars, (owner) => owner);
     return [
       <Show when={this.menuRenderer && this.railPinMenuPosition} keyed>
         {(_menu) => this.menuRenderer!.renderSidebarRailPinMenuForController(this)}
@@ -591,7 +587,7 @@ export class SidebarMenusController {
       <Show when={this.menuRenderer && this.agentMenuPosition} keyed>
         {(_menu) =>
           this.agentMenuAvatars.withActiveRoutes(() =>
-            this.menuRenderer!.renderSidebarAgentMenuForController(this, avatars.read),
+            this.menuRenderer!.renderSidebarAgentMenuForController(this),
           )
         }
       </Show>,

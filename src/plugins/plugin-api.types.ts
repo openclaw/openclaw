@@ -119,8 +119,6 @@ type OpenClawPluginSessionStateApi = {
 export type PluginActiveRunSteerParams = {
   sessionKey: string;
   text: string;
-  /** Operator-facing note without model-only delivery instructions; defaults to text. */
-  displayText?: string;
   idempotencyKey?: string;
 };
 
@@ -133,7 +131,7 @@ type OpenClawPluginSessionWorkflowApi = {
   enqueueNextTurnInjection: (
     injection: PluginNextTurnInjection,
   ) => Promise<PluginNextTurnInjectionEnqueueResult>;
-  /** Steer a current run without starting a turn; shown only as a Control UI notice, never a channel reply. */
+  /** Deliver hidden plugin-authored guidance to a session's current run, without starting a turn. */
   steerActiveRun: (params: PluginActiveRunSteerParams) => Promise<PluginActiveRunSteerResult>;
   /**
    * Register cleanup metadata for a plugin-owned session scheduler job.

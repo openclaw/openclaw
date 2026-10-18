@@ -2487,7 +2487,14 @@ final class NodeAppModel {
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
-            content.interruptionLevel = (params.priority ?? .active).interruptionLevel
+            switch params.priority ?? .active {
+            case .passive:
+                content.interruptionLevel = .passive
+            case .timeSensitive:
+                content.interruptionLevel = .timeSensitive
+            case .active:
+                content.interruptionLevel = .active
+            }
             let soundValue = params.sound?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if let soundValue, ["none", "silent", "off", "false", "0"].contains(soundValue) {
                 content.sound = nil

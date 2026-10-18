@@ -150,11 +150,10 @@ function record(value: unknown, name: string, keys: readonly string[]): Record<s
 }
 
 function text(value: unknown, name: string, min: number, max = Number.MAX_SAFE_INTEGER): string {
-  const trimmed = typeof value === "string" ? value.trim() : undefined;
-  if (trimmed === undefined || trimmed.length < min || trimmed.length > max) {
+  if (typeof value !== "string" || value.trim().length < min || value.trim().length > max) {
     throw new Error(`${name} must be a string with ${min}..${max} characters.`);
   }
-  return trimmed;
+  return value.trim();
 }
 
 function boolean(value: unknown, name: string): boolean {

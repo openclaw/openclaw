@@ -38,10 +38,13 @@ describe("coercion helper declaration AST guard", () => {
       "const isValidAgentId = () => true;",
       "function containsAsciiControlCharacter() {}",
     ].join("\n");
-    using retainedSource = parser.createSourceFile("src/example.ts", source);
 
     expect(
-      findBannedCoercionHelperDeclarations(source, "src/example.ts", retainedSource.sourceFile),
+      findBannedCoercionHelperDeclarations(
+        source,
+        "src/example.ts",
+        parser.createSourceFile("src/example.ts", source),
+      ),
     ).toEqual([
       { file: "src/example.ts", kind: "function", line: 1, name: "readString" },
       { file: "src/example.ts", kind: "variable", line: 2, name: "isRecord" },
@@ -71,10 +74,13 @@ describe("coercion helper declaration AST guard", () => {
       "// function asRecord() {}",
       'const fixture = "function toError() {}";',
     ].join("\n");
-    using retainedSource = parser.createSourceFile("src/example.ts", source);
 
     expect(
-      findBannedCoercionHelperDeclarations(source, "src/example.ts", retainedSource.sourceFile),
+      findBannedCoercionHelperDeclarations(
+        source,
+        "src/example.ts",
+        parser.createSourceFile("src/example.ts", source),
+      ),
     ).toEqual([]);
   });
 
@@ -174,9 +180,11 @@ describe("coercion helper declaration AST guard", () => {
       "export { local as alias };",
       "export const VALUE = 1;",
     ].join("\n");
-    using retainedSource = parser.createSourceFile("src/owner.ts", source);
 
-    expect(findExportedCallableNames(retainedSource.sourceFile)).toEqual(["alias", "canonical"]);
+    expect(findExportedCallableNames(parser.createSourceFile("src/owner.ts", source))).toEqual([
+      "alias",
+      "canonical",
+    ]);
   });
 
   it("reports unclassified exports and stale, duplicate, or blank deferred entries", () => {

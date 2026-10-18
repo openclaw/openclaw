@@ -8,10 +8,6 @@ import { buildBaseOptions } from "./simple-options.js";
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 export { convertMessages } from "../openai-completions-messages.js";
 
-type OpenAIThinkingProvenanceOptions = OpenAICompletionsOptions & {
-  openclawThinkingExplicit?: boolean;
-};
-
 export const streamOpenAICompletions: StreamFunction<
   "openai-completions",
   OpenAICompletionsOptions
@@ -27,16 +23,12 @@ export const streamSimpleOpenAICompletions: StreamFunction<
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
-  // Host session streams attach selection intent without changing the public provider options.
-  const completionsOptions = options as OpenAIThinkingProvenanceOptions | undefined;
+  const completionsOptions = options as OpenAICompletionsOptions | undefined;
 
-  const providerOptions = {
+  return streamOpenAICompletions(model, context, {
     ...base,
     reasoningEffort: clampedReasoning,
     toolChoice: completionsOptions?.toolChoice,
     streaming: completionsOptions?.streaming,
-    openclawThinkingExplicit:
-      completionsOptions?.openclawThinkingExplicit ?? options?.reasoning !== undefined,
-  } satisfies OpenAIThinkingProvenanceOptions;
-  return streamOpenAICompletions(model, context, providerOptions);
+  } satisfies OpenAICompletionsOptions);
 };

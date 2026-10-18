@@ -241,9 +241,7 @@ export function isCodexSandboxExecServerEnabled(
   );
 }
 
-export function isCodexRemoteExecPlacementSandbox(
-  sandbox: unknown,
-): sandbox is { placementExecutionMode: "remote-exec" } {
+export function isCodexRemoteExecPlacementSandbox(sandbox: unknown): boolean {
   return (
     typeof sandbox === "object" &&
     sandbox !== null &&
@@ -255,6 +253,8 @@ export function isCodexRemoteExecPlacementSandbox(
 export function isCodexPairedNodeRemoteExecPlacementSandbox(sandbox: unknown): boolean {
   return (
     isCodexRemoteExecPlacementSandbox(sandbox) &&
+    typeof sandbox === "object" &&
+    sandbox !== null &&
     "placementNodeId" in sandbox &&
     typeof sandbox.placementNodeId === "string" &&
     sandbox.placementNodeId.length > 0

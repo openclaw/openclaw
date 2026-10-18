@@ -176,7 +176,7 @@ export function tokenizeIntentText(text: string): string[] {
 
 export type StandingIntentMatchInput = {
   promptTokens: string[];
-  ftsQuery: import("openclaw/plugin-sdk/database-engine-worker-runtime").TextQuery;
+  ftsQuery: string;
   channelScopes: string[];
   senderScope?: string;
   nowMs?: number;
@@ -223,7 +223,7 @@ export function prepareStandingIntentMatch(params: {
       : undefined;
   return {
     promptTokens,
-    ftsQuery: { kind: "any", clauses: promptTokens.map((text) => ({ kind: "phrase", text })) },
+    ftsQuery: promptTokens.map((token) => `"${token.replaceAll('"', '""')}"`).join(" OR "),
     channelScopes,
     senderScope: storedSenderScope,
     nowMs: params.nowMs,

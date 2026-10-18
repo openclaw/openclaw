@@ -36,13 +36,11 @@ function parseCronRunSessionJobId(sessionKey: string): string | undefined {
   return /^cron:([^:]+):run:[^:]+(?:$|:)/u.exec(parsed.rest)?.[1];
 }
 
-function pruneSessionRegistryStore(params: {
-  retentionMs: number;
-  removals?: SessionEntryLifecycleRemoval[];
+function buildSessionRegistryPreserveKeys(params: {
   runningCronJobIds: ReadonlySet<string>;
   storePath: string;
   store: Record<string, SessionEntry>;
-}): SessionRegistryMaintenanceStoreSummary {
+}): { preserveKeys: Set<string>; preservedRunning: number } {
   const preserveKeys =
     collectActiveSessionWorkAdmissionKeys({
       storePath: params.storePath,
@@ -56,6 +54,21 @@ function pruneSessionRegistryStore(params: {
       preservedRunning += 1;
     }
   }
+  return { preserveKeys, preservedRunning };
+}
+
+function pruneSessionRegistryStore(params: {
+  retentionMs: number;
+  removals?: SessionEntryLifecycleRemoval[];
+  runningCronJobIds: ReadonlySet<string>;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+}): SessionRegistryMaintenanceStoreSummary {
+  const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
+    runningCronJobIds: params.runningCronJobIds,
+    storePath: params.storePath,
+    store: params.store,
+  });
   const pruned = pruneStaleEntries(params.store, params.retentionMs, {
     log: false,
     onPruned: params.removals
@@ -93,7 +106,7 @@ function pruneSessionRegistryStore(params: {
 
 /**
  * Runs session-registry maintenance for one resolved agent store.
- * Preview and apply consume bounded snapshots under one physical reader owner.
+ * Preview and apply select removals from one owned worker snapshot.
  * The lifecycle owner commits removals without running generic session maintenance.
  */
 export async function runSessionRegistryMaintenanceForStore(
@@ -109,12 +122,7 @@ export async function runSessionRegistryMaintenanceForStore(
       nextSweepAtMs: null,
     };
   }
-  const summary: SessionRegistryMaintenanceStoreSummary = {
-    preservedRunning: 0,
-    pruned: 0,
-    nextSweepAtMs: null,
-  };
-  await withSessionRegistryEntriesInWorker(
+  return await withSessionRegistryEntriesInWorker(
     { agentId, storePath },
     async (entries, assertReaderCurrent) => {
       const assertCurrent = () => {
@@ -140,17 +148,16 @@ export async function runSessionRegistryMaintenanceForStore(
           commitGuard: assertCurrent,
         });
         assertCurrent();
-        if (mutation.removedEntries !== planned.pruned) {
-          planned.nextSweepAtMs = Date.now() + 60_000;
-        }
-        planned.pruned = mutation.removedEntries;
+        return {
+          preservedRunning: planned.preservedRunning,
+          pruned: mutation.removedEntries,
+          nextSweepAtMs:
+            mutation.removedEntries === planned.pruned
+              ? planned.nextSweepAtMs
+              : Date.now() + 60_000,
+        };
       }
-      summary.preservedRunning += planned.preservedRunning;
-      summary.pruned += planned.pruned;
-      if (planned.nextSweepAtMs !== null) {
-        summary.nextSweepAtMs = Math.min(summary.nextSweepAtMs ?? Infinity, planned.nextSweepAtMs);
-      }
+      return planned;
     },
   );
-  return summary;
 }

@@ -195,7 +195,6 @@ export async function prepareWorktreeTemplate(params: {
     record: WorktreeTemplateRecord,
     options: WorktreeFilesystemOptions,
   ) => Promise<boolean>;
-  refresh?: (record: WorktreeTemplateRecord, options: WorktreeAllocationGuard) => Promise<boolean>;
   prepare: (record: WorktreeTemplateRecord, options: WorktreeAllocationGuard) => Promise<void>;
 }): Promise<PreparedWorktreeTemplate | undefined> {
   let retained: PreparedWorktreeTemplate | undefined;
@@ -271,9 +270,8 @@ export async function prepareWorktreeTemplate(params: {
           : false;
         if (
           existing?.status === "ready" &&
-          existing.backend === params.backend &&
-          (existing.contentKey === params.contentKey ||
-            (params.refresh && !params.reuseOnly && !hasReaders))
+          existing.contentKey === params.contentKey &&
+          existing.backend === params.backend
         ) {
           // A ready generation with readers is immutable until they settle. Reuse
           // that admission instead of rescanning the same tree for every clone.
@@ -289,23 +287,13 @@ export async function prepareWorktreeTemplate(params: {
           if (
             hasReaders ||
             ((await worktreePathExists(existing.path)) &&
-              (await params.validate(existing, options)) &&
-              (existing.contentKey === params.contentKey ||
-                (await params.refresh?.(existing, options))))
+              (await params.validate(existing, options)))
           ) {
             setWorktreePreparationTemplate("warm", { reason: "ready" });
             if (!hasReaders) {
-              await markTemplateReadyAsync(params.env, existing.id, params.now(), assertCurrent, {
-                sourceCommit: params.sourceCommit,
-                contentKey: params.contentKey,
-              });
+              await markTemplateReadyAsync(params.env, existing.id, params.now(), assertCurrent);
             }
-            return {
-              ...retained,
-              status: "ready",
-              sourceCommit: params.sourceCommit,
-              contentKey: params.contentKey,
-            };
+            return retained;
           }
           await retained.release();
           retained = undefined;

@@ -105,11 +105,7 @@ export function buildUpdatedSessionGoalStatus(
   if (!accounted) {
     throw new SessionGoalTransitionError("goal not found");
   }
-  if (
-    accounted.status === "complete" &&
-    options.status !== "complete" &&
-    options.status !== "active"
-  ) {
+  if (accounted.status === "complete" && accounted.status !== options.status) {
     throw new SessionGoalTransitionError(`goal is already ${accounted.status}`);
   }
   const resetsBudgetWindow =
@@ -128,10 +124,6 @@ export function buildUpdatedSessionGoalStatus(
     ...(options.status === "blocked" ? { blockedAt: now } : {}),
     ...(options.status === "complete" ? { completedAt: accounted.completedAt ?? now } : {}),
   };
-  if (accounted.status === "complete" && options.status === "active") {
-    // Completion belongs to the finished pursuit; a later completion needs its own timestamp.
-    delete next.completedAt;
-  }
   if (resetsBudgetWindow) {
     next.tokenStart = freshTokenStart ?? 0;
     next.tokenStartFresh = freshTokenStart !== undefined;

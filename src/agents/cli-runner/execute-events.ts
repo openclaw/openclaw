@@ -1,5 +1,3 @@
-import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentEventStream } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -8,7 +6,6 @@ import { projectProgressCardChannelUpdate } from "../../session-cards/progress-c
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
 import { registerListener } from "../../shared/listeners.js";
 import { projectAgentActivityItem } from "../agent-activity-presentation.js";
-import { prepareAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import type {
   CliCompactionDelta,
   CliStreamingDelta,
@@ -63,7 +60,6 @@ export function createCliEventHandlers(params: {
     });
   };
   let commentaryCounter = 0;
-  let assistantVisibleText = "";
   const toolSummaryById = new Map<
     string,
     { name: string; failed: boolean; terminalObserved?: boolean }
@@ -379,14 +375,6 @@ export function createCliEventHandlers(params: {
     if (!emitLiveEvents) {
       return;
     }
-    const prepared = prepareAgentRunTerminalReply({ rawText: text });
-    const visibleText = applyPluginTextReplacements(
-      prepared.text,
-      context.backendResolved.textTransforms?.output,
-    );
-    if (!visibleText) {
-      return;
-    }
     commentaryCounter += 1;
     emitLiveEvent("item", () => ({
       kind: "preamble",
@@ -396,7 +384,10 @@ export function createCliEventHandlers(params: {
       phase: "end",
       title: "commentary",
       status: "running",
-      progressText: visibleText,
+      progressText: applyPluginTextReplacements(
+        text,
+        context.backendResolved.textTransforms?.output,
+      ),
     }));
   };
   const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
@@ -404,49 +395,22 @@ export function createCliEventHandlers(params: {
       observedCliActivity = true;
       signalExecutionPhase("assistant_output_started");
     }
-    const candidate = text.trimStart();
-    if (
-      !text.startsWith(`${SILENT_REPLY_TOKEN}\n`) &&
-      (SILENT_REPLY_TOKEN.startsWith(candidate) ||
-        (candidate.startsWith(SILENT_REPLY_TOKEN) &&
-          !candidate.slice(SILENT_REPLY_TOKEN.length).trim()))
-    ) {
-      return;
-    }
-    const sourceText = stripMixedSilentReplyTokens(text) ?? text;
-    const sourceDelta = sourceText.startsWith(assistantVisibleText)
-      ? sourceText.slice(assistantVisibleText.length)
-      : sourceText;
-    assistantVisibleText = sourceText;
-    const preparedText = applyPluginTextReplacements(
-      sourceText,
-      context.backendResolved.textTransforms?.output,
-    );
     emitLiveEvent("assistant", () => ({
       itemId: cliAssistantItemId(runParams.runId),
-      text: preparedText,
-      delta: applyPluginTextReplacements(
-        sourceDelta,
-        context.backendResolved.textTransforms?.output,
-      ),
+      text: applyPluginTextReplacements(text, context.backendResolved.textTransforms?.output),
+      delta: applyPluginTextReplacements(delta, context.backendResolved.textTransforms?.output),
     }));
   };
   const emitCliCompletedReply = (text: string, assistantMessageIndex: number) => {
     if (text) {
       observedCliActivity = true;
     }
-    assistantVisibleText = "";
-    const prepared = prepareAgentRunTerminalReply({ rawText: text });
-    const visibleText = applyPluginTextReplacements(
-      prepared.text,
-      context.backendResolved.textTransforms?.output,
-    );
-    if (!visibleText) {
-      return;
-    }
     emitLiveEvent("assistant", () => ({
       assistantMessageIndex,
-      completedText: visibleText,
+      completedText: applyPluginTextReplacements(
+        text,
+        context.backendResolved.textTransforms?.output,
+      ),
     }));
   };
 

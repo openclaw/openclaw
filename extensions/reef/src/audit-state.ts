@@ -34,9 +34,9 @@ export {
 } from "./audit-state-format.js";
 
 export type ReefAuditOperationState = {
-  head: PluginStateKeyedStore<ReefAuditHeadRecord, 2>;
-  migration: PluginStateKeyedStore<{ pending: true }, 2>;
-  entries: PluginStateKeyedStore<ReefAuditStateRecord, 2>;
+  head: PluginStateKeyedStore<ReefAuditHeadRecord>;
+  migration: PluginStateKeyedStore<{ pending: true }>;
+  entries: PluginStateKeyedStore<ReefAuditStateRecord>;
   auditKey: Uint8Array;
   maxEntries: number;
 };
@@ -54,19 +54,19 @@ class ReefSqliteAuditStore implements AuditStore {
   constructor(
     runtime: PluginRuntime,
     auditKey: Uint8Array,
-    head: PluginStateKeyedStore<ReefAuditHeadRecord, 2>,
+    head: PluginStateKeyedStore<ReefAuditHeadRecord>,
     maxEntries = REEF_AUDIT_MAX_ENTRIES,
     authoritySignal?: AbortSignal,
   ) {
     if (auditKey.length !== 32) {
       throw new Error("audit key must be 32 bytes");
     }
-    const migration = runtime.state.openKeyedStoreV2<{ pending: true }>({
+    const migration = runtime.state.openKeyedStore<{ pending: true }>({
       namespace: REEF_AUDIT_MIGRATION_NAMESPACE,
       maxEntries: REEF_AUDIT_MIGRATION_MAX_ENTRIES,
       overflowPolicy: "reject-new",
     });
-    const entries = runtime.state.openKeyedStoreV2<ReefAuditStateRecord>({
+    const entries = runtime.state.openKeyedStore<ReefAuditStateRecord>({
       namespace: REEF_AUDIT_NAMESPACE,
       maxEntries: maxEntries + 1,
       overflowPolicy: "reject-new",
@@ -123,7 +123,7 @@ export function openReefAuditStore(
   maxEntries?: number,
   authoritySignal?: AbortSignal,
 ): AuditStore {
-  const head = runtime.state.openKeyedStoreV2<ReefAuditHeadRecord>({
+  const head = runtime.state.openKeyedStore<ReefAuditHeadRecord>({
     namespace: REEF_AUDIT_HEAD_NAMESPACE,
     maxEntries: REEF_AUDIT_HEAD_MAX_ENTRIES,
     overflowPolicy: "reject-new",

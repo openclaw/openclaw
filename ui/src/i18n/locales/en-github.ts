@@ -22,20 +22,6 @@ const enGitHub = {
     moreParticipantsLabel: en.sessionHovercard.moreParticipantsLabel,
     projectLabel: en.sessionHovercard.projectLabel,
     workspaceLabel: en.sessionHovercard.workspaceLabel,
-    automationCount: "{count} automations",
-    selectAutomation: "Select an automation",
-    automationInstructions: "Instructions",
-    automationFullInstructions: "Full instructions",
-    openAutomation: "Open automation",
-    openAutomations: "Open automations",
-    automationNext: "Next {time}",
-    automationLast: "Last run {status} · {time}",
-    automationStatuses: {
-      ok: "succeeded",
-      error: "failed",
-      skipped: "skipped",
-      unknown: "status unknown",
-    },
     branchLabel: en.sessionHovercard.branchLabel,
     runsOn: en.sessionHovercard.runsOn,
     machineLabel: en.sessionHovercard.machineLabel,
@@ -44,7 +30,6 @@ const enGitHub = {
     more: en.sessionHovercard.more,
     changedFile: en.sessionHovercard.changedFile,
     changedFiles: en.sessionHovercard.changedFiles,
-    pullRequests: "Pull requests",
     pullRequestLabel: "Pull request #{number}, {state}",
     pullRequestAuthorLabel: "Opened by {login}",
     states: {
@@ -61,7 +46,7 @@ const enGitHub = {
   },
   chat: {
     pullRequests: {
-      linkLabel: "Pull request {reference}: {title}",
+      linkLabel: "Pull request #{number}: {title}",
       createPr: "Create PR",
       createPrLabel: "Create a pull request for {branch}",
       publishPr: "Publish PR",
@@ -71,7 +56,7 @@ const enGitHub = {
       openPublishedPr: "Open PR",
       cloudPublicationGuidance:
         "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
-      dismiss: "Dismiss pull request {reference}",
+      dismiss: "Dismiss pull request #{number}",
       dismissBranch: "Hide {branch} for this session",
       open: en.chat.pullRequests.open,
       draft: en.chat.pullRequests.draft,

@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   installMockGateway,
   createControlUiMockSameOriginGatewayScript,
@@ -72,7 +71,6 @@ suite.define(() => {
           reloads += 1;
         });
         await gateway.setOnline(true);
-        await waitForControlUiGatewayReady(page);
         if (cachedSplit) {
           await selectChatLayoutAction(page, "Open split view");
           await page

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -12,7 +11,6 @@ import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js"
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import { resolveChatAttachmentFrameBudgetBytes } from "../../shared/chat-attachment-frame-budget.js";
-import { normalizeChatImageRenditionWidth } from "../../shared/chat-image-renditions.js";
 import { canCreateArtifactDownload, createArtifactDownload } from "../artifact-download-grants.js";
 import type { PreparedArtifactDownload } from "../artifact-download-projection.js";
 import {
@@ -20,10 +18,6 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
   resolveManagedOutgoingMediaUrlDownload,
 } from "../managed-image-attachments.js";
-import {
-  encodeImageThumbnail,
-  resolveManagedImageThumbnail,
-} from "../managed-image-thumbnail-cache.js";
 import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -413,7 +407,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!found.ok) {
       return;
     }
-    let { artifact } = found.value;
+    const { artifact } = found.value;
     if (!artifact) {
       respondArtifactNotFound(respond, query.artifactId);
       return;
@@ -480,44 +474,6 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         : null;
     if (!artifactResponseIsCurrent(found.value, respond)) {
       return;
-    }
-    if (query.previewWidth !== undefined && !managedUrl) {
-      let preview: Buffer | undefined;
-      if (
-        artifact.type === "image" &&
-        artifact.download.mode === "bytes" &&
-        artifact.data !== undefined
-      ) {
-        const source = Buffer.from(artifact.data, "base64");
-        const width = normalizeChatImageRenditionWidth(query.previewWidth);
-        const cacheKey = `${createHash("sha256").update(source).digest("hex")}\0${width}`;
-        preview = await resolveManagedImageThumbnail(cacheKey, () =>
-          encodeImageThumbnail(source, width),
-        ).catch(() => undefined);
-      }
-      assertCurrent();
-      if (!artifactResponseIsCurrent(found.value, respond)) {
-        return;
-      }
-      if (!preview) {
-        respond(
-          false,
-          undefined,
-          artifactError("artifact_preview_unavailable", "artifact image preview is unavailable", {
-            artifactId: artifact.id,
-          }),
-        );
-        return;
-      }
-      // The frame budget below applies to encoded preview bytes, not the source.
-      // Do not retain an original data URL in the summary's optional image field.
-      artifact = {
-        ...artifact,
-        image: undefined,
-        mimeType: "image/webp",
-        sizeBytes: preview.byteLength,
-        data: preview.toString("base64"),
-      };
     }
     const payload = {
       artifact: toArtifactSummary(artifact),

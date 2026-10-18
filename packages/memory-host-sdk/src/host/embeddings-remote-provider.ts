@@ -10,7 +10,6 @@ import type {
   EmbeddingProviderOptions,
 } from "./embeddings.types.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
-import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
 
 // Remote embedding provider factory for OpenAI-compatible embeddings APIs.
 
@@ -20,7 +19,6 @@ export type RemoteEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
-  resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
   model: string;
 };
 
@@ -52,7 +50,6 @@ export function createRemoteEmbeddingProvider(params: {
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
-      resolveRequestHeaders: client.resolveRequestHeaders,
       signal: options?.signal,
       onUsage: options?.onUsage,
       body: {
@@ -94,12 +91,12 @@ export async function resolveRemoteEmbeddingClient(params: {
   defaultBaseUrl: string;
   normalizeModel: (model: string) => string;
 }): Promise<RemoteEmbeddingClient> {
-  const client = await resolveRemoteEmbeddingBearerClient({
+  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
     provider: params.provider,
     capability: params.capability,
     options: params.options,
     defaultBaseUrl: params.defaultBaseUrl,
   });
   const model = params.normalizeModel(params.options.model);
-  return { ...client, model };
+  return { baseUrl, headers, ssrfPolicy, model };
 }

@@ -2724,7 +2724,23 @@ describe("talk realtime gateway relay", () => {
     });
     const { events, context } = createRelayEventRecorder();
 
-    const hasForcedConsult = () =>
+    const nativeSession = await createTalkRealtimeRelaySession({
+      context,
+      provider,
+      instructions: "be brief",
+      forceAgentConsultOnFinalTranscript: true,
+    });
+    await Promise.resolve();
+    bridgeRequest?.onTranscript?.("user", "Can you check this?", true);
+    bridgeRequest?.onToolCall?.({
+      itemId: "native-item",
+      callId: "native-call",
+      name: "openclaw_agent_consult",
+      args: { question: "Can you check this for me?" },
+    });
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(
       events.some((entry) => {
         const payload = entry.payload;
         return (
@@ -2733,32 +2749,43 @@ describe("talk realtime gateway relay", () => {
           (payload as Record<string, unknown>).type === "toolCall" &&
           (payload as Record<string, unknown>).forced === true
         );
-      });
-    for (const [callId, transcript, question] of [
-      ["native-call", "Can you check this?", "Can you check this for me?"],
-      ["unicode-native-call", "проверь статус", "проверь статус"],
-    ] as const) {
-      const session = await createTalkRealtimeRelaySession({
-        context,
-        provider,
-        instructions: "be brief",
-        forceAgentConsultOnFinalTranscript: true,
-      });
-      await Promise.resolve();
-      bridgeRequest?.onTranscript?.("user", transcript, true);
-      bridgeRequest?.onToolCall?.({
-        itemId: `item-${callId}`,
-        callId,
-        name: "openclaw_agent_consult",
-        args: { question },
-      });
-      await vi.advanceTimersByTimeAsync(250);
-      expect(hasForcedConsult()).toBe(false);
-      await stopTalkRealtimeRelaySession({
-        relaySessionId: session.relaySessionId,
-        connId: "conn-1",
-      });
-    }
+      }),
+    ).toBe(false);
+    await stopTalkRealtimeRelaySession({
+      relaySessionId: nativeSession.relaySessionId,
+      connId: "conn-1",
+    });
+
+    const unicodeSession = await createTalkRealtimeRelaySession({
+      context,
+      provider,
+      instructions: "be brief",
+      forceAgentConsultOnFinalTranscript: true,
+    });
+    await Promise.resolve();
+    bridgeRequest?.onTranscript?.("user", "проверь статус", true);
+    bridgeRequest?.onToolCall?.({
+      itemId: "unicode-native-item",
+      callId: "unicode-native-call",
+      name: "openclaw_agent_consult",
+      args: { question: "проверь статус" },
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(
+      events.some((entry) => {
+        const payload = entry.payload;
+        return (
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "toolCall" &&
+          (payload as Record<string, unknown>).forced === true
+        );
+      }),
+    ).toBe(false);
+    await stopTalkRealtimeRelaySession({
+      relaySessionId: unicodeSession.relaySessionId,
+      connId: "conn-1",
+    });
 
     const cancelledSession = await createTalkRealtimeRelaySession({
       context,
@@ -2775,7 +2802,17 @@ describe("talk realtime gateway relay", () => {
       turnId: ensureActiveRelayTurnId(cancelledSession.relaySessionId),
     });
     await vi.advanceTimersByTimeAsync(250);
-    expect(hasForcedConsult()).toBe(false);
+    expect(
+      events.some((entry) => {
+        const payload = entry.payload;
+        return (
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "toolCall" &&
+          (payload as Record<string, unknown>).forced === true
+        );
+      }),
+    ).toBe(false);
     expect(relaySessions.has(cancelledSession.relaySessionId)).toBe(true);
   });
 
@@ -3658,69 +3695,98 @@ describe("talk realtime gateway relay", () => {
     expect(talkTypes.indexOf("tool.progress")).toBeLessThan(talkTypes.indexOf("tool.result"));
   });
 
-  it.each([false, true])(
-    "serializes a final result behind client interims (rejection=%s)",
-    async (rejects) => {
-      const firstAccepted = createDeferred();
-      const secondAccepted = createDeferred();
-      const submitToolResult = vi
-        .fn<RealtimeVoiceBridge["submitToolResult"]>()
-        .mockReturnValueOnce(firstAccepted.promise)
-        .mockReturnValueOnce(rejects ? undefined : secondAccepted.promise)
-        .mockReturnValueOnce(undefined);
-      const provider = createIdleRelayProvider(() => makeRelayTransport({ submitToolResult }));
-      const session = await createTalkRealtimeRelaySession({
-        context: { broadcastToConnIds: vi.fn() } as never,
-        provider,
+  it("serializes concurrent client interims and a final result in submission order", async () => {
+    const firstAccepted = createDeferred();
+    const secondAccepted = createDeferred();
+    const submitToolResult = vi
+      .fn<RealtimeVoiceBridge["submitToolResult"]>()
+      .mockReturnValueOnce(firstAccepted.promise)
+      .mockReturnValueOnce(secondAccepted.promise)
+      .mockReturnValueOnce(undefined);
+    const provider = createIdleRelayProvider();
+    provider.createBridge = () =>
+      makeRelayTransport({
+        submitToolResult,
       });
+    const session = await createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn() } as never,
+      provider,
+    });
 
-      const firstInterim = submitTalkRealtimeRelayToolResult({
-        relaySessionId: session.relaySessionId,
-        connId: "conn-1",
-        callId: "call-1",
-        result: { phase: rejects ? "checking" : "first" },
-        options: { willContinue: true },
+    const firstInterim = submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { phase: "first" },
+      options: { willContinue: true },
+    });
+    const secondInterim = submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { phase: "second" },
+      options: { willContinue: true },
+    });
+    expect(submitToolResult).toHaveBeenCalledTimes(1);
+
+    firstAccepted.resolve();
+    await firstInterim;
+    expect(submitToolResult).toHaveBeenCalledTimes(2);
+
+    const final = submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { answer: "done" },
+    });
+    expect(submitToolResult).not.toHaveBeenCalledWith("call-1", { answer: "done" }, undefined);
+
+    secondAccepted.resolve();
+    await Promise.all([firstInterim, secondInterim, final]);
+    expect(submitToolResult.mock.calls.map((call) => call[1])).toEqual([
+      { phase: "first" },
+      { phase: "second" },
+      { answer: "done" },
+    ]);
+  });
+
+  it("submits an ordinary final after an interim rejection", async () => {
+    const { promise: rejectedInterim, reject: rejectInterim } = createDeferred();
+    const submitToolResult = vi
+      .fn<RealtimeVoiceBridge["submitToolResult"]>()
+      .mockReturnValueOnce(rejectedInterim)
+      .mockReturnValueOnce(undefined);
+    const provider = createIdleRelayProvider();
+    provider.createBridge = () =>
+      makeRelayTransport({
+        submitToolResult,
       });
-      const secondInterim = rejects
-        ? undefined
-        : submitTalkRealtimeRelayToolResult({
-            relaySessionId: session.relaySessionId,
-            connId: "conn-1",
-            callId: "call-1",
-            result: { phase: "second" },
-            options: { willContinue: true },
-          });
-      expect(submitToolResult).toHaveBeenCalledTimes(1);
+    const session = await createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn() } as never,
+      provider,
+    });
+    const interim = submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { phase: "checking" },
+      options: { willContinue: true },
+    });
+    const final = submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { answer: "done" },
+    });
 
-      if (!rejects) {
-        firstAccepted.resolve();
-        await firstInterim;
-        expect(submitToolResult).toHaveBeenCalledTimes(2);
-      }
-
-      const final = submitTalkRealtimeRelayToolResult({
-        relaySessionId: session.relaySessionId,
-        connId: "conn-1",
-        callId: "call-1",
-        result: { answer: "done" },
-      });
-      expect(submitToolResult).not.toHaveBeenCalledWith("call-1", { answer: "done" }, undefined);
-
-      if (rejects) {
-        firstAccepted.reject(new Error("interim rejected"));
-        await expect(firstInterim).rejects.toThrow("interim rejected");
-      } else {
-        secondAccepted.resolve();
-        await Promise.all([firstInterim, secondInterim]);
-      }
-      await final;
-      expect(submitToolResult.mock.calls.map((call) => call[1])).toEqual(
-        rejects
-          ? [{ phase: "checking" }, { answer: "done" }]
-          : [{ phase: "first" }, { phase: "second" }, { answer: "done" }],
-      );
-    },
-  );
+    rejectInterim?.(new Error("interim rejected"));
+    await expect(interim).rejects.toThrow("interim rejected");
+    await final;
+    expect(submitToolResult.mock.calls.map((call) => call[1])).toEqual([
+      { phase: "checking" },
+      { answer: "done" },
+    ]);
+  });
 
   it("supersedes queued interims and a stale final with canonical cancellation", async () => {
     const interimAccepted = createDeferred();

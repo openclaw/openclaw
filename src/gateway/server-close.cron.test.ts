@@ -25,7 +25,7 @@ it("joins accepted cron writes and receipt finalization before closing shared st
   const saveCommitted = createDeferred();
   const finishCommitted = createDeferred();
   const releaseReplies = createDeferred();
-  const receivedWorkCancelled = createDeferred();
+  const preludeEntered = createDeferred();
   let saving: Promise<void> | undefined;
   let finishing: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
@@ -94,7 +94,7 @@ it("joins accepted cron writes and receipt finalization before closing shared st
       ),
       signal,
     );
-    kernel.connectionWork.signal.addEventListener("abort", () => receivedWorkCancelled.resolve(), {
+    kernel.requestEntryLifetime.signal.addEventListener("abort", () => preludeEntered.resolve(), {
       once: true,
     });
     let closed = false;
@@ -103,9 +103,9 @@ it("joins accepted cron writes and receipt finalization before closing shared st
     });
     await withinTest(
       awaitGateBeforeSettlement(
-        receivedWorkCancelled.promise,
+        preludeEntered.promise,
         closing,
-        "Gateway did not cancel received work",
+        "Gateway missed its close prelude",
       ),
       signal,
     );

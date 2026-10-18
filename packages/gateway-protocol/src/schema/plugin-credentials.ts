@@ -1,7 +1,6 @@
 import { Type, type Static } from "typebox";
 import { lazyCompile } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 const text = Type.String({ minLength: 1, maxLength: 512 });
 const path = Type.Array(Type.Union([text, Type.Integer({ minimum: 0 })]), {
@@ -18,7 +17,12 @@ export const PluginCredentialDescriptorSchema = closedObject({
 });
 
 const reference = closedObject({
-  source: stringLiteralUnion(["env", "file", "exec", "store"]),
+  source: Type.Union([
+    Type.Literal("env"),
+    Type.Literal("file"),
+    Type.Literal("exec"),
+    Type.Literal("store"),
+  ]),
   provider: text,
   id: Type.String({ minLength: 1, maxLength: 4096 }),
 });

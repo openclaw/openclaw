@@ -91,16 +91,15 @@ export function loadPersistedPluginModelCatalogsReadOnly(
 export function repairPersistedPluginModelCatalogs(params: {
   agentDir: string;
   catalogs: readonly PersistedPluginModelCatalog[];
-}): Array<{ pluginId: string; removedModelCount: number; completedCostModelCount: number }> {
+}): Array<{ pluginId: string; removedModelCount: number }> {
   const repairs = params.catalogs.flatMap((catalog) => {
     const repaired = repairPluginModelCatalogTransportMetadata(catalog.contents);
-    return repaired.contents !== catalog.contents
+    return repaired.removedModelCount > 0
       ? [
           {
             ...catalog,
             repairedContents: repaired.contents,
             removedModelCount: repaired.removedModelCount,
-            completedCostModelCount: repaired.completedCostModelCount,
           },
         ]
       : [];
@@ -131,11 +130,7 @@ export function repairPersistedPluginModelCatalogs(params: {
     pluginModelCatalogDatabaseOptions(params.agentDir),
     { operationLabel: "plugin-model-catalog.repair" },
   );
-  return applied.map(({ pluginId, removedModelCount, completedCostModelCount }) => ({
-    pluginId,
-    removedModelCount,
-    completedCostModelCount,
-  }));
+  return applied.map(({ pluginId, removedModelCount }) => ({ pluginId, removedModelCount }));
 }
 
 function readPersistedPluginModelCatalogMigrationPayloads(

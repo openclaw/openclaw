@@ -10,7 +10,7 @@ type LegacyConfigRule = {
 };
 
 type PluginModelMigration = {
-  key: string;
+  path: string[];
   retiredModels: ReadonlySet<string>;
   targetModel: string;
 };
@@ -35,27 +35,38 @@ const RETIRED_CODE_MODELS = new Set([
 
 const PLUGIN_MODEL_MIGRATIONS: PluginModelMigration[] = [
   {
-    key: "webSearch",
+    path: ["plugins", "entries", "xai", "config", "webSearch"],
     retiredModels: RETIRED_REASONING_MODELS,
     targetModel: "grok-4.3",
   },
   {
-    key: "codeExecution",
+    path: ["plugins", "entries", "xai", "config", "codeExecution"],
     retiredModels: RETIRED_REASONING_MODELS,
     targetModel: "grok-4.3",
   },
   {
-    key: "xSearch",
+    path: ["plugins", "entries", "xai", "config", "xSearch"],
     retiredModels: RETIRED_NON_REASONING_MODELS,
     targetModel: "grok-4.3",
   },
-  ...["webSearch", "codeExecution", "xSearch"].map((key) => ({
-    key,
-    retiredModels: RETIRED_CODE_MODELS,
-    targetModel: "grok-build-0.1",
-  })),
+  ...[
+    ["plugins", "entries", "xai", "config", "webSearch"],
+    ["plugins", "entries", "xai", "config", "codeExecution"],
+    ["plugins", "entries", "xai", "config", "xSearch"],
+  ].map((path) => ({ path, retiredModels: RETIRED_CODE_MODELS, targetModel: "grok-build-0.1" })),
 ];
 const XAI_MEDIA_MODEL_LIST_PATHS = [["tools", "media", "models"]] as const;
+
+function readPath(root: unknown, path: readonly string[]): unknown {
+  let current = root;
+  for (const segment of path) {
+    current = asObjectRecord(current)?.[segment];
+    if (current === undefined) {
+      return undefined;
+    }
+  }
+  return current;
+}
 
 function isRetiredToolModel(value: unknown, retiredModels: ReadonlySet<string>): boolean {
   const model = asObjectRecord(value)?.model;
@@ -119,8 +130,8 @@ function hasLegacyXaiSttEntries(value: unknown): boolean {
 
 export const legacyConfigRules: LegacyConfigRule[] = [
   ...PLUGIN_MODEL_MIGRATIONS.map((migration) => ({
-    path: ["plugins", "entries", "xai", "config", migration.key],
-    message: `plugins.entries.xai.config.${migration.key}.model uses a retired xAI model; run "openclaw doctor --fix" to use ${migration.targetModel}.`,
+    path: migration.path,
+    message: `${migration.path.join(".")}.model uses a retired xAI model; run "openclaw doctor --fix" to use ${migration.targetModel}.`,
     match: (value: unknown) => isRetiredToolModel(value, migration.retiredModels),
   })),
   ...XAI_MEDIA_MODEL_LIST_PATHS.map((path) => ({
@@ -148,56 +159,52 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   let next = cfg;
   const changes: string[] = [];
 
-  const pluginConfig = asObjectRecord(cfg.plugins?.entries?.xai?.config);
-  const migratedPluginConfig = { ...pluginConfig };
   for (const migration of PLUGIN_MODEL_MIGRATIONS) {
-    const current = asObjectRecord(migratedPluginConfig[migration.key]);
+    const current = readPath(next, migration.path);
     if (!isRetiredToolModel(current, migration.retiredModels)) {
       continue;
     }
-    migratedPluginConfig[migration.key] = { ...current, model: migration.targetModel };
+    if (next === cfg) {
+      next = structuredClone(cfg);
+    }
+    const target = asObjectRecord(readPath(next, migration.path));
+    if (!target) {
+      continue;
+    }
+    const previous = target.model;
+    target.model = migration.targetModel;
     changes.push(
-      `Updated plugins.entries.xai.config.${migration.key}.model from ${JSON.stringify(current?.model)} to ${JSON.stringify(migration.targetModel)}.`,
+      `Updated ${migration.path.join(".")}.model from ${JSON.stringify(previous)} to ${JSON.stringify(migration.targetModel)}.`,
     );
-  }
-  if (changes.length > 0) {
-    next = {
-      ...next,
-      plugins: {
-        ...cfg.plugins,
-        entries: {
-          ...cfg.plugins?.entries,
-          xai: { ...cfg.plugins?.entries?.xai, config: migratedPluginConfig },
-        },
-      },
-    };
   }
 
   for (const path of XAI_MEDIA_MODEL_LIST_PATHS) {
-    const entries = cfg.tools?.media?.models;
+    const currentEntries = readPath(next, path);
+    const hasRetiredImages = hasRetiredXaiImageMediaEntries(currentEntries);
+    const hasLegacyStt = hasLegacyXaiSttEntries(currentEntries);
+    if (!hasRetiredImages && !hasLegacyStt) {
+      continue;
+    }
+    if (next === cfg) {
+      next = structuredClone(cfg);
+    }
+    const entries = readPath(next, path);
     if (!Array.isArray(entries)) {
       continue;
     }
     let migrated = 0;
     let removed = 0;
-    const models: typeof entries = [];
     for (const entry of entries) {
-      if (isRetiredXaiImageMediaEntry(entry)) {
+      const rec = asObjectRecord(entry);
+      if (isRetiredXaiImageMediaEntry(entry) && rec) {
+        rec.model = "grok-4.3";
         migrated += 1;
-        models.push({ ...entry, model: "grok-4.3" });
-      } else if (isLegacyXaiSttEntry(entry)) {
-        const { model: _model, ...retained } = entry;
-        removed += 1;
-        models.push(retained);
-      } else {
-        models.push(entry);
+        continue;
       }
-    }
-    if (migrated > 0 || removed > 0) {
-      next = {
-        ...next,
-        tools: { ...next.tools, media: { ...next.tools?.media, models } },
-      };
+      if (isLegacyXaiSttEntry(entry) && rec) {
+        delete rec.model;
+        removed += 1;
+      }
     }
     if (migrated > 0) {
       changes.push(
@@ -211,18 +218,18 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     }
   }
 
-  const provider = cfg.models?.providers?.xai;
-  if (provider && Array.isArray(provider.models)) {
-    const retained = provider.models.filter((model) => !isLegacyXaiBuiltinModel(model));
-    const removed = provider.models.length - retained.length;
-    if (removed > 0) {
-      next = {
-        ...next,
-        models: {
-          ...next.models,
-          providers: { ...next.models?.providers, xai: { ...provider, models: retained } },
-        },
-      };
+  const modelsPath = ["models", "providers", "xai", "models"];
+  const configuredModels = readPath(next, modelsPath);
+  if (hasLegacyBuiltinCatalogRows(configuredModels)) {
+    if (next === cfg) {
+      next = structuredClone(cfg);
+    }
+    const provider = asObjectRecord(readPath(next, ["models", "providers", "xai"]));
+    const models = provider?.models;
+    if (provider && Array.isArray(models)) {
+      const retained = models.filter((model) => !isLegacyXaiBuiltinModel(model));
+      const removed = models.length - retained.length;
+      provider.models = retained;
       changes.push(`Removed ${removed} stale generated xAI model catalog row(s).`);
     }
   }

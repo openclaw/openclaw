@@ -38,29 +38,20 @@ export async function runWorkerFixtureCompiler(directory, input, receipt) {
   const declaration = fileURLToPath(
     new URL("../../../src/infra/runtime-process-entrypoints.ts", import.meta.url),
   );
-  const metadata = fileURLToPath(
-    new URL("../../../src/infra/runtime-process-manifest.ts", import.meta.url),
-  );
   const declarationSource = fs.readFileSync(declaration, "utf8");
-  const metadataSource = fs.readFileSync(metadata, "utf8");
-  const transpile = process.versions.bun
-    ? (source) => new Bun.Transpiler({ loader: "ts" }).transformSync(source)
-    : (await import("node:module")).stripTypeScriptTypes;
+  const compiledDeclaration = process.versions.bun
+    ? new Bun.Transpiler({ loader: "ts" }).transformSync(declarationSource)
+    : (await import("node:module")).stripTypeScriptTypes(declarationSource);
   const workerSource = fs.readFileSync(input);
   const manifest = writeWorkerFixtureManifest(
     directory,
     {
       [declaration]: declarationSource,
-      [metadata]: metadataSource,
       [input]: workerSource,
     },
     {
       // Preserve the actual declaration policy and hash the same bytes used for output.
-      "infra/runtime-process-entrypoints.js": transpile(declarationSource).replace(
-        "./runtime-process-manifest.ts",
-        "./runtime-process-manifest.js",
-      ),
-      "infra/runtime-process-manifest.js": transpile(metadataSource),
+      "infra/runtime-process-entrypoints.js": compiledDeclaration,
       [runtimeProcessEntrypoints.sqliteReadOnly.distWorkerPath]: workerSource,
     },
   );

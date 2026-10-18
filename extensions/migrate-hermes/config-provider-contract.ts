@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   MCP_ENV_REFERENCE_RE,
+  mcpValueHasEnvReferences,
   normalizeHermesEnvReferenceName,
   resolveMcpEnvReferences,
 } from "./config-env.js";
@@ -397,17 +398,32 @@ export function readProviderHeaders(
       continue;
     }
     const value = String(rawValue);
+    const envName = readEnvReference(value);
+    const hasReference = mcpValueHasEnvReferences(value);
     if (!includeSecrets) {
       blocked = true;
       continue;
     }
     sensitive = true;
-    const resolved = resolveMcpEnvReferences(value, env);
-    if (resolved.unresolved || typeof resolved.value !== "string") {
-      unresolved = true;
+    if (envName) {
+      const resolved = env[envName];
+      if (resolved === undefined) {
+        unresolved = true;
+        continue;
+      }
+      headers[name] = resolved;
       continue;
     }
-    headers[name] = resolved.value;
+    if (hasReference) {
+      const resolved = resolveMcpEnvReferences(value, env);
+      if (resolved.unresolved || typeof resolved.value !== "string") {
+        unresolved = true;
+        continue;
+      }
+      headers[name] = resolved.value;
+      continue;
+    }
+    headers[name] = value;
   }
   return {
     blocked,

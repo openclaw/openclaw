@@ -76,9 +76,13 @@ type WorkspaceIcon = HttpImageRepresentation;
 /** `null` records a resolved absence so a workspace without an icon never re-scans. */
 type WorkspaceIconResolution = WorkspaceIcon | null;
 
-const workspaceIconCache = new LruCache<Promise<WorkspaceIconResolution>>(
+let workspaceIconCache = new LruCache<Promise<WorkspaceIconResolution>>(
   WORKSPACE_ICON_CACHE_MAX_ENTRIES,
 );
+
+export function clearWorkspaceIconCacheForTest(): void {
+  workspaceIconCache = new LruCache(WORKSPACE_ICON_CACHE_MAX_ENTRIES);
+}
 
 async function scanWorkspaceIcon(workspaceRoot: string): Promise<WorkspaceIconResolution> {
   for (const relativePath of WORKSPACE_ICON_RELATIVE_PATHS) {

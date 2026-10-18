@@ -33,7 +33,6 @@ import type {
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -50,7 +49,7 @@ export function registerDetachedCleanupAuthorityTest({
   createLifecycleController: (
     params: { entry: SubagentRunRecord } & Pick<
       LifecycleControllerFixtureOptions,
-      "runSubagentAnnounceFlow"
+      "runSubagentAnnounceFlow" | "beforeWrite"
     >,
   ) => Pick<SubagentLifecycleController, "startSubagentAnnounceCleanupFlow">;
 }) {
@@ -82,7 +81,7 @@ export function registerDetachedCleanupAuthorityTest({
       payload: delivered,
     });
     const dispatchFinished = createDeferredCore<unknown>();
-    const joinCleanup = observeRootWork();
+    const cleanupFinished = createDeferredCore();
     const runSubagentAnnounceFlow = vi.fn(async () => {
       await cleanupReady.promise;
       try {
@@ -106,6 +105,11 @@ export function registerDetachedCleanupAuthorityTest({
     const controller = createLifecycleController({
       entry,
       runSubagentAnnounceFlow,
+      beforeWrite: ({ postimages }) => {
+        if (postimages.get(entry.runId)?.cleanupCompletedAt !== undefined) {
+          cleanupFinished.resolve();
+        }
+      },
     });
 
     await withGatewayToolCallerIdentity(
@@ -130,10 +134,9 @@ export function registerDetachedCleanupAuthorityTest({
     cleanupReady.resolve();
 
     await dispatchResult;
-    await joinCleanup();
+    await cleanupFinished.promise;
     expect(freshTranscriptWrite).toHaveBeenCalledOnce();
     expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
-    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
     expect(requesterTranscriptWrite).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
   });
@@ -427,7 +430,6 @@ export function registerDeliveryRetryOwnerTests({
     );
     const controller = createLifecycleController({
       entry,
-      captureSubagentCompletionReply: vi.fn(async () => terminalReply.text),
       runSubagentAnnounceFlow,
       resumeSubagentRun,
     });
@@ -461,10 +463,7 @@ export function registerDeliveryRetryOwnerTests({
         expect(params.roundOneReply).toBe("A=alpha");
       }
       expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
-      expect(readLifecycleRun(entry).completion?.resultText).toBeUndefined();
-      expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
-        "A=alpha",
-      );
+      expect(readLifecycleRun(entry).completion?.resultText).toBe("A=alpha");
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
       await vi.advanceTimersByTimeAsync(60_000);
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);

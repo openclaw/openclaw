@@ -4,7 +4,6 @@ import { Type } from "typebox";
 import { ApprovalChannelReviewerSchema, ApprovalScopeSchema } from "./approvals.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 /**
  * Exec approval protocol schemas.
@@ -31,8 +30,16 @@ const ExecApprovalsPolicyFields = {
   autoAllowSkills: Type.Optional(Type.Boolean()),
 };
 
-const ExecSecuritySchema = stringLiteralUnion(["deny", "allowlist", "full"]);
-const ExecAskSchema = stringLiteralUnion(["off", "on-miss", "always"]);
+const ExecSecuritySchema = Type.Union([
+  Type.Literal("deny"),
+  Type.Literal("allowlist"),
+  Type.Literal("full"),
+]);
+const ExecAskSchema = Type.Union([
+  Type.Literal("off"),
+  Type.Literal("on-miss"),
+  Type.Literal("always"),
+]);
 
 /** Host-resolved default policy after applying persisted defaults and runtime fallbacks. */
 const ExecApprovalsResolvedDefaultsSchema = closedObject({
@@ -84,7 +91,11 @@ export const ExecApprovalsSnapshotSchema = closedObject({
   resolvedDefaults: Type.Optional(ExecApprovalsResolvedDefaultsSchema),
 });
 
-const NativeExecApprovalActionSchema = stringLiteralUnion(["allow", "deny", "prompt"]);
+const NativeExecApprovalActionSchema = Type.Union([
+  Type.Literal("allow"),
+  Type.Literal("deny"),
+  Type.Literal("prompt"),
+]);
 
 /** One rule owned and enforced by a host-native exec policy implementation. */
 const NativeExecApprovalRuleSchema = closedObject({
@@ -348,7 +359,11 @@ export const ExecApprovalGrantsRevokeParamsSchema = closedObject({
 });
 
 export const ExecApprovalGrantsRevokeResultSchema = closedObject({
-  outcome: stringLiteralUnion(["revoked", "already-revoked", "not-found"]),
+  outcome: Type.Union([
+    Type.Literal("revoked"),
+    Type.Literal("already-revoked"),
+    Type.Literal("not-found"),
+  ]),
 });
 
 // Owner-local wire types derived directly from local schema consts so the

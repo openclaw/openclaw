@@ -1,6 +1,8 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 
+export { connectLegacyApplicationContext } from "../lit/solid-bridge.ts";
+
 type RootElementAttributes = SolidJSX.HTMLAttributes<HTMLElement> & {
   [key: `prop:${string}`]: unknown;
 };
@@ -10,6 +12,7 @@ declare module "@solidjs/web" {
       "openclaw-tooltip-provider": RootElementAttributes;
       "openclaw-gateway-url-confirmation": RootElementAttributes;
       "openclaw-browser-document": RootElementAttributes;
+      "openclaw-terminal-panel": RootElementAttributes & { fullscreen?: boolean };
       "openclaw-board-document": RootElementAttributes;
       "openclaw-login-gate": RootElementAttributes;
       "openclaw-approval-page": RootElementAttributes;

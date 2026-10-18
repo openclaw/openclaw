@@ -1,9 +1,9 @@
-// State for the curated Talk settings page. Owns the talk.catalog read
+// Controller for the curated Talk settings page. Owns the talk.catalog read
 // that feeds the provider/model/voice pickers; all writes go through the shared
 // config form draft so the embedded schema editor below stays in sync.
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { createSignal, onCleanup, untrack } from "solid-js";
+import { onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -12,6 +12,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
   isTalkGptLiveModel,
@@ -292,87 +293,151 @@ export type TalkSettingsPageProps = {
   buildEditor?: () => JSX.Element;
 };
 
-function createTalkSettings(context: ApplicationContext, props: TalkSettingsPageProps) {
-  // Connection setup can publish the initial loading state inside the page owner.
-  const [catalog, setCatalog] = createSignal<TalkCatalogState>(
-    { kind: "unavailable" },
-    { ownedWrite: true },
-  );
-  const [modelDefaultResetIntent, setModelDefaultResetIntent] =
-    createSignal<ModelDefaultResetIntent | null>(null);
-  let connectionValue: CatalogConnection | null = null;
+class TalkSettingsController {
+  private readonly listeners = new Set<() => void>();
+  private catalogValue: TalkCatalogState = { kind: "unavailable" };
+  private resetIntentValue: ModelDefaultResetIntent | null = null;
+  private connection: CatalogConnection | null = null;
+  private catalogRequestId = 0;
+  private disposed = false;
   /** `undefined` = baseline not yet observed; `null` = no public revision token. */
-  let lastCatalogConfigRevision: string | null | undefined;
+  private lastCatalogConfigRevision: string | null | undefined;
+  private readonly stopGateway: () => void;
+  private readonly stopConfig: () => void;
+
+  constructor(
+    private readonly context: ApplicationContext,
+    private readonly props: TalkSettingsPageProps,
+  ) {
+    this.stopGateway = context.gateway.subscribe(() =>
+      this.syncCatalog(catalogConnection(context.gateway)),
+    );
+    this.stopConfig = context.runtimeConfig.subscribe(() =>
+      this.refreshCatalogOnConfigChange(context.runtimeConfig.state),
+    );
+    this.syncCatalog(catalogConnection(context.gateway));
+    this.refreshCatalogOnConfigChange(context.runtimeConfig.state);
+    window.addEventListener("focus", this.refreshOnFocus);
+  }
+
+  get catalog() {
+    return this.catalogValue;
+  }
+
+  set catalog(value: TalkCatalogState) {
+    this.catalogValue = value;
+    this.notify();
+  }
+
+  get modelDefaultResetIntent() {
+    return this.resetIntentValue;
+  }
+
+  set modelDefaultResetIntent(value: ModelDefaultResetIntent | null) {
+    this.resetIntentValue = value;
+    this.notify();
+  }
+
+  private notify() {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
 
   // Provider credential readiness can change outside the config editor without
   // advancing the config hash, so window focus refreshes the catalog.
-  const refreshOnFocus = () => {
-    const connection = connectionValue;
+  private readonly refreshOnFocus = () => {
+    const connection = this.connection;
     if (connection?.client && connection.connected) {
-      void loadCatalog(connection.client, connection);
+      void this.loadCatalog(connection.client, connection);
     }
   };
 
-  function syncCatalog(connection: CatalogConnection) {
+  dispose() {
+    this.disposed = true;
+    window.removeEventListener("focus", this.refreshOnFocus);
+    this.stopGateway();
+    this.stopConfig();
+    this.listeners.clear();
+    this.connection = null;
+  }
+
+  private syncCatalog(connection: CatalogConnection) {
     const { gatewayUrl, client, connected, voiceWake } = connection;
-    // Connection events inspect pending intent without subscribing the caller.
-    const intent = untrack(modelDefaultResetIntent);
-    if (intent && intent.gatewayUrl !== gatewayUrl) {
-      setModelDefaultResetIntent(null);
+    if (this.modelDefaultResetIntent && this.modelDefaultResetIntent.gatewayUrl !== gatewayUrl) {
+      this.modelDefaultResetIntent = null;
     }
     // connecting -> connected keeps the same client object; keying only on the
     // client would leave a page mounted mid-handshake without a catalog.
     if (
-      connectionValue?.gatewayUrl === gatewayUrl &&
-      connectionValue.client === client &&
-      connectionValue.connected === connected &&
-      connectionValue.voiceWake === voiceWake
+      this.connection?.gatewayUrl === gatewayUrl &&
+      this.connection.client === client &&
+      this.connection.connected === connected &&
+      this.connection.voiceWake === voiceWake
     ) {
       return;
     }
-    connectionValue = connection;
+    this.connection = connection;
     if (!client || !connected) {
-      setCatalog({ kind: "unavailable" });
+      this.catalog = { kind: "unavailable" };
       return;
     }
-    setCatalog({ kind: "loading" });
-    void loadCatalog(client, connection);
+    this.catalog = { kind: "loading" };
+    void this.loadCatalog(client, connection);
   }
 
-  async function loadCatalog(client: GatewayClient, connection: CatalogConnection) {
+  private async loadCatalog(client: GatewayClient, connection: CatalogConnection) {
+    // Initial load, config-hash refresh, and focus refresh can overlap on the
+    // same connection; only the newest request may write the catalog, or a
+    // slow older response would overwrite a fresher one.
+    const requestId = ++this.catalogRequestId;
     try {
       const result = await client.request<TalkCatalogResult>("talk.catalog", {});
-      if (connectionValue !== connection) {
-        return;
-      }
-      // Same-connection catalog refreshes are best effort; focus/config changes refresh again.
-      setCatalog({
+      const applied = this.applyCatalog(connection, requestId, {
         kind: "ready",
         ready: result.realtime.ready === true,
         activeProvider: result.realtime.activeProvider ?? null,
         providers: result.realtime.providers,
       });
-      acknowledgeModelDefaultReset(connection);
+      if (applied) {
+        this.acknowledgeModelDefaultReset(connection);
+      }
     } catch {
       // The catalog only powers the pickers; the page still renders the raw
       // configured values when it cannot be read.
-      if (connectionValue === connection) {
-        setCatalog({ kind: "unavailable" });
-      }
+      this.applyCatalog(connection, requestId, { kind: "unavailable" });
     }
   }
 
-  function acknowledgeModelDefaultReset(connection: CatalogConnection) {
-    // An async catalog receipt acknowledges the current intent once.
-    const intent = untrack(modelDefaultResetIntent);
-    const configRevision = lastCatalogConfigRevision;
+  private applyCatalog(
+    connection: CatalogConnection,
+    requestId: number,
+    catalog: TalkCatalogState,
+  ): boolean {
+    if (this.disposed || this.connection !== connection || this.catalogRequestId !== requestId) {
+      return false;
+    }
+    this.catalog = catalog;
+    return true;
+  }
+
+  private acknowledgeModelDefaultReset(connection: CatalogConnection) {
+    const intent = this.modelDefaultResetIntent;
+    const configRevision = this.lastCatalogConfigRevision;
     // Without a public revision token, a ready catalog cannot prove the reset
     // was applied; retain provider-default metadata until an authoritative ack.
     if (configRevision == null) {
       return;
     }
     if (intent?.gatewayUrl === connection.gatewayUrl && intent.configRevision !== configRevision) {
-      setModelDefaultResetIntent(null);
+      this.modelDefaultResetIntent = null;
     }
   }
 
@@ -383,19 +448,19 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
    * is the durable ack signal; transient saving flags can be skipped entirely
    * by a fast save.
    */
-  function refreshCatalogOnConfigChange(configState: ApplicationContext["runtimeConfig"]["state"]) {
+  private refreshCatalogOnConfigChange(configState: ApplicationContext["runtimeConfig"]["state"]) {
     const configRevision = configRevisionToken(configState.configSnapshot);
-    if (lastCatalogConfigRevision === undefined) {
-      lastCatalogConfigRevision = configRevision;
+    if (this.lastCatalogConfigRevision === undefined) {
+      this.lastCatalogConfigRevision = configRevision;
       return;
     }
-    if (configRevision === null || configRevision === lastCatalogConfigRevision) {
+    if (configRevision === null || configRevision === this.lastCatalogConfigRevision) {
       return;
     }
-    lastCatalogConfigRevision = configRevision;
-    const connection = connectionValue;
+    this.lastCatalogConfigRevision = configRevision;
+    const connection = this.connection;
     if (connection?.client && connection.connected) {
-      void loadCatalog(connection.client, connection);
+      void this.loadCatalog(connection.client, connection);
     }
   }
 
@@ -406,17 +471,17 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
    * (matched by configured spelling, canonical id, and aliases). Removing only
    * the top-level key would make Default a no-op over provider-level config.
    */
-  function changeModel(model: string | null) {
-    if (props.mutationDisabled) {
+  changeModel(model: string | null) {
+    if (this.props.mutationDisabled) {
       return;
     }
-    const runtimeConfig = context.runtimeConfig;
+    const runtimeConfig = this.context.runtimeConfig;
     if (model !== null) {
-      setModelDefaultResetIntent(null);
+      this.modelDefaultResetIntent = null;
       runtimeConfig.patchForm(["talk", "realtime", "model"], model);
-      const selection = liveSelection();
+      const selection = this.liveSelection();
       const transport = selection.transport;
-      const provider = selectedTalkProviderOption(catalog(), selection);
+      const provider = selectedTalkProviderOption(this.catalog, selection);
       const rejectsTransport =
         transport !== null &&
         (gptLiveRejectsTransport(model, transport) ||
@@ -435,36 +500,36 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       }
       return;
     }
-    setModelDefaultResetIntent({
-      gatewayUrl: context.gateway.connection.gatewayUrl,
+    this.modelDefaultResetIntent = {
+      gatewayUrl: this.context.gateway.connection.gatewayUrl,
       configRevision: configRevisionToken(runtimeConfig.state.configSnapshot),
-    });
+    };
     runtimeConfig.removeFormValue(["talk", "realtime", "model"]);
-    for (const key of selectedProviderConfigKeys()) {
+    for (const key of this.selectedProviderConfigKeys()) {
       runtimeConfig.removeFormValue(["talk", "realtime", "providers", key, "model"]);
     }
   }
 
-  function changeVoice(voice: string | null) {
-    if (props.mutationDisabled) {
+  changeVoice(voice: string | null) {
+    if (this.props.mutationDisabled) {
       return;
     }
-    const runtimeConfig = context.runtimeConfig;
+    const runtimeConfig = this.context.runtimeConfig;
     if (voice !== null) {
       runtimeConfig.patchForm(["talk", "realtime", "speakerVoice"], voice);
       return;
     }
     runtimeConfig.removeFormValue(["talk", "realtime", "speakerVoice"]);
     runtimeConfig.removeFormValue(["talk", "realtime", "speakerVoiceId"]);
-    for (const key of selectedProviderConfigKeys()) {
+    for (const key of this.selectedProviderConfigKeys()) {
       runtimeConfig.removeFormValue(["talk", "realtime", "providers", key, "speakerVoice"]);
       runtimeConfig.removeFormValue(["talk", "realtime", "providers", key, "voice"]);
     }
   }
 
-  function selectedProviderConfigKeys(): string[] {
-    const selection = liveSelection();
-    const option = selectedTalkProviderOption(catalog(), selection);
+  private selectedProviderConfigKeys(): string[] {
+    const selection = this.liveSelection();
+    const option = selectedTalkProviderOption(this.catalog, selection);
     return talkProviderConfigKeys(selection, option);
   }
 
@@ -473,9 +538,9 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
    * the form updates immutably and the prop only refreshes on the next render,
    * so a same-tick read through the prop sees pre-write values.
    */
-  function liveSelection() {
-    const form = context.runtimeConfig.state.configForm;
-    return resolveTalkRealtimeSelection(form ?? props.configObject ?? {});
+  private liveSelection() {
+    const form = this.context.runtimeConfig.state.configForm;
+    return resolveTalkRealtimeSelection(form ?? this.props.configObject ?? {});
   }
 
   /**
@@ -484,13 +549,13 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
    * advertises it; an unavailable catalog is not evidence of incompatibility.
    * Each provider's own entry survives and supplies its fallback values.
    */
-  function changeProvider(providerId: string | null) {
-    if (props.mutationDisabled) {
+  changeProvider(providerId: string | null) {
+    if (this.props.mutationDisabled) {
       return;
     }
-    setModelDefaultResetIntent(null);
-    const runtimeConfig = context.runtimeConfig;
-    const selection = liveSelection();
+    this.modelDefaultResetIntent = null;
+    const runtimeConfig = this.context.runtimeConfig;
+    const selection = this.liveSelection();
     for (const key of ["model", "speakerVoice", "speakerVoiceId"]) {
       runtimeConfig.removeFormValue(["talk", "realtime", key]);
     }
@@ -502,10 +567,9 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       return;
     }
     const configuredTransport = selection.transport;
-    const currentCatalog = catalog();
     const option =
-      currentCatalog.kind === "ready"
-        ? currentCatalog.providers.find((provider) => provider.id === providerId)
+      this.catalog.kind === "ready"
+        ? this.catalog.providers.find((provider) => provider.id === providerId)
         : undefined;
     const targetModel =
       effectiveTalkValues(
@@ -540,27 +604,19 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       runtimeConfig.removeFormValue(["talk", "realtime", "consultRouting"]);
     }
   }
-  const stopGateway = context.gateway.subscribe(() =>
-    syncCatalog(catalogConnection(context.gateway)),
-  );
-  const stopConfig = context.runtimeConfig.subscribe(() =>
-    refreshCatalogOnConfigChange(context.runtimeConfig.state),
-  );
-  syncCatalog(catalogConnection(context.gateway));
-  refreshCatalogOnConfigChange(context.runtimeConfig.state);
-  window.addEventListener("focus", refreshOnFocus);
-  onCleanup(() => {
-    window.removeEventListener("focus", refreshOnFocus);
-    stopGateway();
-    stopConfig();
-    connectionValue = null;
-  });
-  return { catalog, modelDefaultResetIntent, changeModel, changeVoice, changeProvider };
 }
 
-export function TalkSettingsPage(props: TalkSettingsPageProps) {
+function TalkSettingsContent(props: TalkSettingsPageProps) {
   const context = useApplication();
-  const settings = createTalkSettings(context, props);
+  const controller = new TalkSettingsController(context, props);
+  const catalog = projectSource(controller, {
+    read: (owner) => ({
+      catalog: owner.catalog,
+      modelDefaultPending: owner.modelDefaultResetIntent !== null,
+    }),
+    subscribe: (owner, notify) => owner.subscribe(notify),
+    equality: "revision",
+  });
   const runtime = projectRuntimeConfig(context.runtimeConfig);
   const voiceWake = voiceWakeOwner(context.gateway);
   const voiceWakeState = projectSource(voiceWake, {
@@ -573,33 +629,44 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
     : undefined;
   onCleanup(() => {
     voiceWake.flush();
+    controller.dispose();
   });
   return (
-    <openclaw-talk-settings>
-      <Talk
-        nativeDeviceSettings={context.nativeDeviceSettings}
-        nativeDeviceSnapshot={device?.read()}
-        voiceWake={{
-          get state() {
-            return voiceWakeState.read();
-          },
-          onInput: (text) => voiceWake.edit(text),
-          onRetry: () => voiceWake.retry(),
-        }}
-        selection={resolveTalkRealtimeSelection(props.configObject ?? {})}
-        catalog={settings.catalog()}
-        modelDefaultPending={settings.modelDefaultResetIntent() !== null}
-        configBusy={
-          props.mutationDisabled ||
-          runtime.read().state.configLoading ||
-          runtime.read().state.configSaving ||
-          runtime.read().state.configApplying
-        }
-        onProviderChange={(providerId) => settings.changeProvider(providerId)}
-        onModelChange={(model) => settings.changeModel(model)}
-        onVoiceChange={(voice) => settings.changeVoice(voice)}
-        editor={props.buildEditor?.()}
-      />
-    </openclaw-talk-settings>
+    <Talk
+      nativeDeviceSettings={context.nativeDeviceSettings}
+      nativeDeviceSnapshot={device?.read()}
+      voiceWake={{
+        get state() {
+          return voiceWakeState.read();
+        },
+        onInput: (text) => voiceWake.edit(text),
+        onRetry: () => voiceWake.retry(),
+      }}
+      selection={resolveTalkRealtimeSelection(props.configObject ?? {})}
+      catalog={catalog.read().catalog}
+      modelDefaultPending={catalog.read().modelDefaultPending}
+      configBusy={
+        props.mutationDisabled ||
+        runtime.read().state.configLoading ||
+        runtime.read().state.configSaving ||
+        runtime.read().state.configApplying
+      }
+      onProviderChange={(providerId) => controller.changeProvider(providerId)}
+      onModelChange={(model) => controller.changeModel(model)}
+      onVoiceChange={(voice) => controller.changeVoice(voice)}
+      editor={props.buildEditor?.()}
+    />
   );
 }
+
+export const TalkSettingsPage = defineSolidBridge<TalkSettingsPageProps>(
+  "openclaw-talk-settings",
+  (props) => <TalkSettingsContent {...props} />,
+  {
+    properties: {
+      configObject: { default: {}, attribute: false },
+      mutationDisabled: { default: false, type: Boolean },
+      buildEditor: { default: () => null, attribute: false },
+    },
+  },
+);

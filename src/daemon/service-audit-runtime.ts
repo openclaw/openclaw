@@ -1,3 +1,4 @@
+/** Checks the executable recorded in a Gateway service against the runtime contract. */
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -7,7 +8,7 @@ import {
   resolveNodeRuntimeInfo,
   resolveSystemNodePath,
 } from "./runtime-paths.js";
-import * as runtimePins from "./runtime-pin-state.js";
+import { readDaemonRuntimePin } from "./runtime-pin-state.js";
 import type { GatewayServiceCommand, ServiceConfigIssue } from "./service-audit-types.js";
 import { normalizeServicePathEntry } from "./service-path-policy.js";
 
@@ -50,7 +51,7 @@ export async function auditGatewayRuntime(
         runtime.status === "probe-failed"
           ? `Gateway service ${bun ? "Bun" : "Node"} runtime check failed.`
           : bun
-            ? "Gateway service uses an unsupported Bun runtime; Bun 1.4.3+ with WAL-reset-safe node:sqlite is required."
+            ? "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required."
             : (runtime.capabilityError ?? "Gateway service Node failed its capability check."),
       detail:
         runtime.status === "probe-failed"
@@ -65,10 +66,7 @@ export async function auditGatewayRuntime(
     return undefined;
   }
 
-  if (runtimePins.readDaemonRuntimePinMigrationPending(env)) {
-    return "Runtime pin migration pending; run openclaw doctor.";
-  }
-  const pinnedPath = runtimePins.readDaemonRuntimePin({ kind: "gateway", env }, command).pin?.path;
+  const pinnedPath = readDaemonRuntimePin({ kind: "gateway", env }, command).pin?.path;
   const explicitlyPinned =
     pinnedPath &&
     normalizeServicePathEntry(pinnedPath, platform) ===

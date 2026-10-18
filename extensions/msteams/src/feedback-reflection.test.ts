@@ -11,7 +11,7 @@ import { runFeedbackReflection } from "./feedback-reflection.js";
 import type { MSTeamsApp } from "./sdk.js";
 
 type LearningEntry = { sessionKey: string; learnings: string[]; updatedAt: number };
-type ComparisonStore = Pick<PluginStateKeyedStore<LearningEntry, 2>, "observe" | "compareAndApply">;
+type ComparisonStore = Pick<PluginStateKeyedStore<LearningEntry>, "observe" | "compareAndApply">;
 
 const mocks = vi.hoisted(() => {
   const observe = vi.fn<(key: string) => Promise<PluginStateObservation<LearningEntry>>>();
@@ -26,15 +26,14 @@ const mocks = vi.hoisted(() => {
   return {
     observe,
     compareAndApply,
-    openKeyedStoreV2: vi.fn<() => ComparisonStore>(),
+    openKeyedStore: vi.fn<() => ComparisonStore>(),
     reflect: vi.fn(),
     send: vi.fn(),
   };
 });
 
-vi.mock("./runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./runtime.js")>()),
-  getMSTeamsRuntime: () => ({ state: { openKeyedStoreV2: mocks.openKeyedStoreV2 } }),
+vi.mock("./runtime.js", () => ({
+  getMSTeamsRuntime: () => ({ state: { openKeyedStore: mocks.openKeyedStore } }),
 }));
 vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
   DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS: 300_000,
@@ -49,7 +48,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.observe.mockResolvedValue({ value: undefined, comparison: "absent" });
   mocks.compareAndApply.mockResolvedValue({ status: "applied" });
-  mocks.openKeyedStoreV2.mockReturnValue({
+  mocks.openKeyedStore.mockReturnValue({
     observe: mocks.observe,
     compareAndApply: mocks.compareAndApply,
   });
@@ -106,6 +105,19 @@ describe("MSTeams feedback learning persistence", () => {
 
     await expect(storeSessionLearning(params)).rejects.toBe(failure);
     expect(mocks.compareAndApply).toHaveBeenCalledOnce();
+  });
+
+  it.each(["observe", "compareAndApply"] as const)("requires %s support", async (method) => {
+    const store: ComparisonStore = {
+      observe: mocks.observe,
+      compareAndApply: mocks.compareAndApply,
+    };
+    store[method] = undefined;
+    mocks.openKeyedStore.mockReturnValue(store);
+
+    await expect(storeSessionLearning(params)).rejects.toThrow("atomic comparison is unavailable");
+    expect(mocks.observe).not.toHaveBeenCalled();
+    expect(mocks.compareAndApply).not.toHaveBeenCalled();
   });
 });
 

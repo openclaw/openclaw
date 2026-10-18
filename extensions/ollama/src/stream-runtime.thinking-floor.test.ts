@@ -11,31 +11,44 @@ import {
   createConfiguredOllamaStreamFn,
 } from "./stream.runtime.js";
 
-const local = { provider: "ollama", baseUrl: "http://127.0.0.1:11434" };
-const hiddenReasoning = {
-  ...local,
-  id: "mandatory-thinking",
-  params: { think: false },
-  reasoning: false,
+const localBaseUrl = "http://127.0.0.1:11434";
+
+type FloorCase = {
+  name: string;
+  provider: string;
+  id: string;
+  baseUrl?: string;
+  params?: Record<string, unknown>;
+  reasoning?: boolean;
+  thinkingLevelMap?: ProviderRuntimeModel["thinkingLevelMap"];
+  expected: string | boolean | undefined;
 };
 
 afterEach(() => {
   fetchMock.mockReset();
 });
 
-function createModel(overrides: Partial<ProviderRuntimeModel>): ProviderRuntimeModel {
+function createModel({
+  provider,
+  id,
+  baseUrl,
+  params,
+  reasoning,
+  thinkingLevelMap,
+}: FloorCase): ProviderRuntimeModel {
   return {
-    id: "glm-5.3",
+    id,
     name: "test model",
-    provider: "ollama-cloud",
+    provider,
     api: "ollama",
-    baseUrl: "https://ollama.com",
-    reasoning: true,
+    baseUrl: baseUrl ?? "https://ollama.com",
+    reasoning: reasoning ?? true,
     input: ["text"],
     contextWindow: 131072,
     maxTokens: 8192,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    ...overrides,
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+    ...(params ? { params } : {}),
   };
 }
 
@@ -62,59 +75,132 @@ async function readSentThink(model: ProviderRuntimeModel, streamFn: StreamFn): P
   return JSON.parse(fetchMock.mock.calls[0]?.[0].init.body).think;
 }
 
-type Expected = string | boolean | undefined;
 describe("Ollama models that cannot disable thinking", () => {
-  it.each<[string, Partial<ProviderRuntimeModel>, "off" | "high", Expected]>([
-    ["Off on glm-5.3", {}, "off", "low"],
-    ["Off on glm-5.3-flash", { id: "glm-5.3-flash" }, "off", "low"],
-    ["Off on a cloud ref through a local server", { ...local, id: "glm-5.3:cloud" }, "off", "low"],
-    ["configured false on glm-5.3", { params: { think: false } }, "off", "low"],
-    [
-      "configured false kept by an unforwarded runtime level",
-      { params: { think: false }, reasoning: false },
-      "high",
-      "low",
-    ],
-    [
-      "discovered floor with hidden reasoning",
-      { ...hiddenReasoning, thinkingLevelMap: { off: "true", high: "true" } },
-      "high",
-      true,
-    ],
-    ["High on glm-5.3", {}, "high", "high"],
-    ["Off on glm-5.2, which lists false", { id: "glm-5.2" }, "off", false],
-    ["Off on a local tag", { ...local, id: "glm-5.3:q4_K_M" }, "off", false],
-  ])("agent turn: %s", async (_name, overrides, thinkingLevel, expected) => {
-    const model = createModel(overrides);
+  it.each<FloorCase & { level: "off" | "high" }>([
+    {
+      name: "Off on glm-5.3",
+      provider: "ollama-cloud",
+      id: "glm-5.3",
+      level: "off",
+      expected: "low",
+    },
+    {
+      name: "Off on glm-5.3-flash",
+      provider: "ollama-cloud",
+      id: "glm-5.3-flash",
+      level: "off",
+      expected: "low",
+    },
+    {
+      name: "Off on a cloud ref through a local server",
+      provider: "ollama",
+      id: "glm-5.3:cloud",
+      baseUrl: localBaseUrl,
+      level: "off",
+      expected: "low",
+    },
+    {
+      name: "configured false on glm-5.3",
+      provider: "ollama-cloud",
+      id: "glm-5.3",
+      level: "off",
+      params: { think: false },
+      expected: "low",
+    },
+    {
+      name: "configured false kept by an unforwarded runtime level",
+      provider: "ollama-cloud",
+      id: "glm-5.3",
+      level: "high",
+      params: { think: false },
+      reasoning: false,
+      expected: "low",
+    },
+    {
+      name: "discovered floor with hidden reasoning",
+      provider: "ollama",
+      id: "mandatory-thinking",
+      baseUrl: localBaseUrl,
+      level: "high",
+      params: { think: false },
+      reasoning: false,
+      thinkingLevelMap: { off: "true", high: "true" },
+      expected: true,
+    },
+    {
+      name: "High on glm-5.3",
+      provider: "ollama-cloud",
+      id: "glm-5.3",
+      level: "high",
+      expected: "high",
+    },
+    {
+      name: "Off on glm-5.2, which lists false",
+      provider: "ollama-cloud",
+      id: "glm-5.2",
+      level: "off",
+      expected: false,
+    },
+    {
+      name: "Off on a local tag",
+      provider: "ollama",
+      id: "glm-5.3:q4_K_M",
+      baseUrl: localBaseUrl,
+      level: "off",
+      expected: false,
+    },
+  ])("agent turn: $name sends $expected", async ({ level, ...testCase }) => {
+    const model = createModel(testCase);
     const streamFn = expectDefined(
       createConfiguredOllamaCompatStreamWrapper({
-        provider: model.provider,
-        modelId: model.id,
+        provider: testCase.provider,
+        modelId: testCase.id,
         model,
-        thinkingLevel,
+        thinkingLevel: level,
         streamFn: createConfiguredOllamaStreamFn({ model }),
       }),
       "wrapped stream",
     );
-    expect(await readSentThink(model, streamFn)).toBe(expected);
+    expect(await readSentThink(model, streamFn)).toBe(testCase.expected);
   });
 
-  // One-shot completions skip the agent wrapper; the transport must apply the floor too.
-  it.each<[string, Partial<ProviderRuntimeModel>, Expected]>([
-    ["configured false on glm-5.3", { params: { think: false } }, "low"],
-    [
-      "discovered floor with hidden reasoning",
-      { ...hiddenReasoning, thinkingLevelMap: { off: "true" } },
-      true,
-    ],
-    [
-      "configured false on glm-5.2, which lists false",
-      { id: "glm-5.2", params: { think: false } },
-      false,
-    ],
-    ["no configured value on glm-5.3", {}, undefined],
-  ])("direct completion: %s", async (_name, overrides, expected) => {
-    const model = createModel(overrides);
-    expect(await readSentThink(model, createConfiguredOllamaStreamFn({ model }))).toBe(expected);
+  // Plugin llm.complete() and other one-shot completions call the transport without
+  // the agent stream wrapper, so the transport itself must apply the floor.
+  it.each<FloorCase>([
+    {
+      name: "configured false on glm-5.3",
+      provider: "ollama-cloud",
+      id: "glm-5.3",
+      params: { think: false },
+      expected: "low",
+    },
+    {
+      name: "discovered floor with hidden reasoning",
+      provider: "ollama",
+      id: "mandatory-thinking",
+      baseUrl: localBaseUrl,
+      params: { think: false },
+      reasoning: false,
+      thinkingLevelMap: { off: "true" },
+      expected: true,
+    },
+    {
+      name: "configured false on glm-5.2, which lists false",
+      provider: "ollama-cloud",
+      id: "glm-5.2",
+      params: { think: false },
+      expected: false,
+    },
+    {
+      name: "no configured value on glm-5.3",
+      provider: "ollama-cloud",
+      id: "glm-5.3",
+      expected: undefined,
+    },
+  ])("direct completion: $name sends $expected", async (testCase) => {
+    const model = createModel(testCase);
+    expect(await readSentThink(model, createConfiguredOllamaStreamFn({ model }))).toBe(
+      testCase.expected,
+    );
   });
 });

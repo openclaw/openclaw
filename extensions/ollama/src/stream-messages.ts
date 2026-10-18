@@ -1,4 +1,5 @@
-import type { AssistantMessage, Message, ThinkingContent } from "openclaw/plugin-sdk/llm";
+import { parseJsonObjectPreservingUnsafeIntegers } from "openclaw/plugin-sdk/json-unsafe-integers";
+import type { ThinkingContent } from "openclaw/plugin-sdk/llm";
 import {
   describeUnsupportedToolResultMedia,
   extractToolResultText,
@@ -7,7 +8,7 @@ import {
   splitSystemPromptRelocatableBoundary,
   stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeOllamaToolCallName } from "./tool-name-aliases.js";
 
 export interface OllamaChatMessage {
@@ -32,53 +33,90 @@ export type OllamaToolCallNameOptions = {
   availableToolNames?: ReadonlySet<string>;
 };
 
-function extractTextContent(content: Message["content"]): string {
+function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }
+  if (!Array.isArray(content)) {
+    return "";
+  }
   return content
-    .filter((part) => part.type === "text")
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        isRecord(part) && part.type === "text" && typeof part.text === "string",
+    )
     .map((part) => part.text)
     .join("");
 }
 
-function extractOllamaImages(content: Message["content"]): string[] {
-  if (typeof content === "string") {
+function extractOllamaImages(content: unknown): string[] {
+  if (!Array.isArray(content)) {
     return [];
   }
-  return content.filter((part) => part.type === "image").map((part) => part.data);
+  return content
+    .filter(
+      (part): part is { type: "image"; data: string } =>
+        isRecord(part) && part.type === "image" && typeof part.data === "string",
+    )
+    .map((part) => part.data);
 }
 
-function extractOllamaThinking(content: AssistantMessage["content"]): string {
+function extractOllamaThinking(content: unknown): string {
+  if (!Array.isArray(content)) {
+    return "";
+  }
   return content
-    .filter((part): part is ThinkingContent => part.type === "thinking" && !part.redacted)
+    .filter(
+      (part): part is ThinkingContent =>
+        isRecord(part) &&
+        part.type === "thinking" &&
+        typeof part.thinking === "string" &&
+        !part.redacted,
+    )
     .map((part) => part.thinking)
     .join("");
 }
 
 function extractToolCalls(
-  content: AssistantMessage["content"],
+  content: unknown,
   options: OllamaToolCallNameOptions = {},
 ): OllamaToolCall[] {
-  return content
-    .filter((part) => part.type === "toolCall")
-    .map((part) => {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  const result: OllamaToolCall[] = [];
+  for (const part of content) {
+    if (
+      isRecord(part) &&
+      (part.type === "toolCall" || part.type === "tool_use") &&
+      typeof part.name === "string"
+    ) {
       const id = normalizeOptionalString(part.id);
-      const call: OllamaToolCall = {
+      result.push({
+        ...(id ? { id } : {}),
         function: {
           name: normalizeOllamaToolCallName(part.name, options),
-          arguments: part.arguments,
+          arguments:
+            parseJsonObjectPreservingUnsafeIntegers(
+              part.type === "toolCall" ? part.arguments : part.input,
+            ) ?? {},
         },
-      };
-      if (id) {
-        call.id = id;
-      }
-      return call;
-    });
+      });
+    }
+  }
+  return result;
 }
 
+type OllamaInputMessage = {
+  role: string;
+  content: unknown;
+  toolName?: unknown;
+  toolCallId?: unknown;
+  isError?: unknown;
+};
+
 export function convertToOllamaMessages(
-  messages: Message[],
+  messages: OllamaInputMessage[],
   system?: string,
   options: OllamaToolCallNameOptions = {},
 ): OllamaChatMessage[] {
@@ -109,26 +147,32 @@ export function convertToOllamaMessages(
       continue;
     }
 
-    const content = msg.content;
-    const text = extractToolResultText(content, { includeStructured: true });
-    const images = content.filter(isImageWithMediaPayload).map((part) => part.data);
-    const omittedMediaPlaceholder = describeUnsupportedToolResultMedia(content, {
-      images: true,
-      audio: false,
-    });
-    const mediaPlaceholder = images.length > 0 ? "(see attached image)" : undefined;
-    result.push({
-      role: "tool",
-      content: formatToolResultText({
-        text,
-        mediaPlaceholder,
-        omittedMediaPlaceholder,
-        isError: msg.isError,
-      }),
-      ...(images.length > 0 ? { images } : {}),
-      ...(msg.toolCallId ? { tool_call_id: msg.toolCallId } : {}),
-      ...(msg.toolName ? { tool_name: msg.toolName } : {}),
-    });
+    if (msg.role === "tool" || msg.role === "toolResult") {
+      const content = Array.isArray(msg.content)
+        ? msg.content
+        : [{ type: "text", text: typeof msg.content === "string" ? msg.content : "" }];
+      const text = extractToolResultText(content, { includeStructured: true });
+      const images = content.filter(isImageWithMediaPayload).map((part) => part.data);
+      const omittedMediaPlaceholder = describeUnsupportedToolResultMedia(content, {
+        images: true,
+        audio: false,
+      });
+      const mediaPlaceholder = images.length > 0 ? "(see attached image)" : undefined;
+      const toolName = typeof msg.toolName === "string" ? msg.toolName : undefined;
+      const toolCallId = typeof msg.toolCallId === "string" ? msg.toolCallId : undefined;
+      result.push({
+        role: "tool",
+        content: formatToolResultText({
+          text,
+          mediaPlaceholder,
+          omittedMediaPlaceholder,
+          isError: msg.isError === true,
+        }),
+        ...(images.length > 0 ? { images } : {}),
+        ...(toolCallId ? { tool_call_id: toolCallId } : {}),
+        ...(toolName ? { tool_name: toolName } : {}),
+      });
+    }
   }
 
   if (system) {

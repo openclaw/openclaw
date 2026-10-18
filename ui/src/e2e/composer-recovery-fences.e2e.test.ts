@@ -1,3 +1,4 @@
+import type { LitElement } from "lit";
 import { expect, it } from "vitest";
 import type { ChatQueueItem, ChatReplyTarget } from "../lib/chat/chat-types.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
@@ -415,8 +416,7 @@ suite.define(() => {
         const restore = notice.getByRole("button", { name: "Restore", exact: true });
         if (change === "incognito") {
           await notice.evaluate(async (element) => {
-            // SAFETY: This locator selects the registered recovery element created above.
-            const component = element as HTMLElementTagNameMap["openclaw-chat-outbox-recovery"];
+            const component = element as LitElement;
             await component.updateComplete;
             await component.updateComplete;
           });
@@ -435,10 +435,9 @@ suite.define(() => {
           // Leaving Incognito reveals the retained source, never an adopted destination.
           await hostHandle.evaluate((host) => {
             host.selectedChatSessionIncognito = false;
-            // SAFETY: The fixture above creates this registered recovery element with this ID.
-            const component = document.querySelector(
-              "#recovery-fence-fixture",
-            ) as HTMLElementTagNameMap["openclaw-chat-outbox-recovery"];
+            const component = document.querySelector("#recovery-fence-fixture") as LitElement & {
+              identity: string;
+            };
             component.identity = "non-incognito-review-owner";
           });
         }

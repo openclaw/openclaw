@@ -18,7 +18,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import { ModelPicker } from "../../components/solid/model-picker.tsx";
+import { renderModelPicker } from "../../components/model-picker.ts";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
@@ -41,6 +41,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { LitContent, defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { newSessionModelSearch } from "../new-session/model-location.ts";
 import { readConfigValue, searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
 import { renderSearchTestResult } from "./search-results.tsx";
@@ -81,7 +82,7 @@ function SettingsSelectRow(props: {
   );
 }
 
-export function SearchPage() {
+function SearchPageContent() {
   const context = useApplication();
   const owner = getOwner();
   const active = () => owner !== null && !isDisposed(owner);
@@ -160,7 +161,7 @@ export function SearchPage() {
   }
 
   function syncAgent() {
-    const id = context.settingsAgentSelection.state.selectedId ?? "";
+    const id = context?.settingsAgentSelection.state.selectedId ?? "";
     if (id === selectedAgent) {
       return false;
     }
@@ -404,7 +405,7 @@ export function SearchPage() {
   const disabled = () => !canEdit() || busy() || !configState().configSnapshot;
 
   return (
-    <openclaw-search-page>
+    <>
       <SettingsPageHeader title={t("tabs.search")} subtitle={t("subtitles.search")} />
       <SettingsWorkspace>
         <SettingsPage>
@@ -475,15 +476,19 @@ export function SearchPage() {
                       title={t("searchPage.model")}
                       description={current().model.runtimeLabel}
                       control={
-                        <ModelPicker
-                          label={t("searchPage.model")}
-                          value={model()}
-                          options={modelOptions()}
-                          disabled={!gateway.connected}
-                          onChange={(value) => {
-                            setModel(value);
-                            void load(value);
-                          }}
+                        <LitContent
+                          render={() =>
+                            renderModelPicker({
+                              label: t("searchPage.model"),
+                              value: model(),
+                              options: modelOptions(),
+                              disabled: !gateway.connected,
+                              onChange: (value) => {
+                                setModel(value);
+                                void load(value);
+                              },
+                            })
+                          }
                         />
                       }
                     />
@@ -647,14 +652,9 @@ export function SearchPage() {
           </Show>
         </SettingsPage>
       </SettingsWorkspace>
-    </openclaw-search-page>
+    </>
   );
 }
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-search-page": HTMLAttributes<HTMLElement>;
-    }
-  }
-}
+export const SearchPage = defineSolidBridge("openclaw-search-page", SearchPageContent, {
+  properties: {},
+});

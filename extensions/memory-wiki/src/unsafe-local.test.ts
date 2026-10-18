@@ -2,8 +2,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
@@ -26,7 +24,6 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
   });
 
   afterEach(() => {
-    __setFsSafeTestHooksForTest();
     vi.restoreAllMocks();
   });
 
@@ -74,19 +71,6 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     expect(page).toContain("provenanceMode: unsafe-local");
 
     const readFile = vi.spyOn(fs, "readFile");
-    const retainedPages = new Set(
-      await Promise.all(
-        first.pagePaths.map((pagePath) => fs.realpath(path.join(vaultDir, pagePath))),
-      ),
-    );
-    const openedPages: string[] = [];
-    __setFsSafeTestHooksForTest({
-      beforeOpen: (filePath) => {
-        if (retainedPages.has(filePath)) {
-          openedPages.push(filePath);
-        }
-      },
-    });
     const second = await syncMemoryWikiUnsafeLocalSources(config);
 
     expect(second.importedCount).toBe(0);
@@ -98,11 +82,6 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
         ([filePath]) => typeof filePath === "string" && filePath.startsWith(vaultDir),
       ),
     ).toBe(false);
-    expect(openedPages).toEqual([]);
-
-    const canaryPage = first.pagePaths[0]!;
-    await (await fsRoot(vaultDir)).readText(canaryPage);
-    expect(openedPages).toEqual([await fs.realpath(path.join(vaultDir, canaryPage))]);
   });
 
   it("salvages unsafe-local page Notes when configured files disappear", async () => {

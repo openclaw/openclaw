@@ -1,12 +1,13 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import {
+  GATEWAY_SERVER_CAPS,
   validateTalkSessionCancelOutputResult,
   type TalkCatalogResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
-import type { RealtimeVoiceCloseOptions } from "../../../../../src/talk/provider-types.js";
 import { t } from "../../../i18n/index.ts";
 import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { isGatewayCapabilityAdvertised } from "../../../lib/gateway-methods.ts";
 import { RealtimeTalkAudioInputBudget } from "./audio-input-budget.ts";
 import {
   floatToPcm16,
@@ -30,28 +31,32 @@ import {
 const BARGE_IN_RMS_THRESHOLD = 0.02;
 const BARGE_IN_PEAK_THRESHOLD = 0.08;
 const BARGE_IN_CONSECUTIVE_SPEECH_FRAMES = 2;
-const AUDIO_APPEND_LIVENESS_TIMEOUT_MS = 30_000;
+const AUDIO_APPEND_TIMEOUT_MS = 8_000;
 const RELAY_CLOSE_TIMEOUT_MS = 8_000;
 const MAX_PENDING_ACTIVATION_EVENTS = 32;
 const MAX_PENDING_ACTIVATION_EVENT_BYTES = 256 * 1024;
 
 function estimateRelayEventBytes(event: GatewayRelayEvent): number {
-  // Gateway events already crossed the JSON boundary. Browser strings may use
-  // two bytes per code unit; avoid allocating a second encoded copy here.
-  return JSON.stringify(event).length * 2;
+  try {
+    const serialized = JSON.stringify(event);
+    // Browser strings may use two bytes per code unit; use the upper bound without
+    // allocating a second encoded copy on this realtime event path.
+    return (serialized?.length ?? 0) * 2;
+  } catch {
+    return MAX_PENDING_ACTIVATION_EVENT_BYTES + 1;
+  }
 }
 
 export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly input = this.ctx.input;
   private inputContext: AudioContext | null = null;
+  private outputContext: AudioContext | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private unsubscribe: (() => void) | null = null;
   private closed = false;
   private closeCompletion: Promise<void> = Promise.resolve();
   private audioAppendAbortController: AbortController | null = null;
-  private pendingAudioAppends = 0;
-  private audioAppendTimer: number | undefined;
   private readonly audioInputBudget = new RealtimeTalkAudioInputBudget((detail) =>
     this.ctx.callbacks.onInputNotice?.(detail),
   );
@@ -133,7 +138,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       return "cancelled";
     }
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
-    this.outputQueue.open(this.session.audio.outputSampleRateHz);
+    this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });
     this.abortPendingAudioAppends();
     this.audioAppendAbortController = new AbortController();
     if (this.ctx.callbacks.onInputLevel) {
@@ -163,7 +168,11 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
   }
 
-  stop({ disposition = "abort" }: RealtimeVoiceCloseOptions = {}): Promise<void> {
+  stop(): Promise<void> {
+    return this.close("abort");
+  }
+
+  private close(disposition: "abort" | "detach"): Promise<void> {
     const wasClosed = this.closed;
     this.stopLocal();
     if (!wasClosed) {
@@ -173,7 +182,12 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           "talk.session.close",
           {
             sessionId: this.session.relaySessionId,
-            disposition,
+            ...(isGatewayCapabilityAdvertised(
+              this.ctx.client,
+              GATEWAY_SERVER_CAPS.TALK_SESSION_CLOSE_DISPOSITION,
+            ) === true
+              ? { disposition }
+              : {}),
           },
           { timeoutMs: RELAY_CLOSE_TIMEOUT_MS },
         )
@@ -209,7 +223,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.stopOutput();
     void this.inputContext?.close();
     this.inputContext = null;
-    this.outputQueue.close();
+    void this.outputContext?.close();
+    this.outputContext = null;
   }
 
   private startMicrophonePump(): void {
@@ -229,13 +244,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         return;
       }
       // Drop stale frames past the budget without ending the call, but make the loss
-      // visible so the user repeats it. Only a lack of progress fails a slow relay.
+      // visible so the user repeats it. The append timeout still fails a dead relay.
       if (!this.audioInputBudget.reserve(frameMs)) {
         return;
-      }
-      this.pendingAudioAppends += 1;
-      if (this.pendingAudioAppends === 1) {
-        this.resetAudioAppendTimer();
       }
       const pcm = floatToPcm16(samples);
       void this.ctx.client
@@ -248,37 +259,18 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           },
           {
             signal: abortController.signal,
-            timeoutMs: null,
+            timeoutMs: AUDIO_APPEND_TIMEOUT_MS,
           },
         )
-        .then(() => {
-          if (abortController.signal.aborted) {
-            return;
-          }
-          this.pendingAudioAppends -= 1;
-          this.resetAudioAppendTimer();
-          this.audioInputBudget.settle(frameMs);
-        })
-        .catch((error: unknown) => this.fail(error));
+        .catch((error: unknown) => this.fail(error))
+        // Close resets the budget first, so late settlements cannot report recovery.
+        .finally(() => this.audioInputBudget.settle(frameMs));
     });
-  }
-
-  private resetAudioAppendTimer(): void {
-    window.clearTimeout(this.audioAppendTimer);
-    this.audioAppendTimer =
-      !this.closed && this.pendingAudioAppends > 0
-        ? window.setTimeout(
-            () => this.fail(t("chat.composer.realtimeTalkRelayUnresponsive")),
-            AUDIO_APPEND_LIVENESS_TIMEOUT_MS,
-          )
-        : undefined;
   }
 
   private abortPendingAudioAppends(): void {
     this.audioAppendAbortController?.abort();
     this.audioAppendAbortController = null;
-    this.pendingAudioAppends = 0;
-    this.resetAudioAppendTimer();
     this.audioInputBudget.reset();
   }
 
@@ -287,7 +279,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       return;
     }
     // Status callbacks can synchronously stop Talk; commit detachment first.
-    void this.stop({ disposition: "detach" });
+    void this.close("detach");
     this.ctx.callbacks.onStatus?.("error", formatUiError(error));
   }
 
@@ -330,7 +322,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       );
       // Overflow is locally terminal, so release the server relay immediately even
       // if the browser's microphone permission prompt never settles.
-      void this.stop({ disposition: "detach" });
+      void this.close("detach");
       return;
     }
     this.pendingActivationEvents.push(event);
@@ -438,7 +430,11 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private playPcm16(base64: string): void {
-    const result = this.outputQueue.play(base64);
+    const result = this.outputQueue.play(
+      base64,
+      this.outputContext,
+      this.session.audio.outputSampleRateHz,
+    );
     if (result === "overflow") {
       this.playbackOverflowed = true;
       this.cancelOutput("playback-overflow", false);
@@ -446,7 +442,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private stopOutput(releaseDelayedToolResults = true): void {
-    this.outputQueue.stop();
+    this.outputQueue.stop(this.outputContext);
     this.speechFramesDuringPlayback = 0;
     if (releaseDelayedToolResults) {
       this.rescheduleDelayedToolResults();
@@ -454,7 +450,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private scheduleMarkAck(markName: string): void {
-    const delayMs = this.outputQueue.playbackDelayMs;
+    const delayMs = this.outputPlaybackDelayMs();
     if (delayMs > 0) {
       const timer = window.setTimeout(() => {
         this.markAckTimers.delete(timer);
@@ -548,7 +544,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (
       !this.closed &&
       !willContinue &&
-      (this.pendingOutputCancellations > 0 || this.outputQueue.playbackDelayMs > 0)
+      (this.pendingOutputCancellations > 0 || this.outputPlaybackDelayMs() > 0)
     ) {
       const pending = { callId, result };
       this.delayedToolResults.add(pending);
@@ -579,6 +575,16 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
   }
 
+  private outputPlaybackDelayMs(): number {
+    if (!this.outputContext) {
+      return 0;
+    }
+    return Math.max(
+      0,
+      Math.ceil((this.outputQueue.queuedUntil - this.outputContext.currentTime) * 1000),
+    );
+  }
+
   private rescheduleDelayedToolResult(pending: DelayedToolResult): void {
     if (this.closed) {
       this.discardDelayedToolResult(pending);
@@ -587,7 +593,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (this.pendingOutputCancellations > 0) {
       return;
     }
-    const playbackDelayMs = this.outputQueue.playbackDelayMs;
+    const playbackDelayMs = this.outputPlaybackDelayMs();
     if (playbackDelayMs > 0) {
       pending.timer = window.setTimeout(() => {
         pending.timer = undefined;

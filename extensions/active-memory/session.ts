@@ -114,7 +114,7 @@ export function resolveStatusUpdateAgentId(ctx: { agentId?: string; sessionKey?:
 }
 
 function formatElapsedMsCompact(elapsedMs: number): string {
-  if (elapsedMs <= 0) {
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) {
     return "0ms";
   }
   if (elapsedMs >= 1000) {
@@ -162,10 +162,13 @@ function buildPluginDebugLine(params: {
       debugParts.push(`${key}=${value}`);
     }
   }
-  if (params.searchDebug?.searchMs !== undefined) {
+  if (
+    typeof params.searchDebug?.searchMs === "number" &&
+    Number.isFinite(params.searchDebug.searchMs)
+  ) {
     debugParts.push(`searchMs=${Math.max(0, Math.round(params.searchDebug.searchMs))}`);
   }
-  if (params.searchDebug?.hits !== undefined) {
+  if (typeof params.searchDebug?.hits === "number" && Number.isFinite(params.searchDebug.hits)) {
     debugParts.push(`hits=${Math.max(0, Math.floor(params.searchDebug.hits))}`);
   }
   const prefix = debugParts.join(" ");

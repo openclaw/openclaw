@@ -127,9 +127,8 @@ suite.define(() => {
         const toolbar = page.locator(".macos-titlebar-controls");
         await toolbar.waitFor();
         const assertChromeClear = async () => {
-          // Closing native popovers retain light-DOM buttons outside the toolbar's hit targets.
           const controls = page.locator(
-            ":is(.chat-pane__header, [data-region-header='side'], .sidebar-rail, .sidebar-session-toolbar, .settings-sidebar__header, .content-header, .new-session-page__incognito-rail) button:visible:not([role='menu'] button):not([popover] button)",
+            ".chat-pane__header button:visible, [data-region-header='side'] button:visible, .sidebar-rail button:visible, .sidebar-session-toolbar button:visible, .settings-sidebar__header button:visible, .content-header button:visible, .new-session-page__incognito-rail button:visible",
           );
           expect(await controls.count()).toBeGreaterThan(0);
           // Sidebar transitions settle before the screenshot and hit-target proof.

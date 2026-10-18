@@ -79,16 +79,12 @@ describe("tool-catalog", () => {
     {
       profile: "minimal",
       allowed: ["presence", "session_status", "gateway"],
-      denied: ["exec", "message", "sessions_create"],
+      denied: ["exec", "message"],
     },
-    {
-      profile: "coding",
-      allowed: ["read", "exec", "bundle-mcp", "sessions_create"],
-      denied: ["browser", "message"],
-    },
+    { profile: "coding", allowed: ["read", "exec", "bundle-mcp"], denied: ["browser", "message"] },
     {
       profile: "messaging",
-      allowed: ["message", "bundle-mcp", "sessions_create"],
+      allowed: ["message", "bundle-mcp"],
       denied: ["exec", "process", "write"],
     },
   ] as const)("keeps the $profile capability boundary", ({ profile, allowed, denied }) => {

@@ -2,7 +2,6 @@ import type { Static, TSchema } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 // Feature handlers own authorization; schemas keep request and device identities explicit.
 export const DevicePairListParamsSchema = closedObject({});
@@ -137,7 +136,7 @@ export const DevicePairSetupCompletedEventSchema = closedObject({
   setupId: SetupIdSchema,
   deviceId: NonEmptyString,
   deviceName: Type.Optional(NonEmptyString),
-  access: stringLiteralUnion(["full", "limited", "node"]),
+  access: Type.Union([Type.Literal("full"), Type.Literal("limited"), Type.Literal("node")]),
   ts: Type.Integer({ minimum: 0 }),
 });
 
@@ -207,9 +206,15 @@ export const DevicePairSetupCodeResultSchema = closedObject({
   gatewayUrls: Type.Optional(
     Type.Array(NonEmptyString, { minItems: 2, maxItems: 8, uniqueItems: true }),
   ),
-  auth: stringLiteralUnion(["token", "password", "trusted-proxy"]),
+  auth: Type.Union([
+    Type.Literal("token"),
+    Type.Literal("password"),
+    Type.Literal("trusted-proxy"),
+  ]),
   urlSource: NonEmptyString,
-  access: Type.Optional(stringLiteralUnion(["full", "limited", "node"])),
+  access: Type.Optional(
+    Type.Union([Type.Literal("full"), Type.Literal("limited"), Type.Literal("node")]),
+  ),
   accessDowngraded: Type.Optional(Type.Boolean()),
   expiresAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });

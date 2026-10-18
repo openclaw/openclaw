@@ -11,6 +11,7 @@ import {
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getSelfIdentity, getSenderIdentity } from "./identity.js";
+import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
 import { resolveWhatsAppGroupConversationId } from "./inbound/group-conversation.js";
 import type { AdmittedWebInboundMessage } from "./inbound/types.js";
 import { getWhatsAppRuntime } from "./runtime.js";
@@ -39,9 +40,14 @@ export function resolveWhatsAppInboundPolicy(params: {
   const dmPolicy = account.dmPolicy ?? "pairing";
   const dmAllowFrom =
     configuredAllowFrom.length > 0 ? configuredAllowFrom : params.selfE164 ? [params.selfE164] : [];
-  const groupAllowFrom = account.groupAllowFrom?.length
-    ? account.groupAllowFrom
-    : configuredAllowFrom;
+  const configuredGroupAllowFrom =
+    Array.isArray(account.groupAllowFrom) && account.groupAllowFrom.length > 0
+      ? account.groupAllowFrom
+      : undefined;
+  const groupAllowFrom =
+    configuredGroupAllowFrom ??
+    (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined) ??
+    [];
   const defaultGroupPolicy = resolveDefaultGroupPolicy(params.cfg);
   const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.cfg.channels?.whatsapp !== undefined,
@@ -51,7 +57,8 @@ export function resolveWhatsAppInboundPolicy(params: {
   const resolvedGroupCfg: OpenClawConfig = {
     channels: { whatsapp: { groupPolicy, groups: account.groups } },
   };
-  const isSamePhone = (value?: string | null) => value != null && value === params.selfE164;
+  const isSamePhone = (value?: string | null) =>
+    typeof value === "string" && typeof params.selfE164 === "string" && value === params.selfE164;
   return {
     account,
     dmPolicy,
@@ -131,7 +138,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   authDir?: string;
 }): Promise<boolean> {
   const self = getSelfIdentity(params.msg, params.authDir);
-  const admission = params.msg.admission;
+  const admission = requireWhatsAppInboundAdmission(params.msg);
   const policy =
     params.policy ??
     resolveWhatsAppInboundPolicy({

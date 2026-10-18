@@ -104,7 +104,7 @@ export function connectControlUiFavicon(
           continue;
         }
         if (isSessionRunActive(row)) {
-          working ||= context.sessions.isRunVisuallyActive(row);
+          working = true;
           nextActive.set(row.key, row.sessionId);
         } else if (
           row.status === "done" &&

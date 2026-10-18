@@ -6,6 +6,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { AgentSelectOption } from "./agent-select.ts";
 import "./agent-select-registration.ts";
+import { icons } from "./icons.ts";
 
 type AgentScopeControlProps = {
   agents: readonly GatewayAgentRow[];
@@ -56,9 +57,7 @@ export function AgentScopeControl(params: AgentScopeControlProps) {
         : (agents[0]?.id ?? "")
       : selectedId;
     const options: AgentSelectOption[] = [
-      ...(allowAll
-        ? [{ value: "", label: t("agentScope.allAgents"), icon: "users" as const }]
-        : []),
+      ...(allowAll ? [{ value: "", label: t("agentScope.allAgents"), icon: icons.users }] : []),
       ...agents.map((agent) => ({
         value: agent.id,
         label: normalizeAgentLabel(agent),

@@ -34,9 +34,17 @@ import {
 
 export type ReplyRunWaiter = (ended: boolean) => void;
 
+export type ReplyRunAdmissionSource = {
+  sessionId: string;
+  sessionIds: Set<string>;
+  operation: ReplyOperation;
+  databaseIdentity?: OpenClawAgentDatabaseIdentity;
+};
+
 export type ReplyRunAdmissionBarrier = {
   settled: Promise<void>;
-  operation: ReplyOperation;
+  source: ReplyRunAdmissionSource;
+  sources: Map<OpenClawAgentDatabaseIdentity | undefined, ReplyRunAdmissionSource>;
 };
 
 export type ReplyOperationAdmission = {
@@ -222,7 +230,18 @@ type ReplyOperationAfterClear = {
   barrier?: ReplyRunAdmissionBarrier;
 };
 const afterClearByOperation = new WeakMap<ReplyOperation, ReplyOperationAfterClear>();
-const successorBarrierGroupsByOperation = new WeakMap<ReplyOperation, Set<() => void>>();
+type ReplyOperationSuccessorBarrierGroup = {
+  registrationKey: string;
+  sources: Map<string, ReplyRunAdmissionSource>;
+  start: () => void;
+};
+// Alias-keyed fences registered for one lane rotate together. Rekeyed command
+// operations retain prior-lane identities so source successors do not adopt
+// the target session.
+const successorBarrierGroupsByOperation = new WeakMap<
+  ReplyOperation,
+  Set<ReplyOperationSuccessorBarrierGroup>
+>();
 export type ReplyOperationStaleExpiryOptions = {
   afterClearBarrier?: PromiseLike<unknown>;
   followupAdmissionBarrierTimeout?: number | ReplyFollowupAdmissionBarrierTimeoutPolicy;
@@ -370,8 +389,11 @@ export function runAfterReplyOperationClear(
   const afterClearState = afterClearByOperation.get(operation);
   if (!afterClearState?.barrier && replyRunState.activeRunsByKey.get(operation.key) !== operation) {
     const barrier = replyRunState.followupAdmissionBarriersByKey.get(operation.key);
-    if (barrier) {
-      void barrier.settled.then(() => afterClear(operation.sessionId));
+    const source = barrier?.sources.get(
+      lifecycleAdmissionByOperation.get(operation)?.databaseIdentity,
+    );
+    if (barrier && source) {
+      void barrier.settled.then(() => afterClear(source.sessionId));
       return;
     }
     afterClear(operation.sessionId);
@@ -386,17 +408,62 @@ export function isReplyOperationAbortedForRestart(operation: ReplyOperation): bo
   return operation.result?.kind === "aborted" && operation.result.code === "aborted_for_restart";
 }
 
+export function mergeReplyRunAdmissionSource<T extends ReplyRunAdmissionSource>(
+  source: T,
+  previous?: ReplyRunAdmissionSource,
+): T {
+  // Only a connected UUID lineage in the same physical store can carry old work.
+  // Restart invalidation cannot disappear when the next owner replaces the source.
+  // Keep valid pending source references stable for retained clear callbacks.
+  if (
+    previous &&
+    !isReplyOperationAbortedForRestart(previous.operation) &&
+    previous.databaseIdentity === source.databaseIdentity &&
+    source.sessionIds.has(previous.sessionId)
+  ) {
+    for (const id of source.sessionIds) {
+      previous.sessionIds.add(id);
+    }
+    return Object.assign(previous, source, { sessionIds: previous.sessionIds });
+  }
+  return source;
+}
+
+function resolveReplyRunAdmissionSource(
+  operation: ReplyOperation,
+  sessionId: string,
+  previous?: ReplyRunAdmissionSource,
+): ReplyRunAdmissionSource {
+  return mergeReplyRunAdmissionSource(
+    {
+      sessionId,
+      sessionIds: operation.captureOwnedSessionIds(),
+      operation,
+      databaseIdentity: lifecycleAdmissionByOperation.get(operation)?.databaseIdentity,
+    },
+    previous,
+  );
+}
+
 function registerReplyRunAdmissionBarrier(
   barriersByKey: Map<string, ReplyRunAdmissionBarrier>,
   sessionKey: string,
-  operation: ReplyOperation,
+  initialSource: ReplyRunAdmissionSource,
   barrier: Promise<void>,
 ): ReplyRunAdmissionBarrier {
   const previous = barriersByKey.get(sessionKey);
+  const source = mergeReplyRunAdmissionSource(
+    initialSource,
+    previous?.sources.get(initialSource.databaseIdentity),
+  );
+  // Retain only the latest source per physical store in this pending chain.
+  // A foreign global barrier must not hide a same-store compaction successor.
+  const sources = new Map(previous?.sources);
+  sources.set(source.databaseIdentity, source);
   const settled = previous
     ? Promise.all([previous.settled, barrier]).then(() => undefined)
     : barrier;
-  const entry = { settled, operation };
+  const entry = { settled, source, sources };
   barriersByKey.set(sessionKey, entry);
   void settled.then(() => {
     if (barriersByKey.get(sessionKey) === entry) {
@@ -416,14 +483,22 @@ export function registerReplyOperationSuccessorBarrier(params: {
   deferUntilClear?: boolean;
 }): void {
   const settlement = createDeferredCore();
-  const sessionKeys = new Set(params.sessionKeys);
+  const sources = new Map<string, ReplyRunAdmissionSource>();
+  for (const sessionKey of new Set(params.sessionKeys.map(normalizeOptionalString))) {
+    if (sessionKey) {
+      sources.set(sessionKey, resolveReplyRunAdmissionSource(params.operation, params.sessionId));
+    }
+  }
   const publish = () => {
-    for (const sessionKey of sessionKeys) {
-      registerReplyRunAdmissionBarrier(
-        replyRunState.successorAdmissionBarriersByKey,
+    for (const [sessionKey, source] of sources) {
+      sources.set(
         sessionKey,
-        params.operation,
-        settlement.promise,
+        registerReplyRunAdmissionBarrier(
+          replyRunState.successorAdmissionBarriersByKey,
+          sessionKey,
+          source,
+          settlement.promise,
+        ).source,
       );
     }
   };
@@ -453,8 +528,10 @@ export function registerReplyOperationSuccessorBarrier(params: {
     start();
     return;
   }
-  const groups = successorBarrierGroupsByOperation.get(params.operation) ?? new Set<() => void>();
-  groups.add(start);
+  const groups =
+    successorBarrierGroupsByOperation.get(params.operation) ??
+    new Set<ReplyOperationSuccessorBarrierGroup>();
+  groups.add({ registrationKey: params.operation.key, sources, start });
   successorBarrierGroupsByOperation.set(params.operation, groups);
 }
 
@@ -462,8 +539,22 @@ export function startReplyOperationSuccessorBarriers(operation: ReplyOperation):
   const groups = successorBarrierGroupsByOperation.get(operation);
   // Drop operation-owned metadata before handoff so adoption cannot retain stale groups.
   successorBarrierGroupsByOperation.delete(operation);
-  for (const start of groups ?? []) {
+  for (const { start } of groups ?? []) {
     start();
+  }
+}
+
+export function updateSuccessorAdmissionSessionId(
+  operation: ReplyOperation,
+  sessionId: string,
+): void {
+  for (const group of successorBarrierGroupsByOperation.get(operation) ?? []) {
+    if (group.registrationKey !== operation.key) {
+      continue;
+    }
+    for (const source of group.sources.values()) {
+      resolveReplyRunAdmissionSource(operation, sessionId, source);
+    }
   }
 }
 
@@ -536,7 +627,7 @@ export function registerFollowupAdmissionBarrier(
   const entry = registerReplyRunAdmissionBarrier(
     replyRunState.followupAdmissionBarriersByKey,
     operation.key,
-    operation,
+    resolveReplyRunAdmissionSource(operation, operation.sessionId),
     waitForReplyBarrierSettlement(barrier, timeout),
   );
   // A later global barrier may belong to another store. Late callbacks still
@@ -547,6 +638,18 @@ export function registerFollowupAdmissionBarrier(
   afterClear.barrier = entry;
   afterClearByOperation.set(operation, afterClear);
   return entry;
+}
+
+export function updateFollowupAdmissionSessionId(operation: ReplyOperation): void {
+  const sources = replyRunState.followupAdmissionBarriersByKey.get(operation.key)?.sources;
+  const databaseIdentity = lifecycleAdmissionByOperation.get(operation)?.databaseIdentity;
+  const source = sources?.get(databaseIdentity);
+  if (sources && source) {
+    sources.set(
+      databaseIdentity,
+      resolveReplyRunAdmissionSource(operation, operation.sessionId, source),
+    );
+  }
 }
 
 export function clearReplyRunState(operation: ReplyOperation): void {

@@ -276,7 +276,7 @@ describe("notarization submission recovery", () => {
     expect(fixture.calls().filter((call) => call[1] === "wait")).toHaveLength(3);
   });
 
-  it.each(["recent matching history", "old", "different name", "failed submit with id"])(
+  it.each(["recent matching history", "empty", "old", "different name", "failed submit with id"])(
     "recovers submission with %s",
     (scenario) => {
       const fixture = notarizationFixture();
@@ -306,7 +306,9 @@ describe("notarization submission recovery", () => {
                 },
                 otherEntry,
               ]
-            : [otherEntry],
+            : scenario === "empty"
+              ? []
+              : [otherEntry],
         }),
       );
       const completed = fixture.run();
@@ -379,7 +381,7 @@ describe("notarization submission recovery", () => {
     },
   );
 
-  it.each(["staple", "validate"])(
+  it.each([undefined, "staple", "validate"])(
     "preserves and resumes DMG bytes across failure stage %s without resubmitting",
     (failStage) => {
       const fixture = notarizationFixture("dmg");

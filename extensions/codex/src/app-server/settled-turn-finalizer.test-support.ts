@@ -13,41 +13,17 @@ import {
 import { CodexSettledTurnContext } from "./settled-turn-context.js";
 import { projectSettledCodexMessages } from "./settled-turn-projection.js";
 import { createCodexRuntimePlanFixture } from "./thread-lifecycle.test-fixtures.js";
-import {
-  attachCodexMirrorAttestation,
-  fingerprintCodexMirrorSourceMessage,
-  isMirroredAgentMessage,
-} from "./transcript-mirror-attestation.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 
 export { registerCodexEventProjectorTestLifecycle } from "./event-projector.test-harness.js";
 
 export async function createCodexSettledFinalizerTestFixture(
-  options: { failedTool?: boolean; terminalStatus?: "failed" | "completed" } = {},
+  options: { failedTool?: boolean } = {},
 ) {
   const runBounded = vi
     .spyOn(boundedTurn, "runBoundedCodexAppServerTurn")
     .mockImplementation(vi.fn<typeof boundedTurn.runBoundedCodexAppServerTurn>());
-  const mirror = vi
-    .spyOn(codexTranscriptMirrorRuntime, "mirror")
-    .mockImplementation(async (input) => ({
-      assistantMirrorIdentitiesOwned: input.terminalAssistantOwner
-        ? [input.terminalAssistantOwner.mirrorIdentity]
-        : [],
-      anchorsByMirrorIdentity: new Map(),
-      messagesPresent: input.messages
-        .filter(isMirroredAgentMessage)
-        .map((message) =>
-          attachCodexMirrorAttestation(
-            Object.assign({}, message, {
-              idempotencyKey: `${input.idempotencyScope}:assistant`,
-            }),
-            fingerprintCodexMirrorSourceMessage(message),
-          ),
-        )
-        .filter(isMirroredAgentMessage),
-      userMessageReceipts: [],
-    }));
+  const mirror = vi.spyOn(codexTranscriptMirrorRuntime, "mirror");
   const params = await createParams();
   params.runId = "run-settled";
   params.sessionId = "session-settled";
@@ -97,18 +73,13 @@ export async function createCodexSettledFinalizerTestFixture(
     forCurrentTurn("turn/completed", {
       turn: {
         id: TURN_ID,
-        status: options.terminalStatus ?? "failed",
+        status: "failed",
         items: [],
-        error:
-          options.terminalStatus === "completed"
-            ? null
-            : { message: "Provider overloaded", codexErrorInfo: "serverOverloaded" },
+        error: { message: "Provider overloaded", codexErrorInfo: "serverOverloaded" },
       },
     }),
   );
-  expect(projector.settledTurnFailureFinalizationAllowed).toBe(
-    options.terminalStatus !== "completed",
-  );
+  expect(projector.settledTurnFailureFinalizationAllowed).toBe(true);
   const attempt = projector.buildResult(buildEmptyToolTelemetry());
   await projector.closeProjection();
   const context = new CodexSettledTurnContext(

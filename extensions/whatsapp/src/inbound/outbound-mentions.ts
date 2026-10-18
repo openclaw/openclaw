@@ -202,9 +202,9 @@ export function resolveWhatsAppOutboundMentions(params: {
 
 export function addWhatsAppOutboundMentionsToContent(
   content: AnyMessageContent,
-  mentionedJids: string[],
+  mentionedJids: readonly string[],
 ): AnyMessageContent {
   return mentionedJids.length > 0
-    ? ({ ...content, mentions: mentionedJids } as AnyMessageContent)
+    ? ({ ...content, mentions: [...mentionedJids] } as AnyMessageContent)
     : content;
 }

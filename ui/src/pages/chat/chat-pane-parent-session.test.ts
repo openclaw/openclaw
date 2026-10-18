@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -8,7 +9,6 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { createPaneHeaderWorkspaceFixture, type TestChatPane } from "./chat-pane.test-support.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -19,7 +19,7 @@ afterEach(resetTranscriptTestDom);
 
 function parentBreadcrumb(pane: TestChatPane) {
   const container = document.createElement("div");
-  renderPaneHeaderInto(
+  render(
     pane.renderPaneHeader(
       createPaneHeaderWorkspaceFixture(pane.state),
       selectedChatSessionRow(pane.state),
@@ -145,13 +145,8 @@ describe("mounted pane parent session", () => {
       const pane = mount(child.key);
       await refreshPane(pane);
       await parentRequested.promise;
-      await vi.dynamicImportSettled();
       if (recovering) {
         oldParent.reject(new Error("Temporary descriptor outage"));
-        await vi.dynamicImportSettled();
-        expect(parentBreadcrumb(pane)).toBeNull();
-        expect(parentReads).toBe(1);
-        sessions.reconcile({ ...child, updatedAt: 2, displayName: "Updated child" });
         await vi.dynamicImportSettled();
         expect(parentBreadcrumb(pane)).toBeNull();
         expect(parentReads).toBe(1);

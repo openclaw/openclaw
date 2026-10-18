@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { getSessionEntryAsync } from "./bot-message-dispatch.runtime.js";
 import type {
   CurrentTurnTranscriptFinal,
   FreshTelegramSessionEntryLoader,
@@ -20,17 +21,14 @@ export function createFreshTelegramSessionEntryLoader(params: {
   cfg: OpenClawConfig;
   telegramDeps: TelegramBotDeps;
 }): FreshTelegramSessionEntryLoader {
-  const entriesByPathAndKey = new Map<
-    string,
-    ReturnType<TelegramBotDeps["getSessionEntryAsync"]>
-  >();
+  const entriesByPathAndKey = new Map<string, ReturnType<typeof getSessionEntryAsync>>();
   const load = async (agentId: string, sessionKey: string) => {
     const storePath = params.telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
     const cacheKey = `${storePath}\0${sessionKey}`;
     if (entriesByPathAndKey.has(cacheKey)) {
       return { storePath, entry: await entriesByPathAndKey.get(cacheKey) };
     }
-    const entry = params.telegramDeps.getSessionEntryAsync({
+    const entry = (params.telegramDeps.getSessionEntryAsync ?? getSessionEntryAsync)({
       storePath,
       sessionKey,
       readConsistency: "latest",

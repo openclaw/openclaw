@@ -10,6 +10,9 @@ import {
 
 type IMessageBindingTargetKind = "subagent" | "acp";
 
+type IMessageConversationBindingManager =
+  AccountScopedConversationBindingManager<IMessageBindingTargetKind>;
+
 const IMESSAGE_CONVERSATION_BINDINGS_STATE_KEY = Symbol.for(
   "openclaw.imessageConversationBindingsState",
 );
@@ -22,11 +25,11 @@ function toIMessageTargetKind(raw: BindingTargetKind): IMessageBindingTargetKind
   return raw === "subagent" ? "subagent" : "acp";
 }
 
-/** @deprecated Use createIMessageConversationBindingManagerV2; final compatibility day: 2026-12-31. */
+/** @deprecated Use createIMessageConversationBindingManagerV2; removal follows a stable deprecation period. */
 export function createIMessageConversationBindingManager(params: {
   accountId?: string;
   cfg: OpenClawConfig;
-}): AccountScopedConversationBindingManager<IMessageBindingTargetKind> {
+}): IMessageConversationBindingManager {
   return createAccountScopedConversationBindingManager({
     channel: "imessage",
     cfg: params.cfg,

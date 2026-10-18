@@ -33,7 +33,7 @@ export function buildUsageContract(
 
   const maxTokens = state.contextTokenBudget;
   const usedTokens =
-    state.contextUsedTokens !== undefined && state.contextUsedTokens > 0
+    typeof state.contextUsedTokens === "number" && state.contextUsedTokens > 0
       ? state.contextUsedTokens
       : promptTotal > 0
         ? promptTotal
@@ -43,7 +43,7 @@ export function buildUsageContract(
 
   const overrideSource = state.overrideSource ?? null;
   const isOverride =
-    state.overrideSource !== undefined &&
+    typeof state.overrideSource === "string" &&
     state.overrideSource !== "" &&
     state.overrideSource !== "auto";
 
@@ -66,8 +66,8 @@ export function buildUsageContract(
       auth_mode: state.authMode ?? null,
     },
     state: {
-      fast_mode: state.fastMode ?? null,
-      compactions: state.compactionCount ?? null,
+      fast_mode: typeof state.fastMode === "boolean" ? state.fastMode : null,
+      compactions: typeof state.compactionCount === "number" ? state.compactionCount : null,
     },
     usage: {
       ...tokens,
@@ -82,11 +82,11 @@ export function buildUsageContract(
       pct_used: pctUsed,
     },
     cost: {
-      turn_usd: state.turnUsd ?? null,
-      available: state.turnUsd !== undefined,
+      turn_usd: typeof state.turnUsd === "number" ? state.turnUsd : null,
+      available: typeof state.turnUsd === "number",
     },
     timing: {
-      duration_ms: state.durationMs ?? null,
+      duration_ms: typeof state.durationMs === "number" ? state.durationMs : null,
     },
     identity: {
       name: state.identity?.name ?? null,

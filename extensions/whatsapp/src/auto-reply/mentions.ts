@@ -11,6 +11,7 @@ import {
   identitiesOverlap,
   type WhatsAppIdentity,
 } from "../identity.js";
+import { requireWhatsAppInboundAdmission } from "../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { isSelfChatMode } from "../targets-runtime.js";
 
@@ -39,13 +40,14 @@ function isBotMentionedFromTargets(
   mentionCfg: MentionConfig,
   targets: MentionTargets,
 ): boolean {
+  const explicitSelfChatOverride = typeof mentionCfg.isSelfChat === "boolean";
   // Having our own number in allowFrom suppresses native self-mentions only in DMs.
   // Explicit caller overrides also apply to groups.
-  const admission = msg.admission;
+  const admission = requireWhatsAppInboundAdmission(msg);
   const isGroupConversation = admission.conversation.kind === "group";
-  const isSelfChat =
-    mentionCfg.isSelfChat ??
-    (isSelfChatMode(targets.self.e164, mentionCfg.allowFrom) && !isGroupConversation);
+  const isSelfChat = explicitSelfChatOverride
+    ? Boolean(mentionCfg.isSelfChat)
+    : isSelfChatMode(targets.self.e164, mentionCfg.allowFrom) && !isGroupConversation;
 
   const hasMentions = targets.normalizedMentions.length > 0;
   const hasNativeMentionsOutsideSelfChat = hasMentions && !isSelfChat;
@@ -81,7 +83,7 @@ export function debugMention(
     self: getSelfIdentity(msg, authDir),
   };
   const result = isBotMentionedFromTargets(msg, mentionCfg, mentionTargets);
-  const admission = msg.admission;
+  const admission = requireWhatsAppInboundAdmission(msg);
   const details = {
     from: admission.conversation.id,
     mentionedJids: msg.group?.mentions?.jids ?? null,
@@ -98,7 +100,8 @@ export function debugMention(
 
 export function resolveOwnerList(mentionCfg: MentionConfig, selfE164?: string | null) {
   const allowFrom = mentionCfg.allowFrom;
-  const raw = allowFrom?.length ? allowFrom : selfE164 ? [selfE164] : [];
+  const raw =
+    Array.isArray(allowFrom) && allowFrom.length > 0 ? allowFrom : selfE164 ? [selfE164] : [];
   return raw
     .filter((entry): entry is string => Boolean(entry && entry !== "*"))
     .map((entry) => normalizeE164(entry))

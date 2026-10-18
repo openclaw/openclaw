@@ -125,11 +125,6 @@ public final class OpenClawChatViewModel {
     var narration = ChatNarration()
     public internal(set) var progressCard: ProgressCard?
     var progressCardStoreAvailable: Bool?
-    var progressCardRefreshAvailable = false
-    var progressCardRefreshPending = false
-    @ObservationIgnored
-    var progressCardRefreshTask: Task<Void, Never>?
-    var progressCardRefreshIntent: (key: String, baseline: Int, accepted: Bool)?
     @ObservationIgnored
     var progressCardGeneration: UInt64 = 0
     @ObservationIgnored
@@ -625,7 +620,6 @@ public final class OpenClawChatViewModel {
         self.retireQuestionAuthority()
         self.resetSessionReactions()
         self.isTransportDetached = true
-        self.invalidateProgressCardTarget()
         self.sidebarData?.invalidate(clear: true)
         let transport = self.transport
         Task { await transport.releaseActiveSessionSubscription() }

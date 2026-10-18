@@ -132,10 +132,9 @@ describe("createDiscordGatewaySupervisor", () => {
     );
   });
 
-  it("is idempotent on dispose", () => {
-    const emitter = new EventEmitter();
+  it("is idempotent on dispose and noops without an emitter", () => {
     const supervisor = createDiscordGatewaySupervisor({
-      gateway: { emitter },
+      gateway: undefined,
       isDisallowedIntentsError: () => false,
       runtime: { error: vi.fn() } as never,
     });

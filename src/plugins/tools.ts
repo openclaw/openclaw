@@ -284,9 +284,6 @@ type PluginToolResolutionParams = {
   /** Host-owned turn fence for factories and retained tool callbacks. */
   assertInvocationCurrent?: () => void;
   ownerContinuation?: PluginToolOwnerContinuation;
-  bindExecutionCapabilities?: Parameters<
-    typeof createPluginToolFactoryContext
-  >[0]["bindExecutionCapabilities"];
   existingToolNames?: Set<string>;
   clientCaps?: string[];
   toolAllowlist?: string[];
@@ -610,7 +607,6 @@ function* resolvePluginToolsFromRegistry(
         context: params.context,
         assertInvocationCurrent: params.assertInvocationCurrent,
         ownerContinuation: params.ownerContinuation,
-        bindExecutionCapabilities: params.bindExecutionCapabilities,
       });
       // Catalog discovery may construct tools without an admitted run; their V2 execution stays fenced.
       params.assertInvocationCurrent?.();

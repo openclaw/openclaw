@@ -49,7 +49,7 @@ import {
   getWorkerTurnToolSurface,
   readWorkerTurnPromptCacheContext,
 } from "./placement-turn-claim-events.js";
-import { projectWorkerInferenceError } from "./worker-error.js";
+import { formatWorkerInferenceError } from "./worker-error.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
 export type WorkerInferenceExecutionParams = Parameters<WorkerInferenceExecutor>[0];
@@ -208,7 +208,7 @@ export const executePreparedWorkerInference = async (
       agentId: target.agentId,
       sessionEntry: target.sessionEntry,
     });
-    const fastModeSetting = promptCacheContext.fastMode ?? fastMode.requestMode;
+    const fastModeSetting = promptCacheContext.fastMode ?? fastMode.mode;
     const fastModeStartedAtMs =
       promptCacheContext.fastModeStartedAtMs ??
       runContext?.lifecycleStartedAt ??
@@ -434,21 +434,17 @@ export const executePreparedWorkerInference = async (
         }
         if (event.type === "error") {
           recordUsage(event.error.usage);
-          const failure =
+          return inferenceError(
+            event.reason === "aborted" ? "cancelled" : "provider-error",
+            event.error.usage,
             event.reason === "aborted"
               ? undefined
-              : projectWorkerInferenceError({
+              : formatWorkerInferenceError({
                   message: event.error.errorMessage ?? ERROR_MESSAGES["provider-error"],
                   errorCode: event.error.errorCode,
                   errorType: event.error.errorType,
                   errorBody: event.error.errorBody,
-                  retryAfterMs: event.error.retryAfterMs,
-                });
-          return inferenceError(
-            event.reason === "aborted" ? "cancelled" : "provider-error",
-            event.error.usage,
-            failure?.message,
-            failure?.retryAfterMs,
+                }),
           );
         }
         if (signal.aborted || !params.isCurrent()) {
@@ -480,12 +476,10 @@ export const executePreparedWorkerInference = async (
       }
       return inferenceError(signal.aborted ? "cancelled" : "provider-error");
     } catch (error) {
-      const failure = signal.aborted ? undefined : projectWorkerInferenceError(error);
       return inferenceError(
         signal.aborted ? "cancelled" : "provider-error",
         undefined,
-        failure?.message,
-        failure?.retryAfterMs,
+        signal.aborted ? undefined : formatWorkerInferenceError(error),
       );
     } finally {
       providerAbort.abort();

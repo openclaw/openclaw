@@ -26,10 +26,8 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../../scripts/lib/local-build-metadata.mts";
-import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
-import { runNodeScript } from "../helpers/run-node-script.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
-import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -57,9 +55,7 @@ function initializeGitFixture(root: string, env = createNestedGitEnv()) {
   return { env, git, head: git(["rev-parse", "HEAD"]) };
 }
 
-it("the actual CLI completes a Gateway cell without a live provider or entrypoint import cycle", async ({
-  signal,
-}) => {
+it("the actual CLI completes a Gateway cell without a live provider or entrypoint import cycle", async () => {
   const root = tempDirs.make("openclaw-matrix-cli-");
   await Promise.all(
     ["dist", "node_modules", "packages", "home", "tmp"].map((directory) =>
@@ -98,9 +94,12 @@ it("the actual CLI completes a Gateway cell without a live provider or entrypoin
   for (const stamp of [BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE]) {
     await fs.writeFile(path.join(root, "dist", stamp), JSON.stringify({ head, inputsClean: true }));
   }
-  const run = await runNodeScript(
-    (workerArgv) => [
-      ...workerArgv(resolveRuntimeWorkerUrl(toolingTsEntrypoints.codeModeModelMatrix)),
+  const run = spawnSync(
+    resolveTestNodeExecPath(),
+    [
+      "--import",
+      new URL("../../scripts/tsx.mjs", import.meta.url).href,
+      fileURLToPath(new URL("../../scripts/code-mode-model-matrix.ts", import.meta.url)),
       "--runtime-dir",
       root,
       "--model",
@@ -114,11 +113,9 @@ it("the actual CLI completes a Gateway cell without a live provider or entrypoin
       "--output-dir",
       "artifacts",
     ],
-    env,
-    30_000,
-    { cwd: root, signal, maxBuffer: 1024 * 1024 },
+    { cwd: root, env, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 },
   );
-  expect(run.error, run.stdout + run.stderr).toBeUndefined();
+  expect(run.error).toBeUndefined();
   expect(run.status, run.stderr).toBe(1);
   const resultsPath = path.join(root, "artifacts", "results.jsonl");
   const resultsText = await fs.readFile(resultsPath, "utf8").catch((cause: unknown) => {

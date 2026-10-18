@@ -72,7 +72,6 @@ import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publi
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   createBoundSpawnInvocation,
-  recordSpawnBoundaryFinal,
   type RequestCustodySpawnCaseOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
@@ -237,17 +236,12 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           }
           commandReady.resolve(command);
           await completeModel.promise;
-          await recordSpawnBoundaryFinal({
-            storePath: bound.storePath,
-            sessionKey,
-            runId: run.runId,
-            text: "Completed child result",
-          });
           return {
             payloads: [{ text: "Completed child result" }],
             meta: {
               durationMs: 1,
-              terminalReply: { disposition: "visible", text: "Completed child result" },
+              finalAssistantVisibleText: "Completed child result",
+              finalAssistantRawText: "Completed child result",
             },
           };
         });

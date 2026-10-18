@@ -130,7 +130,7 @@ describe("agent runtime identity token", () => {
     useTempHome();
   });
 
-  it.each(["signed"] as const)(
+  it.each(["signed", "direct"] as const)(
     "retains a worker approval scope through delayed first %s use",
     async (mode) => {
       const runtimeToken = await importRuntimeTokenModule();
@@ -150,12 +150,15 @@ describe("agent runtime identity token", () => {
           owner: { kind: "worker", environmentId: "worker-environment", ownerEpoch: 1 },
         },
       };
-      const token = await runtimeToken.mintAgentRuntimeIdentityToken(params);
+      const token =
+        mode === "signed" ? await runtimeToken.mintAgentRuntimeIdentityToken(params) : undefined;
+      const direct =
+        mode === "direct" ? await runtimeToken.createAgentRuntimeIdentity(params) : undefined;
       lifetime.abort();
       const replacement = claimAgentRunApprovalAuthority(run.delegatedAuthority, [
         new AbortController().signal,
       ]);
-      const stale = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
+      const stale = token ? await runtimeToken.verifyAgentRuntimeIdentityToken(token) : direct;
       if (!stale) {
         throw new Error("Expected decoded worker identity");
       }
@@ -178,7 +181,7 @@ describe("agent runtime identity token", () => {
     },
   );
 
-  it.each(["signed"] as const)(
+  it.each(["signed", "direct"] as const)(
     "rejects %s delegated authority after terminal, replacement, and restart boundaries",
     async (mode) => {
       const runtimeToken = await importRuntimeTokenModule();
@@ -251,7 +254,7 @@ describe("agent runtime identity token", () => {
     );
   });
 
-  it.each(["signed"] as const)(
+  it.each(["signed", "direct"] as const)(
     "redeems %s execution lineage once for the active parent",
     async (mode) => {
       const runtimeToken = await importRuntimeTokenModule();
@@ -326,7 +329,7 @@ describe("agent runtime identity token", () => {
     },
   );
 
-  it.each(["signed"] as const)(
+  it.each(["signed", "direct"] as const)(
     "preserves the %s plugin owner, turn-source route, requesting UI, and cron capture",
     async (mode) => {
       const runtimeToken = await importRuntimeTokenModule();
@@ -590,7 +593,7 @@ describe("agent runtime identity token", () => {
     });
   });
 
-  it.each(["signed"] as const)(
+  it.each(["signed", "direct"] as const)(
     "carries a %s live native requester grant without claiming complete tool capture",
     async (mode) => {
       const runtimeToken = await importRuntimeTokenModule();

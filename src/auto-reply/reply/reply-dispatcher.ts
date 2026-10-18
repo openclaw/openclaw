@@ -21,6 +21,7 @@ import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { settleReplyPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -513,7 +514,7 @@ export function createReplyDispatcher(
     deliveryOutcomeTrackers.delete(payload);
     const fallback = undeliveredFallbacks.get(payload);
     undeliveredFallbacks.delete(payload);
-    const originalWasSilent = getReplyPayloadMetadata(payload)?.silentReply === true;
+    const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
     const normalizedPrimary =
       getReplyPayloadMetadata(payload)?.replyDispatcherNormalizationOwner === dispatcher
         ? ({ kind: "deliver", payload } as const)
@@ -531,8 +532,8 @@ export function createReplyDispatcher(
           : null;
     const normalizedInput = normalized ? replaceDispatchPayload(input, normalized) : null;
     if (!normalizedInput) {
-      if (kind === "final" && originalWasSilent) {
-        silentReplyLogger.debug("silent final payload was skipped before delivery", {
+      if (kind === "final" && originalWasExactSilent) {
+        silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
           hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
           surface: options.silentReplyContext?.surface,
           conversationType: options.silentReplyContext?.conversationType,
@@ -623,9 +624,14 @@ export function createReplyDispatcher(
       return;
     }
     completeCalled = true;
-    if (pending === 1) {
-      releasePending();
-    }
+    // If no replies were enqueued (pending is still 1 = just the reservation),
+    // schedule clearing the reservation after current microtasks complete.
+    // This gives any in-flight enqueue() calls a chance to increment pending.
+    void Promise.resolve().then(() => {
+      if (pending === 1) {
+        releasePending();
+      }
+    });
   };
 
   const dispatcher: ReturnType<typeof createReplyDispatcher> = {

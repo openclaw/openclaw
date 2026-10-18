@@ -47,10 +47,7 @@ export function collectRawSessionText(content: unknown): string | null {
 }
 
 /** Retain memory's input facts, not tool results, attachments, or provider replay payloads. */
-export function projectSessionEntryRecord(
-  value: unknown,
-  prepareTranscriptText: (message: unknown, text: string | undefined) => string | undefined,
-): unknown {
+export function projectSessionEntryRecord(value: unknown): unknown {
   const record = asOptionalRecord(value);
   if (!record) {
     return null;
@@ -76,19 +73,10 @@ export function projectSessionEntryRecord(
     message: message
       ? {
           role: readStringValue(message.role),
-          display:
-            message.display === false
-              ? false
-              : message.role === "assistant" || message.display === true
-                ? true
-                : undefined,
           timestamp: timestamp(message.timestamp),
           content:
             message.role === "user" || message.role === "assistant"
-              ? (prepareTranscriptText(
-                  message,
-                  collectRawSessionText(message.content) ?? undefined,
-                ) ?? null)
+              ? collectRawSessionText(message.content)
               : null,
           provenance: {
             kind: readStringValue(provenance?.kind),

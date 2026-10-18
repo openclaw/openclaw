@@ -1,23 +1,27 @@
-import { createComponent } from "solid-js";
 import { expect, it, vi } from "vitest";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
-import { AgentEmojiPicker } from "./agent-emoji-picker.tsx";
+import "./agent-emoji-picker.ts";
 
-it("filters emoji choices, selects their value, and resets on remount", () => {
+it("filters emoji choices, selects their value, and remounts after removal", async () => {
+  const picker = document.createElement("openclaw-agent-emoji-picker");
   const onSelect = vi.fn();
-  const view = mountSolid(() => createComponent(AgentEmojiPicker, { onSelect }));
-  flush();
-  const search = view.container.querySelector<HTMLInputElement>(".emoji-search-panel__search")!;
-  search.value = "rocket";
-  search.dispatchEvent(new Event("input", { bubbles: true }));
-  flush();
-  const choice = view.container.querySelector<HTMLButtonElement>(".emoji-search-panel__choice")!;
-  expect(choice.textContent).toBe("🚀");
-  choice.click();
-  expect(onSelect).toHaveBeenCalledExactlyOnceWith("🚀");
-  view.unmount();
-  const remounted = mountSolid(() => createComponent(AgentEmojiPicker, { onSelect }));
-  flush();
-  expect(remounted.container.querySelectorAll(".emoji-search-panel__choice")).toHaveLength(24);
+  picker.onSelect = onSelect;
+  document.body.append(picker);
+  try {
+    await picker.updateComplete;
+    const search = picker.querySelector<HTMLInputElement>(".agent-emoji-picker__search")!;
+    search.value = "rocket";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await picker.updateComplete;
+    const choice = picker.querySelector<HTMLButtonElement>(".agent-emoji-picker__choice")!;
+    expect(choice.textContent).toBe("🚀");
+    choice.click();
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("🚀");
+    picker.remove();
+    await Promise.resolve();
+    document.body.append(picker);
+    await picker.updateComplete;
+    expect(picker.querySelectorAll(".agent-emoji-picker__choice")).toHaveLength(24);
+  } finally {
+    picker.remove();
+  }
 });

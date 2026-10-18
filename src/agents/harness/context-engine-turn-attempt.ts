@@ -251,7 +251,6 @@ export async function finalizeAcceptedContextEngineTurn(params: {
         sessionFile: turn.admission.sessionKey,
         reason: "turn",
         runtimeContext: turn.runtimeContext,
-        runtimeSettings: turn.runtimeSettings,
         config: params.config,
         onDeferredMaintenance: (promise) => params.lease.deferDisposalUntil(promise),
       });

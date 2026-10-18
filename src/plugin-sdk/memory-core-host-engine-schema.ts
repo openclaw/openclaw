@@ -23,4 +23,4 @@ export {
 export {
   loadSqliteVecExtension,
   loadSqliteVecExtensionFromPath,
-} from "../infra/database-engine/sqlite-vec.js";
+} from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";

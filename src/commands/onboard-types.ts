@@ -80,8 +80,6 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   cloudflareAiGatewayGatewayId?: string;
   customBaseUrl?: string;
   customApiKey?: string;
-  /** Mark the custom endpoint as not enforcing auth (--custom-no-auth). */
-  customNoAuth?: boolean;
   lmstudioApiKey?: string;
   customModelId?: string;
   customProviderId?: string;

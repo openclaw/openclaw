@@ -3,8 +3,8 @@ import { For, Show, createMemo } from "solid-js";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { ConfigFormArrayIdentity } from "./config-form-array-identity.ts";
 import {
-  ConfigCollectionDraft,
-  type ConfigCollectionDraftHandle,
+  openCollectionDraft,
+  ConfigCollectionDraftHost,
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
@@ -244,28 +244,30 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
     draftId,
     draftProps,
     patchArrayItem,
-    commitDraft(draft: ConfigFormCollectionDraftCommit) {
-      const nextValue = [...arrayValue, draft.value];
+    commitDraft(event: CustomEvent<ConfigFormCollectionDraftCommit>) {
+      const nextValue = [...arrayValue, event.detail.value];
       const canApply =
-        !(uniqueItems && arrayValue.some((item) => configValuesEqual(item, draft.value))) &&
+        !(uniqueItems && arrayValue.some((item) => configValuesEqual(item, event.detail.value))) &&
         (maximumItems === undefined || arrayValue.length < maximumItems) &&
-        isSupportedConfigValueValid(nextItemSchema, draft.value) &&
+        isSupportedConfigValueValid(nextItemSchema, event.detail.value) &&
         (nextValue.length < minimumItems || isSupportedConfigValueValid(schema, nextValue));
-      return canApply && patch(nextValue, [...rowIdentities, Symbol("array-row")]);
+      if (!canApply || !patch(nextValue, [...rowIdentities, Symbol("array-row")])) {
+        event.preventDefault();
+      }
     },
-    add(openDraft: () => void) {
+    add(event: Event) {
       if (atomicCandidate) {
         if (onPatch(path, atomicCandidate) === false) {
-          openDraft();
+          openCollectionDraft(event, draftId);
         }
       } else if (requiresDraft) {
-        openDraft();
+        openCollectionDraft(event, draftId);
       } else if (autoCandidate) {
         const appended = Array.from({ length: autoCandidate.length - arrayValue.length }, () =>
           Symbol("array-row"),
         );
         if (!patch(autoCandidate, [...rowIdentities, ...appended])) {
-          openDraft();
+          openCollectionDraft(event, draftId);
         }
       }
     },
@@ -345,8 +347,6 @@ function ConfigArrayRow(
 }
 
 export function ConfigArray(props: CollectionProps): JSX.Element {
-  let draft!: ConfigCollectionDraftHandle;
-  const openDraft = () => draft.openDraft();
   // Only string segments identify a nested array; a moved parent row retains its editors.
   const rows = createMemo(() =>
     JSON.stringify(props.params.path.filter((segment) => typeof segment === "string")),
@@ -412,7 +412,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
                   props.params.disabled ||
                   (!current().canAppend && current().atomicCandidate === undefined)
                 }
-                onClick={() => current().add(openDraft)}
+                onClick={(event) => current().add(event)}
               >
                 <Show when={props.params.compact} fallback={t("configForm.add")}>
                   <Icon name="plus" />
@@ -420,11 +420,12 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
               </button>
             </div>
           </div>
-          <ConfigCollectionDraft
-            {...current().draftProps}
+          <ConfigCollectionDraftHost
             id={current().draftId}
-            ref={(handle) => (draft = handle)}
-            onCommit={(value) => current().commitDraft(value)}
+            props={current().draftProps}
+            onConfig-collection-draft-commit={(
+              event: CustomEvent<ConfigFormCollectionDraftCommit>,
+            ) => current().commitDraft(event)}
           />
           <Show
             when={entries().length > 0}

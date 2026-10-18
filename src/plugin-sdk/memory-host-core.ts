@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  readFileHandleBounded,
-  sameFileIdentity,
-  type ExactFileIdentity,
-} from "@openclaw/fs-safe/advanced";
+import { sameFileIdentity, type ExactFileIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -186,9 +182,7 @@ async function readMemoryHostEventExportOwnership(
     if (openedExport.stat.size > MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES) {
       exportContent = undefined;
     } else {
-      exportContent = (
-        await readFileHandleBounded(exportOwner.handle, MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES)
-      ).toString("utf8");
+      exportContent = await exportOwner.handle.readFile({ encoding: "utf8" });
     }
   }
   const exportSha256 = exportContent === undefined ? undefined : sha256Hex(exportContent);

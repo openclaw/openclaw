@@ -440,9 +440,13 @@ function retainRoot(registry: OverlayRegistry, root: OverlayRoot): () => void {
       root.addEventListener(type, listener as EventListener, capture);
     }
     const observer = new MutationObserver(() => {
-      for (const [entry, registration] of registry.members) {
+      const entries = Array.from(registry.members);
+      for (const [entry, registration] of entries) {
+        if (registry.members.get(entry) !== registration) {
+          continue;
+        }
         refreshOverlayRoots(registry, entry);
-        if (entry.phase !== "hidden" && !registration.valid()) {
+        if (!registration.valid()) {
           entry.retire();
         }
       }

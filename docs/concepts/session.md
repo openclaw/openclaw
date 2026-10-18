@@ -157,7 +157,7 @@ context, and replies to the source room remain unchanged.
 
 ## Incognito sessions
 
-Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Finishing a turn does not close the thread, and activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
+Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
 
 <Warning>
 On the Codex runtime, the Codex app-server still writes each message you submit to its own diagnostic log database (`logs_2.sqlite` in that agent's Codex home), including messages in incognito threads. Codex currently offers no setting that turns this log off, so OpenClaw cannot prevent it. For conversations that must not reach disk, use an agent on the OpenClaw runtime.
@@ -295,8 +295,7 @@ Parents still waiting after yielding to children remain owned by their child bat
 
 If a delegated turn's sender authority cannot be reconstructed, automatic recovery
 stops with a recorded reason and a visible notice in the transcript or original
-channel. The notice offers **Resume** in WebChat. The click supplies current operator
-authority and continues the saved task in the same session. A saved
+channel. The notice explains how to continue in a replacement session. A saved
 delegation alone does not authorize replay after restart.
 
 Messages sent while restart recovery is waiting to start stay pending. Once
@@ -311,21 +310,9 @@ the message. A saved user message that has not reached the model remains user
 input when a subagent announcement continues the session; it is not demoted to
 background context.
 
-If automatic recovery is exhausted, the unfinished task and transcript remain
-available. Use **Resume** in WebChat to continue with the same session identity,
-workspace, participants, and child sessions. Resume saves the new operator input
-and clears the restart tombstone together before starting work. It rechecks your
-current permissions; previous approvals and delegated authority are not restored.
-Completed tool results stay in the transcript, and uncertain effects must be
-inspected before being repeated. Existing restart-safe tool restrictions still
-apply to the continuation.
-
-A session already recovered into a replacement opens that replacement instead;
-resuming both could duplicate the task. If a CLI runtime cannot enforce the
-required restart-safe tools, WebChat offers **Resume in new session** instead.
-An unresolved final-delivery record must
-settle before an in-place continuation, and missing transcripts require repair.
-In other channels, `/new` or `/reset` still starts a replacement session.
+If automatic recovery is exhausted, the transcript remains available. Use
+**Resume in new session** in WebChat, or `/new` or `/reset` in other channels,
+to start a replacement session.
 
 ## Where state lives
 
@@ -389,31 +376,14 @@ eligible sessions age out without further traffic. Reply preparation does not wa
 for unrelated retention cleanup. Writes that cannot change
 age or count maintenance outcomes skip candidate scans. Automatic planning reads
 only retention and protection metadata before entering the foreground write queue;
-age candidates must reach their enabled retention phase's cutoff, and maintenance
-looks up only active-session ancestry unless runtime identities need the full
-session-key inventory. Cap selection retains only the required oldest eligible entries.
-Automatic capacity cleanup yields the writer between batches of up to 64 entries;
-explicit cleanup remains exhaustive. The writer rechecks the selected rows and their protection before applying
+cap selection retains only the required oldest eligible entries. The writer rechecks the selected rows and their protection before applying
 changes, so concurrent updates are reconsidered instead of overwritten. Activity
 on unrelated sessions and protection that has ended do not invalidate the plan.
-When an over-cap pass finds only durably protected entries, ordinary activity does not
-repeat that futile plan. New eligible entries, restored identities, lost entry
-protection, and changed policy reconsider it. Delivery cleanup resumes idle maintenance
-when it releases the session's remaining recovery protection. Temporary protection from active
-sessions, runtime providers, or recent activity does not suppress planning on
-ordinary writes; age deadlines and the periodic recheck still resume idle cleanup.
-While entry pressure still requires cleanup, capacity maintenance revisits entries
-once temporary write protection ends, without requiring another entry write.
-Releasing acquired session work also wakes idle capacity maintenance; overlapping
-work keeps the session protected until its final admission releases.
 If writes invalidate an automatic maintenance plan, its replacement waits for
-the scheduled retry delay (one second, then two seconds). Further writes coalesce
-into that retry without postponing it indefinitely. Three
+a quiet window after the last write (one second, then two seconds). Three
 consecutive invalidations pause automatic retries and log the cause; a new
-entry write can schedule another attempt. `warn` mode skips automatic reclamation.
-Certified transcript backfill and usage-cache writes retain a protected-only no-op result
-while entry-change publications and scoped write receipts remain current. Unknown writes
-still invalidate that result and wait for the existing quiet window before replanning.
+entry write can schedule another attempt. `warn` mode captures the maintenance
+age fact without constructing or dispatching automatic reclamation.
 
 `maxEntries` defaults to 5000 unarchived session rows. Archived rows do not consume
 the cap. Existing explicit limits remain unchanged.
@@ -467,16 +437,10 @@ rechecks physical usage before considering another deletion. A measurement
 failure stops the sweep.
 
 Background disk-budget checks run at most every 30 minutes on entry writes.
-Unchanged entry patches do not schedule a check.
 Delete and reset operations can request a check sooner, but repeated requests
 coalesce to at most one forced check per minute per store. If cleanup exhausts
 eligible history and the store remains over budget, automatic checks back off
 for 30 minutes and log one warning until the pressure clears or the budget changes.
-Per-agent legacy store locators and their canonical SQLite paths share this queue
-and backoff. Custom aggregate store locators retain their own maintenance scope.
-After a pass reclaims nothing, the next automatic check first inspects eligible
-data without reserving the foreground writer; protected-only pressure does not
-repeat archive pruning or checkpoints. Manual cleanup still runs immediately.
 The warning recommends raising `session.maintenance.maxDiskBytes` or exporting
 and deleting unneeded sessions. Checks resume on subsequent activity;
 `openclaw sessions cleanup --enforce` remains available immediately.
@@ -486,14 +450,6 @@ prevent truncation, a complete PASSIVE checkpoint is sufficient: frames relevant
 to cleanup must have reached the main database, even if the WAL file remains allocated.
 Retained WAL bytes still count toward the physical budget. Successful cleanup
 logs one outcome with the before/after bytes and removal counts.
-Archive pruning measures physical usage outside the foreground writer queue.
-Each deletion and page-reclamation unit retains its own admission, with a yield
-between reclamation units. Archive retention also selects candidates outside the
-writer queue, then rechecks and removes at most 16 rows per admission, yielding
-between batches while retaining the same 256-row selection limit per pass.
-Concurrent shrinkage can prune one additional oldest derived archive before the
-next measurement ends the sweep; canonical retention and deletion eligibility
-checks are unchanged.
 
 An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
 archives and history instead of deleting more data behind the blocked checkpoint.

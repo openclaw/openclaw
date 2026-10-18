@@ -12,7 +12,7 @@ import {
   shouldUseEnvHttpProxyForUrl,
   withTrustedEnvProxyGuardedFetchMode,
 } from "openclaw/plugin-sdk/fetch-runtime";
-import { findNormalizedProviderValue } from "openclaw/plugin-sdk/model-ref-parse";
+import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 import {
   isProviderAuthError,
   resolveApiKeyForProvider,
@@ -30,11 +30,8 @@ import {
   OPENAI_API_BASE_URL,
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 type Context = Parameters<DecisionProviderV1["evaluate"]>[1];
-// The bundled manifest declares one OpenAI Decision model with shared wire limits.
-const { maxQuestions, maxChoiceAlternatives } = manifest.decisionModels[0]!.capabilities;
 
 function text(value: DecisionEntry | undefined): string {
   return typeof value === "string" ? value : value === undefined ? "" : JSON.stringify(value);
@@ -211,18 +208,6 @@ export async function evaluateOpenAIDecision(
   config: OpenClawConfig,
 ): Promise<ProviderDecisionOutcome> {
   context.signal.throwIfAborted();
-  // The API caps batches and choices below the shared Decision V1 input limits.
-  // Use the same limits advertised to callers, before resolving credentials or sending evidence.
-  const entries = Object.values(batch.questions);
-  if (
-    entries.length > maxQuestions ||
-    entries.some(
-      (question) =>
-        question.type === "choice" && Object.keys(question.criteria).length > maxChoiceAlternatives,
-    )
-  ) {
-    return { status: "unavailable", reason: "unsupported-input" };
-  }
   const providerConfig = findNormalizedProviderValue(config.models?.providers, "openai");
   const configuredBaseUrl = providerConfig?.baseUrl ?? resolveOpenAIDefaultBaseUrl();
   const endpointKind = classifyOpenAIBaseUrl(configuredBaseUrl);

@@ -1,116 +1,185 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-page.test/"} */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// mock-isolation: Observe page publications without mounting panes that start session requests.
+// mock-isolation: Observe page title publications without registering real panes that start session requests.
 vi.mock("./chat-pane.tsx", async () => {
   const { mockChatPagePane } = await import("./chat-page-pane.test-support.ts");
   return { ChatPaneView: mockChatPagePane };
 });
 
-// mock-isolation: Count page snapshot publications while retaining the real keyed DOM renderer.
-vi.mock("./chat-page-pane-render.tsx", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./chat-page-pane-render.tsx")>();
-  return { ...actual, createChatPageSnapshot: vi.fn(actual.createChatPageSnapshot) };
-});
-
-import { patchSettings } from "../../app/settings.ts";
-import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createChatPageSnapshot } from "./chat-page-pane-render.tsx";
+import { ChatPageState } from "./chat-page-state.ts";
 import {
   settleChatPage,
   createSessionTitleSource,
   createSplitLayout,
+  setLayout,
   setNavigationContext,
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
 import { ChatPage } from "./chat-page.ts";
 
+type RenderedPane = HTMLElement & { presentationTitle: string | undefined };
+
 describe("chat page session refresh", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
+    localStorage.clear();
     stubMatchMedia(false);
   });
 
   afterEach(() => {
     document.body.replaceChildren();
-    vi.restoreAllMocks();
+    localStorage.clear();
     vi.unstubAllGlobals();
   });
 
-  it("leaves roster presentation updates with mounted panes", async () => {
+  it("coalesces shared list publications and commits split toolbar titles inside a frame", async () => {
     const page = new ChatPage();
     const source = createSessionTitleSource();
     const navigation = setNavigationContext(page);
-    Object.assign(navigation.context, { sessions: source.sessions });
-    page.data = { sessionKey: "agent:main:current" };
-    patchSettings({ chatSplitLayout: createSplitLayout(page.data.sessionKey) });
+    (page as unknown as { context: unknown }).context = {
+      ...navigation.context,
+      agents: { state: { agentsList: null } },
+      gateway: {
+        ...navigation.context.gateway,
+        snapshot: { assistantAgentId: "main", client: null, hello: null, phase: "stopped" },
+        subscribe: () => () => undefined,
+      },
+      sessions: source.sessions,
+    };
+    page.data = { sessionKey: "main" };
     document.body.append(page);
+    const layout = createSplitLayout("main");
+    layout.activePaneId = expectDefined(layout.columns[0]?.panes[0], "active main pane").id;
+    const foreignPane = expectDefined(layout.columns[1]?.panes[0], "foreign-agent pane");
+    foreignPane.sessionKey = "agent:research:dashboard:retained";
+    setLayout(page, layout);
     await settleChatPage(page);
-    const panes = [...page.querySelectorAll("openclaw-chat-pane")];
-    const render = vi.mocked(createChatPageSnapshot).mockClear();
+
+    const presentationTitles = () =>
+      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map(
+        (pane) => pane.presentationTitle,
+      );
+    expect(presentationTitles()).toEqual([undefined, undefined]);
+
+    // Rows arrive under the canonical agent key while the route still says
+    // "main"; hello-default resolution plus equivalence matching must find
+    // the label anyway — including non-default agent ids.
+    (page as unknown as { context: { gateway?: unknown; sessions: unknown } }).context.gateway = {
+      ...navigation.context.gateway,
+      snapshot: {
+        assistantAgentId: "dev",
+        client: null,
+        hello: {
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "dev",
+              mainKey: "main",
+              mainSessionKey: "agent:dev:main",
+            },
+          },
+        },
+        phase: "stopped",
+      },
+      subscribe: () => () => undefined,
+    };
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
       frames.push(callback),
     );
-
-    for (const key of ["agent:main:other", page.data.sessionKey]) {
-      source.publish(key, "Updated conversation");
-      for (const frame of frames.splice(0)) {
-        frame(0);
+    let insideFrame = false;
+    const offFrameUpdates: string[] = [];
+    const originalRequestUpdate = page.requestUpdate.bind(page);
+    vi.spyOn(page, "requestUpdate").mockImplementation((...args) => {
+      if (!insideFrame) {
+        offFrameUpdates.push("page");
       }
-      await settleChatPage(page);
-    }
+      originalRequestUpdate(...args);
+    });
+    const originalRender = ChatPageState.forHost(page).render.bind(ChatPageState.forHost(page));
+    vi.spyOn(ChatPageState.forHost(page), "render").mockImplementation(() => {
+      if (!insideFrame) {
+        offFrameUpdates.push("pane bindings");
+      }
+      return originalRender();
+    });
+    source.publish("agent:dev:main", "Loading desk");
+    source.publish("agent:dev:main", "Main desk");
+    expect(offFrameUpdates).toEqual([]);
+    expect(presentationTitles()).toEqual([undefined, undefined]);
+    expect(frames).toHaveLength(1);
+    insideFrame = true;
+    expectDefined(frames[0], "scheduled render frame")(0);
+    insideFrame = false;
+    await settleChatPage(page);
 
-    expect(render).not.toHaveBeenCalled();
-    expect([...page.querySelectorAll("openclaw-chat-pane")]).toEqual(panes);
+    expect(presentationTitles()).toEqual(["Main desk", undefined]);
+    expect(offFrameUpdates).toEqual([]);
+
     page.remove();
     await settleChatPage(page);
     expect(source.listeners.size).toBe(0);
   });
 
-  it("refreshes route defaults on hello changes while leaving profile updates with children", async () => {
+  it("moves session updates to a replacement context source", async () => {
+    const first = createSessionTitleSource();
+    const second = createSessionTitleSource();
     const page = new ChatPage();
-    const navigation = setNavigationContext(page);
-    const listeners = new Set<(snapshot: typeof navigation.context.gateway.snapshot) => void>();
-    const gateway = {
-      ...navigation.context.gateway,
-      subscribe: (listener: (snapshot: typeof navigation.context.gateway.snapshot) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
+    const sharedContext = {
+      ...setNavigationContext(page).context,
+      agents: { state: { agentsList: null } },
+      gateway: {
+        setSessionKey: vi.fn(),
+        snapshot: { assistantAgentId: "main", client: null, hello: null, phase: "stopped" },
+        subscribe: () => () => undefined,
       },
     };
-    Object.assign(navigation.context, { gateway });
-    page.data = { sessionKey: "agent:main:current" };
+    (page as unknown as { context: unknown }).context = {
+      ...sharedContext,
+      sessions: first.sessions,
+    };
+    page.data = { sessionKey: "main" };
     document.body.append(page);
+    setLayout(page, createSplitLayout("main"));
     await settleChatPage(page);
-    const render = vi.mocked(createChatPageSnapshot).mockClear();
-    const frames: FrameRequestCallback[] = [];
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
-      frames.push(callback),
-    );
+    const presentationTitles = () =>
+      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map(
+        (pane) => pane.presentationTitle,
+      );
+    first.publish("agent:main:main", "First desk");
+    await new Promise(requestAnimationFrame);
+    await settleChatPage(page);
+    expect(presentationTitles()).toEqual(["First desk", "First desk"]);
 
-    gateway.snapshot = { ...gateway.snapshot, selfUser: { id: "viewer", name: "Updated viewer" } };
-    for (const listener of listeners) {
-      listener(gateway.snapshot);
-    }
-    for (const frame of frames.splice(0)) {
-      frame(0);
-    }
+    second.publish("agent:main:main", "Second desk");
+    (page as unknown as { context: unknown }).context = {
+      ...sharedContext,
+      sessions: second.sessions,
+    };
+    page.requestUpdate();
     await settleChatPage(page);
-    expect(render).not.toHaveBeenCalled();
+    expect(first.listeners.size).toBe(0);
+    expect(presentationTitles()).toEqual(["Second desk", "Second desk"]);
 
-    gateway.snapshot = { ...gateway.snapshot, hello: gatewayHelloForMethods([]) };
-    for (const listener of listeners) {
-      listener(gateway.snapshot);
-    }
-    for (const frame of frames.splice(0)) {
-      frame(0);
-    }
+    const requestUpdate = vi.spyOn(page, "requestUpdate");
+    first.publish("agent:main:main", "Retired desk");
+    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(presentationTitles()).toEqual(["Second desk", "Second desk"]);
+    second.publish("agent:main:main", "Updated desk");
+    await new Promise(requestAnimationFrame);
     await settleChatPage(page);
-    expect(render).toHaveBeenCalledTimes(1);
+    expect(presentationTitles()).toEqual(["Updated desk", "Updated desk"]);
+
+    page.remove();
+    await settleChatPage(page);
+    expect(second.listeners.size).toBe(0);
+    requestUpdate.mockClear();
+    second.publish("agent:main:main", "Disposed desk");
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 });

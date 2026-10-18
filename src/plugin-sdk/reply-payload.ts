@@ -86,7 +86,6 @@ export {
   FAST_MODE_AUTO_PROGRESS_KIND,
   getReplyPayloadTtsSupplement,
   isFastModeAutoProgressPayload,
-  isHostNoticePayload,
   isReplyPayloadNonTerminalToolErrorWarning,
   isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,

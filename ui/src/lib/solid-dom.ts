@@ -16,3 +16,17 @@ export function liveValue(value: () => string) {
     }
   };
 }
+
+/** Only pass markup from the existing sanitizing Markdown or escaping highlighter owners. */
+export function sanitizedHtml(value: () => string) {
+  let element: HTMLElement | undefined;
+  createRenderEffect(value, (next) => {
+    if (element) {
+      element.innerHTML = next;
+    }
+  });
+  return (target: HTMLElement) => {
+    element = target;
+    target.innerHTML = untrack(value);
+  };
+}

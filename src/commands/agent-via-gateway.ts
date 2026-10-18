@@ -10,7 +10,6 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { AgentsListResult } from "../../packages/gateway-protocol/src/index.js";
-import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import {
   AgentSelectionRequiredError,
   listAgentIds,
@@ -41,7 +40,7 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { assertGatewayCliMessageContext } from "../gateway/operator-cli-message-input.js";
-import { READ_SCOPE } from "../gateway/operator-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE } from "../gateway/operator-scopes.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import {
@@ -66,7 +65,6 @@ import {
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 import { sleep } from "../utils/sleep.js";
-import { resolveAgentGatewayIdentity } from "./agent-gateway-identity.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -136,6 +134,10 @@ type AgentCliDeps = CliDeps & {
   process?: AgentCliProcessLike;
   localGatewayLockOptions?: GatewayLockOptions;
 };
+type AgentGatewayCallIdentity = Pick<
+  Parameters<typeof callGateway>[0],
+  "clientName" | "mode" | "scopes"
+>;
 type GatewayAbortRequest = (...args: Parameters<GatewayRequestFunction>) => Promise<unknown>;
 
 function usesImplicitRemoteCompatibilityDefault(roster: RemoteGatewayRoster): boolean {
@@ -618,6 +620,23 @@ function createAgentCliSignalBridge(processLike: AgentCliProcessLike = process) 
   };
 }
 
+function isAgentCliProcessLike(value: unknown): value is AgentCliProcessLike {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    typeof (value as { on?: unknown }).on === "function" &&
+    typeof (value as { off?: unknown }).off === "function"
+  );
+}
+
+function resolveAgentCliProcessLike(deps: AgentCliDeps | undefined): AgentCliProcessLike {
+  if (!deps || !Object.hasOwn(deps, "process")) {
+    return process;
+  }
+  const processLike = (deps as { process?: unknown }).process;
+  return isAgentCliProcessLike(processLike) ? processLike : process;
+}
+
 async function delayMs(ms: number, signal?: AbortSignal): Promise<void> {
   try {
     await sleep(ms, signal);
@@ -790,8 +809,9 @@ async function agentViaGatewayCommand(
     opts.to?.trim() &&
     classifySessionKeyShape(opts.to) !== "agent",
   );
-  // The Gateway owns session metadata even when it shares this CLI's filesystem.
-  const deferSessionId = Boolean(opts.sessionId?.trim() && !explicitSessionKey);
+  const deferRemoteSessionId = Boolean(
+    remoteGateway && opts.sessionId?.trim() && !explicitSessionKey,
+  );
   const deferRemoteBareSessionKey = Boolean(
     remoteGateway && explicitSessionKey && classifySessionKeyShape(explicitSessionKey) !== "agent",
   );
@@ -806,7 +826,7 @@ async function agentViaGatewayCommand(
   const sessionKey =
     preserveImplicitCompatibilitySession || deferRemoteBareSessionKey
       ? explicitSessionKey
-      : deferAgentDefaultSession || deferExplicitRecipientSession || deferSessionId
+      : deferAgentDefaultSession || deferExplicitRecipientSession || deferRemoteSessionId
         ? undefined
         : classifySessionKeyShape(explicitSessionKey) === "agent"
           ? explicitSessionKey
@@ -821,7 +841,7 @@ async function agentViaGatewayCommand(
                 sessionKey: explicitSessionKey,
               })
             ).sessionKey;
-  const abortSessionKey = deferSessionId
+  const abortSessionKey = deferRemoteSessionId
     ? undefined
     : deferExplicitRecipientSession
       ? (
@@ -834,7 +854,15 @@ async function agentViaGatewayCommand(
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);
   const needsAdminGatewayIdentity = Boolean(modelOverride) || isSessionResetCommand(body);
-  const gatewayIdentity = resolveAgentGatewayIdentity(needsAdminGatewayIdentity, remoteGateway);
+  const gatewayIdentity: AgentGatewayCallIdentity = {
+    clientName: needsAdminGatewayIdentity
+      ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+      : GATEWAY_CLIENT_NAMES.CLI,
+    mode: needsAdminGatewayIdentity ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+    // Overrides/resets require admin; otherwise only the local operator requests
+    // owner scope, and remote callers keep the agent method's least-privilege scope.
+    ...(needsAdminGatewayIdentity || !remoteGateway ? { scopes: [ADMIN_SCOPE] } : {}),
+  };
 
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
@@ -859,9 +887,6 @@ async function agentViaGatewayCommand(
       async () =>
         await callGateway({
           method: "agent",
-          requiredCapabilities: deferSessionId
-            ? [GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE]
-            : undefined,
           params: {
             message: body,
             agentId,
@@ -870,7 +895,6 @@ async function agentViaGatewayCommand(
             replyTo: opts.replyTo,
             sessionId: opts.sessionId,
             sessionKey,
-            createSessionIfMissing: deferSessionId || undefined,
             thinking: opts.thinking,
             deliver: Boolean(opts.deliver),
             channel,
@@ -1058,7 +1082,7 @@ export async function agentCliCommand(
   const gatewayDispatchOpts = dispatchOpts.runId
     ? dispatchOpts
     : { ...dispatchOpts, runId: randomIdempotencyKey() };
-  const signalBridge = createAgentCliSignalBridge(deps?.process);
+  const signalBridge = createAgentCliSignalBridge(resolveAgentCliProcessLike(deps));
   try {
     if (dispatchOpts.local === true) {
       const stateLock = await acquireEmbeddedAgentStateLock(

@@ -61,11 +61,25 @@ private enum class ActiveTalkState(
   Speaking(WearRealtimeTalkStatus.SPEAKING, "Speaking…"),
 }
 
+internal fun chunkWearRealtimeOutput(
+  payload: ByteArray,
+  maxFrameBytes: Int = WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES,
+): List<ByteArray> {
+  require(maxFrameBytes > 0 && maxFrameBytes % PCM_16_BYTES == 0)
+  require(payload.size % PCM_16_BYTES == 0)
+  return buildList {
+    for (offset in payload.indices step maxFrameBytes) {
+      add(payload.copyOfRange(offset, minOf(offset + maxFrameBytes, payload.size)))
+    }
+  }
+}
+
 internal fun advanceWearRealtimePlaybackDeadline(
   currentEndsAtMillis: Long,
   deliveredAtMillis: Long,
   audioByteCount: Int,
 ): Long {
+  require(audioByteCount >= 0 && audioByteCount % PCM_16_BYTES == 0)
   val sampleCount = audioByteCount / PCM_16_BYTES
   val durationMillis =
     (
@@ -315,10 +329,17 @@ internal class WearRealtimeTalkController(
     owner: WearRealtimeAttemptOwner,
     payload: ByteArray,
   ) {
+    if (
+      payload.isEmpty() ||
+      payload.size > WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES ||
+      activeOwner != owner ||
+      sessionId == null ||
+      _snapshot.value.speaking
+    ) {
+      return
+    }
     val activeSessionId = sessionId ?: return
-    if (activeOwner != owner || _snapshot.value.speaking) return
-    // The channel reader transfers a freshly allocated, validated PCM frame.
-    if (audioFrames?.trySend(payload)?.isSuccess != true) {
+    if (audioFrames?.trySend(payload.copyOf())?.isSuccess != true) {
       fail(
         "Watch audio input is unavailable",
         expectedOwner = owner,
@@ -503,9 +524,8 @@ internal class WearRealtimeTalkController(
               delivered = isCurrentOutput(owner, activeSessionId)
             } else {
               delivered =
-                (audio.indices step WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES).all { offset ->
+                chunkWearRealtimeOutput(audio).all { chunk ->
                   if (!isCurrentOutput(owner, activeSessionId)) return@all false
-                  val chunk = audio.copyOfRange(offset, minOf(offset + WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES, audio.size))
                   sendWatchFrame(owner, WearRealtimeAudioFrameType.OUTPUT_PCM, chunk)
                   if (!isCurrentOutput(owner, activeSessionId)) return@all false
                   playbackEndsAtMillis =

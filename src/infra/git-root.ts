@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { readFileDescriptorBoundedSync, readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
 import { safeStatSync } from "@openclaw/fs-safe/path";
-import { escapeRegExp } from "../shared/regexp.js";
 import { isMissingPathError } from "./errors.js";
 import { unquoteGitPath } from "./git-path-quote.js";
 
@@ -37,7 +36,7 @@ export function findGitRoot(startDir: string, opts: { maxDepth?: number } = {}):
   return walkUpFrom(startDir, opts, (repoRoot) => (hasGitMarker(repoRoot) ? repoRoot : null));
 }
 
-function readGitMetadataFile(filePath: string, limit = 1024 * 1024): Buffer {
+export function readGitMetadataFile(filePath: string, limit = 1024 * 1024): Buffer {
   const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
   try {
     const stat = fs.fstatSync(fd);
@@ -491,14 +490,13 @@ export function readGitRefs(refsBase: string, refs: readonly string[]): Map<stri
       path.join(refsBase, "packed-refs"),
       Number.MAX_SAFE_INTEGER,
     ).toString("utf8");
-    // Materialize only requested refs, not every unrelated snapshot or remote ref.
-    const records = new RegExp(
-      `^(?![#^])[^\\S\\r\\n]*(\\S+)[^\\S\\r\\n]+(${[...missing].map(escapeRegExp).join("|")})(?=\\s|$)`,
-      "gm",
-    );
-    for (const [, value, packedRef] of packedRefs.matchAll(records)) {
-      if (missing.delete(packedRef!)) {
-        values.set(packedRef!, value!);
+    for (const line of packedRefs.split("\n")) {
+      if (!line || line.startsWith("#") || line.startsWith("^")) {
+        continue;
+      }
+      const [value, packedRef] = line.trim().split(/\s+/, 2);
+      if (packedRef && missing.delete(packedRef)) {
+        values.set(packedRef, value ?? null);
       }
     }
   } catch (error) {

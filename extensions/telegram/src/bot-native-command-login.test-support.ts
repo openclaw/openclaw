@@ -122,8 +122,7 @@ export async function registerLoginCommand(params: {
         telegramDeps: {
           ...nativeParams.telegramDeps,
           ...(params.getRuntimeConfig ? { getRuntimeConfig: params.getRuntimeConfig } : {}),
-          runModelsAuthLoginFlow:
-            params.loginFlow ?? nativeParams.telegramDeps.runModelsAuthLoginFlow,
+          runModelsAuthLoginFlow: params.loginFlow,
           sendMessageTelegram,
         },
       }),

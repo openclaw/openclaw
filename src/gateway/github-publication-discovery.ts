@@ -1,7 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { subscribeGitHubIdentityChanges } from "../agents/github-read-identity.js";
-import { onManagedGitHubProfileChanged } from "../agents/github-tool-identity.js";
-import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.types.js";
 import {
   captureSessionActorStorageOwner,
   runWithSessionActorStorage,
@@ -16,12 +14,7 @@ import type { SelectionRow } from "./session-row-projection-record.js";
 import { prepareGitHubPublicationFact } from "./worker-environments/worker-github-binding.js";
 
 type WorkspaceRow = Pick<SelectionRow, "agentId" | "key" | "entry">;
-type PublicationFact = {
-  available: boolean;
-  github?: WorkerGitHubLaunchBinding;
-  identity?: PreparedGitHubPublicationIdentity;
-  workspaceKey?: string;
-};
+type PublicationFact = { available: boolean; github?: WorkerGitHubLaunchBinding };
 const unavailable: PublicationFact = { available: false };
 const PUBLICATION_FACT_MAX_AGE_MS = 60_000;
 let readPublished: ((session: PublicationSessionIdentity) => PublicationFact) | undefined;
@@ -141,7 +134,6 @@ export function startGitHubPublicationDiscovery(params: {
       refresh(key, retireCredentials);
     }
   };
-  const stopProfile = onManagedGitHubProfileChanged(() => refreshAll(true));
   const stopIdentity = subscribeGitHubIdentityChanges(() => refreshAll(true));
   const stopConfig = sessionChanges.subscribe((change) => {
     if ("all" in change && change.scope === "config") {
@@ -184,7 +176,6 @@ export function startGitHubPublicationDiscovery(params: {
     stop: async () => {
       scheduler.beginClose();
       stopIdentity();
-      stopProfile();
       stopConfig();
       if (readPublished === read) {
         readPublished = undefined;

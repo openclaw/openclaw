@@ -19,9 +19,9 @@ import {
   isRenderablePayload,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { createBlockReplyContentKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
-import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
 import { shouldRetryReplyDispatch } from "./reply-dispatch-outcome.js";
@@ -34,11 +34,11 @@ const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
 async function normalizeSentMediaUrlsForDedupe(params: {
-  sentMediaUrls: string[];
+  sentMediaUrls: readonly string[];
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
 }): Promise<string[]> {
   if (params.sentMediaUrls.length === 0 || !params.normalizeMediaPaths) {
-    return params.sentMediaUrls;
+    return [...params.sentMediaUrls];
   }
 
   const normalizedUrls = new Set<string>();
@@ -83,6 +83,25 @@ function sanitizeFinalReplyText(
   return payload.isError
     ? renderUserFacingText(text, { errorContext: true, conversationContext })
     : sanitizeUserFacingText(text, { conversationContext });
+}
+
+function sanitizeHeartbeatPayload(
+  payload: ReplyPayload,
+  conversationContext?: string,
+): ReplyPayload {
+  const text = payload.text;
+  if (!text) {
+    return payload;
+  }
+  const withoutLegacyBlocks = stripLegacyBracketToolCallBlocks(text);
+  const cleaned = sanitizeFinalReplyText(payload, withoutLegacyBlocks, conversationContext);
+  if (cleaned === text) {
+    return payload;
+  }
+  if (withoutLegacyBlocks !== text) {
+    logVerbose("Stripped legacy tool-call block from heartbeat reply");
+  }
+  return copyPayloadWithSanitizedText(payload, cleaned, conversationContext);
 }
 
 function copyPayloadWithSanitizedText(
@@ -140,17 +159,14 @@ export async function buildReplyPayloads(params: {
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads: ReplyPayload[] = [];
-  for (const payload of params.payloads) {
-    let text = payload.text;
-    if (params.isHeartbeat) {
-      if (text) {
-        const withoutLegacyBlocks = stripLegacyBracketToolCallBlocks(text);
-        if (withoutLegacyBlocks !== text) {
-          logVerbose("Stripped legacy tool-call block from heartbeat reply");
-        }
-        text = withoutLegacyBlocks;
-      }
-    } else {
+  if (params.isHeartbeat) {
+    for (const payload of params.payloads) {
+      sanitizedPayloads.push(sanitizeHeartbeatPayload(payload, params.conversationContext));
+    }
+  } else {
+    for (const payload of params.payloads) {
+      let text = payload.text;
+
       if (payload.isError && text && BUN_FETCH_SOCKET_ERROR_RE.test(text)) {
         text =
           "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
@@ -167,8 +183,10 @@ export async function buildReplyPayloads(params: {
         }
         text = stripped.text;
       }
+      sanitizedPayloads.push(
+        copyPayloadWithSanitizedText(payload, text, params.conversationContext),
+      );
     }
-    sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, text, params.conversationContext));
   }
 
   const messageProvider = resolveOriginMessageProvider({
@@ -197,6 +215,7 @@ export async function buildReplyPayloads(params: {
       const parsed = normalizeReplyPayloadDirectives({
         payload,
         currentMessageId: params.currentMessageId,
+        silentToken: SILENT_REPLY_TOKEN,
         parseMode: "always",
         extractMarkdownImages: params.extractMarkdownImages,
       });
@@ -207,6 +226,9 @@ export async function buildReplyPayloads(params: {
               await params.normalizeMediaPaths(parsed.payload),
             )
           : parsed.payload;
+      if (parsed.isSilent) {
+        mediaNormalizedPayload.text = undefined;
+      }
       return setReplyPayloadMetadata(mediaNormalizedPayload, {
         replyDelivery,
         ...(replyDeliverySource ? { replyDeliverySource } : {}),
@@ -411,13 +433,7 @@ export async function buildReplyPayloads(params: {
         })
       : contentSuppressedPayloads;
   return {
-    replyPayloads: filteredPayloads.flatMap(
-      (payload) =>
-        normalizeReplyPayload(payload, {
-          applyChannelTransforms: false,
-          conversationContext: params.conversationContext,
-        }) ?? [],
-    ),
+    replyPayloads: filteredPayloads.filter(isRenderablePayload),
     didLogHeartbeatStrip,
   };
 }

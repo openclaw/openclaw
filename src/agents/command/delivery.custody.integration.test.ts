@@ -42,7 +42,6 @@ import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execu
 import { resolveSourceReplyDelivery } from "../embedded-agent-runner/delivery-evidence.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
-import { capturePendingFinalRecoverySource } from "../pending-final-recovery-source.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
 
@@ -113,7 +112,6 @@ function persistMarker(
 ) {
   return persistPendingFinalDeliveryMarker({
     ...target,
-    admittedRecoverySource: capturePendingFinalRecoverySource(entry),
     deliver: true,
     sessionStore: { [target.sessionKey]: entry },
     sessionEntry: entry,

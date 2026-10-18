@@ -39,8 +39,8 @@ export function resolveQueueSettingsCore(params: ResolveQueueSettingsParams): Qu
     DEFAULT_QUEUE_DROP;
   return {
     mode: resolvedMode,
-    debounceMs: Math.max(0, debounceRaw),
-    cap: Math.max(1, Math.floor(capRaw)),
+    debounceMs: typeof debounceRaw === "number" ? Math.max(0, debounceRaw) : undefined,
+    cap: typeof capRaw === "number" ? Math.max(1, Math.floor(capRaw)) : undefined,
     dropPolicy: dropRaw,
   };
 }

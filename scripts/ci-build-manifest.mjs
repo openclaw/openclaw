@@ -172,7 +172,6 @@ const changedPaths = (() => {
 })();
 const docsOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
 const docsChanged = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
-const rootProseOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY);
 const releaseGate = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_GATE) && !ciQualification;
 const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
 const runtimePullRequest = isCanonicalRepository && (compactPullRequest || releaseGate);
@@ -685,15 +684,13 @@ if (uiE2eSelection) {
 // Keep its browser-only contracts scoped to their interaction and style owners.
 const uiWebkitOwners = [
   "ui/vitest.config.ts",
-  "ui/src/components/{control-theme*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
-  "ui/src/components/{session-hovercard*,solid/session-hovercard*}.{ts,tsx,css}",
+  "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
   "ui/src/app/app-shell-chrome.ts",
   "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
   "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
   "ui/src/lit/presentation-binding.ts",
-  "ui/src/lib/presentation.ts",
   "ui/src/pages/new-session/{composer*,draft-composer*}.{ts,tsx}",
   "ui/src/lib/native-overlay-occlusion.{ts,tsx}",
   "ui/src/styles/{base,layout,components,sidebar-menus,select-picker,multi-select,hub-tabs,*tooltip*,modal*,menu*,session-menu*}.css",
@@ -955,16 +952,6 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
-  "src/gateway/server*.ts",
-  "src/cli/gateway-cli/run.ts",
-  "src/commands/*preflight*.ts",
-  "src/state/*worker*.ts",
-  "src/state/openclaw-state-ownership.ts",
-  "src/state/openclaw-agent-db-registry-listing.ts",
-  "src/infra/sqlite-worker-*.ts",
-  "src/state/openclaw-state-db*",
-  "src/state/openclaw-state-feature-schema-ensure.ts",
-  "src/state/user-profiles-schema.ts",
   "src/snapshot/**",
   "src/infra/backup-*.ts",
   "src/infra/update-database-*.ts",
@@ -997,10 +984,8 @@ const runPostgresConformance =
     ((eventName === "pull_request" || releaseGate) &&
       !docsOnly &&
       (changedPaths === null ||
-        changedPaths.some(
-          (file) =>
-            !changedNodeTestPlan.isCiDocumentationPath?.(file) &&
-            postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
+        changedPaths.some((file) =>
+          postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
         ))));
 const runBuildArtifacts =
   publishedDriverUpdate ||
@@ -1045,7 +1030,6 @@ const rawNodeTestShards = runNodeFull
           // the complete compact inventory within its 77-row main-tier cap.
           compact: compactPlanMode !== undefined,
           compactMode: mainValidation ? "pull-request" : compactPlanMode,
-          mainValidation,
           compactNodeJobCap: nodeMatrixLimit - nodeWorkerE2eShards.length,
           runnerBackend: nodeRunnerBackend,
         }),
@@ -1201,7 +1185,6 @@ const shardRequiresTests = (shard, tests, fallback) =>
       : fallback(plan);
   });
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
-const packedNodeTestRows = [];
 const nodeTestShards = targetNodeTestShards
   .toSorted(
     (a, b) =>
@@ -1263,7 +1246,6 @@ const nodeTestShards = targetNodeTestShards
           "src/agents/sessions/tools/grep.byte-path.test.ts",
           "src/agents/filesystem-tools-output-contract.test.ts",
           "test/scripts/check-database-worker-ratchet.test.ts",
-          "test/scripts/pr-baseline-publication.test.ts",
           "test/scripts/pr-baseline-signing.test.ts",
           "test/scripts/pr-baseline-successor.test.ts",
           "test/scripts/pr-correction-continuation.test.ts",
@@ -1303,51 +1285,8 @@ const nodeTestShards = targetNodeTestShards
         delete row.shard_name;
       }
     }
-    if (packedGroups) {
-      packedNodeTestRows.push({ row, groups });
-    }
     return row;
   });
-const nodeTestGroupPools = {};
-if (
-  typeof nodeTestGroupsCodec?.decodeNodeTestGroups === "function" &&
-  packedNodeTestRows.reduce((size, { row }) => size + row.groups_gzip_base64.length, 0) > 128_000
-) {
-  // Compress repeated paths across rows, without changing the runner's per-row contract.
-  // Each pool stays below Linux's per-environment-string limit, including base64 overhead.
-  let pool = [];
-  let rows = [];
-  const flush = () => {
-    const poolKey = `pool-${Object.keys(nodeTestGroupPools).length + 1}`;
-    nodeTestGroupPools[poolKey] = encodeNodeTestGroups(pool);
-    rows.forEach((row, index) => {
-      row.groups_pool = poolKey;
-      row.groups_index = index;
-      delete row.groups_gzip_base64;
-    });
-    pool = [];
-    rows = [];
-  };
-  for (const { row, groups } of packedNodeTestRows) {
-    // Oversized individual descriptors retain their existing standalone transport.
-    if (row.groups_gzip_base64.length > 60_000) {
-      continue;
-    }
-    if (encodeNodeTestGroups([...pool, groups]).length > 60_000) {
-      if (pool.length) {
-        flush();
-      }
-      if (encodeNodeTestGroups([groups]).length > 60_000) {
-        continue;
-      }
-    }
-    pool.push(groups);
-    rows.push(row);
-  }
-  if (pool.length) {
-    flush();
-  }
-}
 const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
 // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
 if (compactPlanMode && nodeTestNonDistShards.length > nodeMatrixLimit) {
@@ -1575,7 +1514,6 @@ const manifest = {
   source_channel_test_env_json: JSON.stringify(sourceChannelTestEnv),
   run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
-  node_test_group_pools_json: JSON.stringify(nodeTestGroupPools),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
   // Older scope owners retain these guards rather than silently dropping coverage.
@@ -1623,7 +1561,6 @@ const manifest = {
   shared_sdk_declarations: sharedSdkDeclarations,
   check_additional_matrix: createMatrix(runNodeFull && !releaseFastLane ? additionalChecks : []),
   run_check_docs: docsChanged && eventName !== "push",
-  run_docs_content: !(ordinaryPullRequest && docsOnly && rootProseOnly),
   run_format_check: runFormatCheck,
   run_control_ui_i18n: runControlUiI18n,
   run_ui_tests: runUiTests,
@@ -1673,8 +1610,8 @@ const manifest = {
   run_macos_node: runMacosNode,
   macos_node_matrix: createMatrix(
     runMacosNode
-      ? [1, 2].every((part) => hasPackageScript(`test:macos:ci:${part}`))
-        ? (hasPackageScript("test:macos:ci:3") ? [1, 2, 3] : [1, 2]).map((part) => ({
+      ? [1, 2, 3].every((part) => hasPackageScript(`test:macos:ci:${part}`))
+        ? [1, 2, 3].map((part) => ({
             check_name: `macos-node-${part}`,
             runtime: "node",
             task: `test-${part}`,
@@ -1775,26 +1712,16 @@ if (hybridHostedEligible) {
     hostedPlanner ||
     (workflowEventName === "pull_request" &&
       process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY);
-  const hostedHybridControls =
-    process.env.OPENCLAW_CI_RUNNER_BACKEND === "hybrid" &&
-    workflowEventName !== "workflow_dispatch" &&
-    (workflowEventName !== "pull_request" ||
-      process.env.OPENCLAW_CI_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY);
   // Include control jobs, every emitted matrix row and native hosted jobs.
   // Narrow PRs reserve full lint/type templates; only hybrid moves critical controls.
   // The guard independently expands the workflow to catch inventory drift.
   // Qualification authenticates on hosted preflight before paid admission.
   hybridHostedBaseRows = Object.values({
-    preflight: count(ciQualification || hostedHybridControls),
-    "ci-gate": count(hostedHybridControls),
-    "check-plan": count(
-      (hostedPlanner || (hostedHybridControls && workflowEventName === "pull_request")) &&
-        runCheckPlan,
-    ),
+    preflight: count(ciQualification),
+    "check-plan": count(hostedPlanner && runCheckPlan),
     "pr-failure-report": count(
       workflowEventName === "pull_request" &&
-        (hostedHybridControls ||
-          process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY),
+        process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY,
     ),
     "control-ui-performance": count(manifest.run_control_ui_performance),
     "published-driver-update": count(manifest.run_published_driver_update),
@@ -1833,7 +1760,7 @@ if (hybridHostedEligible) {
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),
     "ios-build": count(manifest.run_ios_build),
-    "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
+    "ios-screenshot-shard": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 2),
     "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),
     "android-screenshots": count(manifest.run_android_screenshots),
     "android-access-native": count(manifest.run_android_access_native, 2),
@@ -1845,6 +1772,7 @@ if (hybridHostedEligible) {
   }).reduce((total, rows) => total + rows, 0);
   hybridHostedOffloadRows =
     1 +
+    count(manifest.run_ui_tests, 3) +
     count(
       manifest.run_ui_e2e && !compatibilityTarget,
       manifest.ui_e2e_matrix.include.filter((row) => row.task === "browser-extension").length,

@@ -96,6 +96,7 @@ type CodexComputerUseInspectionParams = Omit<
 };
 
 type ExplicitManagedComputerUseInstallContext = {
+  client: CodexAppServerClient;
   agentDir: string;
   codexHome: string;
   command: string;
@@ -248,6 +249,7 @@ async function inspectCodexComputerUse(
         options: { ...clientOptions, timeoutMs: remainingTimeoutMs() },
         signal: params.signal,
         run: async (readClient, requestOptions) => {
+          const { assertCurrent } = requestOptions();
           return await inspectCodexComputerUseWithoutFence({
             ...params,
             client: readClient,
@@ -262,7 +264,7 @@ async function inspectCodexComputerUse(
                   ? {
                       timeoutMs: options?.timeoutMs ?? operationTimeoutMs,
                       signal: options?.signal,
-                      assertCurrent: undefined,
+                      assertCurrent,
                     }
                   : requestOptions();
               return await requestCodexAppServerClientJson<T>({
@@ -557,6 +559,7 @@ async function resolveExplicitManagedComputerUseInstallContext(
     return undefined;
   }
   return {
+    client: params.client,
     agentDir: params.agentDir,
     codexHome,
     command,

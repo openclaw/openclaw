@@ -1,12 +1,11 @@
-import { createMemo, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import type { AgentIdentityResult } from "../../api/types.ts";
 import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
-import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
+import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import type { AgentSelectOption } from "../agent-select.ts";
-import { Icon } from "./icon.tsx";
+import { avatarArtwork } from "../identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 
 export type AgentAvatarProps = {
@@ -15,14 +14,16 @@ export type AgentAvatarProps = {
 };
 
 export function AgentAvatarContent(props: AgentAvatarProps) {
-  const loader = createIdentityAvatars();
-  onCleanup(loader.connect());
-  const avatarSource = projectOwner(loader, (owner) => owner);
+  const [revision, refresh] = createSignal(0, { ownedWrite: true });
+  const loader = new IdentityAvatarController(() => refresh((value) => value + 1));
+  loader.hostConnected();
+  onCleanup(() => loader.hostDisconnected());
   const avatar = createMemo(() => {
+    revision();
     const option = props.option;
     const identity = props.identity;
     const url = option.agent ? resolveAgentAvatarUrl(option.agent, identity) : null;
-    return avatarSource.read().withActiveRoutes(() => ({
+    return loader.withActiveRoutes(() => ({
       image: url ? loader.resolve(url) : null,
       onError: url ? loader.imageErrorHandler(url) : undefined,
     }));
@@ -30,26 +31,26 @@ export function AgentAvatarContent(props: AgentAvatarProps) {
 
   return (
     <Show
-      when={avatar().image ? undefined : props.option.icon}
+      when={!props.option.icon || Boolean(avatar().image)}
       fallback={
-        <AgentIdentityAvatar
-          agent={{
-            id: props.option.agent?.id ?? props.option.value,
-            avatar: avatar().image,
-            textAvatar: props.option.agent
-              ? resolveAgentTextAvatar(props.option.agent, props.identity)
-              : null,
-          }}
-          class="agent-select__avatar"
-          onImageError={avatar().onError}
+        <span
+          ref={avatarArtwork(() => props.option.icon)}
+          class="agent-select__avatar agent-select__avatar--icon"
+          aria-hidden="true"
         />
       }
     >
-      {(icon) => (
-        <span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true">
-          <Icon name={icon()} />
-        </span>
-      )}
+      <AgentIdentityAvatar
+        agent={{
+          id: props.option.agent?.id ?? props.option.value,
+          avatar: avatar().image,
+          textAvatar: props.option.agent
+            ? resolveAgentTextAvatar(props.option.agent, props.identity)
+            : null,
+        }}
+        class="agent-select__avatar"
+        onImageError={avatar().onError}
+      />
     </Show>
   );
 }

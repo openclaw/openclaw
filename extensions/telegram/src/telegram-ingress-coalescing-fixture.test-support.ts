@@ -208,7 +208,6 @@ export function resetTelegramIngressRuntime() {
 export type TelegramIngressMonitorOptions = {
   telegramTransport?: TelegramTransport;
   adoptionStallTimeoutMs?: number;
-  pollIntervalMs?: number;
   onRuntimeError?: (error: unknown) => void;
 };
 
@@ -249,9 +248,9 @@ export async function createIngressMonitor(
     ...(options.adoptionStallTimeoutMs === undefined
       ? {}
       : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
-    pollIntervalMs: options.pollIntervalMs ?? 10,
+    pollIntervalMs: 10,
   });
-  const resources = { monitor, telegramTransport, abortController, bot };
+  const resources = { monitor, telegramTransport, abortController };
   return resources;
 }
 

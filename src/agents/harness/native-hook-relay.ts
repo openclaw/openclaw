@@ -187,8 +187,9 @@ function registerNativeHookRelayInternal(
     stateDbPath,
     () => partialRegistration !== undefined && relays.get(relayId) === partialRegistration,
   );
-  unregisterNativeHookRelay(relayId, undefined, {
+  const deliverReplacedRegistrationUnregister = unregisterNativeHookRelay(relayId, undefined, {
     deferListenerCloseMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
+    deferOnUnregister: true,
   });
   try {
     const retained =
@@ -341,20 +342,26 @@ function registerNativeHookRelayInternal(
       unregisterNativeHookRelay(relayId, partialRegistration);
     }
     throw error;
+  } finally {
+    // The successor is authoritative before the old callback runs. A reentrant
+    // callback can therefore replace this registration normally instead of
+    // being overwritten by the outer replacement path. Finally also preserves
+    // the old callback if successor setup aborts partway through.
+    deliverReplacedRegistrationUnregister?.();
   }
 }
 
 function unregisterNativeHookRelay(
   relayId: string,
   expectedRegistration?: ActiveNativeHookRelayRegistration,
-  options?: { deferListenerCloseMs?: number },
-): void {
+  options?: { deferListenerCloseMs?: number; deferOnUnregister?: boolean },
+): (() => void) | undefined {
   if (expectedRegistration && relays.get(relayId) !== expectedRegistration) {
-    return;
+    return undefined;
   }
   const registration = expectedRegistration ?? relays.get(relayId);
   if (!registration) {
-    return;
+    return undefined;
   }
   const lifetime = readRelayLifetime(registration);
   const bridge = relayBridges.get(relayId);
@@ -377,11 +384,23 @@ function unregisterNativeHookRelay(
   removeNativeHookRelayInvocations(relayId);
   const cancelApprovals = detachNativeHookRelayApprovalState(relayId);
   cancelApprovals();
-  try {
-    lifetime?.retention?.onDispose();
-  } catch (error) {
-    log.warn("native hook relay unregister callback failed", { error, relayId });
+  const deliverOnUnregister = () => {
+    try {
+      lifetime?.retention?.onDispose();
+    } catch (error) {
+      try {
+        log.warn("native hook relay unregister callback failed", { error, relayId });
+      } catch {
+        // Teardown has already detached every identity-bound resource. Logging
+        // must not turn an observer callback failure into a cleanup failure.
+      }
+    }
+  };
+  if (options?.deferOnUnregister) {
+    return deliverOnUnregister;
   }
+  deliverOnUnregister();
+  return undefined;
 }
 
 function deactivateNativeHookRelayForeground(

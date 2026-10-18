@@ -1,9 +1,5 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import {
-  isStandaloneRuntimeExecutable,
-  resolveOpenClawCliInvocation,
-} from "../../../cli-invocation.mjs";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { DEFAULT_RELAY_TIMEOUT_MS } from "./native-hook-relay-constants.js";
 import type { NativeHookRelayEvent, NativeHookRelayProvider } from "./native-hook-relay-types.js";
@@ -59,30 +55,11 @@ export function buildNativeHookRelayCommandWithStateDatabase(params: {
   nodeExecutable?: string;
 }): string {
   const timeoutMs = normalizePositiveInteger(params.timeoutMs, DEFAULT_RELAY_TIMEOUT_MS);
-  const target = params.executable
-    ? { executable: params.executable, kind: "cli" as const }
-    : resolveNativeHookRelayExecutable();
-  const executable = target.executable;
-  const standaloneExecutable =
-    target.kind === "cli" &&
-    executable !== "openclaw" &&
-    isStandaloneRuntimeExecutable(path.resolve(executable))
-      ? path.resolve(executable)
-      : undefined;
-  const directExecutable =
-    standaloneExecutable ?? (executable === "openclaw" ? executable : undefined);
-  const invocation =
-    target.kind === "cli"
-      ? resolveOpenClawCliInvocation({
-          execPath: directExecutable ?? params.nodeExecutable ?? process.execPath,
-          entryPath: directExecutable ? null : executable,
-          execArgv: [],
-          args: [],
-        })
-      : undefined;
-  const argv = invocation
-    ? [invocation.command, ...invocation.args]
-    : [params.nodeExecutable ?? process.execPath, executable];
+  const executable = params.executable ?? resolveNativeHookRelayExecutable();
+  const argv =
+    executable === "openclaw"
+      ? ["openclaw"]
+      : [params.nodeExecutable ?? process.execPath, executable];
   const nicePrefix = resolveNativeHookRelayNicePrefix(params.nice);
   const command = shellQuoteArgs([
     ...nicePrefix,
@@ -112,13 +89,10 @@ export function buildNativeHookRelayCommandWithStateDatabase(params: {
   return process.platform === "win32" ? command : `exec ${command}`;
 }
 
-function resolveNativeHookRelayExecutable(): { executable: string; kind: "worker" | "cli" } {
+function resolveNativeHookRelayExecutable(): string {
   const envPath = process.env.OPENCLAW_CLI_PATH?.trim();
   if (envPath && existsSync(envPath)) {
-    return { executable: envPath, kind: "cli" };
-  }
-  if (isStandaloneRuntimeExecutable()) {
-    return { executable: process.execPath, kind: "cli" };
+    return envPath;
   }
   const packageRoot = resolveOpenClawPackageRootSync({
     moduleUrl: import.meta.url,
@@ -126,17 +100,14 @@ function resolveNativeHookRelayExecutable(): { executable: string; kind: "worker
     cwd: process.cwd(),
   });
   if (packageRoot) {
-    const relayEntry = path.join(packageRoot, "dist", "native-hook-relay", "entry.js");
-    if (existsSync(relayEntry)) {
-      return { executable: relayEntry, kind: "worker" };
-    }
     for (const candidate of [
+      path.join(packageRoot, "dist", "native-hook-relay", "entry.js"),
       path.join(packageRoot, "openclaw.mjs"),
       path.join(packageRoot, "dist", "entry.js"),
       path.join(packageRoot, "scripts", "run-node.mjs"),
     ]) {
       if (existsSync(candidate)) {
-        return { executable: candidate, kind: "cli" };
+        return candidate;
       }
     }
   }
@@ -144,7 +115,7 @@ function resolveNativeHookRelayExecutable(): { executable: string; kind: "worker
   if (argvEntry) {
     const resolved = path.resolve(argvEntry);
     if (existsSync(resolved)) {
-      return { executable: resolved, kind: "cli" };
+      return resolved;
     }
   }
   throw new Error("Cannot resolve OpenClaw CLI executable path for native hook relay");

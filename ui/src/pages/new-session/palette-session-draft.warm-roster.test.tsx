@@ -1,9 +1,11 @@
-import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import type { SolidController } from "../../lit/solid-controller-host.ts";
+import { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
@@ -15,58 +17,42 @@ import {
 } from "./palette-session-draft-view.tsx";
 import { PaletteSessionDraft } from "./palette-session-draft.ts";
 
-class WarmRosterHost {
+class WarmRosterHost extends ControllerHost {
   readonly element = document.createElement("div");
   readonly ownerDocument = document;
   readonly querySelector = this.element.querySelector.bind(this.element);
   readonly querySelectorAll = this.element.querySelectorAll.bind(this.element);
-  private publish = () => {};
-  readonly requestUpdate = () => this.publish();
+  private readonly updatedControllers = new Set<SolidController>();
   private readonly unmount: () => void;
   readonly placementReady = createDeferred();
   readonly context: ApplicationContext;
-  readonly draft = new PaletteSessionDraft(
-    this.element,
-    () => ({ context: this.context, open: true }),
-    {
-      changed: this.requestUpdate,
-      updateComplete: () => this.updateComplete,
-      onClose: () => undefined,
-    },
-  );
+  readonly draft = new PaletteSessionDraft(this, () => ({ context: this.context, open: true }), {
+    onClose: () => undefined,
+  });
 
   constructor(context: ApplicationContext) {
+    super();
     this.context = context;
     document.body.append(this.element);
     const mounted = mountSolid(
       () => {
         const [revision, setRevision] = createSignal({}, { ownedWrite: true });
-        this.publish = () => setRevision({});
+        const unsubscribe = this.subscribe(() => setRevision({}));
         const recovery = createMemo(() => {
           revision();
           return this.draft.recoveryAction;
         });
         createEffect(revision, () => {
-          this.draft.synchronize();
-          this.draft.settled();
+          for (const controller of this.updatedControllers) {
+            controller.hostUpdated?.();
+          }
           if (this.querySelector(".palette-session-settings__workspace")) {
             this.placementReady.resolve();
           }
         });
-        onSettled(() => {
-          const stops = [
-            context.agents,
-            context.agentIdentity,
-            context.sessions,
-            context.config,
-          ].map((source) => source.subscribe(this.requestUpdate));
-          this.draft.connect();
-          this.requestUpdate();
-          return () => {
-            this.publish = () => {};
-            stops.forEach((stop) => stop());
-            this.draft.disconnect();
-          };
+        onCleanup(() => {
+          unsubscribe();
+          this.disconnect();
         });
         return (
           <>
@@ -82,10 +68,21 @@ class WarmRosterHost {
       { container: this.element },
     );
     this.unmount = mounted.unmount;
+    this.connect();
   }
 
-  get updateComplete() {
-    return Promise.resolve(true).then(() => {
+  override addController(controller: SolidController) {
+    this.updatedControllers.add(controller);
+    super.addController(controller);
+  }
+
+  override removeController(controller: SolidController) {
+    this.updatedControllers.delete(controller);
+    super.removeController(controller);
+  }
+
+  override get updateComplete() {
+    return super.updateComplete.then(() => {
       flush();
       return true;
     });

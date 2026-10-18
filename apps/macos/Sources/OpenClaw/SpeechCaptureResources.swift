@@ -37,6 +37,10 @@ final class SpeechCaptureResources {
         self.request = request
         SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
 
+        // PTT creates its engine before checking the default input; dictation checks first.
+        if self.mode == .pushToTalk {
+            self.engine = self.engine ?? AVAudioEngine()
+        }
         guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
             self.engine = nil
             throw NSError(domain: self.mode.rawValue, code: self.mode == .pushToTalk ? 1 : 2, userInfo: [
@@ -68,10 +72,18 @@ final class SpeechCaptureResources {
     }
 
     func stop() {
-        self.finishAudio()
+        if self.mode == .dictation {
+            self.finishAudio()
+        }
         self.task?.cancel()
-        self.task = nil
-        self.request = nil
+        if self.mode == .pushToTalk {
+            self.request = nil
+            self.task = nil
+            self.removeTap()
+        } else {
+            self.task = nil
+            self.request = nil
+        }
         if self.engine?.isRunning == true {
             self.engine?.stop()
             self.engine?.reset()

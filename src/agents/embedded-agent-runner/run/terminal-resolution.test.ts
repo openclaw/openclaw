@@ -123,33 +123,6 @@ describe("terminal resolution", () => {
     },
   );
 
-  it("keeps real internal provider failures visible", async () => {
-    const assistant = emptyAssistant({
-      stopReason: "error",
-      errorMessage: "Authentication failed",
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      terminal: { kind: "failed", source: "prompt", error: new Error("Authentication failed") },
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-    });
-    const resolved = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({
-        attempt,
-        runParams: {
-          messageChannel: "internal",
-          inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
-        },
-      }),
-    );
-    expect(resolved.action).toBe("complete");
-    if (resolved.action !== "complete") {
-      throw new Error("Expected a terminal provider failure");
-    }
-    expect(resolved.result.meta.error).toMatchObject({ message: "Authentication failed" });
-    expect(resolved.result.meta.suppressErrorNotice).not.toBe(true);
-  });
-
   it("keeps external cancellation ahead of a failed attempt during final result construction", async () => {
     const assistant = emptyAssistant({ stopReason: "stop" });
     const attempt = makeEmbeddedRunnerAttempt({
@@ -201,8 +174,8 @@ describe("terminal resolution", () => {
     if (resolved.action !== "complete") {
       return;
     }
-    expect(resolved.result.payloads).toBeUndefined();
-    expect(resolved.result.meta.terminalReply).toEqual({ disposition: "silent" });
+    expect(resolved.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
+    expect(resolved.result.meta.terminalReplyKind).toBe("silent-empty");
     expect(resolved.result.meta.livenessState).toBe("working");
     expect(activateInternalPrompt).not.toHaveBeenCalled();
   });
@@ -428,109 +401,70 @@ describe("terminal resolution", () => {
     },
   );
 
-  it.each(
-    (["cross-chat send", "reaction", "group", "yield"] as const).flatMap((effect) =>
-      ["NO_REPLY", " \tNO_REPLY\n"].map((text) => ({
-        effect,
-        text,
-      })),
-    ),
-  )(
-    "honors required external silence after $effect: $text without recovery",
-    async ({ effect, text }) => {
-      const assistant = emptyAssistant({ content: [{ type: "text", text }] });
-      const attempt = makeEmbeddedRunnerAttempt({
-        assistantTexts: [text],
-        toolMetas: [
-          { toolName: effect === "yield" ? "sessions_yield" : "message", replaySafe: false },
-        ],
-        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        yieldDetected: effect === "yield",
-        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        ...(effect === "cross-chat send"
-          ? { didSendViaMessagingTool: true, messagingToolSentTexts: ["Sent to another chat."] }
-          : {}),
-      });
-      const input = makeTerminalInput({
-        attempt,
-        attemptAssistant: assistant,
-        finalAssistantRawText: text,
-        runParams: {
-          terminalReplyExpectation: "required",
-          sessionKey:
-            effect === "group"
-              ? "agent:main:telegram:group:team"
-              : "agent:main:telegram:direct:user",
-        },
-      });
+  it("keeps a length-stopped silent cron result silent", async () => {
+    // The only payload is the synthesized silent result of a successful tool and
+    // the assistant produced no prose, so there is no partial reply to label; a
+    // truncation notice here would turn intentional silence into a message.
+    const assistant = emptyAssistant({ stopReason: "length" });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "exec" }],
+      messagesSnapshot: [
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
+          details: { aggregated: SILENT_REPLY_TOKEN },
+        } as never,
+        assistant,
+      ],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      runParams: { trigger: "cron", terminalReplyExpectation: "required" },
+    });
 
-      const resolved = await resolveEmbeddedRunTerminal(input);
-
-      expect(resolved.action).toBe("complete");
-      if (resolved.action !== "complete") {
-        throw new Error("expected intentional silence");
-      }
-      expect(resolved.result.meta.error).toBeUndefined();
-      expect(resolved.result.meta.terminalReply).toEqual({ disposition: "silent" });
-      expect(resolved.result.payloads).toBeUndefined();
-      expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["subagent", undefined])(
-    "requires a real private result (lane=%s) and preserves mixed-token text",
-    async (lane) => {
-      for (const { text, silent } of [
-        { text: "NO_REPLY", silent: true },
-        { text: "NO_REPLY.", silent: false },
-        { text: '"NO_REPLY"', silent: false },
-        { text: '{"action":"NO_REPLY"}', silent: false },
-        { text: "NO_REPLY The requested result.", silent: false },
-      ]) {
-        const assistant = emptyAssistant({ content: [{ type: "text", text }] });
-        const attempt = makeEmbeddedRunnerAttempt({
-          assistantTexts: [text],
-          lastAssistant: assistant,
-          currentAttemptAssistant: assistant,
-          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-        });
-        const input = makeTerminalInput({
-          attempt,
-          attemptAssistant: assistant,
-          finalAssistantRawText: text,
-          payloadsWithToolMedia: silent ? [] : [{ text }],
-          runParams: { lane, messageChannel: undefined },
-        });
-        const resolved = await resolveEmbeddedRunTerminal(input);
-        if (silent) {
-          expect(resolved).toEqual({ action: "retry" });
-          expect(input.sessionPromptState.activateInternalPrompt).toHaveBeenCalledOnce();
-        } else {
-          expect(resolved.action).toBe("complete");
-          if (resolved.action !== "complete") {
-            throw new Error("expected mixed-token answer");
-          }
-          expect(resolved.result.payloads).toEqual([{ text }]);
-          expect(resolved.result.meta.terminalReply).toEqual({ disposition: "visible", text });
-        }
-      }
-    },
-  );
-
-  it("completes optional empty output without recovery or a silent classification", async () => {
-    const input = makeTerminalInput({ runParams: { terminalReplyExpectation: "optional" } });
     const resolved = await resolveEmbeddedRunTerminal(input);
 
     expect(resolved.action).toBe("complete");
     if (resolved.action !== "complete") {
-      throw new Error("expected optional completion");
+      return;
     }
-    expect(resolved.result.meta.terminalReply).toEqual({ disposition: "empty" });
-    expect(resolved.result.meta.error).toBeUndefined();
-    expect(resolved.result.payloads).toBeUndefined();
-    expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+    expect(resolved.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
+  });
+
+  it("marks explicit subagent silence at the terminal producer", async () => {
+    const rawText = "NO_REPLY";
+    const expectedKind = "silent-empty";
+    const assistant = emptyAssistant({ content: [{ type: "text", text: rawText ?? "" }] });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: rawText ? [rawText] : [],
+      toolMetas: [{ toolName: "write", replaySafe: false }],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      finalAssistantRawText: rawText,
+      replayState: { ...attempt.replayMetadata, replayInvalid: false },
+      runParams: {
+        lane: "subagent",
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
+      },
+    });
+
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.meta.terminalReplyKind).toBe(expectedKind);
   });
 
   it("retries reasoning-only output and surfaces a retained presentation after exhaustion", async () => {
@@ -577,9 +511,8 @@ describe("terminal resolution", () => {
       {
         text:
           "Web fetch completed.\nOrigin: https://example.com\nStatus: 200\n\n" +
-          "No answer was returned. Ask again if you still need one.",
+          "⚠️ Agent couldn't generate a response. Please try again.",
         isError: true,
-        isStatusNotice: true,
       },
     ]);
     expect(exhausted.result.meta.error).toMatchObject({
@@ -587,9 +520,6 @@ describe("terminal resolution", () => {
       fallbackSafe: false,
       terminalPresentation: true,
     });
-    expect(exhausted.result.meta.terminalReply).toEqual({ disposition: "empty" });
-    expect(exhausted.result.meta.finalAssistantVisibleText).toBeUndefined();
-    expect(exhausted.result.meta.finalAssistantRawText).toBeUndefined();
   });
 
   it("keeps a prepared answer when a later assistant message is reasoning-only", async () => {
@@ -702,7 +632,7 @@ describe("terminal resolution", () => {
     expect(input.armPostCompactionGuard).toHaveBeenCalledOnce();
   });
 
-  it("reports exhausted finalization as a failed required reply", async () => {
+  it("reports completed-empty finalization for required replies", async () => {
     const assistant = emptyAssistant();
     const attempt = makeEmbeddedRunnerAttempt({
       assistantTexts: [],
@@ -720,7 +650,7 @@ describe("terminal resolution", () => {
           terminalReplyExpectation: "required",
         },
         replayState: { hadPotentialSideEffects: true, replayInvalid: true },
-        settledTurnFinalizationOutcome: "failed",
+        settledTurnFinalizationOutcome: "completed-empty",
       }),
     );
     expect(resolved.action).toBe("complete");
@@ -729,9 +659,7 @@ describe("terminal resolution", () => {
     }
     expect(resolved.result.payloads?.[0]).toMatchObject({ isError: true });
     expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
-    expect(resolved.result.meta.terminalReply).toEqual({ disposition: "empty" });
-    expect(resolved.result.meta.finalAssistantVisibleText).toBeUndefined();
-    expect(resolved.result.meta.finalAssistantRawText).toBeUndefined();
+    expect(resolved.result.meta.terminalReplyKind).not.toBe("silent-empty");
   });
 
   it("delivers partial text with a truncation notice when the output budget ends", async () => {

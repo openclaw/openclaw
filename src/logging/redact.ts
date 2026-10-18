@@ -84,7 +84,6 @@ const canonicalBuiltInSources = new Set<string>(
 );
 const formAwareEqualsAssignmentPatterns = new WeakSet<ResolvedRedactPattern>();
 let defaultResolvedPatterns: ResolvedRedactPattern[] | undefined;
-let warnedInvalidPatterns = false;
 
 const FORM_BODY_KEY_OBFUSCATION_RE = new RegExp(
   String.raw`[${FORM_BODY_KEY_INVISIBLE_CHARS}+]`,
@@ -155,8 +154,7 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
     return PEM_REDACT_MATCHER;
   }
   if (typeof raw !== "string" && !(raw instanceof RegExp)) {
-    // Rejected config still reaches diagnostic redaction; only internal matchers have exec.
-    return raw !== null && typeof raw === "object" && typeof raw.exec === "function" ? raw : null;
+    return raw;
   }
   // Linear matchers and compiled regexes share the source's masking policies below.
   let pattern: ResolvedRedactPattern | null =
@@ -226,7 +224,7 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
 }
 
 function resolvePatterns(value?: readonly RedactPattern[]): ResolvedRedactPattern[] {
-  if (usesBuiltInRedactPatterns(value)) {
+  if (!value?.length || value === DEFAULT_REDACT_PATTERNS) {
     defaultResolvedPatterns ??= DEFAULT_REDACT_PATTERNS.map(parsePattern).filter(
       (re): re is ResolvedRedactPattern => Boolean(re),
     );
@@ -236,42 +234,23 @@ function resolvePatterns(value?: readonly RedactPattern[]): ResolvedRedactPatter
   // identity decides provenance, not array identity: each raw entry that is itself a canonical
   // built-in rule keeps whole-text scanning, while actual operator rules keep bounded scanning.
   // Mark the resolved instances at parse time; the shared compiler can reuse a regex instance.
-  const combined = new Set<ResolvedRedactPattern>();
-  let invalid = !Array.isArray(value);
-  for (const raw of Array.isArray(value) ? value : []) {
+  const seen = new Set<ResolvedRedactPattern>();
+  const combined: ResolvedRedactPattern[] = [];
+  for (const raw of value) {
     const resolved = parsePattern(raw);
-    if (resolved) {
-      combined.add(resolved);
-    } else {
-      invalid = true;
+    if (resolved !== null && !seen.has(resolved)) {
+      seen.add(resolved);
+      combined.push(resolved);
     }
   }
-  if (invalid) {
-    // A malformed policy must keep both usable operator rules and default protection.
-    for (const pattern of resolvePatterns()) {
-      combined.add(pattern);
-    }
-    if (!warnedInvalidPatterns) {
-      warnedInvalidPatterns = true;
-      try {
-        console.warn(
-          "[openclaw] Ignoring invalid logging.redactPatterns entries; keeping valid patterns and built-in redaction. Fix logging.redactPatterns in your config.",
-        );
-      } catch {
-        // Console capture can re-enter redaction, and a failed warning must not stop masking.
-      }
-    }
+  if (!seen.has(AWS_SECRET_ACCESS_KEY_MATCHER)) {
+    combined.push(AWS_SECRET_ACCESS_KEY_MATCHER);
   }
-  combined.add(AWS_SECRET_ACCESS_KEY_MATCHER);
-  return [...combined];
+  return combined;
 }
 
 function usesBuiltInRedactPatterns(value?: readonly RedactPattern[]): boolean {
-  return (
-    value === undefined ||
-    value === DEFAULT_REDACT_PATTERNS ||
-    (Array.isArray(value) && value.length === 0)
-  );
+  return !value?.length || value === DEFAULT_REDACT_PATTERNS;
 }
 
 function normalizeSensitiveKeyName(value: string): string {
@@ -684,9 +663,9 @@ function resolveToolPayloadRedaction(
 ): RedactOptions {
   const userPatterns = loggingConfig?.redactPatterns;
   const patterns =
-    Array.isArray(userPatterns) && userPatterns.length > 0
+    userPatterns && userPatterns.length > 0
       ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
-      : userPatterns;
+      : undefined;
   return { mode: "tools", patterns };
 }
 
@@ -1148,19 +1127,12 @@ export function redactSensitiveLines(
   if (lines.length === 0 || resolved.mode === "off") {
     return selectedLines ? lines.filter((_, index) => selectedLines[index]) : lines;
   }
-  // Partial PEM context belongs to the complete batch, not each JSON record.
-  const recordPatterns = resolved.patterns.map((pattern) =>
-    pattern.source === PEM_REDACT_PATTERN_SOURCE ? PEM_REDACT_MATCHER : pattern,
-  );
   const recordRedaction = {
     ...resolved,
-    // Tail context copies the pattern array; restore default-policy identity so
-    // benign fields retain the transport redactor's built-in prefilter.
-    patterns:
-      defaultResolvedPatterns?.length === recordPatterns.length &&
-      recordPatterns.every((pattern, index) => pattern === defaultResolvedPatterns?.[index])
-        ? defaultResolvedPatterns
-        : recordPatterns,
+    // Partial PEM context belongs to the complete batch, not each JSON record.
+    patterns: resolved.patterns.map((pattern) =>
+      pattern.source === PEM_REDACT_PATTERN_SOURCE ? PEM_REDACT_MATCHER : pattern,
+    ),
   };
   return redactJsonRecord(
     lines

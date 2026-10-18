@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
@@ -12,7 +11,6 @@ import {
   createNativeSubagentAssignmentStore,
   createNativeSubagentSessionAuthority,
 } from "./native-subagent-assignment-store.js";
-import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
@@ -37,8 +35,7 @@ export async function fixture() {
   const identity = {
     kind: "session" as const,
     agentId: "main",
-    // Session entry cleanup preserves history, so fixtures need distinct physical transcripts.
-    sessionId: randomUUID(),
+    sessionId: "physical-1",
     sessionKey: "agent:main:inventory",
   };
   await seedRunSessionOwnerForTest(identity.sessionId, identity.sessionKey, {
@@ -55,9 +52,8 @@ export async function fixture() {
     vi.useRealTimers();
   });
   const lifecycleRevision = entry.lifecycleRevision;
-  const historyOwner = (parentThreadId = "parent-thread"): CodexNativeSubagentHistoryOwner => ({
+  const historyOwner = (parentThreadId = "parent-thread") => ({
     ...nativeHistoryOwner(parentThreadId),
-    sessionId: identity.sessionId,
     lifecycleRevision,
   });
   const binding = {
@@ -205,7 +201,6 @@ export async function fixture() {
   return {
     identity,
     binding,
-    state,
     store,
     deliver,
     register,

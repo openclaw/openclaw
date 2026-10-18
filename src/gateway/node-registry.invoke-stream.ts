@@ -58,13 +58,6 @@ export type NodeInvokeResultParams = NodeInvokeResult & {
 const MAX_PENDING_PROGRESS_CHUNKS = 128;
 const MAX_INVOKE_INPUT_BYTES = 16 * 1024;
 
-export class NodeInvokeNotPendingError extends Error {
-  constructor() {
-    super("node invoke is not pending");
-    this.name = "NodeInvokeNotPendingError";
-  }
-}
-
 export class NodeInvokeStreamController {
   constructor(
     private readonly options: {
@@ -89,7 +82,7 @@ export class NodeInvokeStreamController {
   sendInput(invokeId: string, payload: unknown): void {
     const pending = this.options.pendingInvokes.get(invokeId);
     if (!pending) {
-      throw new NodeInvokeNotPendingError();
+      throw new Error("node invoke is not pending");
     }
     const payloadJSON = JSON.stringify(payload);
     if (payloadJSON === undefined) {
@@ -99,9 +92,7 @@ export class NodeInvokeStreamController {
       throw new Error("node invoke input exceeds 16 KiB");
     }
     if (!this.getPending(invokeId, pending.nodeId, pending.connId)) {
-      throw this.options.pendingInvokes.has(invokeId)
-        ? new Error("node invoke is not pending")
-        : new NodeInvokeNotPendingError();
+      throw new Error("node invoke is not pending");
     }
     if (!this.options.sendInput(invokeId, pending, pending.nextInputSeq, payloadJSON)) {
       throw new Error("failed to send node invoke input");

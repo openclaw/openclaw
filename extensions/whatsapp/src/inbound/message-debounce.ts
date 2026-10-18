@@ -1,6 +1,7 @@
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { getPrimaryIdentityId } from "../identity.js";
+import { requireWhatsAppInboundAdmission } from "./admission.js";
 import type { WhatsAppIngressLifecycle, WhatsAppReadReceiptTarget } from "./durable-receive.js";
 import { attachWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
 import type { AdmittedWebInboundCallbackMessage } from "./types.js";
@@ -34,11 +35,11 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     }
   };
   const buildKey = (msg: WhatsAppQueuedInboundMessage): string => {
-    const admission = msg.admission;
+    const admission = requireWhatsAppInboundAdmission(msg);
     return `${admission.accountId}:${admission.conversation.id}`;
   };
   const resolveSenderKey = (msg: WhatsAppQueuedInboundMessage): string => {
-    const admission = msg.admission;
+    const admission = requireWhatsAppInboundAdmission(msg);
     const sender = msg.platform.sender;
     return admission.conversation.kind === "group"
       ? (getPrimaryIdentityId(sender ?? null) ??

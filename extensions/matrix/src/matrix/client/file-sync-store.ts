@@ -213,9 +213,11 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     this.dirty = false;
     const payload: PersistedMatrixSyncStore = {
       version: MATRIX_SYNC_CACHE_VERSION,
-      savedSync: this.savedSync,
+      savedSync: this.savedSync ? structuredClone(this.savedSync) : null,
       cleanShutdown: this.cleanShutdown,
-      ...(this.savedClientOptions ? { clientOptions: this.savedClientOptions } : {}),
+      ...(this.savedClientOptions
+        ? { clientOptions: structuredClone(this.savedClientOptions) }
+        : {}),
     };
     try {
       await writeMatrixSyncCacheStateToStore({

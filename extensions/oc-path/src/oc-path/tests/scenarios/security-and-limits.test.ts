@@ -47,9 +47,8 @@ describe("file-slot containment", () => {
     expect(() => parseOcPath('oc://"C:/Windows/System32/foo"/section')).toThrow(
       /Absolute file slot/,
     );
-    expect(() => parseOcPath('oc://"C:\\\\Windows\\\\System32"/section')).toThrow(
-      /Absolute file slot/,
-    );
+    // `\` inside quoted segments is rejected outright (no escape support).
+    expect(() => parseOcPath('oc://"C:\\\\Windows\\\\System32"/section')).toThrow(OcPathError);
   });
 
   it("rejects leading-backslash UNC path", () => {

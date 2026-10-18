@@ -16,7 +16,7 @@ import {
 } from "../gateway/server-methods/chat-assistant-content.js";
 import { bindOutboundSessionEntry } from "../infra/outbound/outbound-session.js";
 import {
-  createStructuredOutboundPayloadPlan,
+  createOutboundPayloadPlan,
   projectOutboundPayloadPlanForMirror,
   resolveOutboundPayloadMirrorText,
 } from "../infra/outbound/payloads.js";
@@ -184,10 +184,9 @@ export async function commitCronConversationResult(
       mediaUrls,
     });
   });
-  const mirror = projectOutboundPayloadPlanForMirror(
-    createStructuredOutboundPayloadPlan(transcriptPayloads),
-  );
-  const completionText = resolveMirroredTranscriptText(mirror);
+  const mirror = projectOutboundPayloadPlanForMirror(createOutboundPayloadPlan(transcriptPayloads));
+  const completionText =
+    resolveMirroredTranscriptText(mirror) ?? normalizeOptionalString(params.text);
   if (!completionText) {
     if (transcriptPayloads.some((payload) => hasReplyChannelData(payload.channelData))) {
       return {

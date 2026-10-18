@@ -45,59 +45,19 @@ const OPENAI_NULLABLE_ANNOTATION_KEYS = new Set([
   "title",
 ]);
 
-function inferUnionBranchType(schema: Record<string, unknown>): string | undefined {
-  const types = new Set<string>();
-  const values = "const" in schema ? [schema.const] : schema.enum;
-  if (Array.isArray(values)) {
-    for (const value of values) {
-      types.add(value === null ? "null" : Array.isArray(value) ? "array" : typeof value);
-    }
-  }
-  for (const [type, keywords] of [
-    ["number", ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"]],
-    ["string", ["minLength", "maxLength", "pattern", "format"]],
-    ["object", ["properties", "required"]],
-    ["array", ["items"]],
-  ] as const) {
-    if (keywords.some((key) => key in schema)) {
-      types.add(type);
-    }
-  }
-  // Conflicting hints and unconstrained branches do not have one safe inferred type.
-  return types.size === 1 ? types.values().next().value : undefined;
-}
-
-type SchemaProfile = "strict" | "compat" | "openapi" | "moonshot";
-
 // Profiles retain their schema-slot scope, map-name handling and root promotion.
 function normalizeToolSchemaRecursive(
   schema: unknown,
-  profile: SchemaProfile | `${SchemaProfile}-map`,
+  profile: "strict" | "strict-map" | "compat" | "compat-map" | "openapi" | "openapi-map",
   depth = 0,
-  inferBranchType = false,
 ): unknown {
-  const mapProfile =
-    profile === "strict-map"
-      ? "strict"
-      : profile === "compat-map"
-        ? "compat"
-        : profile === "openapi-map"
-          ? "openapi"
-          : profile === "moonshot-map"
-            ? "moonshot"
-            : undefined;
   if (Array.isArray(schema)) {
-    if (mapProfile) {
+    if (profile === "strict-map" || profile === "compat-map" || profile === "openapi-map") {
       return schema;
     }
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeToolSchemaRecursive(
-        entry,
-        profile,
-        profile === "strict" ? depth : 1,
-        inferBranchType,
-      );
+      const next = normalizeToolSchemaRecursive(entry, profile, profile === "strict" ? depth : 1);
       changed ||= next !== entry;
       return next;
     });
@@ -156,25 +116,16 @@ function normalizeToolSchemaRecursive(
       } else if (SCHEMA_NESTED_KEYS.has(key)) {
         next = normalizeToolSchemaRecursive(value, profile, depth + 1);
       }
-    } else if (mapProfile) {
+    } else if (profile === "strict-map" || profile === "compat-map" || profile === "openapi-map") {
       next = normalizeToolSchemaRecursive(
         value,
-        mapProfile,
+        profile === "strict-map" ? "strict" : profile === "compat-map" ? "compat" : "openapi",
         profile === "strict-map" ? depth + 1 : 1,
       );
     } else if (SCHEMA_MAP_KEYS.has(key)) {
-      next = normalizeToolSchemaRecursive(
-        value,
-        profile === "moonshot" ? "moonshot-map" : "compat-map",
-        1,
-      );
+      next = normalizeToolSchemaRecursive(value, "compat-map", 1);
     } else if (SCHEMA_NESTED_KEYS.has(key)) {
-      next = normalizeToolSchemaRecursive(
-        value,
-        profile === "moonshot" ? "moonshot" : "compat",
-        1,
-        profile === "moonshot" && (key === "anyOf" || key === "oneOf"),
-      );
+      next = normalizeToolSchemaRecursive(value, "compat", 1);
     }
     changed ||= next !== value;
     entries.push([key, next]);
@@ -182,18 +133,7 @@ function normalizeToolSchemaRecursive(
   // Schema names are literal data; indexed writes would invoke __proto__'s setter.
   const normalized = Object.fromEntries<unknown>(entries);
 
-  if (mapProfile) {
-    return changed ? normalized : schema;
-  }
-
-  if (profile === "moonshot") {
-    if (inferBranchType && !("type" in normalized)) {
-      const type = inferUnionBranchType(normalized);
-      if (type) {
-        normalized.type = type;
-        changed = true;
-      }
-    }
+  if (profile === "strict-map" || profile === "compat-map" || profile === "openapi-map") {
     return changed ? normalized : schema;
   }
 
@@ -271,14 +211,9 @@ function normalizeToolSchemaRecursive(
 }
 
 export function normalizeToolSchema(
-  schema: Record<string, unknown>,
-  profile: "moonshot",
-): Record<string, unknown>;
-export function normalizeToolSchema(
   schema: unknown,
   profile: "strict" | "compat" | "openapi",
-): unknown;
-export function normalizeToolSchema(schema: unknown, profile: SchemaProfile): unknown {
+): unknown {
   const bounded = truncateToolSchemaDepth(schema);
   return inheritToolSchemaTruncation(bounded, normalizeToolSchemaRecursive(bounded, profile));
 }

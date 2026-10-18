@@ -283,7 +283,6 @@ suite.define(() => {
           );
       const assertCatalogMenu = async (entryPoint: string) => {
         await expect.poll(() => catalogMenu().count()).toBe(1);
-        await catalogMenu().getByRole("menu").waitFor();
         await expect.poll(menuValues).toEqual(["viewer", "import", "terminal"]);
         await expect
           .poll(() => catalogMenu().locator('[data-value="terminal"]').getAttribute("disabled"))
@@ -294,7 +293,7 @@ suite.define(() => {
             path.join(proofDir, `${entryPoint}.png`),
             await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
               row,
-              catalogMenu().getByRole("menu"),
+              catalogMenu(),
             ]),
           );
         }

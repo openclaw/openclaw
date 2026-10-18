@@ -1,4 +1,3 @@
-import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import {
   asFiniteNumber,
   asRecord,
@@ -16,14 +15,15 @@ export type FaceTimeTalkEventSummary = {
   message?: string;
 };
 
-export function summarizeRecentTalkEvents(events: readonly TalkEvent[]) {
+export function summarizeRecentTalkEvents(events: readonly unknown[]) {
   return events.slice(-12).map((event): FaceTimeTalkEventSummary => {
-    const payload = asRecord(event.payload);
+    const record = asRecord(event);
+    const payload = asRecord(record.payload);
     return {
-      type: event.type,
-      turnId: normalizeOptionalString(event.turnId),
-      callId: normalizeOptionalString(event.callId),
-      final: event.final,
+      type: normalizeOptionalString(record.type) ?? "unknown",
+      turnId: normalizeOptionalString(record.turnId),
+      callId: normalizeOptionalString(record.callId),
+      final: typeof record.final === "boolean" ? record.final : undefined,
       byteLength: asFiniteNumber(payload.byteLength),
       name: normalizeOptionalString(payload.name),
       text: normalizeOptionalString(payload.text),

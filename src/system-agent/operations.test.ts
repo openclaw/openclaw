@@ -429,6 +429,12 @@ describe("system agent operations", () => {
 
   it.each([
     {
+      operation: { kind: "config-set", path: "gateway.port", value: "19001" } as const,
+      request: { path: "gateway.port", value: "19001", cliOptions: {} },
+      audit: { operation: "config.set", summary: "Set config gateway.port" },
+      details: { path: "gateway.port" },
+    },
+    {
       operation: {
         kind: "config-set-ref",
         path: "gateway.auth.token",

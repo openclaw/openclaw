@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { IDBFactory } from "fake-indexeddb";
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../../app/settings.ts";
 import { transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
@@ -17,7 +18,7 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import { mountChatThread } from "./components/chat-thread.test-support.ts";
+import { renderChatThread } from "./components/chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -158,7 +159,7 @@ describe("chat pane warm reload", () => {
       );
       const client = createGatewayBrowserClientFixture({ request });
       const transcript = createTestTranscript();
-      let view: ReturnType<typeof mountChatThread> | undefined;
+      const container = document.body.appendChild(document.createElement("div"));
 
       try {
         expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(attached);
@@ -167,11 +168,13 @@ describe("chat pane warm reload", () => {
         expect(pane.state.chatMessages).toEqual(priorProjection ? [] : messages);
         expect(pane.state.connected).toBe(false);
         expect(request).not.toHaveBeenCalled();
-        view = mountChatThread(
-          threadProps("warm-reload-pane", sessionKey, pane.state.chatMessages),
-          transcript,
+        render(
+          renderChatThread(
+            threadProps("warm-reload-pane", sessionKey, pane.state.chatMessages),
+            transcript,
+          ),
+          container,
         );
-        const { container } = view;
         transcript.hostConnected();
         transcript.hostUpdated();
         if (!empty && !priorProjection) {
@@ -184,7 +187,13 @@ describe("chat pane warm reload", () => {
         await resumePendingChatHistoryLoad(pane.state);
 
         expect(pane.state.chatMessages).toEqual(priorProjection ? currentMessages : messages);
-        view.update(threadProps("warm-reload-pane", sessionKey, pane.state.chatMessages));
+        render(
+          renderChatThread(
+            threadProps("warm-reload-pane", sessionKey, pane.state.chatMessages),
+            transcript,
+          ),
+          container,
+        );
         transcript.hostUpdated();
         if (priorProjection && !networkEmpty) {
           expect(container.textContent).toContain("A newer turn is present on the Gateway.");
@@ -204,7 +213,7 @@ describe("chat pane warm reload", () => {
         );
         expect(pane.state.chatMessages).toEqual(priorProjection ? currentMessages : messages);
       } finally {
-        view?.unmount();
+        render(null, container);
         transcript.hostDisconnected();
         pane.disconnectedCallback();
         pane.context.sessions.dispose();

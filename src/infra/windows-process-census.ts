@@ -1,5 +1,3 @@
-import { ProcSafeError } from "@openclaw/proc-safe/errors";
-import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { listProcesses } from "@openclaw/proc-safe/inspect";
 
 type WindowsProcessObservation = {
@@ -9,7 +7,6 @@ type WindowsProcessObservation = {
   commandLine?: string;
   cwd?: string;
   foreignOwner?: true;
-  accessDenied?: true;
 };
 
 /** Missing fields never establish absence for same-user or unknown-owner work. */
@@ -18,18 +15,6 @@ export function readWindowsProcessCensus(timeoutMs: number): WindowsProcessObser
     ({ pid, owner, identity, command }) => {
       if (pid === 0 || pid === 4 || identity?.exited) {
         return [];
-      }
-      let accessDenied: true | undefined;
-      if (owner === "unknown" && !identity && !command) {
-        try {
-          readProcessIdentity(pid);
-        } catch (error) {
-          // The census omits the reason for missing facts; only access denial
-          // proves that a same-account, non-elevating handoff could not own it.
-          if (error instanceof ProcSafeError && error.code === "access-denied") {
-            accessDenied = true;
-          }
-        }
       }
       return [
         {
@@ -44,7 +29,6 @@ export function readWindowsProcessCensus(timeoutMs: number): WindowsProcessObser
           ...(command?.commandLine === undefined ? {} : { commandLine: command.commandLine }),
           ...(command?.cwd === undefined ? {} : { cwd: command.cwd }),
           ...(owner === "different" ? { foreignOwner: true as const } : {}),
-          ...(accessDenied ? { accessDenied } : {}),
         },
       ];
     },

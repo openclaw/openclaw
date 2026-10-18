@@ -176,6 +176,15 @@ export function applyCommonResponsesParams<TApi extends Api>(
   }
 }
 
+function cleanStreamingScratchBuffers(output: AssistantMessage): void {
+  for (const block of output.content) {
+    delete (block as { index?: number }).index;
+    if (block.type === "toolCall") {
+      delete block.partialJson;
+    }
+  }
+}
+
 export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   stream: AssistantMessageEventStream;
   model: Model<TApi>;
@@ -315,6 +324,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       output,
       signal: options?.signal,
       error,
+      cleanup: () => cleanStreamingScratchBuffers(output),
     });
   } finally {
     firstEventAbort?.dispose();

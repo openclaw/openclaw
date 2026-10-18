@@ -44,7 +44,7 @@ const cases: Array<{
   {
     name: "restart tombstone",
     changes: { mainRestartRecovery: tombstone },
-    message: "Use Resume in WebChat",
+    message: "Use /new or /reset",
   },
   {
     name: "restart tombstone with model lock",

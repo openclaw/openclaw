@@ -141,6 +141,7 @@ describe("resolveBundledPluginsDir", () => {
     expected: string;
     vitest?: string;
     execArgv?: string[];
+    incompleteBuilt?: boolean;
     inspectBuilt?: boolean;
   }>([
     { name: "runtime bundle", layout: builtTrees, expected: "dist-runtime/extensions" },
@@ -155,13 +156,37 @@ describe("resolveBundledPluginsDir", () => {
       expected: "extensions",
       inspectBuilt: true,
     },
+    {
+      name: "VITEST alone",
+      layout: { ...builtTrees, hasExtensions: true },
+      expected: "dist-runtime/extensions",
+      vitest: "true",
+    },
+    {
+      name: "tsx source host",
+      layout: { ...sourceCheckout, ...builtTrees, hasGitCheckout: true },
+      expected: "extensions",
+      execArgv: ["--import", "tsx"],
+      inspectBuilt: true,
+    },
+    {
+      name: "unbuilt checkout",
+      layout: { ...sourceCheckout, hasGitCheckout: true },
+      expected: "extensions",
+    },
+    {
+      name: "incomplete builds",
+      layout: { ...sourceCheckout, ...builtTrees, hasGitCheckout: true },
+      expected: "extensions",
+      incompleteBuilt: true,
+    },
     { name: "workspace mirror without git", layout: sourceCheckout, expected: "extensions" },
     {
       name: "git without workspace metadata",
       layout: { ...builtTrees, hasExtensions: true, hasSrc: true, hasGitCheckout: true },
       expected: "dist-runtime/extensions",
     },
-  ])("resolves $name", ({ layout, expected, vitest, execArgv, inspectBuilt }) => {
+  ])("resolves $name", ({ layout, expected, vitest, execArgv, incompleteBuilt, inspectBuilt }) => {
     const repoRoot = createOpenClawRoot({ prefix: "openclaw-bundled-layout-", ...layout });
     for (const [present, relative] of [
       [layout.hasExtensions, "extensions"],
@@ -171,7 +196,11 @@ describe("resolveBundledPluginsDir", () => {
       if (!present) {
         continue;
       }
-      seedBundledPluginTree(repoRoot, relative);
+      if (incompleteBuilt && relative !== "extensions") {
+        fs.mkdirSync(path.join(repoRoot, relative, "discord"), { recursive: true });
+      } else {
+        seedBundledPluginTree(repoRoot, relative);
+      }
     }
     if (inspectBuilt) {
       expect(resolveBundledDirFromPackageRoot(repoRoot)).toBe(

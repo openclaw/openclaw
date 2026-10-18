@@ -142,9 +142,6 @@ export async function prepareCodexAttemptContext(
     await bootstrapHarnessContextEngine({
       hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
-      ...(runtimeParams.authoredContextTokenCap && effectiveContextTokenBudget
-        ? { tokenBudget: effectiveContextTokenBudget }
-        : {}),
       sessionId: runtimeParams.sessionId,
       sessionKey: contextSessionKey,
       sessionFile: runtimeParams.sessionFile,

@@ -170,7 +170,7 @@ describe("Codex app-server runtime artifact", () => {
         const originalBun = Object.getOwnPropertyDescriptor(process.versions, "bun");
         try {
           Object.defineProperty(process, "execPath", { ...originalExecPath, value: bunPath });
-          Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+          Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
           const { binding } = await captureBinding({
             options: startOptions(launcher, {
               commandSource: "resolved-managed",

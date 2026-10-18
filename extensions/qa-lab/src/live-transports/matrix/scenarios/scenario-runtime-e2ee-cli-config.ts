@@ -92,29 +92,36 @@ export function assertMatrixQaCliAccountAddBootstrapStatus(params: {
 
 export async function runMatrixQaCliExpectedFailure(params: {
   args: string[];
-  start: (
-    args: string[],
-    timeoutMs?: number,
-    options?: { allowNonZero?: boolean },
-  ) => MatrixQaCliSession;
+  start: (args: string[], timeoutMs?: number) => MatrixQaCliSession;
   stdin?: string;
   timeoutMs: number;
 }): Promise<MatrixQaCliRunResult> {
-  const session = params.start(params.args, params.timeoutMs, { allowNonZero: true });
+  const session = params.start(params.args, params.timeoutMs);
   try {
     if (params.stdin !== undefined) {
       await session.writeStdin(params.stdin);
       session.endStdin();
     }
     const result = await session.wait();
-    if (result.exitCode === 0) {
-      throw new Error(
-        `${formatMatrixQaCliCommand(params.args)} unexpectedly succeeded with stdout:\n${redactMatrixQaCliOutput(
-          result.stdout,
-        )}`,
-      );
+    throw new Error(
+      `${formatMatrixQaCliCommand(params.args)} unexpectedly succeeded with stdout:\n${redactMatrixQaCliOutput(
+        result.stdout,
+      )}`,
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("unexpectedly succeeded")) {
+      throw error;
     }
-    return result;
+    const output = session.output();
+    if (!output.stdout.trim() && !output.stderr.trim()) {
+      throw error;
+    }
+    return {
+      args: params.args,
+      exitCode: 1,
+      stderr: output.stderr,
+      stdout: output.stdout,
+    };
   } finally {
     session.kill();
   }

@@ -7,6 +7,8 @@ let collectedHeap = 0;
 let session: Session | null | undefined;
 let pending: NodeJS.Timeout | undefined;
 let collecting = false;
+let idle = false;
+let generation = 0;
 
 async function collectWorkerIdleGarbage(): Promise<void> {
   pending = undefined;
@@ -14,6 +16,7 @@ async function collectWorkerIdleGarbage(): Promise<void> {
   if (process.memoryUsage().heapUsed <= collectedHeap + IDLE_GC_GROWTH_BYTES) {
     return;
   }
+  const collectingGeneration = generation;
   collecting = true;
   try {
     if (!session) {
@@ -24,16 +27,20 @@ async function collectWorkerIdleGarbage(): Promise<void> {
       session = connection;
     }
     await session.post("HeapProfiler.collectGarbage");
-    // A task overlapping collection can leave garbage until the next idle growth sample.
-    collectedHeap = process.memoryUsage().heapUsed;
+    collecting = false;
+    if (collectingGeneration === generation) {
+      collectedHeap = process.memoryUsage().heapUsed;
+    } else if (idle) {
+      // A successor finished while GC was pending; its released heap needs a new sample.
+      scheduleWorkerIdleGc();
+    }
   } catch (error) {
+    collecting = false;
     if (error instanceof Error && error.message.startsWith("Inspector error -32601:")) {
       session = null;
     } else {
       process.emitWarning(error instanceof Error ? error : String(error));
     }
-  } finally {
-    collecting = false;
   }
 }
 
@@ -42,6 +49,7 @@ export function scheduleWorkerIdleGc(): void {
   if (isMainThread || session === null) {
     return;
   }
+  idle = true;
   if (pending || collecting) {
     return;
   }
@@ -56,6 +64,8 @@ export function scheduleWorkerIdleGc(): void {
 
 /** A new operation takes precedence over collection of the preceding idle heap. */
 export function cancelWorkerIdleGc(): void {
+  generation++;
+  idle = false;
   clearTimeout(pending);
   pending = undefined;
 }

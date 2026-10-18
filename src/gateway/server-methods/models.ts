@@ -11,7 +11,7 @@ import {
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
-import { isPreparedModelRuntimeMissingOwnerError } from "../../agents/prepared-model-runtime.errors.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
@@ -32,7 +32,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 
-// Ordinary reads serve published rows while the catalog owner acquires native inventory.
+// Native catalog demand precedes projection; provider inventory keeps its refresh lifecycle.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": createPreparedReadHandler(
     async (options) => {
@@ -114,9 +114,10 @@ export const modelsHandlers: GatewayRequestHandlers = {
             agentId: resolved.agentId,
             config: cfg,
           });
-          void owner?.recheckNativeLogin?.();
+          owner?.recheckNativeLogin?.();
           if (!params.preparedOnly && params.view !== "provider-config") {
-            void owner?.loadNativeModelCatalog?.().catch(() => undefined);
+            await owner?.loadNativeModelCatalog?.();
+            assertCurrent();
           }
         }
         return {
@@ -214,7 +215,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         failure = errorShape(ErrorCodes.INVALID_REQUEST, error.message);
       } else if (error instanceof SessionMutationAuthorizationChangedError) {
         failure = error.error;
-      } else if (isPreparedModelRuntimeMissingOwnerError(error)) {
+      } else if (error instanceof PreparedModelRuntimePublicationSupersededError) {
         failure = errorShape(ErrorCodes.UNAVAILABLE, error.message, {
           retryable: true,
           retryAfterMs: 0,

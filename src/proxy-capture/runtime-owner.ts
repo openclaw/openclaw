@@ -440,7 +440,7 @@ export function resolveCaptureOwnerForTransport(
 
 // Legacy finalization settles legacy work synchronously. Worker-backed claims
 // retain their lifecycle owner and end the shared session when they also close.
-/** @deprecated Use finalizeDebugProxyCaptureAsync to drain asynchronous capture work. Final compatibility day: 2026-12-31. */
+/** @deprecated Use finalizeDebugProxyCaptureAsync to drain asynchronous capture work. */
 export function finalizeDebugProxyCapture(
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},

@@ -104,7 +104,6 @@ export async function readSessionLogSnapshot(params: {
     return snapshot;
   } catch {
     params.abortSignal?.throwIfAborted();
-    // Accounting is optional; failed reads leave usage unknown and flush taint conservative.
     return params.includeTurnTaint ? { turnTainted: true } : {};
   }
 }
@@ -123,7 +122,11 @@ export type TranscriptTokenEstimate = {
 function hasUsableProviderPromptUsage(
   usage: SessionTranscriptUsageSnapshot | undefined,
 ): usage is SessionTranscriptUsageSnapshot & { promptTokens: number } {
-  return usage?.promptTokens !== undefined && usage.promptTokens > 0;
+  return (
+    typeof usage?.promptTokens === "number" &&
+    Number.isFinite(usage.promptTokens) &&
+    usage.promptTokens > 0
+  );
 }
 
 // Fresh totals include the provider usage anchor and any later projected messages.
@@ -131,7 +134,7 @@ async function estimateProviderPromptTokens(
   messages: AgentMessage[],
   contextWindowTokens: number,
   priorPromptTokens = 0,
-): Promise<number> {
+): Promise<number | undefined> {
   if (messages.length === 0) {
     return Math.ceil(priorPromptTokens);
   }
@@ -146,7 +149,9 @@ async function estimateProviderPromptTokens(
     createToolResultPromptProjectionState(),
   ).messages;
   const tokens = estimateMessagesTokens(projected);
-  return Math.ceil(priorPromptTokens) + Math.ceil(tokens);
+  return Number.isFinite(tokens) && tokens >= 0
+    ? Math.ceil(priorPromptTokens) + Math.ceil(tokens)
+    : undefined;
 }
 
 export async function estimatePromptTokensFromSessionTranscript(
@@ -178,7 +183,7 @@ export async function estimatePromptTokensFromSessionTranscript(
     let usage = snapshot.usage;
     if (
       !hasUsableProviderPromptUsage(usage) &&
-      snapshot.eventCount !== undefined &&
+      typeof snapshot.eventCount === "number" &&
       snapshot.eventCount > SQLITE_USAGE_TAIL_MAX_EVENTS
     ) {
       usage = (
@@ -205,6 +210,9 @@ export async function estimatePromptTokensFromSessionTranscript(
       params.contextWindowTokens,
       providerUsage?.promptTokens,
     );
+    if (promptTokens === undefined) {
+      return undefined;
+    }
     return {
       promptTokens,
       promptTokenSource: providerUsage

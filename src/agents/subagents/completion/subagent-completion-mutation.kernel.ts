@@ -440,18 +440,24 @@ function reconcileRequesterWake(
     const original = committed.entries.find(
       ({ subagent }) => subagent.runId === expected.runId,
     )?.subagent;
-    if (!original || !sameRequesterSettleRunIdentity(original, expected)) {
+    const originalCanonical = original && rowToSubagentRunRecord(bindSubagentRunRecord(original));
+    const expectedCanonical = rowToSubagentRunRecord(bindSubagentRunRecord(expected));
+    if (
+      !originalCanonical ||
+      !expectedCanonical ||
+      !sameRequesterSettleRunIdentity(originalCanonical, expectedCanonical)
+    ) {
       throw new Error("Requester wake reconciliation lost its original generation");
     }
     const row = readSubagentRunRow(database, expected.runId);
     if (
-      loadSubagentRunsForChildSessionFromSqlite(original.childSessionKey, database).some(
+      loadSubagentRunsForChildSessionFromSqlite(originalCanonical.childSessionKey, database).some(
         (candidate) =>
           matchesSubagentChildSessionOwner(
             candidate,
-            original.childSessionKey,
-            resolveSubagentChildAgentId(original),
-          ) && compareSubagentRunGeneration(candidate, original) > 0,
+            originalCanonical.childSessionKey,
+            resolveSubagentChildAgentId(originalCanonical),
+          ) && compareSubagentRunGeneration(candidate, originalCanonical) > 0,
       )
     ) {
       throw new Error("Requester wake reconciliation was superseded");
@@ -472,8 +478,8 @@ function reconcileRequesterWake(
       !row ||
       !current ||
       !intended ||
-      !sameRequesterSettleRunIdentity(current, original) ||
-      !sameRequesterSettleRunIdentity(intended, original) ||
+      !sameRequesterSettleRunIdentity(current, originalCanonical) ||
+      !sameRequesterSettleRunIdentity(intended, originalCanonical) ||
       current.pauseReason !== intended.pauseReason ||
       current.completionTarget !== intended.completionTarget ||
       current.expectsCompletionMessage !== intended.expectsCompletionMessage ||

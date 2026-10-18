@@ -1,10 +1,9 @@
-import { createComponent } from "solid-js";
+import { render, type LitElement } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiNavigationItem } from "../../../../src/plugin-sdk/control-ui.js";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { Icon } from "../../components/solid/icon.tsx";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { icons } from "../../components/icons.ts";
 import { selectSidebarView } from "../app-sidebar-setup.ts";
 import {
   createGateway,
@@ -14,7 +13,6 @@ import {
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
 import { createDataTransferStub } from "../drag-data.ts";
-import { mountSolid } from "../mount-solid.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.tsx";
 import "../../plugins/control-ui-view.solid.tsx";
@@ -218,9 +216,7 @@ describe("AppSidebar interleaved zone", () => {
     ];
     await Promise.all(
       entries.map(
-        (entry) =>
-          entry.querySelector<SolidBridgeElement<object>>("openclaw-plugin-contributions")!
-            .updateComplete,
+        (entry) => entry.querySelector<LitElement>("openclaw-plugin-contributions")!.updateComplete,
       ),
     );
     expect(entries.map((entry) => entry.dataset.sidebarEntry)).toEqual([
@@ -265,8 +261,7 @@ describe("AppSidebar interleaved zone", () => {
       const railEntry = sidebar.querySelector<HTMLElement>(
         `.sidebar-rail [data-sidebar-entry="plugin:example/${id}"]`,
       )!;
-      await railEntry.querySelector<SolidBridgeElement<object>>("openclaw-plugin-contributions")!
-        .updateComplete;
+      await railEntry.querySelector<LitElement>("openclaw-plugin-contributions")!.updateComplete;
       expect(railEntry.querySelectorAll("a")).toHaveLength(1);
       expect(railEntry.querySelector(".nav-item__children")).toBeNull();
       expect(railEntry.querySelector("a")?.getAttribute("aria-label")).toBe(id);
@@ -297,13 +292,12 @@ describe("AppSidebar interleaved zone", () => {
       sidebar.sidebarEntries = entries;
     };
     await selectSidebarView(sidebar, "pages");
+    const icon = document.createElement("div");
     for (const [id, expectedIcon] of [
       ["review", "activity"],
       ["notes", "plug"],
     ] as const) {
-      const icon = mountSolid(() => createComponent(Icon, { name: expectedIcon }), {
-        container: document.createElement("div"),
-      }).container;
+      render(icons[expectedIcon], icon);
       const paths = sidebar.querySelectorAll(
         `.sidebar-pages [data-sidebar-entry="plugin:example/${id}"] .nav-item__icon svg path`,
       );

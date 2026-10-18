@@ -3,10 +3,6 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../../config/runtime-snapshot.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../internal-runtime-context.js";
 import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
@@ -27,8 +23,6 @@ let registry: typeof import("../../subagents/registry/subagent-registry.test-hel
 
 async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
   resetEmbeddedAttemptHarness();
-  const config = { session: { store: sessionStore } };
-  setRuntimeConfigSnapshot(config);
   getHoisted().createOpenClawCodingToolsMock.mockReturnValue([
     {
       name: "sessions_spawn",
@@ -44,7 +38,7 @@ async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
     sessionKey,
     tempPaths,
     attemptOverrides: {
-      config,
+      config: { session: { store: sessionStore } },
       sessionTarget: {
         agentId: "main",
         sessionId: "embedded-session",
@@ -64,12 +58,7 @@ async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
       };
     },
   });
-  expect(
-    result.terminal.kind,
-    result.terminal.kind === "failed"
-      ? `${result.terminal.source}: ${result.terminal.error instanceof Error ? result.terminal.error.stack : String(result.terminal.error)}`
-      : undefined,
-  ).toBe("ok");
+  expect(result.terminal.kind).toBe("ok");
   if (!captured) {
     throw new Error("Expected a provider submission after history and prompt preparation");
   }
@@ -94,7 +83,6 @@ describe("subagent facts through full attempt history preparation", () => {
   afterEach(async () => {
     await registry.resetSubagentRegistryForTests({ persist: false });
     await cleanupTempPaths(tempPaths);
-    clearRuntimeConfigSnapshot();
   });
 
   it("preserves the complete system prompt across child state in code mode", async () => {

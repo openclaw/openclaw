@@ -382,10 +382,16 @@ describe("browser screencast sessions", () => {
     expect(viewer.frames()).toHaveLength(1);
   });
 
-  it("closes viewers with target_closed when CDP closes", async () => {
+  it.each(["cdp"])("closes viewers with target_closed when %s closes", async (owner) => {
     const lifecycle = new AbortController();
     const viewer = await attach(screencastParams({ lifecycleSignal: lifecycle.signal }));
-    page.cdp.emit("close", page.cdp);
+    if (owner === "lifecycle") {
+      lifecycle.abort();
+    } else if (owner === "page") {
+      page.emit("close");
+    } else {
+      page.cdp.emit("close", page.cdp);
+    }
     expect(viewer.close).toHaveBeenCalledWith(4004, "target_closed");
     await flush();
     expect(page.cdp.detach).toHaveBeenCalledTimes(1);

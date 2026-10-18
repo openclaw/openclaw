@@ -384,7 +384,6 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           {
             input: JSON.stringify({
               ...request,
-              includeLocalStoreVersions: true,
               streamProgress: true,
               streamEntryProgress: true,
               stateDir: params.stateDir,

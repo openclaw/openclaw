@@ -6,6 +6,8 @@ import type {
   DiscordGatewaySupervisor,
 } from "./monitor/gateway-supervisor.js";
 
+export { getDiscordGatewayEmitter } from "./monitor/gateway-supervisor.js";
+
 type WaitForDiscordGatewayStopParams = {
   gateway?: DiscordGatewayHandle;
   abortSignal?: AbortSignal;

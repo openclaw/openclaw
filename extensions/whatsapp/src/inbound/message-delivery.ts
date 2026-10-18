@@ -1,10 +1,4 @@
-import {
-  WAMessageStubType,
-  type AnyMessageContent,
-  type MiscMessageGenerationOptions,
-  type WAMessage,
-  type WASocket,
-} from "baileys";
+import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage, WASocket } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
@@ -12,14 +6,15 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { defaultRuntime, createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
-import { logWhatsAppVerbose } from "../auto-reply/loggers.js";
 import { resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
+import { maybeResolveWhatsAppQuestionReaction } from "../question-reactions.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { formatError } from "../session.js";
+import { requireWhatsAppInboundAdmission } from "./admission.js";
 import {
   createWhatsAppDurableInboundQueue,
   createWhatsAppDurableInboundMessageId,
@@ -59,6 +54,13 @@ function parseWhatsAppTimestampSeconds(value: unknown): number | undefined {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
+  if (!enabled) {
+    return;
+  }
+  defaultRuntime.log(message);
 }
 
 function recordAcceptedInboundActivity(accountId: string): void {
@@ -272,9 +274,10 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       {
         from: inbound.from,
         to: self.e164 ?? "me",
-        messageId: inbound.id,
-        textLength: enriched.body.length,
+        body: enriched.body,
+        mediaPath: enriched.mediaPath,
         mediaType: enriched.mediaType,
+        mediaFileName: enriched.mediaFileName,
         timestamp,
       },
       "inbound message",
@@ -360,7 +363,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       receiveOrder: durable.receiveOrder,
     };
     if (inboundMessage.event.id) {
-      const admission = inboundMessage.admission;
+      const admission = requireWhatsAppInboundAdmission(inboundMessage);
       cacheInboundMessageMeta(
         admission.accountId,
         inboundMessage.platform.chatJid,
@@ -422,6 +425,18 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     if (!inbound) {
       return "completed";
     }
+    if (
+      await maybeResolveWhatsAppQuestionReaction({
+        cfg: options.loadConfig?.() ?? options.cfg,
+        accountId: options.accountId,
+        msg,
+        senderId: inbound.senderE164 ?? inbound.from,
+        resolveReactionTargetJids,
+        logDebug: (message) => logWhatsAppVerbose(options.verbose, message),
+      })
+    ) {
+      return "completed";
+    }
     const readReceipt = buildReadReceiptTarget(inbound);
     const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
     if (context.skipStaleAppend === true) {
@@ -469,11 +484,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       return;
     }
     for (const msg of upsert.messages ?? []) {
-      if (!msg.message && msg.messageStubType === WAMessageStubType.CIPHERTEXT) {
-        // Baileys re-emits the decrypted copy under the same key after a
-        // placeholder resend; admitting the stub would complete that key first.
-        continue;
-      }
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
 
       const receiveOrder = nextReceiveOrder++;

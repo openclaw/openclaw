@@ -1,4 +1,3 @@
-import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import {
   UPDATE_IN_PROGRESS_ENV,
   UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
@@ -105,23 +104,20 @@ export async function runPostActivationInspections(params: {
       ]) {
         delete baseEnv[key];
       }
-      const invocation = resolveOpenClawCliInvocation({
-        execPath: params.nodeRunner ?? resolveNodeRunner(),
-        entryPath,
-        execArgv: [],
-        args,
-      });
-      return runUtf8CommandWithTimeout([invocation.command, ...invocation.args], {
-        cwd: params.root,
-        timeoutMs: params.timeoutMs,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        input: "",
-        maxOutputBytes: 4 * 1024 * 1024,
-        outputCapture: "head",
-        terminateOnOutputLimit: true,
-        baseEnv,
-      });
+      return runUtf8CommandWithTimeout(
+        [params.nodeRunner ?? resolveNodeRunner(), entryPath, ...args],
+        {
+          cwd: params.root,
+          timeoutMs: params.timeoutMs,
+          killProcessTree: true,
+          requireProcessTreeExtinction: true,
+          input: "",
+          maxOutputBytes: 4 * 1024 * 1024,
+          outputCapture: "head",
+          terminateOnOutputLimit: true,
+          baseEnv,
+        },
+      );
     });
     step.exitCode = execution.code;
     step.termination = execution.termination;

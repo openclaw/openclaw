@@ -83,12 +83,7 @@ afterEach(() => {
 describe("ACP diagnostic events", () => {
   it("preserves cancelled result metadata without a stop reason", () => {
     expect(
-      buildAcpResult({
-        payloadText: "",
-        terminalReply: { disposition: "empty" },
-        startedAt: Date.now(),
-        resultStatus: "cancelled",
-      }).meta,
+      buildAcpResult({ payloadText: "", startedAt: Date.now(), resultStatus: "cancelled" }).meta,
     ).toMatchObject({ aborted: true, stopReason: "stop" });
   });
 

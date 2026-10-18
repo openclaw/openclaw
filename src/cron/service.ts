@@ -1,12 +1,10 @@
 /** Stateful CronService facade around the locked service operation helpers. */
-import type { CronEventRunOptions } from "./event-source.js";
 import type {
   CronServiceContract,
   CronServiceRunOptions,
   CronServiceRunResult,
 } from "./service-contract.js";
 import type { CronListPageOptions } from "./service/list-page-types.js";
-import * as eventOps from "./service/ops-event.js";
 import * as lifecycleOps from "./service/ops-lifecycle.js";
 import * as mutationOps from "./service/ops-mutations.js";
 import * as readOps from "./service/ops-read.js";
@@ -15,7 +13,6 @@ import * as streamOps from "./service/ops-stream.js";
 import type { OnExitRunOptions } from "./service/run-options.js";
 import {
   type CronAddOptions,
-  type CronRemoveOptions,
   type CronServiceDeps,
   type CronRunMode,
   type CronUpdatePrecondition,
@@ -107,14 +104,6 @@ export class CronService implements CronServiceContract {
     return this.startInProgress;
   }
 
-  async readEventSources(source: string) {
-    return await eventOps.readEventSources(this.state, source);
-  }
-
-  async runEvent(id: string, opts: CronEventRunOptions) {
-    return await eventOps.runEvent(this.state, id, opts);
-  }
-
   async status() {
     return await readOps.status(this.state);
   }
@@ -151,7 +140,7 @@ export class CronService implements CronServiceContract {
     return await mutationOps.updateWithPrecondition(this.state, id, patch, precondition, opts);
   }
 
-  async remove(id: string, opts?: CronRemoveOptions) {
+  async remove(id: string, opts?: { systemOwned?: boolean; commitGuard?: () => void }) {
     return await mutationOps.remove(this.state, id, opts);
   }
 
@@ -159,10 +148,7 @@ export class CronService implements CronServiceContract {
     return await mutationOps.removeAgentJobsTransactional(this.state, agentId, commit);
   }
 
-  async quiesceJobs(
-    jobs: readonly { id: string; revision: string }[],
-    commitGuard: (cancel: () => void) => void | Promise<void>,
-  ) {
+  async quiesceJobs(jobs: readonly { id: string; revision: string }[], commitGuard: () => void) {
     await mutationOps.quiesceJobs(this.state, jobs, commitGuard);
   }
 

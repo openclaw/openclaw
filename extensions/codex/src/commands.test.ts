@@ -156,12 +156,17 @@ async function createLockedSessionContextOverrides(
 function inMemoryCodexPluginsIO(
   initial: Record<string, CodexPluginConfigEntry> = {},
   options: { enabled?: boolean } = { enabled: true },
-): CodexPluginsManagementIO {
+): CodexPluginsManagementIO & {
+  current: () => Record<string, CodexPluginConfigEntry>;
+  currentConfig: () => CodexPluginsConfigBlock;
+} {
   const store: CodexPluginsConfigBlock = {
     enabled: options.enabled,
     plugins: structuredClone(initial),
   };
   return {
+    current: () => structuredClone(store.plugins ?? {}),
+    currentConfig: () => structuredClone(store),
     readConfig: () => Promise.resolve(structuredClone(store)),
     mutate: async (update, assertCurrent) => {
       assertCurrent?.();
@@ -242,18 +247,46 @@ describe("codex command", () => {
     expect(result.text).not.toContain("<@U123>");
   });
 
-  it("renders the command picker", async () => {
-    const result = await runCommand("");
-    expectResultTextContains(result, "/codex plugins menu");
-    expect(buttonCommands(result)).toEqual([
-      "/codex plugins menu",
-      "/codex permissions menu",
-      "/codex fast menu",
-      "/codex computer-use menu",
-      "/codex account",
-      "/codex plugins refresh",
-      "/codex help",
-    ]);
+  it.each([
+    {
+      args: "",
+      text: "/codex plugins menu",
+      buttons: [
+        "/codex plugins menu",
+        "/codex permissions menu",
+        "/codex fast menu",
+        "/codex computer-use menu",
+        "/codex account",
+        "/codex plugins refresh",
+        "/codex help",
+      ],
+    },
+    { args: "plugins menu", text: "/codex plugins enable", buttons: undefined },
+  ])("renders the $args command picker", async ({ args, text, buttons }) => {
+    const result = await runCommand(args, { codexPluginsManagementIo: inMemoryCodexPluginsIO() });
+    expectResultTextContains(result, text);
+    if (buttons) {
+      expect(buttonCommands(result)).toEqual(buttons);
+    } else {
+      expect(buttonCommands(result)).toContain("/codex plugins list");
+      expect(buttonCommands(result)).toContain("/codex plugins refresh");
+      expectResultTextContains(result, "/codex plugins refresh");
+    }
+  });
+
+  it("lists Codex sub-plugins through the /codex plugins command surface", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    });
+
+    const result = await runCommand("plugins list", { codexPluginsManagementIo });
+
+    expectResultTextContains(result, "ON   google-calendar");
+    expectResultTextContains(result, "openclaw.json");
   });
 
   it("routes owner-only plugin discovery through the native command boundary with its workspace", async () => {
@@ -433,6 +466,29 @@ describe("codex command", () => {
     );
   });
 
+  it("enables and disables Codex sub-plugins through the /codex plugins command surface", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    });
+
+    const disabled = await runCommand("plugins disable google-calendar", {
+      codexPluginsManagementIo,
+    });
+    expectResultTextContains(disabled, "google-calendar: disabled in openclaw.json");
+    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(false);
+
+    const enabled = await runCommand("plugins enable google-calendar", {
+      codexPluginsManagementIo,
+    });
+    expectResultTextContains(enabled, "google-calendar: enabled in openclaw.json");
+    expect(codexPluginsManagementIo.currentConfig().enabled).toBe(true);
+    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(true);
+  });
+
   it.each([
     { knownBeforeResume: true, sameOwner: false },
     { knownBeforeResume: false, sameOwner: false },
@@ -444,7 +500,7 @@ describe("codex command", () => {
       ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
       const threadId = "thread-parent-owned";
       const existingThreadId = sameOwner ? threadId : "thread-existing";
-      const identity = sessionIdentity;
+      const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
       const release = vi.fn(async () => undefined);
       await retainCodexAppServerLiveThread(harness.client, existingThreadId, release);
       await writeTestBinding(identity, {
@@ -649,7 +705,11 @@ describe("codex command", () => {
       await retainCodexAppServerLiveThread(harness.client, `thread-idle-${index}`);
     }
     await retainCodexAppServerLiveThread(harness.client, "thread-existing");
-    const identity = sessionIdentity;
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+    };
     await writeTestBinding(identity, {
       threadId: "thread-existing",
       clientId: harness.client.getInstanceId(),
@@ -686,7 +746,11 @@ describe("codex command", () => {
       const replacement = createClientHarness();
       ensureCodexAppServerClientRuntime(previous.client, { agentDir: tempDir });
       ensureCodexAppServerClientRuntime(replacement.client, { agentDir: tempDir });
-      const identity = sessionIdentity;
+      const identity = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: "session-1",
+      };
       await writeTestBinding(identity, {
         threadId: "thread-manual-migration",
         clientId: previous.client.getInstanceId(),
@@ -761,7 +825,11 @@ describe("codex command", () => {
   it("preserves known native config ownership when manually resuming the same thread", async () => {
     const harness = createClientHarness();
     ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
-    const identity = sessionIdentity;
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+    };
     await writeTestBinding(identity, {
       threadId: "thread-known-resume",
       clientId: harness.client.getInstanceId(),
@@ -830,7 +898,11 @@ describe("codex command", () => {
       client: harness.client,
       parentThreadId: "thread-parent",
     });
-    const identity = sessionIdentity;
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+    };
     await writeTestBinding(identity, {
       threadId: existingThreadId,
       clientId: harness.client.getInstanceId(),
@@ -902,7 +974,11 @@ describe("codex command", () => {
   });
 
   it("serializes manual resume with other session binding owners", async () => {
-    const identity = sessionIdentity;
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+    };
     const order: string[] = [];
     const entered = createDeferred<void>();
     const contenderObserved = createDeferred<void>();
@@ -1860,6 +1936,42 @@ describe("codex command", () => {
       }
     });
 
+    it("summarizes blocked account rate limits as a human takeaway", async () => {
+      const quota = limits(0, 100, true);
+      const result = await readAccount(
+        accountRequests(
+          success({
+            account: { type: "chatgpt", email: "codex@example.com", planType: "pro" },
+            requiresOpenaiAuth: false,
+          }),
+          success({
+            rateLimitsByLimitId: {
+              ...quota.rateLimitsByLimitId,
+              "gpt-5.3-codex-spark": {
+                ...limits(0, 0).rateLimitsByLimitId.codex,
+                limitId: "gpt-5.3-codex-spark",
+                limitName: "GPT 5.3 Codex Spark",
+              },
+            },
+          }),
+        ),
+      );
+      expect(result.text).toContain("Codex is paused until ");
+      expect(result.text).toContain("Your weekly Codex usage limit is reached.");
+      for (const omitted of [
+        "GPT 5.3 Codex Spark",
+        "Primary:",
+        "Secondary:",
+        "Bucket:",
+        "Why:",
+        "5-hour",
+        "100%",
+        "\uff08rate limit reached\uff09",
+      ]) {
+        expect(result.text).not.toContain(omitted);
+      }
+    });
+
     it("prefers the configured ChatGPT subscription over stale API-key lastGood state", async () => {
       const config = {
         auth: { order: { openai: ["openai:personal-email@gmail.com", "openai:api-key-backup"] } },
@@ -2009,7 +2121,7 @@ describe("codex command", () => {
     });
   });
 
-  it.each([true, false])("reports host compaction safely (compacted: %s)", async (compacted) => {
+  it("compacts a conversation binding after recovering its current session owner", async () => {
     const runtime = await createCodexRuntimeContextOverrides(
       tempDir,
       "agent:main:test:conversation-compact-recovery",
@@ -2019,70 +2131,56 @@ describe("codex command", () => {
       sessionKey: runtime.sessionKey,
       entry: {
         sessionId: "session-1",
-        ...(compacted ? { previousSessionId: "session-before-compact" } : {}),
+        previousSessionId: "session-before-compact",
         updatedAt: Date.now(),
         agentHarnessId: "codex",
       },
     });
     const owner = {
-      threadId: compacted ? "thread-recovered-compact" : "thread-123",
+      threadId: "thread-recovered-compact",
+      clientId: "client-recovered-compact",
       cwd: "/repo",
-      ...(compacted
-        ? {
-            clientId: "client-recovered-compact",
-            contextEngine: {
-              schemaVersion: 1,
-              engineId: "lossless-claw",
-              policyFingerprint: "policy-1",
-              projection: { schemaVersion: 1, mode: "thread_bootstrap", epoch: "epoch-1" },
-            },
-          }
-        : {}),
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-1",
+        projection: { schemaVersion: 1, mode: "thread_bootstrap", epoch: "epoch-1" },
+      },
     } satisfies Parameters<typeof writeTestBinding>[1];
     await writeTestBinding(
       {
         kind: "session",
         agentId: "main",
-        sessionId: compacted ? "session-before-compact" : "session-1",
+        sessionId: "session-before-compact",
         sessionKey: runtime.sessionKey,
       },
       owner,
     );
-    if (compacted) {
-      await writeTestBinding({ kind: "conversation", bindingId: "binding-data-1" }, owner);
-    }
-    const compactCurrent = vi.fn(async () =>
-      compacted
-        ? { compacted: true, tokensBefore: 900, tokensAfter: 123 }
-        : { compacted: false, reason: "thread-123 <@U123>" },
-    );
+    await writeTestBinding({ kind: "conversation", bindingId: "binding-data-1" }, owner);
+    const compactCurrent = vi.fn(async () => ({
+      compacted: true,
+      tokensBefore: 900,
+      tokensAfter: 123,
+    }));
     const codexControlRequest = vi.fn();
 
-    const result = await runCommand(
-      "compact",
-      { codexControlRequest },
-      {
-        ...runtime,
-        runtimeContext: { compactCurrent },
-        ...(compacted
-          ? {
-              getCurrentConversationBinding: async () =>
-                publicConversationBinding({
-                  kind: "codex-app-server-session",
-                  version: 2,
-                  bindingId: "binding-data-1",
-                  workspaceDir: "/repo",
-                }),
-            }
-          : {}),
-      },
-    );
-    if (compacted) {
-      expect(result).toEqual({ text: "Compacted Codex session (123 tokens after)." });
-    } else {
-      expect(result.text).toContain("thread-123 &lt;\uff20U123&gt;");
-      expect(result.text).not.toContain("<@U123>");
-    }
+    await expect(
+      runCommand(
+        "compact",
+        { codexControlRequest },
+        {
+          ...runtime,
+          runtimeContext: { compactCurrent },
+          getCurrentConversationBinding: async () =>
+            publicConversationBinding({
+              kind: "codex-app-server-session",
+              version: 2,
+              bindingId: "binding-data-1",
+              workspaceDir: "/repo",
+            }),
+        },
+      ),
+    ).resolves.toEqual({ text: "Compacted Codex session (123 tokens after)." });
     expect(compactCurrent).toHaveBeenCalledOnce();
     expect(codexControlRequest).not.toHaveBeenCalled();
     expect(
@@ -2203,6 +2301,35 @@ describe("codex command", () => {
         startOptions: { homeScope: "user" },
       });
     }
+  });
+
+  it("escapes compaction failure reasons before chat display", async () => {
+    const runtime = await createCodexRuntimeContextOverrides(tempDir);
+    await writeTestBinding(
+      {
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: runtime.sessionKey,
+      },
+      { threadId: "thread-123", cwd: "/repo" },
+    );
+    const result = await runCommand(
+      "compact",
+      {},
+      {
+        ...runtime,
+        runtimeContext: {
+          compactCurrent: async () => ({
+            compacted: false,
+            reason: "thread-123 <@U123>",
+          }),
+        },
+      },
+    );
+
+    expect(result.text).toContain("thread-123 &lt;\uff20U123&gt;");
+    expect(result.text).not.toContain("<@U123>");
   });
 
   it.each([
@@ -3157,7 +3284,7 @@ describe("codex command", () => {
   });
 
   it("does not transfer a replacement session thread while recording bind intent", async () => {
-    const identity = sessionIdentity;
+    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
     await writeTestBinding(identity, { threadId: "thread-old", cwd: "/repo" });
     let requestedData: Record<string, unknown> | undefined;
     const requestConversationBinding = vi.fn(

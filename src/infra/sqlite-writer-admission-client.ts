@@ -56,6 +56,7 @@ export function requestSqliteWorkerOperationAdmission(
     {
       ...request,
       decision: decision.buffer,
+      deadlineNs,
       ports: transferList.filter((value) => value instanceof MessagePort),
     },
     transferList,

@@ -124,9 +124,7 @@ export type GatewayServerOptions = {
    * Config snapshot already read by the CLI gateway preflight. Passing it avoids
    * reparsing openclaw.json during server startup.
    */
-  startupConfigSnapshotRead?: import("../config/io.js").ReadConfigFileSnapshotWithPluginMetadataResult & {
-    databaseEngineSelection?: import("../infra/database-engine/context.js").DatabaseEngineSelection;
-  };
+  startupConfigSnapshotRead?: import("../config/io.js").ReadConfigFileSnapshotWithPluginMetadataResult;
   /** Restart request override; direct servers fail closed on restart-required reloads. */
   hotReloadRecovery?: GatewayRestartEmitter;
 };

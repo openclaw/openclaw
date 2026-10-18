@@ -37,9 +37,7 @@ import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
 
-export function createWorkerProviderLifecycle(
-  options: WorkerProviderLifecycleOptions & { ownerSignal: AbortSignal },
-) {
+export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOptions) {
   const { store, callBootstrap, callProvider, move, saveError } = options;
   const now = options.now ?? Date.now;
   const startStatuses = new Map<
@@ -141,10 +139,6 @@ export function createWorkerProviderLifecycle(
       }
     } catch (error) {
       await cancellation?.settleStopIntent();
-      if (options.ownerSignal.aborted) {
-        // Owner shutdown leaves this allocation for restart recovery.
-        throw error;
-      }
       return await failBootstrap(record, leaseId, provider, error);
     }
     return commitReady(record, { ...receipt, installKind: "bundle" }, {}, () => {
@@ -496,10 +490,6 @@ export function createWorkerProviderLifecycle(
     retainProviderSettlement?: (settled: Promise<void>) => void,
     beforeProvision?: () => void,
   ): Promise<void> => {
-    const workSignal = signal
-      ? AbortSignal.any([options.ownerSignal, signal])
-      : options.ownerSignal;
-    workSignal.throwIfAborted();
     let record = initialRecord;
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
       return void (await finishDestroy(record));
@@ -510,7 +500,7 @@ export function createWorkerProviderLifecycle(
       ["ready", "idle", "attached"].includes(record.state)
     ) {
       try {
-        currentBundle = await options.prepareInstallation("bundle", workSignal);
+        currentBundle = await options.prepareInstallation("bundle", signal);
         if (record.bootstrapReceipt && sameWorkerBuild(record.bootstrapReceipt, currentBundle)) {
           const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : null;
           if (record.state !== "attached" || sessionId) {
@@ -519,7 +509,7 @@ export function createWorkerProviderLifecycle(
           }
         }
       } catch {
-        workSignal.throwIfAborted();
+        signal?.throwIfAborted();
         // Provider inspection and the state-specific path below retain their existing retry policy.
       }
     }
@@ -543,7 +533,7 @@ export function createWorkerProviderLifecycle(
       return;
     }
     const lease = lifecycleLease(record, leaseId);
-    const inspection = await dedicatedLeases.inspect(record, provider, lease, workSignal);
+    const inspection = await dedicatedLeases.inspect(record, provider, lease);
     if (!inspection) {
       return;
     }
@@ -600,9 +590,8 @@ export function createWorkerProviderLifecycle(
     if (!record.sshEndpoint || record.state === "attached") {
       // Failed upgrades retain the old receipt and exact lease for recovery.
       await runtimeRefresher
-        .refresh(record, provider, currentBundle, workSignal)
+        .refresh(record, provider, currentBundle, signal)
         .catch(async (error: unknown) => {
-          workSignal.throwIfAborted();
           await saveError(record, error);
         });
       return;
@@ -626,9 +615,8 @@ export function createWorkerProviderLifecycle(
         try {
           // Bundle identity is local and canonical for both install channels. A matching admitted
           // receipt must not depend on npm registry availability during routine reconciliation.
-          installation ??= await options.prepareInstallation("bundle", workSignal);
+          installation ??= await options.prepareInstallation("bundle", signal);
         } catch (error) {
-          workSignal.throwIfAborted();
           if (record.bootstrapReceipt && ["ready", "idle"].includes(record.state)) {
             await saveError(record, error);
             return;
@@ -642,9 +630,8 @@ export function createWorkerProviderLifecycle(
         }
         if (installFor(record) === "npm") {
           try {
-            installation = await options.prepareInstallation("npm", workSignal);
+            installation = await options.prepareInstallation("npm", signal);
           } catch (error) {
-            workSignal.throwIfAborted();
             await failBootstrap(record, leaseId, provider, error).catch(() => undefined);
             return;
           }

@@ -106,7 +106,6 @@ describe("paired node worker Gateway upgrade wire", () => {
       for (const file of [
         "package.json",
         "openclaw.mjs",
-        "cli-invocation.mjs",
         "node-version.mjs",
         "node-sqlite.mjs",
         "node-runtime-update.mjs",

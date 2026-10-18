@@ -396,7 +396,7 @@ export function createProviderRegistryResolver(dependencies: {
     workspaceDir?: string;
     /** Use an explicit env when plugin roots should resolve independently from process.env. */
     env?: PluginLoadOptions["env"];
-    onlyPluginIds?: readonly string[];
+    onlyPluginIds?: string[];
     providerRefs?: readonly string[];
     modelRefs?: readonly string[];
     activate?: boolean;

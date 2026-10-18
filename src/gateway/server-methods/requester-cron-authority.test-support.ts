@@ -228,10 +228,8 @@ export async function createCreatorTransportTools(params: {
   admitted: AdmittedRunContext;
   creator?: CronCreatorAuthorityCapability;
   senderIsOwner: boolean;
-  workspaceDir?: string;
 }): Promise<CreatorTransportTools> {
   const { transport, config, admitted, creator, senderIsOwner } = params;
-  const workspaceDir = params.workspaceDir ?? stateDir;
   const { runId } = admitted.operationalRunInstance;
   const toolsAllow = expectDefined(config.tools?.allow, "fixture tool allowlist");
   let sequence = 0;
@@ -244,9 +242,9 @@ export async function createCreatorTransportTools(params: {
             run: {
               sessionKey: SESSION,
               sessionId: SESSION_ID,
-              sessionFile: path.join(workspaceDir, "creator.jsonl"),
+              sessionFile: path.join(stateDir, "creator.jsonl"),
               runId,
-              workspaceDir,
+              workspaceDir: stateDir,
               provider: "claude-cli",
               model: "creator-fixture",
               prompt: "Update an automation",
@@ -340,7 +338,7 @@ export async function createCreatorTransportTools(params: {
       sessionKey: SESSION,
       sessionId: SESSION_ID,
       runId,
-      workspaceDir,
+      workspaceDir: stateDir,
       agentAccountId: "default",
       senderIsOwner,
       cronCreatorToolAllowlistRef: creatorTools,

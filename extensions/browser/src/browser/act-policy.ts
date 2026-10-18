@@ -183,7 +183,7 @@ function resolveExecutionBudgetMs(request: BrowserActRequest): number {
     return resolveLeafExecutionBudgetMs(request);
   }
   // Text locators accept whitespace as content; selector, URL, and function
-  // waits are trimmed by the /act boundary before execution.
+  // waits normalize it away. Keep this in lockstep with waitForViaPlaywright.
   const conditionCount = [
     Boolean(request.text),
     Boolean(request.textGone),

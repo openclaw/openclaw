@@ -67,7 +67,10 @@ export class Client {
     this.eventQueue = this.options.eventQueue
       ? new DiscordEventQueue(this.options.eventQueue)
       : undefined;
-    this.entityCache = new DiscordEntityCache(this);
+    this.entityCache = new DiscordEntityCache({
+      client: this,
+      rest: () => this.rest,
+    });
     this.commandDeployer = new DiscordCommandDeployer({
       clientId: this.options.clientId,
       commands: this.commands,

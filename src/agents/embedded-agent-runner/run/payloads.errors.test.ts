@@ -32,18 +32,22 @@ describe("buildEmbeddedRunPayloads tool-error silence", () => {
     { text: "NO_REPLY", mutatingAction: false },
     { text: "NO_REPLY", mutatingAction: true },
     { text: "NO_REPLY", mutatingAction: undefined },
+    { text: '{"action":"NO_REPLY"}', mutatingAction: false },
+    { text: '{"action":"NO_REPLY"}', mutatingAction: true },
+    { text: '{"action":"NO_REPLY"}', mutatingAction: undefined },
   ])(
-    "suppresses authored silence: $text, mutatingAction=$mutatingAction",
+    "respects authored conversational silence: $text, mutatingAction=$mutatingAction",
     ({ text, mutatingAction }) => {
-      const payloads = buildPayloads({
-        assistantTexts: [text],
-        lastToolError: {
-          toolName: "codex_apps.slack.slack_read_thread",
-          error: "429 RATE_LIMITED",
-          mutatingAction,
-        },
-      });
-      expect(payloads).toHaveLength(0);
+      expect(
+        buildPayloads({
+          assistantTexts: [text],
+          lastToolError: {
+            toolName: "codex_apps.slack.slack_read_thread",
+            error: "429 RATE_LIMITED",
+            mutatingAction,
+          },
+        }),
+      ).toHaveLength(0);
     },
   );
 

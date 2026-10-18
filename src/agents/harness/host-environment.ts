@@ -10,6 +10,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-sta
 import { resolveSessionAgentIdStrict } from "../agent-scope.js";
 import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
+import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 const MAX_NATIVE_OPERATION_CWD_BYTES = 4096;
 
@@ -40,7 +41,7 @@ export function prepareAgentHarnessEnvironment(params: {
   sessionKey?: string;
   sandboxAgentId?: string;
   installationTarget?: InstallationTarget;
-}) {
+}): ReturnType<NonNullable<AgentHarnessHostCapabilities["preparedEnvironment"]>> {
   const execConfig = resolveExecToolConfig({
     cfg: params.config,
     agentId: params.sandboxAgentId ?? resolveSessionAgentIdStrict(params),
@@ -61,11 +62,14 @@ export function prepareAgentHarnessEnvironment(params: {
   const identity = prepareGitHubToolEnvironment({
     config: params.config ?? {},
     sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
-    agentId: resolveSessionAgentIdStrict(params),
+    agentId: params.agentId ?? "main",
   });
   const localProcessEnv = installationTargetEnv(params.installationTarget);
   return Object.freeze({
-    ...identity,
+    credentialScrubEnv: Object.freeze({ ...identity.credentialScrubEnv }),
+    localIdentityEnv: Object.freeze({ ...identity.localIdentityEnv }),
+    localGitConfigParameters: identity.localGitConfigParameters,
+    managedLocalIdentity: identity.managedLocalIdentity,
     ...(localProcessEnv ? { localProcessEnv } : {}),
     ...(localToolEnv ? { localToolEnv, localToolPathPrepend } : {}),
   });

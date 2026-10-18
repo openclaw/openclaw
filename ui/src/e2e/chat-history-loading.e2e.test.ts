@@ -191,15 +191,16 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, pane.locator(".chat-main"), [thread]),
         );
       }
-      // Filling the viewport must not stage an unused automatic page.
+      // The second applied page staged one background prefetch (offset 22);
+      // the now-scrollable transcript must not consume or chain beyond it.
       await expect
         .poll(() => gateway.getRequests("chat.history").then((requests) => requests.length))
-        .toBe(2);
+        .toBe(3);
       expect(
         (await gateway.getRequests("chat.history")).map(
           (request) => (request.params as { offset?: number } | undefined)?.offset,
         ),
-      ).toEqual([2, 6]);
+      ).toEqual([2, 6, 22]);
       for (const request of await gateway.getRequests("chat.history")) {
         expect(request.params).toMatchObject({ limit: 1000, maxBytes: 1024 * 1024 });
       }

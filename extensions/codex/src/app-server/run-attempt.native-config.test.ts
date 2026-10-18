@@ -607,6 +607,7 @@ describe("Codex native configuration", () => {
           expect(result.settledTurnFinalizationContext).toBeUndefined();
         } else {
           expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
+          expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
           expect(warn).toHaveBeenCalledWith(
             "codex settled-turn finalization context is unavailable",
             expect.objectContaining({

@@ -1,27 +1,22 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Icon, type IconName } from "../../components/solid/icon.tsx";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createComposerContainer,
   createComposerProps as props,
   findComposerButton as button,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
-  renderComposerInto,
 } from "./chat-composer.test-support.ts";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 
-function iconShapes(name: IconName): string[] {
+function iconShapes(icon: unknown): string[] {
   const container = document.createElement("div");
-  const view = mountSolid(() => createComponent(Icon, { name }), { container });
-  try {
-    return Array.from(container.querySelector("svg")?.children ?? [], (shape) => shape.outerHTML);
-  } finally {
-    view.unmount();
-  }
+  render(icon, container);
+  return Array.from(container.querySelector("svg")?.children ?? [], (shape) => shape.outerHTML);
 }
 
 afterEach(async () => {
@@ -68,8 +63,8 @@ describe("renderChatComposer video", () => {
       cameraToggle.querySelector("svg")?.children ?? [],
       (shape) => shape.outerHTML,
     );
-    expect(shapes).toEqual(iconShapes("cameraOff"));
-    expect(shapes).not.toEqual(iconShapes("camera"));
+    expect(shapes).toEqual(iconShapes(icons.cameraOff));
+    expect(shapes).not.toEqual(iconShapes(icons.camera));
   });
 
   it("offers camera switching only for a live preview with multiple cameras", () => {
@@ -131,7 +126,7 @@ describe("renderChatComposer video", () => {
       realtimeTalkStatus: "listening",
       realtimeTalkVideoStream: stream,
     });
-    const draw = () => renderComposerInto(container, composerProps);
+    const draw = () => render(renderChatComposer(composerProps), container);
     draw();
 
     const preview = container.querySelector<HTMLVideoElement>(

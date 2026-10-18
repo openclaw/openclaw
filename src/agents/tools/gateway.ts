@@ -42,7 +42,6 @@ import {
 import type { DeviceIdentity } from "../../infra/device-identity.js";
 import { prepareQuestionGatewayDispatch } from "../harness/host-private-capabilities.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
-import { hasInProcessGatewayToolCaller } from "./gateway-caller-availability.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { getGatewaySessionSpawnParentExecutionIdentityToken } from "./gateway-session-spawn-execution-identity.js";
@@ -605,10 +604,12 @@ export async function resolveMessageActionAgentRuntimeIdentity(
 
 /** Explicit destinations remain transport calls; retired hosted bindings must reject locally. */
 export function shouldUseInProcessGatewayTool(opts: GatewayCallOptions): boolean {
+  const resolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   return (
+    Boolean(resolver) &&
     !trimToUndefined(opts.gatewayUrl) &&
     !trimToUndefined(opts.gatewayToken) &&
-    hasInProcessGatewayToolCaller()
+    resolver?.()?.localEmbedded !== true
   );
 }
 

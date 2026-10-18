@@ -6,18 +6,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../scripts/stage-bundled-plugin-runtime.mts";
-import { resolveRuntimeWorkerUrl } from "../src/infra/runtime-worker-url.js";
-import { toolingMtsEntrypoints } from "./scripts/tooling-mts-runtime.test-support.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// Share the invocation's compiled modules while retaining a real isolated process
-// per update. The artifact probe must borrow the adapter's same lock owner.
-const updateGatewayBuildUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.updateGatewayBuild);
-const artifactPreflightUrl = resolveRuntimeWorkerUrl(
-  toolingMtsEntrypoints.sourceUpdateArtifactPreflight,
-);
-const artifactOwnershipUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.distArtifactOwnership);
-const stageRuntimeUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.stageBundledPluginRuntime);
 let scratch: string;
 let workdir: string;
 let shimDir: string;
@@ -95,7 +85,7 @@ describe("source updater lifecycle preflight", () => {
     );
     fs.writeFileSync(
       path.join(seed, "scripts/update-gateway-build.mts"),
-      `import { runUpdateGatewayBuild } from ${JSON.stringify(updateGatewayBuildUrl.href)};\nprocess.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));\n`,
+      `import { runUpdateGatewayBuild } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/update-gateway-build.mts")).href)};\nprocess.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));\n`,
     );
     fs.writeFileSync(
       path.join(seed, "package.json"),
@@ -195,7 +185,7 @@ fs.writeFileSync('dist/marker', process.argv[2] || 'new');
     const seed = path.join(scratch, "seed");
     fs.writeFileSync(
       path.join(seed, "scripts/stage-bundled-plugin-runtime.mts"),
-      `export { prepareBundledPluginRuntime } from ${JSON.stringify(stageRuntimeUrl.href)};\n`,
+      `export { prepareBundledPluginRuntime } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/stage-bundled-plugin-runtime.mts")).href)};\n`,
     );
     git(seed, "add", "scripts/stage-bundled-plugin-runtime.mts");
     commitFixture(seed, "runtime inspector");
@@ -216,8 +206,8 @@ fs.writeFileSync('dist/marker', process.argv[2] || 'new');
       `
 import fs from "node:fs";
 import path from "node:path";
-import { preflightInstalledSourceArtifacts } from ${JSON.stringify(artifactPreflightUrl.href)};
-import { withDistArtifactOwnership, resolveDistArtifactLockPath } from ${JSON.stringify(artifactOwnershipUrl.href)};
+import { preflightInstalledSourceArtifacts } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/lib/source-update-artifact-preflight.mts")).href)};
+import { withDistArtifactOwnership, resolveDistArtifactLockPath } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/lib/dist-artifact-ownership.mts")).href)};
 const owner = path.join(resolveDistArtifactLockPath(process.env.UPDATE_TEST_LIVE_ROOT), "owner.json");
 const original = fs.readFileSync(owner, "utf8");
 await withDistArtifactOwnership(process.cwd(), async () => {
@@ -296,7 +286,7 @@ await withDistArtifactOwnership(process.cwd(), async () => {
 import fs from "node:fs/promises";
 import path from "node:path";
 import {execFileSync} from "node:child_process";
-import {runUpdateGatewayBuild} from ${JSON.stringify(updateGatewayBuildUrl.href)};
+import {runUpdateGatewayBuild} from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/update-gateway-build.mts")).href)};
 const root = await fs.realpath(process.cwd());
 const rename = fs.rename.bind(fs);
 fs.rename = async (source, destination) => {

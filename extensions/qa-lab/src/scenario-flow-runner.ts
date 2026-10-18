@@ -289,6 +289,7 @@ async function runFlowAction(
   }
   if (action.resetTransport === true) {
     const reset = resolveCallable("transport.reset", api, vars);
+    throwIfFlowAborted(api, options);
     await reset();
     return;
   }

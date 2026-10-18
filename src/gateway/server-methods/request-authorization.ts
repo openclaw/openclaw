@@ -152,17 +152,18 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     await params.context.ensureSessionRowProjection();
   }
   params.markSessionSubscribePhase?.("accessFacts");
-  // SAFETY: The host-owned method registry carries the PluginRegistry selected for dispatch.
-  const pluginRegistry = params.methodRegistry.pluginRegistry as PluginRegistry | undefined;
   const authorizeMethod = () =>
-    withPluginRuntimeRegistryScope(pluginRegistry, () =>
-      authorizeGatewayMethod(
-        params.method,
-        params.client,
-        params.requestParams,
-        params.methodRegistry,
-        params.context,
-      ),
+    withPluginRuntimeRegistryScope(
+      // SAFETY: The host-owned method registry carries the PluginRegistry selected for dispatch.
+      params.methodRegistry.pluginRegistry as PluginRegistry | undefined,
+      () =>
+        authorizeGatewayMethod(
+          params.method,
+          params.client,
+          params.requestParams,
+          params.methodRegistry,
+          params.context,
+        ),
     );
   const startupError = () =>
     params.context.unavailableGatewayMethods?.has(params.method)
@@ -471,10 +472,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         try {
           const preparedAccess = await prepareGatewaySessionAccessAuthority({
             policy: sessionPolicy,
-            methodOwner: params.methodRegistry
-              .descriptors()
-              .find((descriptor) => descriptor.name === params.method)?.owner,
-            pluginRegistry,
             requestParams: params.requestParams,
             client: params.client ?? null,
             context: params.context,

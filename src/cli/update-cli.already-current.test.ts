@@ -177,27 +177,13 @@ describe("update-cli", () => {
           new ExitError(1),
         );
         expect(serviceStop).toHaveBeenCalledTimes(failure === "changed owner" ? 0 : 1);
-        // The native stop mutation precedes the failed listener check; recovery must start it.
-        expect(freshRestartCalls()).toHaveLength(failure === "stop" ? 1 : 0);
-        if (failure === "stop") {
-          expect(freshRestartCalls()[0]?.[0]).toContain("--preserve-definition");
-        }
-        expect(packageInstallCommandCall()).toBeUndefined();
+        expect(freshRestartCalls()).toHaveLength(0);
         expect(lastWriteJsonCall()).toMatchObject({
           status: "error",
           reason: "post-update-plugins",
           ...(failure === "changed owner"
             ? {}
-            : {
-                run: {
-                  verification: {
-                    serviceRunning: true,
-                    readyz: true,
-                    settled: true,
-                    recovery: { serviceRestartSafe: true, service: "healthy" },
-                  },
-                },
-              }),
+            : { run: { verification: { serviceRunning: false } } }),
         });
         return;
       }

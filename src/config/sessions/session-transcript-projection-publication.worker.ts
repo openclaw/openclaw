@@ -3,10 +3,10 @@ import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
+  assertTransactionUsable,
   runSqliteImmediateTransactionSync,
   runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
-import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type {
   SqliteWorkerBackend,
   SqliteWorkerCommand,
@@ -78,7 +78,6 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
   function execute(
     command: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>,
   ): TranscriptProjectionPublicationOperations[keyof TranscriptProjectionPublicationOperations]["output"] {
-    backend.assertOpen();
     if (command.type === "preflight" || command.type === "sweep") {
       if (isSessionTranscriptIndexStatusClean(db)) {
         return { sessionIds: [], hasMore: false, traversalComplete: true };
@@ -153,6 +152,7 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
               };
             }
           }
+          throw new Error("Unknown transcript projection publication operation");
         },
         {
           operationLabel: `sessions.transcript-index.${command.type}`,
@@ -162,11 +162,14 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
       ),
     );
   }
-  const backend = bindSqliteWorkerDatabase<TranscriptProjectionPublicationOperations>(db, {
-    execute,
-  });
   return {
-    ...backend,
     execute,
+    assertSettled() {
+      assertTransactionUsable(db);
+      if (db.isTransaction) {
+        throw new Error("Transcript projection publication did not settle");
+      }
+    },
+    close() {},
   } satisfies SqliteWorkerBackend<TranscriptProjectionPublicationOperations>;
 }

@@ -258,27 +258,23 @@ export async function callWindowTool(
 }
 
 function structuredRefusalCode(result: CuaToolResult): string | undefined {
-  if (!result.structuredContent && !result.structuredJson) {
+  if (!result.structuredJson) {
     return undefined;
   }
   try {
-    const value: unknown =
-      result.structuredContent ??
-      (result.structuredJson ? JSON.parse(result.structuredJson) : undefined);
-    const refusal = isRecord(value) ? asOptionalRecord(value.refusal) : undefined;
-    return isRecord(value) && value.status === "refused" && typeof refusal?.code === "string"
-      ? refusal.code
+    const value = JSON.parse(result.structuredJson) as {
+      status?: unknown;
+      refusal?: { code?: unknown };
+    };
+    return value.status === "refused" && typeof value.refusal?.code === "string"
+      ? value.refusal.code
       : undefined;
   } catch {
-    // Malformed optional refusal metadata cannot supply a refusal code.
     return undefined;
   }
 }
 
 export function projectedToolDetails(result: CuaToolResult, tool: string): Record<string, unknown> {
-  if (result.structuredContent) {
-    return result.structuredContent;
-  }
   if (!result.structuredJson) {
     throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned no structuredContent`);
   }
@@ -287,9 +283,7 @@ export function projectedToolDetails(result: CuaToolResult, tool: string): Recor
     if (isRecord(value)) {
       return value;
     }
-  } catch {
-    // Malformed JSON is reported by the driver error below.
-  }
+  } catch {}
   throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned invalid structuredContent`);
 }
 

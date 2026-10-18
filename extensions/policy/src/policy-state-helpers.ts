@@ -21,7 +21,6 @@ export function collectPolicyConfiguredAgents(agents: Record<string, unknown>) {
   if (Object.hasOwn(agents, "entries") && entries !== undefined) {
     return isRecord(entries)
       ? Object.entries(entries)
-          .filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]))
           .toSorted(([a], [b]) => a.localeCompare(b))
           .map(([agentId, value]) => ({
             agentId,
@@ -31,20 +30,14 @@ export function collectPolicyConfiguredAgents(agents: Record<string, unknown>) {
       : [];
   }
   return Array.isArray(agents.list)
-    ? agents.list.flatMap((value, index) =>
-        isRecord(value)
-          ? [
-              {
-                agentId:
-                  typeof value.id === "string" && value.id.trim() !== ""
-                    ? value.id.trim()
-                    : `agent-${index}`,
-                sourceBase: `oc://openclaw.config/agents/list/#${index}`,
-                value,
-              },
-            ]
-          : [],
-      )
+    ? agents.list.map((value, index) => ({
+        agentId:
+          isRecord(value) && typeof value.id === "string" && value.id.trim() !== ""
+            ? value.id.trim()
+            : `agent-${index}`,
+        sourceBase: `oc://openclaw.config/agents/list/#${index}`,
+        value,
+      }))
     : [];
 }
 
@@ -78,17 +71,23 @@ export function collectPolicyAgentContexts<Scope extends "defaults" | "global">(
       workspaceSourceBase: "oc://openclaw.config/agents/defaults",
       toolsSourceBase: "oc://openclaw.config/tools",
     },
-    ...collectPolicyConfiguredAgents(agents).map(({ agentId, sourceBase, value }) => ({
-      id: agentId,
-      scope: "agent" as const,
-      agentId,
-      sandbox: asNonArrayRecord(value.sandbox),
-      inheritedSandbox: sandbox,
-      tools: asNonArrayRecord(value.tools),
-      inheritedTools: tools,
-      workspaceSourceBase: sourceBase,
-      toolsSourceBase: `${sourceBase}/tools`,
-    })),
+    ...collectPolicyConfiguredAgents(agents).flatMap(({ agentId, sourceBase, value }) =>
+      isRecord(value)
+        ? [
+            {
+              id: agentId,
+              scope: "agent" as const,
+              agentId,
+              sandbox: asNonArrayRecord(value.sandbox),
+              inheritedSandbox: sandbox,
+              tools: asNonArrayRecord(value.tools),
+              inheritedTools: tools,
+              workspaceSourceBase: sourceBase,
+              toolsSourceBase: `${sourceBase}/tools`,
+            },
+          ]
+        : [],
+    ),
   ];
 }
 

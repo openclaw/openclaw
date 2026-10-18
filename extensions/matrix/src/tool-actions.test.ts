@@ -213,6 +213,28 @@ describe("Matrix public message actions", () => {
     });
   });
 
+  it("preserves indented text and scoped options on message sends", async () => {
+    const message = "    @room";
+    await runMatrixAction(
+      "send",
+      {
+        to: `room:${roomId}`,
+        message,
+        threadId: "$thread",
+      },
+      cfg,
+      { ...account, mediaLocalRoots },
+    );
+    expect(mocks.sendMatrixMessage).toHaveBeenCalledWith(`room:${roomId}`, message, {
+      cfg,
+      ...account,
+      mediaUrl: undefined,
+      mediaLocalRoots,
+      replyToId: undefined,
+      threadId: "$thread",
+    });
+  });
+
   it("preserves indented Markdown on message edits", async () => {
     const message = "    @alice:example.org";
     await runMatrixAction("edit", { ...target, message }, cfg);
@@ -231,7 +253,6 @@ describe("Matrix public message actions", () => {
         to: `room:${roomId}`,
         path: "/tmp/clip.mp3",
         asVoice: true,
-        threadId: "$thread",
       },
       cfg,
       { ...account, mediaAccess, mediaLocalRoots },
@@ -243,7 +264,7 @@ describe("Matrix public message actions", () => {
       mediaAccess,
       mediaLocalRoots,
       replyToId: undefined,
-      threadId: "$thread",
+      threadId: undefined,
       audioAsVoice: true,
     });
     expect(mocks.sendMatrixMessage.mock.lastCall?.[2]?.mediaAccess).toBe(mediaAccess);
@@ -384,6 +405,15 @@ describe("Matrix public message actions", () => {
         toolContext: { currentChannelId: "!current:example", currentChannelProvider: "matrix" },
       }),
     ).rejects.toThrow("Matrix read target is not allowed.");
+    expect(mocks.readMatrixMessage).not.toHaveBeenCalled();
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+  });
+
+  it("validates fractional limits before exact event selection", async () => {
+    await expect(
+      runMatrixAction("read", { roomId, messageId: "$older", limit: 1.5 }, emptyCfg),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
     expect(mocks.readMatrixMessage).not.toHaveBeenCalled();
     expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
   });

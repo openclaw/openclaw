@@ -10,7 +10,6 @@ const pinSnapshotMock = vi.hoisted(() =>
 vi.mock("../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/runtime-pin-state.js")>()),
   readDaemonRuntimePin: pinSnapshotMock,
-  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T) => read(),
 }));
 
 export { pinSnapshotMock };

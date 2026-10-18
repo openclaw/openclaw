@@ -1,8 +1,7 @@
-import type { SessionsListResult } from "../api/types.ts";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
   storeSidebarSessionOwnerFilter,
@@ -14,7 +13,7 @@ type SessionOwnerFilterContext = {
 };
 
 /** Owns the saved owner filter and invalidates changes to the effective list query. */
-export class SessionOwnerFilterController implements SolidController {
+export class SessionOwnerFilterController implements ReactiveController {
   ownerId: string | null = null;
   involvingMe = false;
   private scope: string | null = null;
@@ -24,7 +23,7 @@ export class SessionOwnerFilterController implements SolidController {
   private ownerFacet: { agentId: string; multiple: boolean } | null = null;
 
   constructor(
-    private readonly host: SolidControllerHost & {
+    private readonly host: ReactiveControllerHost & {
       isConnected: boolean;
       sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
       sessionData: {
@@ -107,17 +106,11 @@ export class SessionOwnerFilterController implements SolidController {
     return this.ownerFacet?.agentId === agentId && this.ownerFacet.multiple;
   }
 
-  observeOwnerFacet(agentId: string, owners: SessionsListResult["owners"]): void {
+  observeOwnerFacet(agentId: string, visibility: { filters: boolean } | undefined): void {
     this.restore();
     // Pending replacement rows must not reverse the query their owner inventory selected.
-    if (owners !== undefined) {
-      // Participants in filtered rows govern attribution UI, not query membership.
-      // The complete owner facet stays authoritative when those rows disappear.
-      const selfUserId = this.selfUserId;
-      this.ownerFacet = {
-        agentId,
-        multiple: owners.some((owner) => owner.type !== "human" || owner.id !== selfUserId),
-      };
+    if (visibility !== undefined) {
+      this.ownerFacet = { agentId, multiple: visibility.filters };
     }
   }
 

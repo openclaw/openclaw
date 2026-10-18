@@ -202,11 +202,7 @@ describe("child followup requester continuation", () => {
         replyTimeoutMs: 1_000,
         replyMode: "one-way",
       });
-      await completion.settle(request!.runId, {
-        status: "ok",
-        replyText: "Child result",
-        terminalReply: { disposition: "visible", text: "Child result" },
-      });
+      await completion.settle(request!.runId, { status: "ok", replyText: "Child result" });
       completion.finishExecution(request!.runId);
       await entered.promise;
       await vi.advanceTimersByTimeAsync(180_000);
@@ -296,11 +292,7 @@ describe("child followup requester continuation", () => {
     fixture.wait.mockResolvedValue(
       outcome === "requester failed while pending"
         ? { status: "error", error: "requester processing failed" }
-        : {
-            status: "ok",
-            replyText: "continued",
-            terminalReply: { disposition: "visible", text: "continued" },
-          },
+        : { status: "ok", replyText: "continued" },
     );
     callGateway.mockImplementation(async (rpc) => {
       if (rpc.method !== "agent") {
@@ -364,11 +356,7 @@ describe("child followup requester continuation", () => {
       reply:
         outcome === "child error"
           ? { status: "error", error: "plugin failed" }
-          : {
-              status: "ok",
-              replyText: "ready",
-              terminalReply: { disposition: "visible", text: "ready" },
-            },
+          : { status: "ok", replyText: "ready" },
       notifyRequesterOnWaitFailure: true,
       targetSessionKey: CHILD,
       targetAgentId: "main",

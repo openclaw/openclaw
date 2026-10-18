@@ -92,7 +92,7 @@ export function joinOwnedWorkerTask<Input, Output>(
 function startJoinOwnedWorkerTask<Input, Output>(
   task: Task<Input, Output>,
   settlement: OwnedWorkerTaskSettlement<Input, Output>,
-  retire: boolean,
+  retire = false,
 ): RetainedOperation<void> {
   const closing = startCloseOwnedWorkerTask(task, settlement, retire);
   const observe = () => {
@@ -142,7 +142,7 @@ export function closeOwnedWorkerTask<Input, Output>(
 function startCloseOwnedWorkerTask<Input, Output>(
   task: Task<Input, Output>,
   settlement: OwnedWorkerTaskSettlement<Input, Output>,
-  retire: boolean,
+  retire = false,
 ): RetainedOperation<void> {
   const owner = task.owner;
   if (!owner || owner.closed) {

@@ -7,7 +7,7 @@ import {
   createWizardTestController as createController,
   tokenStep,
 } from "./wizard-controller.test-support.ts";
-import { createChannelWizard } from "./wizard-runner.ts";
+import { ChannelWizardController } from "./wizard-controller.ts";
 
 const selectStep = {
   id: "step-select",
@@ -16,7 +16,7 @@ const selectStep = {
   options: [{ value: "telegram", label: "Telegram" }],
 };
 
-describe("createChannelWizard", () => {
+describe("ChannelWizardController", () => {
   it("does not treat a colliding owner selection as the channel presentation", async () => {
     let nextCount = 0;
     const request = vi.fn(async (method: string) => {
@@ -59,7 +59,7 @@ describe("createChannelWizard", () => {
         accounts: [{ channel: "discord", accountId: "default" }],
       };
     });
-    const controller = createChannelWizard(
+    const controller = new ChannelWizardController(
       () => ({ request: request as never }),
       vi.fn(),
       (value) => value === "telegram" || value === "discord",

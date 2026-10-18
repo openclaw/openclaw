@@ -37,6 +37,13 @@ function expectImages(
 }
 
 describe("codex conversation turn input", () => {
+  it("forwards a projected image once despite scalar and plural metadata aliases", () => {
+    expectImages(
+      [{ path: "/tmp/photo.png", url: "https://example.test/photo.png", contentType: "image/png" }],
+      [{ type: "localImage", path: "/tmp/photo.png" }],
+    );
+  });
+
   it("preserves sparse mixed media associations and source order", () => {
     const inlineImage = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
     expectImages(
@@ -44,7 +51,7 @@ describe("codex conversation turn input", () => {
         { url: "https://example.test/first.webp" },
         {},
         { path: "/tmp/voice", contentType: "audio/ogg" },
-        { path: "/tmp/photo", url: "https://example.test/photo.png", contentType: "image/png" },
+        { path: "/tmp/photo", contentType: "image/png" },
         { url: inlineImage, contentType: "image/gif" },
       ],
       [
@@ -75,6 +82,14 @@ describe("codex conversation turn input", () => {
       [{ path: stagedPath, contentType: "image/jpeg" }],
       [{ type: "localImage", path: stagedPath }],
       { channelId: "imessage", originalMedia: [{ path: rawPath, contentType: "image/jpeg" }] },
+    );
+  });
+
+  it("withholds attachments while remote staging is pending", () => {
+    expectImages(
+      [{ path: "/Users/demo/Library/Messages/Attachments/photo.jpg", contentType: "image/jpeg" }],
+      [],
+      { channelId: "imessage", mediaStagingPending: true },
     );
   });
 

@@ -1,15 +1,27 @@
-import {
-  getActiveEmbeddedRunCount,
-  isEmbeddedAgentRunActive,
-} from "../../agents/embedded-agent-runner/active-run-projections.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { onGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
 import { createBackgroundWorkOwner } from "../../process/background-work.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 
 const reviews = createBackgroundWorkOwner({ owner: "core:skill-workshop", maxConcurrent: 1 });
+
+/**
+ * A background review can look things up but changes nothing outside learned skills: it runs
+ * unattended on conversation content, so it must never re-run the task or touch other files.
+ */
+const SKILL_WORKSHOP_REVIEW_TOOLS = [
+  "skill_workshop",
+  "read",
+  "ls",
+  "view_image",
+  "web_search",
+  "web_fetch",
+  "sessions_history",
+  "sessions_search",
+  "memory_search",
+  "memory_get",
+] as const;
 
 /**
  * The background Workshop review run: the openclaw harness on a locked model, crediting
@@ -23,19 +35,10 @@ export async function runSkillWorkshopReview(
     skillWorkshopReviewOf: string;
   },
 ) {
-  const foreground = new AbortController();
-  const yieldToForeground = () => {
-    const ownRun = isEmbeddedAgentRunActive(params.sessionId) ? 1 : 0;
-    if (getActiveEmbeddedRunCount() > ownRun) {
-      foreground.abort(new DOMException("Skill review yielded to foreground work", "AbortError"));
-    }
-  };
-  const unsubscribe = onGatewayWorkMetricsChanged(yieldToForeground);
-  const abortSignal = AbortSignal.any([
-    getGatewayRestartDrainSignal(),
-    foreground.signal,
-    ...(params.abortSignal ? [params.abortSignal] : []),
-  ]);
+  const restartSignal = getGatewayRestartDrainSignal();
+  const abortSignal = params.abortSignal
+    ? AbortSignal.any([restartSignal, params.abortSignal])
+    : restartSignal;
   // Background runs stay out of the Control UI and never project into a user session.
   registerAgentRunContext(params.runId, {
     agentId: params.agentId,
@@ -47,42 +50,20 @@ export async function runSkillWorkshopReview(
     projectSessionMessages: false,
   });
   try {
-    yieldToForeground();
     abortSignal.throwIfAborted();
     const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-    const result = await runEmbeddedAgent({
+    return await runEmbeddedAgent({
       ...params,
       abortSignal,
       lane: reviews.lane,
       agentHarnessId: "openclaw",
       agentHarnessRuntimeOverride: "openclaw",
-      // Review is best-effort work: never spend interactive capacity on retries.
+      // Review prompts and cloned prefixes are sized for this exact model.
       modelSelectionLocked: true,
       modelFallbacksOverride: [],
-      retryTransientErrors: false,
-      allowAuthProfileFallback: false,
-      authProfileFailurePolicy: "local_transient",
       requestedRouteResolution: "resolved",
       sessionPersistence: "detached",
-      promptCacheKey: undefined,
-      sourceReplyDeliveryMode: undefined,
-      toolsAllow: ["skill_workshop"],
-      toolExecutionAllow: ["skill_workshop"],
-      codeModeOverride: false,
-      disableToolSearch: true,
-      promptMode: "minimal",
-      bootstrapContextMode: "lightweight",
-      skillsSnapshot: undefined,
-      extraSystemPrompt: undefined,
-      clientTools: undefined,
-      conversationRecall: undefined,
-      gitCoauthorPrompt: undefined,
-      forceMessageTool: false,
-      forceHeartbeatTool: false,
-      contextTokenBudget: 16_384,
-      streamParams: { maxTokens: 2_048 },
-      thinkLevel: "low",
-      timeoutMs: Math.min(params.timeoutMs, 120_000),
+      toolExecutionAllow: SKILL_WORKSHOP_REVIEW_TOOLS,
       disableTrajectory: true,
       silentExpected: true,
       allowEmptyAssistantReplyAsSilent: true,
@@ -90,10 +71,7 @@ export async function runSkillWorkshopReview(
       cleanupBundleMcpOnRunEnd: true,
       verboseLevel: "off",
     });
-    foreground.signal.throwIfAborted();
-    return result;
   } finally {
-    unsubscribe();
     params.preparedRunAdmission.close();
     clearAgentRunContext(params.runId);
   }

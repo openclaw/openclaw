@@ -1,15 +1,14 @@
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { PersonName } from "../../../components/person-activity-link-solid.tsx";
-import { personActivityLink } from "../../../components/person-activity-link.ts";
+import { personActivityLink, renderPersonName } from "../../../components/person-activity-link.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { emptyLegacyContent as litNothing } from "../../../lit/solid-content.tsx";
-import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
+import { emptyLegacyContent as litNothing, LitContent } from "../../../lit/solid-content.tsx";
+import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
-import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
+import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
 import { ActivityGroupContent } from "./chat-message-activity-view.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -38,14 +37,14 @@ import type { AssistantMessageDisclosure } from "./chat-message-text-view.tsx";
 import { MessageMeta } from "./chat-message-timestamp-view.tsx";
 import {
   NO_REPLY_LINE,
+  renderReplyLine,
+  renderReplyLineConnector,
   resolveGroupReplyLine,
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
-import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
-import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
-import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
-import { TurnRecapRow } from "./chat-working-indicator.tsx";
+import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 
@@ -185,7 +184,7 @@ export function MessageGroupContent(props: {
         )}
       </For>
       {options().showToolCalls === false ? undefined : (
-        <BrowserTabPreviews previews={selectBrowserTabPreviews([props.group], options())} />
+        <LitContent value={renderBrowserTabPreviews([props.group], options())} />
       )}
     </Show>
   );
@@ -196,29 +195,29 @@ function GroupAvatar(props: { frame: MessageGroupFrame }) {
   const options = () => frame().options;
   return (
     <Show when={frame().hasAvatar}>
-      <Show
-        when={frame().isForwarded}
-        fallback={
-          <ChatAvatar
-            role={frame().group.role}
-            assistant={{
-              agentId: options().agentId,
-              name: frame().assistantName,
-              avatar: options().assistantAvatar ?? null,
-              textAvatar: options().assistantTextAvatar,
-            }}
-            user={
-              frame().isOwnGroup
-                ? { name: options().userName ?? null, avatar: options().userAvatar ?? null }
-                : undefined
-            }
-            sender={frame().group.sender}
-            channelAvatar={options().channelAvatar}
-          />
+      <LitContent
+        value={
+          frame().isForwarded
+            ? renderForwardedAvatar(frame().group.senderSession?.agentId, options())
+            : renderChatAvatar(
+                frame().group.role,
+                {
+                  agentId: options().agentId,
+                  name: frame().assistantName,
+                  avatar: options().assistantAvatar ?? null,
+                  textAvatar: options().assistantTextAvatar,
+                },
+                frame().isOwnGroup
+                  ? {
+                      name: options().userName ?? null,
+                      avatar: options().userAvatar ?? null,
+                    }
+                  : undefined,
+                frame().group.sender,
+                options().channelAvatar,
+              )
         }
-      >
-        <ForwardedAvatar agentId={frame().group.senderSession?.agentId} options={options()} />
-      </Show>
+      />
     </Show>
   );
 }
@@ -235,7 +234,7 @@ function SenderIdentity(props: { frame: MessageGroupFrame }) {
   return (
     <>
       <Show when={frame().showSenderName}>
-        <PersonName label={frame().who} link={activityLink()} class="chat-sender-name" />
+        <LitContent value={renderPersonName(frame().who, activityLink(), "chat-sender-name")} />
       </Show>
       <Show when={frame().visibleSources?.length}>
         <span class="chat-message-source">
@@ -306,7 +305,6 @@ function FramedMessage(props: {
         : undefined,
   }));
   const showActions = () =>
-    prepared().ownsActions &&
     hasMessageActionButtons(prepared().actions, frame().options) &&
     props.index < frame().lastMessageIndex &&
     !frame().isTurnBlock;
@@ -318,7 +316,7 @@ function FramedMessage(props: {
         fallback={
           <>
             {frame().isPeerGroup ? (
-              <ReplyLineView line={line()} actions={frame().options} />
+              <LitContent value={renderReplyLine(line(), frame().options)} />
             ) : undefined}
             <PreparedMessage
               group={frame().group}
@@ -331,7 +329,7 @@ function FramedMessage(props: {
         }
       >
         <div class="chat-message--reply">
-          <ReplyLineView line={line()} actions={frame().options} />
+          <LitContent value={renderReplyLine(line(), frame().options)} />
           <PreparedMessage
             group={frame().group}
             item={props.item}
@@ -340,7 +338,9 @@ function FramedMessage(props: {
             prepared={prepared()}
           />
           <GroupAvatar frame={props.frame} />
-          <ReplyLineConnector line={line()} avatar={frame().hasAvatar ? true : litNothing} />
+          <LitContent
+            value={renderReplyLineConnector(line(), frame().hasAvatar ? true : litNothing)}
+          />
         </div>
       </Show>
       <Show when={showActions()}>
@@ -397,9 +397,9 @@ function FramedMessageGroup(props: {
       </Show>
       <div class="chat-group-messages">
         <Show when={frame().forwardedSource}>
-          <ForwardedAttribution group={props.group} options={options()} />
+          <LitContent value={renderForwardedAttribution(props.group, options())} />
         </Show>
-        <ReplyLineView line={frame().replyLine} actions={options()} />
+        <LitContent value={renderReplyLine(frame().replyLine, options())} />
         <Show
           when={options().frameContent !== undefined}
           fallback={
@@ -413,13 +413,15 @@ function FramedMessageGroup(props: {
           {options().frameContent}
         </Show>
         {frame().ownsRunFrame || options().showToolCalls === false ? undefined : (
-          <BrowserTabPreviews previews={selectBrowserTabPreviews([props.group], options())} />
+          <LitContent value={renderBrowserTabPreviews([props.group], options())} />
         )}
         <Show
           when={Boolean(options().activeContinuation)}
           fallback={
             options().turnRecap ? (
-              <TurnRecapRow recap={options().turnRecap!} presentation="continuation" />
+              <LitContent
+                value={renderTurnRecapRow(options().turnRecap!, { presentation: "continuation" })}
+              />
             ) : undefined
           }
         >
@@ -457,9 +459,13 @@ function FramedMessageGroup(props: {
               {frame().normalizedRole === "user" &&
               frame().showAvatar &&
               frame().avatarPlacement === "footer" ? (
-                <ChatAuthorAvatar
-                  sender={props.group.sender}
-                  channelAvatar={options().channelAvatar}
+                <LitContent
+                  value={renderChatAuthorAvatar(
+                    props.group.sender,
+                    "chat-author-avatar",
+                    undefined,
+                    options().channelAvatar,
+                  )}
                 />
               ) : undefined}
               <SenderIdentity frame={frame()} />
@@ -483,7 +489,9 @@ function FramedMessageGroup(props: {
           </div>
         </Show>
       </Show>
-      <ReplyLineConnector line={frame().replyLine} avatar={frame().hasAvatar ? true : litNothing} />
+      <LitContent
+        value={renderReplyLineConnector(frame().replyLine, frame().hasAvatar ? true : litNothing)}
+      />
     </div>
   );
 }

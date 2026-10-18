@@ -54,8 +54,12 @@ function isContainerEnvironment() {
   }
 
   for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
-    if (fs.existsSync(sentinelPath)) {
-      return true;
+    try {
+      if (fs.existsSync(sentinelPath)) {
+        return true;
+      }
+    } catch {
+      // ignore
     }
   }
 
@@ -172,8 +176,13 @@ export async function startGatewayBonjourAdvertiser(
   let restoreConsoleLog: () => void = () => {};
   let cleanupUnhandledRejection: (() => void) | undefined;
   let cleanupUncaughtException: (() => void) | undefined;
+  let processHandlersCleaned = false;
 
   function cleanupProcessHandlers() {
+    if (processHandlersCleaned) {
+      return;
+    }
+    processHandlersCleaned = true;
     cleanupUncaughtException?.();
     cleanupUnhandledRejection?.();
   }
@@ -209,7 +218,10 @@ export async function startGatewayBonjourAdvertiser(
     const labelEnd = dotIndex === -1 ? hostnameWithoutLocal.length : dotIndex;
     const hostnameLabel = hostnameWithoutLocal.slice(0, labelEnd).trim() || "openclaw";
     const hostname = truncateToDnsLabel(hostnameLabel, "openclaw");
-    const instanceName = opts.instanceName?.trim() || `${hostname} (OpenClaw)`;
+    const instanceName =
+      typeof opts.instanceName === "string" && opts.instanceName.trim()
+        ? opts.instanceName.trim()
+        : `${hostname} (OpenClaw)`;
     const displayName = prettifyInstanceName(instanceName);
 
     const txtBase: Record<string, string> = {
@@ -227,10 +239,10 @@ export async function startGatewayBonjourAdvertiser(
     if (opts.gatewayDirectReachable) {
       txtBase.gatewayDirectReachable = "1";
     }
-    if (!opts.minimal && opts.tailnetDns?.trim()) {
+    if (!opts.minimal && typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
       txtBase.tailnetDns = opts.tailnetDns.trim();
     }
-    if (!opts.minimal && opts.cliPath?.trim()) {
+    if (!opts.minimal && typeof opts.cliPath === "string" && opts.cliPath.trim()) {
       txtBase.cliPath = opts.cliPath.trim();
     }
 
@@ -279,14 +291,18 @@ export async function startGatewayBonjourAdvertiser(
       hostname,
       txt: gatewayTxt,
     });
-    gateway.on("name-change", (name) => {
-      logger.warn(`bonjour: gateway name conflict resolved; newName=${JSON.stringify(name)}`);
-    });
-    gateway.on("hostname-change", (nextHostname) => {
-      logger.warn(
-        `bonjour: gateway hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
-      );
-    });
+    try {
+      gateway.on("name-change", (name) => {
+        logger.warn(`bonjour: gateway name conflict resolved; newName=${JSON.stringify(name)}`);
+      });
+      gateway.on("hostname-change", (nextHostname) => {
+        logger.warn(
+          `bonjour: gateway hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
+        );
+      });
+    } catch (err) {
+      logger.debug(`bonjour: failed to attach listeners for gateway: ${String(err)}`);
+    }
     try {
       void gateway
         .advertise()

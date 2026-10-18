@@ -9,7 +9,6 @@ import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runti
 import {
   asNullableRecord,
   asOptionalObjectRecord,
-  asOptionalRecord,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_TRANSFER_NODE_INVOKE_COMMANDS,
@@ -82,8 +81,8 @@ type FileTransferPolicyConfig = {
   pendingReapprovals?: unknown;
 };
 
-function asFilePolicyConfig(value: unknown): FilePolicyConfig | undefined {
-  return asOptionalRecord(value) as FilePolicyConfig | undefined;
+function asFilePolicyConfig(value: unknown): FilePolicyConfig | null {
+  return asNullableRecord(value) as FilePolicyConfig | null;
 }
 
 function readFileTransferConfigFromPluginConfig(
@@ -96,7 +95,7 @@ function readFileTransferConfigFromPluginConfig(
   return {
     policyVersion:
       typeof pluginRecord.policyVersion === "number" ? pluginRecord.policyVersion : undefined,
-    nodes: asFilePolicyConfig(pluginRecord.nodes),
+    nodes: asFilePolicyConfig(pluginRecord.nodes) ?? undefined,
     literalGrants: pluginRecord.literalGrants,
     pendingReapprovals: pluginRecord.pendingReapprovals,
   };
@@ -229,7 +228,9 @@ function resolveNodePolicy(
   nodeId: string,
   nodeDisplayName?: string,
 ): { key: string; entry: NodeFilePolicyConfig } | null {
-  const candidates = [nodeId, nodeDisplayName].filter((k): k is string => Boolean(k));
+  const candidates = [nodeId, nodeDisplayName].filter(
+    (k): k is string => typeof k === "string" && k.length > 0,
+  );
   for (const key of candidates) {
     if (config[key]) {
       return { key, entry: config[key] };
@@ -279,7 +280,7 @@ function evaluateFilePolicyInternal(
       askable: false,
     };
   }
-  const config = pluginPolicy?.nodes;
+  const config = pluginPolicy ? asFilePolicyConfig(pluginPolicy.nodes) : null;
   if (!pluginPolicy || !config) {
     return {
       ok: false,
@@ -422,7 +423,7 @@ export function snapshotNodeFileReadPolicy(input: {
   pluginConfig?: Record<string, unknown>;
 }) {
   const policy = readFileTransferConfig(input.pluginConfig);
-  const nodes = policy?.nodes;
+  const nodes = policy && asFilePolicyConfig(policy.nodes);
   const resolved = nodes && resolveNodePolicy(nodes, input.nodeId, input.nodeDisplayName);
   if (!resolved) {
     throw new Error("Node file read policy is unavailable");

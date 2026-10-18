@@ -1,6 +1,5 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-compaction-constants.js";
-import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
 import { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/agent-settings.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,6 +9,7 @@ import {
   type MemoryFlushPlanResolution,
   type MemoryFlushToolsPlan,
 } from "../../plugins/memory-state.js";
+import { isSilentReplyPayloadText } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 
 const log = createSubsystemLogger("auto-reply/memory-flush");
@@ -85,7 +85,7 @@ export function resolveMemoryFlushPlanForRun(
   if (!timing) {
     return null;
   }
-  const resolution = resolveMemoryFlushPlan({ ...params, nowMs: params.nowMs ?? Date.now() });
+  const resolution = resolveMemoryFlushPlan(params);
   if (resolution && isToolsMemoryFlushPlan(resolution.plan) && !resolution.selectedSlotOwner) {
     log.warn(
       `memory flush skipped: plugin "${resolution.pluginId}" supplied a tools-arm plan but is not the selected memory slot owner`,
@@ -130,7 +130,8 @@ export function resolveMemoryFlushPlanForRun(
 /** Recognize deliberate silence only in the final assistant output. */
 export function memoryFlushResultIsSilent(result: {
   payloads?: readonly ReplyPayload[];
-  meta?: { terminalReply?: AgentRunTerminalReplySnapshot };
+  meta?: { finalAssistantRawText?: string; finalAssistantVisibleText?: string };
 }): boolean {
-  return result.meta?.terminalReply?.disposition === "silent";
+  const finalText = result.meta?.finalAssistantVisibleText ?? result.meta?.finalAssistantRawText;
+  return isSilentReplyPayloadText(finalText ?? result.payloads?.at(-1)?.text);
 }

@@ -22,6 +22,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { agentSessionSetContextReplacementHook } from "./agent-session-compaction.js";
 import {
   createAssistant,
   createTestSession,
@@ -231,4 +232,52 @@ describe("context replacement after write admission", () => {
       }
     },
   );
+
+  it("does not adopt a successor's context authority after in-memory summarization", async () => {
+    const manager = SessionManager.inMemory();
+    seedHistory(manager);
+    const summaryReady = createDeferred();
+    const release = createDeferred();
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      [
+        "session_before_compact",
+        [
+          async (event) => {
+            summaryReady.resolve();
+            await release.promise;
+            return compactionResult(event as BeforeCompactionEvent);
+          },
+        ],
+      ],
+    ]);
+    const { session } = await createTestSession({
+      sessionManager: manager,
+      settingsManager: settings(),
+      resourceLoader: createResourceLoader(handlers),
+    });
+    const before = manager.getEntries();
+    const messagesBefore = [...session.messages];
+    const accounted: string[] = [];
+    session[agentSessionSetContextReplacementHook](
+      () => accounted.push("original"),
+      () => {},
+    );
+    const work = session.compact();
+    const settled = work.catch((error: unknown) => error);
+    try {
+      await summaryReady.promise;
+      session[agentSessionSetContextReplacementHook](
+        () => accounted.push("successor"),
+        () => {},
+      );
+      release.resolve();
+      expect(await settled).toEqual(new Error("Compaction cancelled"));
+      expect(manager.getEntries()).toEqual(before);
+      expect(session.messages).toEqual(messagesBefore);
+      expect(accounted).toEqual([]);
+    } finally {
+      release.resolve();
+      await settled;
+    }
+  });
 });

@@ -14,6 +14,7 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "../../announce-idempotency.js";
+import { isSilentAgentReplyText } from "../../embedded-agent-runner/message-visibility.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
@@ -322,7 +323,7 @@ export const refreshFrozenResultFromSession = async (
     return false;
   }
   const trimmed = captured?.trim();
-  if (!trimmed) {
+  if (!trimmed || isSilentAgentReplyText(trimmed)) {
     return false;
   }
   // Reply capture yields while registration can transfer session ownership.

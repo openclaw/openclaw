@@ -1,6 +1,5 @@
 // Provider-runtime mock used by model resolution tests.
 import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
-import type { ModelProviderAuthMode } from "../../config/types.js";
 
 type OpenRouterModelCapabilities = NonNullable<
   ReturnType<typeof import("./openrouter-model-capabilities.js").getOpenRouterModelCapabilities>
@@ -47,7 +46,7 @@ type DynamicModelContext = {
   authProfileMode?: "api_key" | "aws-sdk" | "oauth" | "token";
   providerConfig?: {
     api?: string | null;
-    auth?: ModelProviderAuthMode;
+    auth?: "api-key" | "aws-sdk" | "oauth" | "token";
     baseUrl?: string;
   };
 };
@@ -715,7 +714,17 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
         : undefined,
     runProviderDynamicModel: (params: {
       provider: string;
-      context: Omit<DynamicModelContext, "provider">;
+      context: {
+        modelId: string;
+        modelRegistry: ModelRegistryLike;
+        agentRuntimeId?: string;
+        authProfileMode?: "api_key" | "aws-sdk" | "oauth" | "token";
+        providerConfig?: {
+          api?: string | null;
+          auth?: "api-key" | "aws-sdk" | "oauth" | "token";
+          baseUrl?: string;
+        };
+      };
     }) =>
       handledDynamicProviders.has(params.provider)
         ? buildDynamicModel(

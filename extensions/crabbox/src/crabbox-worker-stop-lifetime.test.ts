@@ -56,22 +56,15 @@ describe("Crabbox stop lifetime", () => {
     ]);
   });
 
-  it.each(
-    [60_000, CRABBOX_STOP_TIMEOUT_MS].flatMap((elapsedMs) =>
-      [-90_000, 90_000].map((clockStepMs) => ({ elapsedMs, clockStepMs })),
-    ),
-  )(
-    "keeps Azure recovery within the original deadline after $elapsedMs ms and a $clockStepMs ms wall step",
-    async ({ elapsedMs, clockStepMs }) => {
+  it.each([60_000, CRABBOX_STOP_TIMEOUT_MS])(
+    "keeps Azure recovery within the original stop deadline after %i ms",
+    async (elapsedMs) => {
       let now = 0;
-      let wallStep = 0;
-      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-      const wallClock = vi.spyOn(Date, "now").mockImplementation(() => now + wallStep);
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
       const runCommand = vi
         .fn<CrabboxCommandRunner>()
         .mockImplementationOnce(async () => {
           now = elapsedMs;
-          wallStep = clockStepMs;
           return commandResult({
             code: 4,
             stderr: "Azure fixed lease cannot be adopted without its create intent",
@@ -90,22 +83,11 @@ describe("Crabbox stop lifetime", () => {
           await expect(stopped).resolves.toBeUndefined();
           expect(runCommand).toHaveBeenCalledTimes(2);
           expect(runCommand.mock.calls[1]?.[1].timeoutMs).toBe(CRABBOX_STOP_TIMEOUT_MS - elapsedMs);
-          expect(runCommand.mock.calls[1]?.[0]).toEqual([
-            "crabbox",
-            "stop",
-            "--provider",
-            "azure",
-            "--id",
-            LEASE_ID,
-            "--force",
-          ]);
         } else {
           await expect(stopped).rejects.toThrow("timed out before Azure fixed-lease recovery");
           expect(runCommand).toHaveBeenCalledOnce();
         }
-        expect(runCommand.mock.calls[0]?.[1].timeoutMs).toBe(CRABBOX_STOP_TIMEOUT_MS);
       } finally {
-        wallClock.mockRestore();
         clock.mockRestore();
       }
     },

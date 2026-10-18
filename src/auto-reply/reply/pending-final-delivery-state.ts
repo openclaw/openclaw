@@ -2,7 +2,9 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
+import { stripMixedSilentReplyTokens } from "./mixed-silent-reply-tokens.js";
 
 // A delivered or discarded final must lose the whole record. Keeping this list
 // centralized prevents new ownership fields from leaving a phantom pending delivery.
@@ -20,5 +22,12 @@ export function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars:
 
 /** Sanitizes pending final delivery text before channel-visible output. */
 export function sanitizePendingFinalDeliveryText(text: string): string {
-  return trimTextPreservingCode(stripInternalMetadataForDisplay(text));
+  let stripped = trimTextPreservingCode(stripInternalMetadataForDisplay(text));
+  if (isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN)) {
+    return "";
+  }
+  stripped = stripMixedSilentReplyTokens(stripped) ?? stripped;
+  return !stripped.trim() || isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN)
+    ? ""
+    : trimTextPreservingCode(stripped);
 }

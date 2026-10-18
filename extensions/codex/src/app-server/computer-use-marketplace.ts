@@ -40,8 +40,6 @@ export async function ensureCodexManagedBundledMarketplace(params: {
   ownershipCandidates?: readonly MacOSDesktopCodexAppPathCandidate[];
   computerUsePluginName?: string;
   computerUseMcpServerName?: string;
-  desktopFingerprint?: string;
-  forceRefresh?: boolean;
   assertCurrent?: () => void;
 }): Promise<string | undefined> {
   const candidates = params.candidates ?? resolveMacOSDesktopCodexAppPathCandidates();
@@ -54,7 +52,6 @@ export async function ensureCodexManagedBundledMarketplace(params: {
     params.codexHome,
     params.computerUsePluginName,
     params.computerUseMcpServerName,
-    params.desktopFingerprint,
   );
   const parentPath = path.dirname(resolveCodexManagedBundledMarketplacePath(params.codexHome));
   const targetPath = path.join(parentPath, MARKETPLACE_NAME);
@@ -78,7 +75,6 @@ export async function ensureCodexManagedBundledMarketplace(params: {
     unifiedRuntime,
     ownershipCandidates: params.ownershipCandidates ?? candidates,
     assertCurrent: params.assertCurrent,
-    forceRefresh: params.forceRefresh,
   });
   activeInstalls.set(physicalTargetPath, install);
   try {
@@ -96,13 +92,11 @@ async function publishManagedWrapper(params: {
   unifiedRuntime?: CodexUnifiedComputerUseRuntime;
   ownershipCandidates: readonly MacOSDesktopCodexAppPathCandidate[];
   assertCurrent?: () => void;
-  forceRefresh?: boolean;
 }): Promise<string> {
   const { parent, physicalTargetPath, targetPath, source, ownershipCandidates, assertCurrent } =
     params;
   if (
-    !params.forceRefresh &&
-    (await wrapperMatches(physicalTargetPath, source.bundledMarketplacePath, params.unifiedRuntime))
+    await wrapperMatches(physicalTargetPath, source.bundledMarketplacePath, params.unifiedRuntime)
   ) {
     return targetPath;
   }

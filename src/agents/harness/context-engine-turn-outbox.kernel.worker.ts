@@ -45,6 +45,14 @@ type OutboxKernelParams<Type extends keyof ContextEngineTurnOutboxWorkerOperatio
 const RECOVERED_TURN_MAX_EVENTS = 20_000;
 const RECOVERED_TURN_MAX_BYTES = 8 * 1024 * 1024;
 
+function outboxEnqueueSequence() {
+  return /* kysely-allow-raw: SQLite's implicit rowid is the durable enqueue sequence for this table. */ sql<number>`context_engine_turn_outbox.rowid`;
+}
+
+function oldestOutboxEnqueueSequence() {
+  return /* kysely-allow-raw: Aggregate the closed implicit-rowid expression used for enqueue order. */ sql<number>`MIN(context_engine_turn_outbox.rowid)`;
+}
+
 function outboxPayloadRequiresAdvancement() {
   // Blocked rows are terminal audit evidence, not retryable work. Keep them
   // inspectable without letting them hold later same-session turns behind them.
@@ -279,7 +287,7 @@ export function recoverContextEngineTurnOutbox(params: {
       .where("session_id", "=", params.sessionId)
       // Blocked rows are terminal; their outcome was logged once when the turn was blocked.
       .where(outboxPayloadRequiresAdvancement())
-      .orderBy("enqueue_sequence", "asc"),
+      .orderBy(outboxEnqueueSequence(), "asc"),
   ).rows;
   let pending = false;
   for (const row of rows) {
@@ -331,7 +339,9 @@ function listPendingContextEngineTurnSessions(
 ): string[] {
   const query = pendingContextEngineTurns(database, filter, filter.sessionId || undefined)
     .select("session_id")
-    .select((eb) => eb.fn.min("enqueue_sequence").as("oldest_enqueue_sequence"));
+    // SQLite rowid preserves enqueue order among surviving pending rows.
+    // Use it instead of wall-clock timestamps, which can collide.
+    .select(oldestOutboxEnqueueSequence().as("oldest_enqueue_sequence"));
   return executeSqliteQuerySync(
     database.db,
     query.groupBy("session_id").orderBy("oldest_enqueue_sequence", "asc").limit(filter.limit),
@@ -346,7 +356,7 @@ function readNextPendingContextEngineTurn(
     database.db,
     pendingContextEngineTurns(database, filter, filter.sessionId)
       .select(["advancement_key", "payload_json", "session_id"])
-      .orderBy("enqueue_sequence", "asc")
+      .orderBy(outboxEnqueueSequence(), "asc")
       .limit(1),
   );
 }

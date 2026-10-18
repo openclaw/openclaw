@@ -78,21 +78,6 @@ const toolCall = {
 };
 
 describe("MCP HTTP keepalive", () => {
-  it("disables connection reuse for consecutive completed tool calls", async () => {
-    execute.mockResolvedValue({ content: [{ type: "text", text: "completed once" }] });
-    const send = await startClient();
-    for (let id = 1; id <= 2; id++) {
-      const response = await send("POST", { ...toolCall, id });
-      expect(response.status).toBe(200);
-      expect(response.headers.get("connection")).toBe("close");
-      expect(await response.json()).toMatchObject({
-        id,
-        result: { content: [{ type: "text", text: "completed once" }], isError: false },
-      });
-    }
-    expect(execute).toHaveBeenCalledTimes(2);
-  });
-
   it.each(["success", "serialization-error", "notification"])(
     "keeps pending calls alive without writing notification bodies: %s",
     async (outcome) => {
@@ -124,7 +109,6 @@ describe("MCP HTTP keepalive", () => {
           release.resolve();
           const response = await within(responsePromise);
           expect(response.status).toBe(202);
-          expect(response.headers.get("connection")).toBe("close");
           expect(await response.text()).toBe("");
           expect(vi.getTimerCount()).toBe(serverTimers);
           return;
@@ -133,7 +117,6 @@ describe("MCP HTTP keepalive", () => {
         await vi.advanceTimersByTimeAsync(30_000);
         const response = await within(responsePromise);
         expect(response.headers.get("content-type")).toBe("application/json");
-        expect(response.headers.get("connection")).toBe("close");
         reader = expectDefined(response.body, "response body").getReader();
         const decoder = new TextDecoder();
         let body = decoder.decode((await within(reader.read())).value);
@@ -187,7 +170,6 @@ describe("MCP HTTP keepalive", () => {
     const send = await startClient();
     const response = await send("GET");
     expect(response.headers.get("content-type")).toBe("text/event-stream");
-    expect(response.headers.get("connection")).toBe("close");
     const reader = expectDefined(response.body, "notification stream").getReader();
     try {
       const decoder = new TextDecoder();

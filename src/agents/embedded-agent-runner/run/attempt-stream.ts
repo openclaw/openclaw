@@ -208,7 +208,7 @@ export function installEmbeddedAttemptStreamGuards(
         const changes =
           observation.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
           observation.dropCause;
-        log[observation.dropCause?.startsWith("unattributed:") ? "debug" : "warn"](
+        log.warn(
           `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
             `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
@@ -419,7 +419,6 @@ export function installEmbeddedAttemptStreamGuards(
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
     nextCallId: () => `${attempt.runId}:model:${(modelCallSequence.value += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
-    onAgentEvent: attempt.onAgentEvent,
     onSucceeded: contextGuards.recordCacheTouch,
     onTerminal: () => {
       modelResponseTerminal = true;
@@ -447,9 +446,9 @@ export function installEmbeddedAttemptStreamGuards(
   });
   return {
     /** Returns the measured predecessor that may anchor this exact request's pressure. */
-    onModelRequest: async (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
+    onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
       const previous = cacheObserver.getContextUsage();
-      const request = await cacheObserver.onModelRequest(...args);
+      const request = cacheObserver.onModelRequest(...args);
       const previousRequest =
         previous?.requestIndex === request.requestIndex - 1 &&
         request.prefixUnchanged &&

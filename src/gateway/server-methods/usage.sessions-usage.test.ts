@@ -18,6 +18,20 @@ import { createSessionRowProjectionFixture } from "../session-row-projection.tes
 import * as sessionSharingPreparation from "../session-sharing-preparation.js";
 
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: vi.fn(() => TEST_RUNTIME_CONFIG) }));
+vi.mock("../../config/sessions/combined-store-gateway-read.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/combined-store-gateway-read.js")
+  >("../../config/sessions/combined-store-gateway-read.js");
+  return {
+    ...actual,
+    loadCombinedSessionStoreForGatewayCoreAsync: vi.fn(() => ({
+      targetsBySessionKey: new Map(),
+      durableTargets: [],
+      storePath: "(multiple)",
+      store: {},
+    })),
+  };
+});
 vi.mock("../session-utils-store-worker.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils-store-worker.js")>(
     "../session-utils-store-worker.js",
@@ -59,6 +73,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
     loadSessionLogs: vi.fn(async () => []),
   };
 });
+import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
@@ -68,10 +83,6 @@ import {
 } from "../../infra/session-cost-usage.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { usageHandlers } from "./usage.js";
-import {
-  createUsageSessionStoreFixture,
-  type UsageSessionStoreFixture,
-} from "./usage.test-support.js";
 
 let TEST_RUNTIME_CONFIG: OpenClawConfig = {
   session: {},
@@ -81,7 +92,6 @@ let TEST_RUNTIME_CONFIG: OpenClawConfig = {
     entries: { main: {}, opus: {} },
   },
 };
-let projectionFixture: UsageSessionStoreFixture = { store: {} };
 const BASE_USAGE_RANGE = { startDate: "2026-02-01", endDate: "2026-02-02", limit: 10 };
 async function runSessionsUsageMethod(
   method: "sessions.usage" | "sessions.usage.timeseries" | "sessions.usage.logs",
@@ -94,21 +104,12 @@ async function runSessionsUsageMethod(
 ) {
   const respond = options.respond ?? vi.fn();
   const handler = expectDefined(usageHandlers[method], "usage handler");
-  const projection = options.context
-    ? undefined
-    : createSessionRowProjectionFixture({ cfg: TEST_RUNTIME_CONFIG, ...projectionFixture });
-  try {
-    await handler({
-      respond,
-      params,
-      signal: options.signal,
-      context:
-        options.context ??
-        bindSessionRowProjection({ getRuntimeConfig: () => TEST_RUNTIME_CONFIG }, () => projection),
-    } as unknown as Parameters<typeof handler>[0]);
-  } finally {
-    projection?.dispose();
-  }
+  await handler({
+    respond,
+    params,
+    signal: options.signal,
+    context: options.context ?? { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
+  } as unknown as Parameters<typeof handler>[0]);
   return respond;
 }
 const runSessionsUsage = (params: Record<string, unknown>) =>
@@ -117,6 +118,32 @@ function readResult(respond: ReturnType<typeof vi.fn>): SessionsUsageResult {
   expect(respond).toHaveBeenCalledOnce();
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   return respond.mock.calls[0]?.[1] as SessionsUsageResult;
+}
+function mockCombinedStore(
+  store: Record<string, SessionEntry>,
+  owners: ReadonlyArray<readonly [string, string]>,
+  storePath?: string,
+) {
+  vi.mocked(loadCombinedSessionStoreForGatewayCoreAsync).mockResolvedValue({
+    durableTargets: [],
+    storePath: "(multiple)",
+    store,
+    targetsBySessionKey: new Map(
+      owners.map(([key, agentId]) => [
+        key,
+        {
+          agentId,
+          entry: store[key],
+          readSourceEntry: (sourceKey: string) => store[sourceKey],
+          resolveSourceKey: (sourceKey: string) => sourceKey,
+          storeTarget: {
+            agentId,
+            storePath: storePath ?? `/tmp/agents/${agentId}/agent/openclaw-agent.sqlite`,
+          },
+        },
+      ]),
+    ),
+  });
 }
 function mockStoredSession(
   key: string,
@@ -141,7 +168,6 @@ function mockStoredSession(
 describe("sessions.usage", () => {
   beforeEach(() => {
     TEST_RUNTIME_CONFIG = { ...TEST_RUNTIME_CONFIG };
-    projectionFixture = { store: {} };
     vi.clearAllMocks();
   });
 
@@ -172,7 +198,7 @@ describe("sessions.usage", () => {
   );
 
   it.each(["client cancellation", "time budget"] as const)(
-    "cancels data work after %s while preserving the caller lifetime",
+    "aborts usage work without publishing a report after %s",
     async (cause) => {
       const started = createDeferred<AbortSignal | undefined>();
       const release = createDeferred();
@@ -183,12 +209,18 @@ describe("sessions.usage", () => {
       }
       vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async () => {
         const signal = getAsyncWorkSignal();
+        const abort = () => release.resolve();
+        signal?.addEventListener("abort", abort, { once: true });
         started.resolve(signal);
-        await release.promise;
-        return {
-          summaries: [createEmptyCostUsageTotals()],
-          cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
-        };
+        try {
+          await release.promise;
+          return {
+            summaries: [createEmptyCostUsageTotals()],
+            cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
+          };
+        } finally {
+          signal?.removeEventListener("abort", abort);
+        }
       });
       const pending = runSessionsUsageMethod("sessions.usage", BASE_USAGE_RANGE, {
         signal: controller.signal,
@@ -209,20 +241,11 @@ describe("sessions.usage", () => {
           await vi.advanceTimersByTimeAsync(1);
         }
         expect(signal.aborted).toBe(true);
+        expect(await pending).toBe(signal.reason);
         if (cause === "time budget") {
-          expect(await pending).toBeUndefined();
-          expect(readResult(respond)).toMatchObject({
-            totals: { totalTokens: 0 },
-            cacheStatus: { status: "partial", pendingFiles: 1 },
-            partial: {
-              reason: "time-budget",
-              message: expect.stringContaining("narrow the date range"),
-            },
-          });
-        } else {
-          expect(await pending).toBe(signal.reason);
-          expect(respond).not.toHaveBeenCalled();
+          expect(signal.reason).toMatchObject({ message: expect.stringContaining("15-second") });
         }
+        expect(respond).not.toHaveBeenCalled();
       } finally {
         release.resolve();
         await pending;
@@ -230,113 +253,6 @@ describe("sessions.usage", () => {
       }
     },
   );
-
-  it("returns completed batches and a range hint when the next batch exceeds its budget", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const started = createDeferred();
-    const release = createDeferred();
-    const discovered = vi.mocked(discoverAllSessions);
-    const originalDiscovery = discovered.getMockImplementation()!;
-    const load = vi.mocked(loadSessionCostSummariesFromCache);
-    const originalLoad = load.getMockImplementation()!;
-    discovered.mockResolvedValue(
-      Array.from({ length: 257 }, (_, index) => ({
-        sessionId: `budget-${index}`,
-        sessionFile: `/tmp/budget-${index}.jsonl`,
-        mtime: 257 - index,
-      })),
-    );
-    load.mockImplementation(async ({ sessions }) => {
-      if (sessions.some(({ sessionId }) => sessionId === "budget-256")) {
-        const signal = getAsyncWorkSignal()!;
-        const abort = () => release.resolve();
-        signal.addEventListener("abort", abort, { once: true });
-        started.resolve();
-        try {
-          await release.promise;
-          signal.throwIfAborted();
-        } finally {
-          signal.removeEventListener("abort", abort);
-        }
-      }
-      return {
-        summaries: sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 })),
-        cacheStatus: {
-          status: "fresh",
-          cachedFiles: sessions.length,
-          pendingFiles: 0,
-          staleFiles: 0,
-        },
-      };
-    });
-    const pending = runSessionsUsage({ ...BASE_USAGE_RANGE, projection: "overview" });
-    try {
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(15_000);
-      const result = readResult(await pending);
-      expect(result.totals.totalTokens).toBe(256 * 7);
-      expect(result.sessions).toHaveLength(50);
-      expect(result.cacheStatus).toMatchObject({
-        status: "partial",
-        cachedFiles: 256,
-        pendingFiles: 1,
-      });
-      expect(result.partial?.reason).toBe("time-budget");
-      expect(result.overview?.queryWarnings).toContain(result.partial?.message);
-      // A timed-out snapshot must not become a complete cached empty/subtotal result.
-      load.mockImplementation(originalLoad);
-      const retried = readResult(
-        await runSessionsUsage({ ...BASE_USAGE_RANGE, projection: "overview" }),
-      );
-      expect(retried.partial).toBeUndefined();
-      expect(retried.cacheStatus?.status).toBe("fresh");
-    } finally {
-      release.resolve();
-      await pending;
-      discovered.mockImplementation(originalDiscovery);
-      load.mockImplementation(originalLoad);
-      vi.useRealTimers();
-    }
-  });
-
-  it("carries the remaining report allowance into later batches", async () => {
-    const discovered = vi.mocked(discoverAllSessions);
-    const originalDiscovery = discovered.getMockImplementation()!;
-    const load = vi.mocked(loadSessionCostSummariesFromCache);
-    const originalLoad = load.getMockImplementation()!;
-    discovered.mockResolvedValue(
-      Array.from({ length: 257 }, (_, index) => ({
-        sessionId: `memory-${index}`,
-        sessionFile: `/tmp/memory-${index}.jsonl`,
-        mtime: 257 - index,
-      })),
-    );
-    load.mockImplementation(async ({ sessions, reportBudgetBytes }) => ({
-      summaries: sessions.map(() =>
-        reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
-      ),
-      remainingReportBytes: 0,
-      cacheStatus: {
-        status: reportBudgetBytes === 0 ? "partial" : "fresh",
-        cachedFiles: reportBudgetBytes === 0 ? 0 : sessions.length,
-        pendingFiles: reportBudgetBytes === 0 ? sessions.length : 0,
-        staleFiles: 0,
-      },
-    }));
-    try {
-      const result = readResult(await runSessionsUsage(BASE_USAGE_RANGE));
-      expect(load.mock.calls[1]?.[0].reportBudgetBytes).toBe(0);
-      expect(result.totals.totalTokens).toBe(256 * 7);
-      expect(result.cacheStatus).toMatchObject({
-        status: "partial",
-        cachedFiles: 256,
-        pendingFiles: 1,
-      });
-    } finally {
-      discovered.mockImplementation(originalDiscovery);
-      load.mockImplementation(originalLoad);
-    }
-  });
 
   it("keeps an identical cold usage request alive when the first client disconnects", async ({
     signal: testSignal,
@@ -517,108 +433,92 @@ describe("sessions.usage", () => {
   });
 
   it("applies the usage size budget to the selected creator", async () => {
-    await withOpenClawTestState({ label: "usage-creator-budget" }, async (state) => {
-      const unrelated = Array.from({ length: 20_001 }, (_, index) => ({
-        sessionId: `other-creator-${index}`,
-        sessionFile: `/tmp/other-creator-${index}.jsonl`,
-        mtime: index + 1,
-      }));
-      const selected = {
-        sessionId: "selected-creator",
-        sessionFile: "/tmp/selected-creator.jsonl",
-        mtime: 1,
-      };
-      const key = "agent:main:selected-creator";
-      const entry: SessionEntry = {
-        sessionId: selected.sessionId,
-        updatedAt: selected.mtime,
-        createdActor: { type: "system" },
-      };
-      const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
-      replaceSessionEntrySync({ agentId: "main", sessionKey: key, storePath }, entry);
-      projectionFixture = createUsageSessionStoreFixture(
-        { [key]: entry },
-        [[key, "main"]],
-        () => storePath,
-      );
-      vi.mocked(discoverAllSessions).mockResolvedValueOnce([...unrelated, selected]);
-      vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async ({ sessions }) => ({
-        summaries: sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 })),
-        cacheStatus: {
-          status: "fresh",
-          cachedFiles: sessions.length,
-          pendingFiles: 0,
-          staleFiles: 0,
-        },
-      }));
-      const result = readResult(
-        await runSessionsUsage({ ...BASE_USAGE_RANGE, creatorKey: '["system",null]', limit: 1 }),
-      );
-      expect(result.sessions).toMatchObject([{ key }]);
-      expect(result.totals.totalTokens).toBe(7);
-    });
+    const unrelated = Array.from({ length: 20_001 }, (_, index) => ({
+      sessionId: `other-creator-${index}`,
+      sessionFile: `/tmp/other-creator-${index}.jsonl`,
+      mtime: index + 1,
+    }));
+    const selected = {
+      sessionId: "selected-creator",
+      sessionFile: "/tmp/selected-creator.jsonl",
+      mtime: 1,
+    };
+    const store = Object.fromEntries(
+      unrelated.map(({ sessionId, mtime }) => [
+        `agent:main:${sessionId}`,
+        { sessionId, updatedAt: mtime, createdActor: { type: "system" as const } },
+      ]),
+    );
+    mockCombinedStore(
+      store,
+      Object.keys(store).map((key) => [key, "main"] as const),
+    );
+    vi.mocked(discoverAllSessions).mockResolvedValueOnce([...unrelated, selected]);
+    vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async ({ sessions }) => ({
+      summaries: sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 })),
+      cacheStatus: {
+        status: "fresh",
+        cachedFiles: sessions.length,
+        pendingFiles: 0,
+        staleFiles: 0,
+      },
+    }));
+    const result = readResult(
+      await runSessionsUsage({ ...BASE_USAGE_RANGE, creatorKey: '["unknown"]', limit: 1 }),
+    );
+    expect(result.sessions).toMatchObject([{ key: "agent:main:selected-creator" }]);
+    expect(result.totals.totalTokens).toBe(7);
   });
 
-  it.each(["available", "time budget"])(
-    "uses resident authority when missing authority is %s",
-    async (mode) => {
-      await withOpenClawTestState({ label: "usage-context-resident" }, async (state) => {
-        const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
-        const store: Record<string, SessionEntry> = {};
-        const report = {
-          source: "run" as const,
-          generatedAt: 1,
-          systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
-          injectedWorkspaceFiles: [],
-          skills: { promptChars: 0, entries: [] },
-          tools: { listChars: 0, schemaChars: 0, entries: [] },
+  it("uses resident authority for context searches and prepares only an unavailable row", async () => {
+    await withOpenClawTestState({ label: "usage-context-resident" }, async (state) => {
+      const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+      const store: Record<string, SessionEntry> = {};
+      const report = {
+        source: "run" as const,
+        generatedAt: 1,
+        systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 0, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      };
+      const discovered = Array.from({ length: 61 }, (_, index) => {
+        const sessionId = `context-${index}`;
+        const key = `agent:main:${sessionId}`;
+        const entry = { sessionId, updatedAt: index + 1, systemPromptReport: report };
+        store[key] = entry;
+        replaceSessionEntrySync({ agentId: "main", sessionKey: key, storePath }, entry);
+        return {
+          sessionId,
+          sessionFile: `sqlite:main:${sessionId}:${storePath}`,
+          mtime: index + 1,
         };
-        const discovered = Array.from({ length: 61 }, (_, index) => {
-          const sessionId = `context-${index}`;
-          const key = `agent:main:${sessionId}`;
-          const entry = { sessionId, updatedAt: index + 1, systemPromptReport: report };
-          store[key] = entry;
-          replaceSessionEntrySync({ agentId: "main", sessionKey: key, storePath }, entry);
-          return {
-            sessionId,
-            sessionFile: `sqlite:main:${sessionId}:${storePath}`,
-            mtime: index + 1,
-          };
-        });
-        projectionFixture = createUsageSessionStoreFixture(
-          store,
-          Object.keys(store).map((key) => [key, "main"] as const),
-          () => storePath,
-        );
-        vi.mocked(discoverAllSessions).mockResolvedValueOnce(discovered);
-        const projection = createSessionRowProjectionFixture({
-          cfg: TEST_RUNTIME_CONFIG,
-          store,
-          storePath,
-          agentId: "main",
-        });
-        const readCapabilityEntry = projection.readCapabilityEntry.bind(projection);
-        const unavailableKey = "agent:main:context-60";
-        vi.spyOn(projection, "readCapabilityEntry").mockImplementation((query) =>
-          query.key === unavailableKey ? undefined : readCapabilityEntry(query),
-        );
-        const context = bindSessionRowProjection(
-          { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
-          () => projection,
-        );
-        const reads = vi.spyOn(sessionSharingPreparation, "prepareSessionMutationFacts");
-        const started = createDeferred();
-        const release = createDeferred();
-        if (mode === "time budget") {
-          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-          reads.mockImplementationOnce(async () => {
-            started.resolve();
-            await release.promise;
-            throw new sessionSharingPreparation.SessionMutationFactsUnavailableError();
-          });
-        }
-        try {
-          const pending = runSessionsUsageMethod(
+      });
+      mockCombinedStore(
+        store,
+        Object.keys(store).map((key) => [key, "main"] as const),
+        storePath,
+      );
+      vi.mocked(discoverAllSessions).mockResolvedValueOnce(discovered);
+      const projection = createSessionRowProjectionFixture({
+        cfg: TEST_RUNTIME_CONFIG,
+        store,
+        storePath,
+        agentId: "main",
+      });
+      const readCapabilityEntry = projection.readCapabilityEntry.bind(projection);
+      const unavailableKey = "agent:main:context-60";
+      vi.spyOn(projection, "readCapabilityEntry").mockImplementation((query) =>
+        query.key === unavailableKey ? undefined : readCapabilityEntry(query),
+      );
+      const context = bindSessionRowProjection(
+        { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
+        () => projection,
+      );
+      const reads = vi.spyOn(sessionSharingPreparation, "prepareSessionMutationFacts");
+      try {
+        const result = readResult(
+          await runSessionsUsageMethod(
             "sessions.usage",
             {
               range: "all",
@@ -627,33 +527,21 @@ describe("sessions.usage", () => {
               includeContextWeight: true,
             },
             { context },
-          );
-          if (mode === "time budget") {
-            await started.promise;
-            await vi.advanceTimersByTimeAsync(15_000);
-          }
-          const result = readResult(await pending);
-          expect(result.overview?.total).toBe(mode === "time budget" ? 60 : 61);
-          expect(result.sessions).toHaveLength(50);
-          if (mode === "time budget") {
-            expect(result.partial?.reason).toBe("time-budget");
-            expect(result.sessions.some((row) => row.key === unavailableKey)).toBe(false);
-          } else {
-            expect(result.sessions.every((row) => row.hasContextWeight)).toBe(true);
-            expect(
-              result.sessions.find((row) => row.key === unavailableKey)?.contextWeight,
-            ).toEqual(report);
-          }
-          expect(reads.mock.calls.map(([params]) => params.sessionKey)).toEqual([unavailableKey]);
-        } finally {
-          release.resolve();
-          vi.useRealTimers();
-          reads.mockRestore();
-          projection.dispose();
-        }
-      });
-    },
-  );
+          ),
+        );
+        expect(result.overview?.total).toBe(61);
+        expect(result.sessions).toHaveLength(50);
+        expect(result.sessions.every((row) => row.hasContextWeight)).toBe(true);
+        expect(result.sessions.find((row) => row.key === unavailableKey)?.contextWeight).toEqual(
+          report,
+        );
+        expect(reads.mock.calls.map(([params]) => params.sessionKey)).toEqual([unavailableKey]);
+      } finally {
+        reads.mockRestore();
+        projection.dispose();
+      }
+    });
+  });
 
   it.each([
     {
@@ -709,7 +597,7 @@ describe("sessions.usage", () => {
       const sessionFile = path.join(state.sessionsDir("opus"), "shared.jsonl");
       fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
       fs.writeFileSync(sessionFile, "");
-      projectionFixture = createUsageSessionStoreFixture(
+      mockCombinedStore(
         {
           "agent:main:shared": {
             sessionId: "shared",
@@ -763,12 +651,13 @@ describe("sessions.usage", () => {
       usageFamilyKey: storeKey,
       usageFamilySessionIds: ["old", "current", "oldest"],
     };
+    mockStoredSession(storeKey, entry);
     vi.mocked(discoverAllSessions).mockResolvedValueOnce([
       { sessionId: "old", sessionFile: oldSessionFile, mtime: 1_000 },
       { sessionId: "oldest", sessionFile: oldestSessionFile, mtime: 900 },
     ]);
 
-    projectionFixture = createUsageSessionStoreFixture({ [storeKey]: entry }, [[storeKey, "opus"]]);
+    mockCombinedStore({ [storeKey]: entry }, [[storeKey, "opus"]]);
     vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => ({
       summaries: sessions.map((session) => {
         const historical = session.sessionId === "old";
@@ -934,9 +823,8 @@ describe("sessions.usage", () => {
 
     TEST_RUNTIME_CONFIG = { ...TEST_RUNTIME_CONFIG };
     const partialEntry = { ...entry, usageFamilySessionIds: ["current", "old"] };
-    projectionFixture = createUsageSessionStoreFixture({ [storeKey]: partialEntry }, [
-      [storeKey, "opus"],
-    ]);
+    mockStoredSession(storeKey, partialEntry);
+    mockCombinedStore({ [storeKey]: partialEntry }, [[storeKey, "opus"]]);
     vi.mocked(discoverAllSessions).mockResolvedValueOnce([
       { sessionId: "old", sessionFile: oldSessionFile, mtime: 1_000 },
     ]);
@@ -962,7 +850,8 @@ describe("sessions.usage", () => {
 
   it("prefers the deterministic store key when duplicate sessionIds exist", async () => {
     const preferredKey = "agent:opus:acp:run-dup";
-    projectionFixture = createUsageSessionStoreFixture(
+    mockStoredSession(preferredKey, { sessionId: "run-dup", updatedAt: 1_000 });
+    mockCombinedStore(
       {
         [preferredKey]: { sessionId: "run-dup", sessionFile: "run-dup.jsonl", updatedAt: 1_000 },
         "agent:other:main": {

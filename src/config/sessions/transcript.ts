@@ -67,7 +67,6 @@ import {
 import {
   resolveMirroredTranscriptText,
   type SessionTranscriptDeliveryMirror,
-  type SubagentCompletionDirectDeliveryMirror,
 } from "./transcript-mirror.js";
 import type {
   ReadRecentSessionConversationTextOptions,
@@ -99,7 +98,6 @@ export type SessionTranscriptAppendResult =
 export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
 type InternalSessionTranscriptDeliveryMirror =
   | SessionTranscriptDeliveryMirror
-  | SubagentCompletionDirectDeliveryMirror
   | {
       kind: "message-tool-source-reply";
       final: boolean;

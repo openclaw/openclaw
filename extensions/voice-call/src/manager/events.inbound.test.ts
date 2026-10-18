@@ -1,7 +1,7 @@
 // Voice Call tests cover inbound event policy and routing behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCallBriefInstructions } from "../call-brief.js";
-import { normalizeVoiceCallConfig } from "../config.js";
+import { VoiceCallConfigSchema } from "../config.js";
 import {
   createEventManagerHarness,
   EVENT_MANAGER_REPLAY_KEY_LIMIT,
@@ -56,6 +56,7 @@ describe("processEvent (functional inbound calls)", () => {
   it.each([
     ["call.initiated", "ringing"],
     ["call.ringing", "ringing"],
+    ["call.answered", "answered"],
     ["call.active", "active"],
   ] as const)("admits mock %s webhooks with their caller and destination", async (type, state) => {
     const ctx = createContext({ provider: new MockProvider() });
@@ -115,7 +116,7 @@ describe("processEvent (functional inbound calls)", () => {
       const hangup = vi.fn(async () => {});
       const ctx = createContext({
         provider: createProvider({ hangupCall: hangup }),
-        config: normalizeVoiceCallConfig({
+        config: VoiceCallConfigSchema.parse({
           enabled: true,
           provider: "plivo",
           inboundPolicy: policy,
@@ -198,7 +199,7 @@ describe("processEvent (functional inbound calls)", () => {
       },
     });
     const ctx = createContext({
-      config: normalizeVoiceCallConfig({
+      config: VoiceCallConfigSchema.parse({
         enabled: true,
         provider: "telnyx",
         fromNumber: "+15550000000",
@@ -243,7 +244,7 @@ describe("processEvent (functional inbound calls)", () => {
     "assigns $sessionScope session keys to inbound calls",
     async ({ sessionScope, coreSession, expectedSessionKey }) => {
       const ctx = createContext({
-        config: normalizeVoiceCallConfig({
+        config: VoiceCallConfigSchema.parse({
           enabled: true,
           provider: "plivo",
           fromNumber: "+15550000000",
@@ -272,7 +273,7 @@ describe("processEvent (functional inbound calls)", () => {
 
   it("applies per-number inbound greeting and stores the matched route key", async () => {
     const ctx = createContext({
-      config: normalizeVoiceCallConfig({
+      config: VoiceCallConfigSchema.parse({
         enabled: true,
         provider: "plivo",
         fromNumber: "+15550000000",

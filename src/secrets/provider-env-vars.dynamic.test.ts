@@ -409,6 +409,37 @@ describe("provider env vars dynamic manifest metadata", () => {
     }
   });
 
+  it("reuses the current compatible metadata snapshot for workspace auth evidence", () => {
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(
+      metadataSnapshot(
+        setupPlugin("external-cloud", "global", {
+          id: "external-cloud",
+          authEvidence: [
+            {
+              type: "local-file-with-env",
+              fileEnvVar: "EXTERNAL_CLOUD_CREDENTIALS",
+              credentialMarker: "external-cloud-local-credentials",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(
+      resolveProviderAuthLookupMaps({
+        config: {},
+        workspaceDir: "/workspace",
+      }).authEvidenceMap["external-cloud"],
+    ).toEqual([
+      {
+        type: "local-file-with-env",
+        fileEnvVar: "EXTERNAL_CLOUD_CREDENTIALS",
+        credentialMarker: "external-cloud-local-credentials",
+      },
+    ]);
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
   it("does not reuse a load-path current snapshot for default provider env lookups", () => {
     const staleSnapshot = metadataSnapshot(LOAD_PATH_PROVIDER_PLUGIN);
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockImplementation(
@@ -664,7 +695,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     const config = { plugins: { entries: { "disabled-setup-owner": { enabled: false } } } };
     for (const enabled of [false, true, false]) {
       config.plugins.entries["disabled-setup-owner"].enabled = enabled;
-      const lookupMaps = resolveProviderAuthLookupMaps({ config, workspaceDir: "/workspace" });
+      const lookupMaps = resolveProviderAuthLookupMaps({ config });
       expect(lookupMaps.setupProviderFallbackRefs).toEqual(
         enabled ? ["disabled-cloud", "disabled-cloud-plan"] : [],
       );

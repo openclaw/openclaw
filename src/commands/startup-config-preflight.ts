@@ -2,18 +2,12 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
-import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { assertDatabasePortStartupAllowed } from "../infra/database-port-recovery.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { RetiredStateFormatError } from "../infra/state-migrations.retired-files.js";
 import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
-import {
-  getPluginCache,
-  getPluginMetadataSnapshotCache,
-  withPluginCache,
-  type PluginCache,
-} from "../plugins/plugin-cache.js";
+import type { PluginCache } from "../plugins/plugin-cache.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   readAdmittedConfigSnapshot,
@@ -181,18 +175,6 @@ async function prepareStartupConfig(
         return result(read);
       }
     }
-    const [{ initializeNativeOpenClawStateDatabase }, { isStatePostgres }] = await Promise.all([
-      import("../state/openclaw-state-db.js"),
-      import("../state/openclaw-state-db-engine.js"),
-    ]);
-    await beforeStatePreparation(read.snapshot);
-    assertLeaseCurrent();
-    // Native clients can create a version-zero catalog before the first Gateway.
-    // Finish that producer's bootstrap after read admission releases its snapshot,
-    // before webhook history or other runtime tables are consumed.
-    if (!isStatePostgres()) {
-      initializeNativeOpenClawStateDatabase({ env });
-    }
     const { HISTORICAL_WEBHOOK_CHANNELS, recordUnwrittenWebhookCompletion } =
       await import("./doctor/shared/legacy-webhook-pins.js");
     const webhookCompletion = read.snapshot.sourceConfig.meta?.migrations?.webhookListeners;
@@ -228,12 +210,11 @@ async function prepareStartupConfig(
         }
       }
     }
-    const verification = await withPluginCache(
-      read.pluginMetadataSnapshot
-        ? getPluginMetadataSnapshotCache(read.pluginMetadataSnapshot)
-        : getPluginCache(),
-      () => refreshStartupPluginQuarantine({ cfg: read.snapshot.sourceConfig, env, measure }),
-    );
+    const verification = await refreshStartupPluginQuarantine({
+      cfg: read.snapshot.sourceConfig,
+      env,
+      measure,
+    });
     setActiveDegradedPlugins(verification.quarantinedPlugins);
     recordStartupMigrationWarnings([
       ...readStartupStateWarnings(env),
@@ -257,9 +238,7 @@ async function prepareStartupConfig(
 }
 
 function result(read: ConfigPreflightSnapshotRead) {
-  const selection = read.databaseEngineSelection ?? getDatabaseEngineSelection();
   return {
-    ...(selection?.input ? { databaseEngineSelection: selection } : {}),
     snapshot: read.snapshot,
     baseConfig: read.snapshot.sourceConfig,
     ...(read.pluginMetadataSnapshot ? { pluginMetadataSnapshot: read.pluginMetadataSnapshot } : {}),

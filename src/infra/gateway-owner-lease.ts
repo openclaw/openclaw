@@ -6,7 +6,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
-import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -148,7 +147,7 @@ export async function assertGatewayOwnerLeaseStopped(
   let outcome: OpenClawStateReadOutcome | undefined;
   try {
     authority.assertCurrent();
-    if (schemaMaintenance && !isStatePostgres()) {
+    if (schemaMaintenance) {
       prepared = prepareSqliteReadOnlyLocationSync(pathname);
       releaseSnapshot = retainSnapshotTempDirectory(
         prepared.cleanupRoot ?? path.dirname(prepared.location),

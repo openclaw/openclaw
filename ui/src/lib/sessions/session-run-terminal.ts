@@ -19,7 +19,6 @@ export type SessionRunTerminal = {
   /** Latest session status after this owned model run leaves the active registry. */
   status: SessionRunStatus;
   errorMessage?: string;
-  suppressErrorNotice?: boolean;
   endedAt: number;
 };
 
@@ -95,7 +94,6 @@ function createSessionRunTerminalReconciler(
     const lastRunError = failed
       ? errorMessage || (replacementRunId ? undefined : row.lastRunError)
       : undefined;
-    const suppressErrorNotice = terminal.suppressErrorNotice ?? false;
     const endedAt = replacementRunId ? terminal.endedAt : (row.endedAt ?? terminal.endedAt);
     const runtimeMs = replacementRunId
       ? undefined
@@ -114,7 +112,6 @@ function createSessionRunTerminalReconciler(
       row.hasActiveRun === false &&
       row.status === terminal.status &&
       row.lastRunError === lastRunError &&
-      (row.suppressErrorNotice ?? false) === suppressErrorNotice &&
       row.endedAt === endedAt &&
       row.runtimeMs === runtimeMs &&
       row.activeRunIds === activeRunIds &&
@@ -127,7 +124,6 @@ function createSessionRunTerminalReconciler(
             hasActiveRun: false,
             status: terminal.status,
             lastRunError,
-            suppressErrorNotice,
             endedAt,
             runtimeMs,
             abortedLastRun,

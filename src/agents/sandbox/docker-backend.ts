@@ -1,7 +1,6 @@
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildGitHubExecLaunchArgv } from "../github-exec-launch.js";
-import { CLEARED_GITHUB_CREDENTIALS } from "../github-host.js";
 import type { PreparedGitHubToolEnvironment } from "../github-tool-identity.types.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
@@ -29,7 +28,6 @@ import {
   type SandboxContainerEngineTarget,
   validateSandboxContainerEngineTarget,
 } from "./docker.js";
-import { bindSandboxInputStager, createSandboxInputStager } from "./input-staging.js";
 import { resolveSandboxContainerOnlyMounts } from "./mount-plan.js";
 import { createSandboxProcessCleanup } from "./process-cleanup.js";
 import type { SandboxRegistryEntry } from "./registry.js";
@@ -55,7 +53,7 @@ function buildContainerExecArgs(params: {
   args.push("--env-file", params.envFile);
   if (params.managedGitHubIdentity) {
     // The host launcher supplies values privately; the engine reads them by name.
-    args.push(...Object.keys(CLEARED_GITHUB_CREDENTIALS).flatMap((name) => ["--env", name]));
+    args.push("--env", "GH_TOKEN", "--env", "GITHUB_TOKEN");
   }
   // Apply the staged prepend only after login profile sourcing; direct PATH
   // injection can break the container engine's initial executable lookup.
@@ -124,21 +122,11 @@ async function createContainerSandboxBackend(
     assertCurrent,
     githubIdentity,
   });
-  handle.createFsBridge = ({ sandbox }) => {
-    const bridge = createSandboxFsBridge({
+  handle.createFsBridge = ({ sandbox }) =>
+    createSandboxFsBridge({
       sandbox: { ...sandbox, backend: sandbox.backend ?? handle },
       containerOnlyMounts,
     });
-    bindSandboxInputStager(
-      bridge,
-      createSandboxInputStager({
-        root: params.workspaceDir,
-        bridge,
-        assertCurrent,
-      }),
-    );
-    return bridge;
-  };
   return handle;
 }
 
@@ -199,7 +187,7 @@ function createContainerSandboxBackendHandle(params: {
       browser: params.engine.id === "docker",
       readOnlyResourceMounts: true,
     },
-    async buildExecSpec({ command, workdir, env: requestedEnv, usePty, stdin }) {
+    async buildExecSpec({ command, workdir, env: requestedEnv, usePty }) {
       await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
       const identity = params.githubIdentity;
       const githubProfileDir = identity?.localIdentityEnv.GH_CONFIG_DIR;
@@ -238,13 +226,14 @@ function createContainerSandboxBackendHandle(params: {
         ];
         return {
           argv: githubProfileDir
-            ? buildGitHubExecLaunchArgv(argv, githubProfileDir, {
-                githubHost: identity?.localIdentityEnv.GH_HOST,
-                externalCommandShell,
-              })
+            ? buildGitHubExecLaunchArgv(
+                argv,
+                githubProfileDir,
+                externalCommandShell ? { externalCommandShell } : undefined,
+              )
             : argv,
           env: process.env,
-          stdinMode: usePty || stdin ? "pipe-open" : "pipe-closed",
+          stdinMode: usePty ? "pipe-open" : "pipe-closed",
           finalizeToken: envFile.cleanup satisfies ContainerExecFinalizeToken,
         };
       } catch (error) {

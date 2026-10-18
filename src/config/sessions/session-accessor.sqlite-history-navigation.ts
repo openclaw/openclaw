@@ -74,11 +74,21 @@ function canFilterEventIds(eventIds: readonly string[] | undefined): eventIds is
   );
 }
 
-function unindexedNavigationQuery(
+/** Exact legacy handoffs retained raw rows without creating identity ownership. */
+export function* iterateUnindexedTranscriptNavigation(
   projection: CurrentTranscriptProjection,
-  eventIds: readonly string[] | undefined,
-) {
-  return getActiveTranscriptKysely(projection.database)
+  options: {
+    afterRawSeq?: number;
+    maxRawSeq?: number;
+    eventIds?: readonly string[];
+    controlsOnly?: boolean;
+  } = {},
+): IterableIterator<UnindexedTranscriptNavigation> {
+  if (!projection.hasUnindexedPrefix || options.eventIds?.length === 0) {
+    return;
+  }
+  const db = getActiveTranscriptKysely(projection.database);
+  const query = db
     .selectFrom("transcript_events as event")
     .leftJoin("transcript_event_identities as identity", (join) =>
       join
@@ -93,43 +103,18 @@ function unindexedNavigationQuery(
     ])
     .where("event.session_id", "=", projection.resolved.sessionId)
     .where("identity.seq", "is", null)
-    .$if(canFilterEventIds(eventIds), (filtered) =>
+    .$if(canFilterEventIds(options.eventIds), (filtered) =>
       filtered.where((eb) =>
         navigationCandidatesSql(
           eb.ref("identity.seq"),
           transcriptEventNavigationSql(projection.database.db, "event"),
           {
             key: "id",
-            eventIds: eventIds!,
+            eventIds: options.eventIds!,
           },
         ),
       ),
-    );
-}
-
-function* navigationRows<Row extends { event_json: string }>(rows: Iterable<Row>) {
-  for (const { event_json, ...row } of rows) {
-    const event = parseNavigation(event_json);
-    if (event) {
-      yield { ...row, event };
-    }
-  }
-}
-
-/** Exact legacy handoffs retained raw rows without creating identity ownership. */
-export function* iterateUnindexedTranscriptNavigation(
-  projection: CurrentTranscriptProjection,
-  options: {
-    afterRawSeq?: number;
-    maxRawSeq?: number;
-    eventIds?: readonly string[];
-    controlsOnly?: boolean;
-  } = {},
-): IterableIterator<UnindexedTranscriptNavigation> {
-  if (!projection.hasUnindexedPrefix || options.eventIds?.length === 0) {
-    return;
-  }
-  const query = unindexedNavigationQuery(projection, options.eventIds)
+    )
     .$if(options.controlsOnly === true, (filtered) =>
       filtered.where((eb) =>
         eb.or([
@@ -143,7 +128,12 @@ export function* iterateUnindexedTranscriptNavigation(
       filtered.where("event.seq", ">", options.afterRawSeq!),
     )
     .orderBy("event.seq", "asc");
-  yield* navigationRows(iterateSqliteQuerySync(projection.database.db, query));
+  for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
+    const event = parseNavigation(row.event_json);
+    if (event) {
+      yield { event_seq: row.event_seq, serialized_bytes: row.serialized_bytes, event };
+    }
+  }
 }
 
 export function* iterateUnindexedActiveTranscriptNavigation(
@@ -158,19 +148,58 @@ export function* iterateUnindexedActiveTranscriptNavigation(
   if (!projection.hasUnindexedPrefix || options.eventIds?.length === 0) {
     return;
   }
-  const query = unindexedNavigationQuery(projection, options.eventIds)
-    .innerJoin("session_transcript_active_events as active", (join) =>
+  const db = getActiveTranscriptKysely(projection.database);
+  const query = db
+    .selectFrom("session_transcript_active_events as active")
+    .innerJoin("transcript_events as event", (join) =>
       join
         .onRef("event.session_id", "=", "active.session_id")
         .onRef("event.seq", "=", "active.event_seq"),
     )
-    .select(["active.active_position", "active.message_position"])
+    .leftJoin("transcript_event_identities as identity", (join) =>
+      join
+        .onRef("identity.session_id", "=", "active.session_id")
+        .onRef("identity.seq", "=", "active.event_seq"),
+    )
+    .select([
+      "active.event_seq",
+      "active.active_position",
+      "active.message_position",
+      transcriptEventResetNavigationSql(projection.database.db, "event").as("event_json"),
+      /* kysely-allow-raw: a bounded lookup admits the original payload size before hydration. */
+      sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
+    ])
+    .where("active.session_id", "=", projection.resolved.sessionId)
+    .where("identity.seq", "is", null)
+    .$if(canFilterEventIds(options.eventIds), (filtered) =>
+      filtered.where((eb) =>
+        navigationCandidatesSql(
+          eb.ref("identity.seq"),
+          transcriptEventNavigationSql(projection.database.db, "event"),
+          {
+            key: "id",
+            eventIds: options.eventIds!,
+          },
+        ),
+      ),
+    )
     .where("active.event_seq", "<=", options.maxRawSeq ?? projection.state.indexedSeq)
     .$if(options.beforeActivePosition !== undefined, (filtered) =>
       filtered.where("active.active_position", "<", options.beforeActivePosition!),
     )
     .orderBy("active.active_position", options.first ? "asc" : "desc");
-  yield* navigationRows(iterateSqliteQuerySync(projection.database.db, query));
+  for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
+    const event = parseNavigation(row.event_json);
+    if (event) {
+      yield {
+        event_seq: row.event_seq,
+        active_position: row.active_position,
+        message_position: row.message_position,
+        serialized_bytes: row.serialized_bytes,
+        event,
+      };
+    }
+  }
 }
 
 /** Resolve display navigation without assigning identity or idempotency ownership. */

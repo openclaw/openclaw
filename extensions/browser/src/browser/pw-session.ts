@@ -20,6 +20,7 @@ export {
   armObservedDialogResponseOnPage,
   createObservedDialogAbortSignalForPage,
   ensurePageState,
+  getObservedBrowserStateForPage,
   markObservedDialogsHandledRemotelyForPage,
   respondToObservedDialogOnPage,
   restoreRoleRefsForTarget,

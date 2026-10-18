@@ -30,7 +30,13 @@ type ChannelAvatarCacheEntry = {
 };
 
 const channelAvatarCache = new LruCache<ChannelAvatarCacheEntry>(CHANNEL_AVATAR_CACHE_MAX_ENTRIES);
-const channelAvatarLoads = new Map<string, Promise<HttpImageRepresentation | undefined>>();
+const channelAvatarLoads = new Map<
+  string,
+  {
+    reference: string;
+    pending: Map<string, Promise<HttpImageRepresentation | undefined>>;
+  }
+>();
 
 const getSessionStoreModule = createLazyRuntimeModule(
   () => import("./session-utils-store-worker.js"),
@@ -40,13 +46,22 @@ async function loadChannelAvatar(
   sessionKey: string,
   reference: string,
 ): Promise<HttpImageRepresentation | undefined> {
-  const cached = channelAvatarCache.get(sessionKey);
+  let loads = channelAvatarLoads.get(sessionKey);
+  if (loads) {
+    loads.reference = reference;
+  }
+  const cached = channelAvatarCache.peek(sessionKey);
   if (cached?.reference === reference) {
+    channelAvatarCache.get(sessionKey);
     return cached.image;
   }
-  const loadKey = JSON.stringify([sessionKey, reference]);
-  let pending = channelAvatarLoads.get(loadKey);
+  if (!loads) {
+    loads = { reference, pending: new Map() };
+    channelAvatarLoads.set(sessionKey, loads);
+  }
+  let pending = loads.pending.get(reference);
   if (!pending) {
+    const sessionLoads = loads;
     pending = (async () => {
       const resolved = await resolveInboundMediaReference(reference);
       if (!resolved) {
@@ -54,15 +69,18 @@ async function loadChannelAvatar(
       }
       const stored = await readMediaBuffer(resolved.id, "inbound", HTTP_IMAGE_MAX_BYTES);
       const image = await resolveHttpImageRepresentation(resolved.id, stored.buffer);
-      // A late older load can cause one cache miss, never return bytes for a different reference.
-      if (image) {
+      // A superseded load may reply to its callers but must not replace the current avatar.
+      if (image && sessionLoads.reference === reference) {
         channelAvatarCache.set(sessionKey, { reference, image });
       }
       return image;
     })().finally(() => {
-      channelAvatarLoads.delete(loadKey);
+      sessionLoads.pending.delete(reference);
+      if (sessionLoads.pending.size === 0) {
+        channelAvatarLoads.delete(sessionKey);
+      }
     });
-    channelAvatarLoads.set(loadKey, pending);
+    loads.pending.set(reference, pending);
   }
   return pending;
 }

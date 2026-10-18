@@ -26,21 +26,12 @@ export function readSessionActorTranscriptAnchors(
   scope: { agentId: string; path: string; sessionId: string },
   selection: SessionTranscriptAnchorSelection,
   tail?: TranscriptTail,
-  residentAnchors?: readonly TranscriptEntryAnchor[],
 ): SessionTranscriptAnchorFacts | undefined {
   if (
+    hot.transcript.anchorsState !== "resident" ||
     selection.includeHeader ||
     selection.includeMetadata ||
     selection.activePathEntryId !== undefined
-  ) {
-    return undefined;
-  }
-  const complete = hot.transcript.anchorsState === "resident";
-  const anchors = complete ? hot.transcript.anchors : (residentAnchors ?? []);
-  // A bounded positive-fact window cannot certify that an evicted entry is absent.
-  if (
-    !complete &&
-    selection.entryIds.some((entryId) => !anchors.some((anchor) => anchor.entryId === entryId))
   ) {
     return undefined;
   }
@@ -127,11 +118,12 @@ export function readSessionActorTranscriptAnchors(
         "Session transcript source was deleted, replaced, or changed lifecycle or permissions.",
       );
     }
-    const retainedAnchor = anchors.find((anchor) => anchor.entryId === through.entryId);
-    if (!retainedAnchor && !complete) {
-      return undefined;
-    }
-    if (!sameTranscriptEntryAnchor(through, retainedAnchor)) {
+    if (
+      !sameTranscriptEntryAnchor(
+        through,
+        hot.transcript.anchors.find((anchor) => anchor.entryId === through.entryId),
+      )
+    ) {
       throw new SessionTranscriptReadFenceError("Completed-turn transcript anchor changed");
     }
   } else if (context && !context.admission) {
@@ -155,7 +147,7 @@ export function readSessionActorTranscriptAnchors(
     return undefined;
   }
   const available = new Map(
-    anchors
+    hot.transcript.anchors
       .filter((anchor) => !fence || anchor.rawSeq < fence.beforeRawSeq)
       .map((anchor) => [anchor.entryId, anchor]),
   );
@@ -211,9 +203,6 @@ export function readSessionActorTranscriptAnchors(
     const anchor =
       message.role === "user" || includeMessage ? available.get(row.id) : requested.get(row.id);
     if (message.role === "user" || includeMessage) {
-      if (!anchor && !complete) {
-        return undefined;
-      }
       requested.set(row.id, anchor);
     }
     entries.push({

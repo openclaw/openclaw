@@ -48,10 +48,14 @@ function resolveRunningActivityAgeMs(params: {
   if (params.storedState !== "running") {
     return 0;
   }
+  const nowMs = asDateTimestampMs(Date.now());
+  if (nowMs === undefined) {
+    return 0;
+  }
   const activityAtMs = asDateTimestampMs(params.lastActivityAt);
   const boundedActivityAtMs =
     activityAtMs === undefined ? 0 : Math.max(0, Math.floor(activityAtMs));
-  return Math.max(0, Date.now() - boundedActivityAtMs);
+  return Math.max(0, nowMs - boundedActivityAtMs);
 }
 
 export async function probeDiscordAcpBindingHealth(params: {

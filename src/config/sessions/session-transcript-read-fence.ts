@@ -107,10 +107,6 @@ export function runWithSessionTranscriptReadFence<T>(
   return receipt ? transcriptReadFenceStorage.run(receipt, run) : run();
 }
 
-export function withoutSessionTranscriptReadFence<T>(run: () => T): T {
-  return transcriptReadFenceStorage.exit(run);
-}
-
 export function withSessionContextAdmission<T>(
   target: SessionTranscriptRuntimeTarget,
   admission: UserTurnTranscriptAdmissionReceipt | undefined,

@@ -23,7 +23,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   adopt<T>(value: T): T;
   admitFactory(
     factory: (...args: never[]) => unknown,
-    resultCallbacks?: "tool" | readonly PropertyKey[],
+    resultCallbacks?: readonly PropertyKey[],
   ): void;
   retainWork(): () => void;
   readonly retainedWorkCount: number;

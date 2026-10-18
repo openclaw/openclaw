@@ -2,7 +2,7 @@ import { once } from "node:events";
 import http from "node:http";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
-  createPluginStateKeyedStoreV2ForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -35,19 +35,15 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function persistentStore() {
   resetPluginStateStoreForTests();
-  const keyedStore = createPluginStateKeyedStoreV2ForTests<BeamStoredSession>(
-    "beam",
-    {
-      namespace: "sessions",
-      maxEntries: BEAM_MAX_SESSIONS,
-      overflowPolicy: "evict-oldest",
-      defaultTtlMs: BEAM_RETENTION_MS,
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("beam-store-") },
-    },
-    { assertCurrent() {} },
-  );
+  const keyedStore = createPluginStateKeyedStoreForTests<BeamStoredSession>("beam", {
+    namespace: "sessions",
+    maxEntries: BEAM_MAX_SESSIONS,
+    overflowPolicy: "evict-oldest",
+    defaultTtlMs: BEAM_RETENTION_MS,
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("beam-store-") },
+  });
   const store = createBeamStore({
-    state: { openKeyedStoreV2: () => keyedStore },
+    state: { openKeyedStore: () => keyedStore },
   } as unknown as PluginRuntime);
   return { keyedStore, store };
 }

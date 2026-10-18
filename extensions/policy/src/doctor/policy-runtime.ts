@@ -1,6 +1,6 @@
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
-import { readExecApprovalsSnapshotAsync } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { readExecApprovalsSnapshot } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { HealthCheckContext, HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { EXEC_APPROVALS_POLICY_DOCUMENT_NAME } from "../exec-approvals-uri.js";
@@ -22,7 +22,7 @@ export async function readPolicyFile(
 }
 
 export async function readExecApprovalsFile() {
-  const snapshot = await readExecApprovalsSnapshotAsync();
+  const snapshot = readExecApprovalsSnapshot();
   if (!snapshot.exists || snapshot.raw === null) {
     return null;
   }

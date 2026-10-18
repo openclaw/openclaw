@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => ({
   inspectPortUsage: vi.fn(),
   issueDeviceBootstrapToken: vi.fn(),
   openUrl: vi.fn(),
-  openUrlPrivately: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveControlUiLinks: vi.fn(),
   resolveGatewayPort: vi.fn(),
@@ -29,11 +28,6 @@ vi.mock("../onboard-helpers.js", () => ({
 
 vi.mock("../../infra/clipboard.js", () => ({
   copyToClipboard: mocks.copyToClipboard,
-}));
-
-vi.mock("../../infra/browser-handoff.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/browser-handoff.js")>()),
-  openUrlPrivately: mocks.openUrlPrivately,
 }));
 
 vi.mock("../../infra/device-bootstrap.js", () => ({

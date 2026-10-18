@@ -289,9 +289,7 @@ describe("Baseten provider registration", () => {
       expect(payloads.map((payload) => payload.reasoning_effort)).toEqual(["none", "max", "high"]);
       for (const [index, payload] of payloads.entries()) {
         expect(payload.model).toBe(modelId);
-        expect(payload.thinking).toEqual(
-          legacy ? undefined : { type: index === 0 ? "disabled" : "enabled" },
-        );
+        expect(payload.thinking).toEqual(legacy ? undefined : { type: "enabled" });
         if (index === 0) {
           expect(payload.messages).not.toEqual(
             expect.arrayContaining([

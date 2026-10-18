@@ -201,7 +201,7 @@ class SidebarShellLogicTest {
   }
 
   @Test
-  fun expandedSessionPresentationRevealsAllRows() {
+  fun expandedSessionPresentationRevealsAllRowsAndCollapsesToTheSameResult() {
     val sessions = (1L..12L).map { activity -> session("session-$activity", activity = activity) }
 
     val collapsed = sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false)
@@ -212,6 +212,7 @@ class SidebarShellLogicTest {
     assertFalse(collapsed.recentSections.flatMap { it.entries }.any { it.key == "session-1" })
     assertTrue(expanded.recentSections.flatMap { it.entries }.any { it.key == "session-1" })
     assertTrue(expanded.canExpandRecent)
+    assertEquals(collapsed, sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false))
   }
 
   @Test
@@ -365,6 +366,9 @@ class SidebarShellLogicTest {
     activity: Long,
     pinned: Boolean = false,
     archived: Boolean = false,
+    displayName: String? = null,
+    label: String? = null,
+    owner: String? = null,
     category: String? = null,
   ): ChatSessionEntry =
     ChatSessionEntry(
@@ -373,6 +377,9 @@ class SidebarShellLogicTest {
       lastActivityAt = activity,
       pinned = pinned,
       archived = archived,
+      displayName = displayName,
+      label = label,
+      ownerAgentId = owner,
       category = category,
     )
 }

@@ -56,7 +56,9 @@ export function normalizeStoredCodexAppServerBindingFingerprints(
     return stored;
   }
   const binding = normalizeLegacyBindingFingerprints(stored.binding);
-  return binding === stored.binding ? stored : { ...stored, binding };
+  return binding === stored.binding
+    ? stored
+    : readStoredCodexAppServerBinding({ ...stored, binding });
 }
 
 /** Encodes a migrated sidecar binding as one canonical plugin-state row. */

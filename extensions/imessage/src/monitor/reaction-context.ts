@@ -28,14 +28,17 @@ const TAPBACK_TEXT_PATTERNS: Array<{
   { prefix: "removed a question from", action: "removed", emoji: "❓" },
 ];
 
-function normalizeReactionValue(value: string | null | undefined): string | undefined {
-  return value ? normalizeIMessageGuid(value) || undefined : undefined;
+function normalizeReactionValue(value: unknown): string | undefined {
+  return typeof value === "string" ? normalizeIMessageGuid(value) || undefined : undefined;
 }
 
-function resolveReactionTargetGuidCandidates(...values: (string | null | undefined)[]): string[] {
+function resolveReactionTargetGuidCandidates(...values: unknown[]): string[] {
   const candidates: string[] = [];
   for (const value of values) {
-    const raw = value?.trim();
+    if (typeof value !== "string") {
+      continue;
+    }
+    const raw = value.trim();
     if (!raw) {
       continue;
     }
@@ -75,7 +78,7 @@ export function resolveIMessageReactionContext(
   const explicit =
     message.is_reaction === true ||
     message.is_tapback === true ||
-    (message.associated_message_type != null &&
+    (typeof message.associated_message_type === "number" &&
       Number.isFinite(message.associated_message_type) &&
       message.associated_message_type >= 2000 &&
       message.associated_message_type < 4000);

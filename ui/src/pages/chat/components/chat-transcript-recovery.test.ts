@@ -1,12 +1,17 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { html, LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { resetChatViewState } from "../chat-view-state.ts";
-import { renderChatThread, TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
 import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
-import { toggleTranscriptSearch, type ChatThreadProps } from "./chat-thread-interactions.ts";
+import {
+  renderTranscriptSearch,
+  toggleTranscriptSearch,
+  type ChatThreadProps,
+} from "./chat-thread-interactions.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import {
   flushDeferredRowPrune,
@@ -28,20 +33,25 @@ function fullMessage(content: string): FullMessageResult {
   return { ok: true, message: { role: "assistant", content } };
 }
 
-class RecoveryTranscriptElement extends TranscriptTestHost {
+class RecoveryTranscriptElement extends LitElement {
   props: ChatThreadProps = threadProps("recovery-pane");
   resetPresentationOnDisconnect = true;
   private readonly transcript = new ChatTranscriptController(this, () => this.props.paneId);
 
-  override renderTranscript = () => {
+  override createRenderRoot() {
+    return this;
+  }
+
+  override render() {
     const requestUpdate = () => this.requestUpdate();
-    return renderChatThread({ ...this.props, onRequestUpdate: requestUpdate }, this.transcript, {
-      search: requestUpdate,
-    });
-  };
+    return html`
+      ${renderTranscriptSearch(this.props.paneId, requestUpdate)}
+      ${renderChatThread({ ...this.props, onRequestUpdate: requestUpdate }, this.transcript)}
+    `;
+  }
 
   override disconnectedCallback() {
-    // Match the pane-specific production reset before disconnecting controllers.
+    // Match the pane-specific production reset before Lit disconnects controllers.
     if (this.resetPresentationOnDisconnect) {
       resetChatViewState(this.props.paneId);
     }
@@ -169,7 +179,7 @@ describe("chat transcript full-message recovery", () => {
   });
 
   it.each(["loading", "loaded"] as const)(
-    "retires %s recovery when the same controller reconnects",
+    "retires %s recovery when the same Lit controller reconnects",
     async (phase) => {
       const retired = createDeferred<FullMessageResult>();
       const current = createDeferred<FullMessageResult>();
@@ -184,7 +194,7 @@ describe("chat transcript full-message recovery", () => {
         await vi.waitFor(() => expect(pane.textContent).toContain("Retired body."));
       }
 
-      // Keep retained rows and pane state so only the controller owns invalidation.
+      // Keep Lit's guarded rows and pane state so only the controller owns invalidation.
       pane.resetPresentationOnDisconnect = false;
       pane.remove();
       document.body.append(pane);

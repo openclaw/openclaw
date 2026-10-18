@@ -136,7 +136,8 @@
 }
 
 .palette-session-settings__agent .new-session-page__select,
-.palette-session-settings__agent openclaw-agent-select {
+.palette-session-settings__agent openclaw-agent-select,
+.palette-session-settings__agent wa-dropdown {
   display: block;
   width: 100%;
   max-width: none;

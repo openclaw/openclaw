@@ -44,6 +44,7 @@ import {
 import {
   createModelCatalogIdentityKeyResolver,
   openAIModelCatalogRoutePolicy,
+  resolveModelCatalogIdentityKey,
 } from "./openai-model-routes.js";
 
 /** Keep capability donors bound to one model and runtime without merging sibling metadata. */
@@ -94,9 +95,11 @@ export function createModelCatalogView(params: {
     variants.push(entry);
     variantsByKey.set(key, variants);
   }
-  // Identity lookups use the same captured policy as this view's physical index.
-  const variantsOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">, key = keyOf(entry)) =>
-    variantsByKey.get(key);
+  // Deferred lookups can follow an await or owner reload; only the initial index shares policy.
+  const variantsOf = (
+    entry: Pick<ModelCatalogEntry, "provider" | "id">,
+    key = resolveModelCatalogIdentityKey(entry),
+  ) => variantsByKey.get(key);
   const routePolicy = params.routePolicy ?? openAIModelCatalogRoutePolicy;
   const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
     cfg: params.cfg,
@@ -347,9 +350,11 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       ) {
         return host;
       }
-      const registry = params.observationConfig
-        ? params.pluginRegistry
-        : (params.pluginRegistry ?? getActivePluginRegistry());
+      const resolveRegistry = () =>
+        params.observationConfig
+          ? params.pluginRegistry
+          : (params.pluginRegistry ?? getActivePluginRegistry());
+      const registry = resolveRegistry();
       const harness = registry?.agentHarnesses.find(
         (registration) => registration.harness.id === runtime,
       )?.harness;
@@ -375,7 +380,9 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
               endpointOverrides: "none",
               requestTransportOverrides: "none",
             },
-          }).supported;
+          }).supported &&
+          isCurrent() &&
+          resolveRegistry() === registry;
         const observation = ready
           ? harness?.readModelCatalogReadiness?.({
               config: params.observationConfig ?? params.cfg,
@@ -386,7 +393,11 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
               modelId: entry.id,
             })
           : undefined;
-        ready = ready && (!harness?.readModelCatalogReadiness || observation !== undefined);
+        ready =
+          ready &&
+          (!harness?.readModelCatalogReadiness || observation !== undefined) &&
+          isCurrent() &&
+          resolveRegistry() === registry;
         authMode = ready ? observation?.authMode : undefined;
       } catch {
         // A failed/disposed owner supplies no account observation; do not infer host readiness.

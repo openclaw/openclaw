@@ -13,9 +13,14 @@ function isMiMoReasoningModelId(modelId: string): boolean {
   return MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase());
 }
 
-export function isMiMoReasoningModelRef(model: { provider: string; id: string }): boolean {
+function isMiMoProviderId(providerId: unknown): boolean {
+  return providerId === XIAOMI_PROVIDER_ID || providerId === XIAOMI_TOKEN_PLAN_PROVIDER_ID;
+}
+
+export function isMiMoReasoningModelRef(model: { provider?: string; id?: unknown }): boolean {
   return (
-    (model.provider === XIAOMI_PROVIDER_ID || model.provider === XIAOMI_TOKEN_PLAN_PROVIDER_ID) &&
+    isMiMoProviderId(model.provider) &&
+    typeof model.id === "string" &&
     isMiMoReasoningModelId(model.id)
   );
 }

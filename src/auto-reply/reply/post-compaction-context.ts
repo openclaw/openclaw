@@ -50,7 +50,7 @@ export async function readPostCompactionContext(
 ): Promise<string | null> {
   const { cfg, agentId, nowMs } = options ?? {};
   const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
-  if (!configuredSections?.length) {
+  if (!Array.isArray(configuredSections) || configuredSections.length === 0) {
     return null;
   }
   const agentsPath = path.join(workspaceDir, "AGENTS.md");

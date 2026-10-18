@@ -4,11 +4,11 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
-  captureOpenClawStateReadWorkerContext,
-  captureOpenClawStateWorkerContext,
-} from "./openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
+  executeOpenClawStateWorker,
+  runOpenClawStateWorkerOperation,
+} from "./openclaw-state-worker-store.js";
 import {
   beginUserPreferenceMutation,
   captureUserPreferenceRead,
@@ -32,7 +32,7 @@ export async function getUserPreferenceValues(
     return { values: new Map(), isCurrent: () => true };
   }
   const ids = [...new Set(profileIds)];
-  const context = captureOpenClawStateReadWorkerContext(options);
+  const context = captureOpenClawStateWorkerContext(options);
   const isCurrent = await captureUserPreferenceRead(context.admission);
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
@@ -42,24 +42,15 @@ export async function getUserPreferenceValues(
   return { values: reply?.values ?? new Map(), isCurrent };
 }
 
-export async function getCanonicalUserPreferences(
+export function getCanonicalUserPreferences(
   profileId: string,
   keys?: readonly string[],
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<CanonicalUserPreferences | undefined> {
-  const context = captureOpenClawStateReadWorkerContext(options);
-  for (;;) {
-    const isCurrent = await captureUserPreferenceRead(context.admission);
-    const reply = await executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env: context.environment },
-      { type: "userPreferences.read", profileId, keys },
-      { context, current: true },
-    );
-    // A preference write or profile merge must not publish an older result afterward.
-    if (isCurrent()) {
-      return reply?.preferences;
-    }
-  }
+  return executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
+    type: "userPreferences.read",
+    input: { profileId, keys },
+  });
 }
 
 export async function setCanonicalUserPreferences(

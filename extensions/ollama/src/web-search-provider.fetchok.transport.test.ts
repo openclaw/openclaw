@@ -175,13 +175,29 @@ beforeEach(() => {
 });
 
 describe("ollama web search guarded fetch", () => {
-  it.each([
-    [401, "ollama signin"],
-    [403, "unavailable"],
-  ] as const)("cancels a stalled %i body before guarded release", async (status, message) => {
-    loopback.status = status;
+  it("cancels a stalled 401 body before guarded release", async () => {
     const tool = createSearchTool();
-    await expect(tool.execute({ query: "latest openclaw release" })).rejects.toThrow(message);
+
+    await expect(tool.execute({ query: "latest openclaw release" })).rejects.toThrow(
+      "ollama signin",
+    );
+
+    expect(loopback.releases.length).toBeGreaterThan(0);
+    for (const release of loopback.releases) {
+      expect(release).toEqual({
+        bodyIsNull: false,
+        bodyUsed: true,
+        socketClosedBeforeGuardRelease: true,
+      });
+    }
+  });
+
+  it("cancels a stalled 403 body before guarded release", async () => {
+    loopback.status = 403;
+    const tool = createSearchTool();
+
+    await expect(tool.execute({ query: "latest openclaw release" })).rejects.toThrow("unavailable");
+
     expect(loopback.releases.length).toBeGreaterThan(0);
     for (const release of loopback.releases) {
       expect(release).toEqual({

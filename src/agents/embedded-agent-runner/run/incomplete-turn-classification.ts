@@ -4,13 +4,8 @@ import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
-import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
-import {
-  extractAssistantVisibleText,
-  extractEmbeddedAssistantText,
-  sanitizeAssistantVisibleStreamText,
-} from "../../embedded-agent-utils.js";
+import { extractEmbeddedAssistantText } from "../../embedded-agent-utils.js";
 import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
@@ -24,8 +19,6 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 export type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
-  | "preparedTerminalReply"
-  | "textToolCallAttempt"
   | "clientToolCalls"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
@@ -208,7 +201,7 @@ const RETRY_GUARD_MODEL_APIS = new Set([
   "openclaw-azure-openai-responses-transport",
 ]);
 export function joinAssistantTexts(assistantTexts?: readonly string[]): string {
-  return (assistantTexts ?? []).join("\n\n");
+  return (assistantTexts ?? []).join("\n\n").trim();
 }
 
 export function shouldApplyNonVisibleTurnRetryGuard(params: {
@@ -236,31 +229,20 @@ export function classifyAssistantTurn(params: {
   payloadCount: number;
   attempt: Pick<
     IncompleteTurnAttempt,
-    | "assistantTexts"
-    | "preparedTerminalReply"
-    | "textToolCallAttempt"
-    | "currentAttemptAssistant"
-    | "currentAttemptCompletedAssistant"
+    "assistantTexts" | "currentAttemptAssistant" | "currentAttemptCompletedAssistant"
   >;
 }) {
   const assistant = resolveCurrentAttemptAssistant(params.attempt);
-  const rawAnswerText = assistant
-    ? resolveRawAssistantAnswerText(assistant)
-    : joinAssistantTexts(params.attempt.assistantTexts);
-  const prepared =
-    params.attempt.preparedTerminalReply ??
-    prepareAgentRunTerminalReply({ rawText: rawAnswerText });
-  const renderedText = params.attempt.preparedTerminalReply
-    ? prepared.text
-    : assistant
-      ? extractAssistantVisibleText(assistant, (_text, final) => (final ? prepared.text : ""))
-      : sanitizeAssistantVisibleStreamText(prepared.text);
-  const visibleText = parseReplyDirectives(renderedText).text.trim();
+  const output = parseReplyDirectives(
+    assistant
+      ? resolveRawAssistantAnswerText(assistant)
+      : joinAssistantTexts(params.attempt.assistantTexts),
+  );
+  const visibleText = output.text.trim();
   const reasoningOnly = Boolean(
     assistant && assessLastAssistantMessage(assistant) === "incomplete-text",
   );
   const nonVisibleEligibleForSilentReply =
-    !params.attempt.textToolCallAttempt &&
     params.payloadCount === 0 &&
     visibleText.length === 0 &&
     assistant?.stopReason !== "error" &&
@@ -272,10 +254,7 @@ export function classifyAssistantTurn(params: {
   return {
     assistant,
     visibleText,
-    silent:
-      prepared.terminalReply.disposition === "silent" &&
-      assistant?.stopReason === "stop" &&
-      !assistant.content.some((block) => block.type === "toolCall"),
+    silent: output.isSilent,
     reasoningOnly,
     emptyResponse: nonVisibleEligibleForSilentReply && !reasoningOnly,
     nonVisibleEligibleForSilentReply,

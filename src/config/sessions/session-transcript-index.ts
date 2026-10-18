@@ -7,7 +7,6 @@
 // marks the session dirty for its write or maintenance owner to rebuild from
 // the canonical visible-path resolver.
 import type { DatabaseSync } from "node:sqlite";
-import type { Expression } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -120,10 +119,7 @@ export function shouldRebuildSessionTranscriptIndexSynchronously(
   return true;
 }
 
-function selectSessionTranscriptProjectionState(
-  db: DatabaseSync,
-  sessionId: string | Expression<string>,
-) {
+function selectSessionTranscriptProjectionState(db: DatabaseSync, sessionId: string) {
   return getIndexKysely(db)
     .selectFrom("session_transcript_index_state")
     .select([
@@ -174,10 +170,7 @@ function readSessionTranscriptProjectionState(
 }
 
 /** The projection owner supplies the same readiness predicate to compound readers. */
-export function selectSessionTranscriptIndexStatus(
-  db: DatabaseSync,
-  sessionId: string | Expression<string>,
-) {
+export function selectSessionTranscriptIndexStatus(db: DatabaseSync, sessionId: string) {
   const kysely = getIndexKysely(db);
   return kysely
     .selectFrom(

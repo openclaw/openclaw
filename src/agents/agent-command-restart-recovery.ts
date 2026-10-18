@@ -27,6 +27,7 @@ import {
   hasVisibleCommittedMessagingToolDeliveryEvidence,
   type AgentDeliveryEvidence,
 } from "./embedded-agent-runner/delivery-evidence.js";
+import { hasIntentionalSilentAgentPayload } from "./embedded-agent-runner/message-visibility.js";
 import { mergeAttemptToolMediaPayloads } from "./embedded-agent-runner/run/tool-media-payloads.js";
 
 /** Restore the exact host-owned delivery constraints before starting a recovery turn. */
@@ -115,6 +116,7 @@ export function constrainRestartRecoveryDeliveryPayloads(
         { payloads: [payload] },
         {
           includeErrorPayloads: false,
+          includeSilentReplyPayloads: false,
           requireTerminalContent: true,
         },
       ),
@@ -147,7 +149,9 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
   result: AgentDeliveryEvidence,
 ): RestartRecoveryTerminalDeliveryEvidenceResult {
   const terminalReply = normalizeAgentRunTerminalReplySnapshot(result.meta?.terminalReply);
-  const silent = terminalReply?.disposition === "silent";
+  const silent = terminalReply
+    ? terminalReply.disposition === "silent"
+    : hasIntentionalSilentAgentPayload(result);
   const meta: RestartRecoveryTerminalDeliveryEvidenceResult["meta"] = {
     ...(silent ? { terminalReply: { disposition: "silent" as const } } : {}),
     ...(result.meta?.yielded === true ? { yielded: true as const } : {}),
@@ -166,6 +170,7 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
           requireTerminalContent: true,
           includeErrorPayloads: false,
           includeReasoningPayloads: false,
+          includeSilentReplyPayloads: false,
         },
       );
       const evidence: { mediaUrls?: string[]; visible?: boolean } = { visible };
@@ -339,8 +344,8 @@ export function shouldPersistCurrentRunSessionCleanup(
   if (current.abortedLastRun !== true) {
     return true;
   }
-  // Session Stop is terminal; process shutdown keeps custody. Only the settled
-  // command may retire its source claim after execution and delivery owners leave.
+  // Stop is terminal, while a restart keeps custody. Only the settled command
+  // may retire its own source claim after all execution and delivery owners leave.
   return (
     current.status === "killed" &&
     current.lastRunId === runId &&

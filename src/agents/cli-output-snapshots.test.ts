@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { createClaudeParser, claudeTextDelta, joinJsonlFrames } from "./cli-output.test-helpers.js";
+import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
+
+const BACKEND = {
+  command: "claude",
+  output: "jsonl",
+  jsonlDialect: "claude-stream-json",
+} as const;
+
+function joinJsonlFrames(...frames: unknown[]) {
+  return frames.map((frame) => JSON.stringify(frame)).join("\n");
+}
+
+function claudeTextDelta(text: string) {
+  return {
+    type: "stream_event",
+    event: { type: "content_block_delta", delta: { type: "text_delta", text } },
+  };
+}
 
 function claudePartialSnapshot(id: string, content: unknown[]) {
   return { type: "assistant", message: { id, content, stop_reason: null } };
@@ -8,7 +25,9 @@ function claudePartialSnapshot(id: string, content: unknown[]) {
 describe("Claude CLI assistant snapshots", () => {
   it("streams cumulative snapshots as incremental deltas", () => {
     const deltas: Array<{ text: string; delta: string }> = [];
-    const parser = createClaudeParser({
+    const parser = createCliJsonlStreamingParser({
+      backend: BACKEND,
+      providerId: "claude-cli",
       onAssistantDelta: ({ text, delta }) => deltas.push({ text, delta }),
     });
 
@@ -30,7 +49,9 @@ describe("Claude CLI assistant snapshots", () => {
 
   it("deduplicates stream-event text repeated by a snapshot", () => {
     const deltas: Array<{ text: string; delta: string }> = [];
-    const parser = createClaudeParser({
+    const parser = createCliJsonlStreamingParser({
+      backend: BACKEND,
+      providerId: "claude-cli",
       onAssistantDelta: ({ text, delta }) => deltas.push({ text, delta }),
     });
 
@@ -55,7 +76,9 @@ describe("Claude CLI assistant snapshots", () => {
     const commentary: string[] = [];
     const tools: string[] = [];
     const deltas: Array<{ text: string; delta: string }> = [];
-    const parser = createClaudeParser({
+    const parser = createCliJsonlStreamingParser({
+      backend: BACKEND,
+      providerId: "claude-cli",
       onAssistantDelta: ({ text, delta }) => deltas.push({ text, delta }),
       onCommentaryText: (text) => commentary.push(text),
       onToolUseStart: (tool) => tools.push(tool.name),
@@ -82,7 +105,9 @@ describe("Claude CLI assistant snapshots", () => {
 
   it("preserves tool-split snapshots when commentary is disabled", () => {
     const deltas: Array<{ text: string; delta: string }> = [];
-    const parser = createClaudeParser({
+    const parser = createCliJsonlStreamingParser({
+      backend: BACKEND,
+      providerId: "claude-cli",
       onAssistantDelta: ({ text, delta }) => deltas.push({ text, delta }),
     });
 
@@ -109,7 +134,9 @@ describe("Claude CLI assistant snapshots", () => {
   it("keeps nested tool-result text out of the visible snapshot", () => {
     const deltas: string[] = [];
     const toolResults: unknown[] = [];
-    const parser = createClaudeParser({
+    const parser = createCliJsonlStreamingParser({
+      backend: BACKEND,
+      providerId: "claude-cli",
       onAssistantDelta: ({ delta }) => deltas.push(delta),
       onToolResult: ({ result }) => toolResults.push(result),
     });
@@ -137,7 +164,9 @@ describe("Claude CLI assistant snapshots", () => {
   it("routes leading tagged reasoning before visible snapshot text", () => {
     const thinking: string[] = [];
     const visible: string[] = [];
-    const parser = createClaudeParser({
+    const parser = createCliJsonlStreamingParser({
+      backend: BACKEND,
+      providerId: "claude-cli",
       onAssistantDelta: ({ delta }) => visible.push(delta),
       onThinkingDelta: ({ delta }) => thinking.push(delta),
     });
@@ -187,7 +216,9 @@ describe("Claude CLI assistant snapshots", () => {
     },
   ])("does not stream a snapshot with $name", ({ record }) => {
     const deltas: string[] = [];
-    const parser = createClaudeParser({
+    const parser = createCliJsonlStreamingParser({
+      backend: BACKEND,
+      providerId: "claude-cli",
       onAssistantDelta: ({ delta }) => deltas.push(delta),
     });
 

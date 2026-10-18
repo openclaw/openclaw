@@ -45,7 +45,7 @@ function normalizeScriptProducerEvidence(params: {
   repoRoot: string;
 }): QaEvidenceSummaryJson {
   const evidenceDir = path.dirname(params.evidencePath);
-  const evidence = params.evidence;
+  const evidence = structuredClone(params.evidence);
   for (const artifact of collectQaEvidenceArtifacts(evidence)) {
     const absolutePath = resolveQaArtifactPath(params.repoRoot, evidenceDir, artifact.path);
     if (evidence.schemaVersion === 3) {
@@ -58,7 +58,7 @@ function normalizeScriptProducerEvidence(params: {
         : path.normalize(absolutePath);
     }
   }
-  return evidence;
+  return validateQaEvidenceSummaryJson(evidence);
 }
 
 function assertScenarioOwnsEvidencePath(scenarioOutputDir: string, evidencePath: string): void {

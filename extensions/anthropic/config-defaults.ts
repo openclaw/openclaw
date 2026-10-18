@@ -1,7 +1,10 @@
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   modelEntryWithClaudeCliRuntime,
   normalizeAnthropicProviderId,
@@ -106,7 +109,7 @@ function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
     if (parsed?.provider === CLAUDE_CLI_BACKEND_ID) {
       return true;
     }
-    const runtimeId = entry?.agentRuntime?.id;
+    const runtimeId = isRecord(entry?.agentRuntime) ? entry.agentRuntime.id : undefined;
     return (
       parsed?.provider === "anthropic" &&
       normalizeLowercaseStringOrEmpty(runtimeId) === CLAUDE_CLI_BACKEND_ID
@@ -188,7 +191,8 @@ export function normalizeAnthropicProviderConfigForProvider<
   if (
     (provider !== "anthropic" && provider !== CLAUDE_CLI_BACKEND_ID) ||
     providerConfig.api ||
-    !providerConfig.models?.length
+    !Array.isArray(providerConfig.models) ||
+    providerConfig.models.length === 0
   ) {
     return providerConfig;
   }

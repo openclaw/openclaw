@@ -30,10 +30,7 @@ export function registerAgentAbortRunExecutionTest() {
         acceptedEntry = entry;
       }
       await finishRun.promise;
-      return {
-        payloads: [{ text: "late completion" }],
-        meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "late completion" } },
-      };
+      return { payloads: [{ text: "late completion" }], meta: { durationMs: 1 } };
     });
 
     try {
@@ -94,10 +91,7 @@ export function registerAgentAbortStaleKeyExecutionTest() {
         acceptedEntry = entry;
       }
       await finishRun.promise;
-      return {
-        payloads: [{ text: "late completion" }],
-        meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "late completion" } },
-      };
+      return { payloads: [{ text: "late completion" }], meta: { durationMs: 1 } };
     });
 
     try {

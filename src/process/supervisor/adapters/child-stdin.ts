@@ -60,10 +60,6 @@ export function createManagedChildStdin(
       }
     },
     end() {
-      // Root exit can close stdin before a caller starts graceful shutdown.
-      if (ended || destroyed || stream.destroyed || stream.writableEnded) {
-        return;
-      }
       ended = true;
       try {
         end();

@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplyOutcome } from "../../auto-reply/reply/normalize-reply.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { normalizeSilentReplyText } from "./delivery-dispatch-policy.js";
 
 type CronChannelTransform = {
   apply: (payload: ReplyPayload) => ReplyPayload | null;
@@ -15,6 +16,16 @@ function shouldAttachDirectCronFallbackText(payload: ReplyPayload): boolean {
   );
 }
 
+function normalizeDirectPayload(payload: ReplyPayload): ReplyPayload {
+  const normalized = payload.text ? normalizeSilentReplyText(payload.text) : undefined;
+  return normalized
+    ? copyReplyPayloadMetadata(payload, {
+        ...payload,
+        text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
+      })
+    : payload;
+}
+
 export function normalizeDirectCronDeliveryPayloads(params: {
   deliveryPayloads: ReplyPayload[];
   outputText?: string;
@@ -22,13 +33,15 @@ export function normalizeDirectCronDeliveryPayloads(params: {
   synthesizedText?: string;
   channelTransform?: CronChannelTransform;
 }): NormalizeReplyOutcome<ReplyPayload[]> {
-  const fallbackText =
+  const fallback = normalizeSilentReplyText(
     normalizeOptionalString(params.outputText) ??
-    normalizeOptionalString(params.summary) ??
-    normalizeOptionalString(params.synthesizedText);
-  const candidates = params.deliveryPayloads.filter((payload) =>
-    hasReplyPayloadContent(payload, { trimText: true }),
+      normalizeOptionalString(params.summary) ??
+      normalizeOptionalString(params.synthesizedText),
   );
+  const fallbackText = fallback.strippedTrailingSilentToken ? undefined : fallback.text;
+  const candidates = params.deliveryPayloads
+    .map(normalizeDirectPayload)
+    .filter((payload) => hasReplyPayloadContent(payload, { trimText: true }));
   if (candidates.length === 0 && fallbackText) {
     candidates.push({ text: fallbackText });
   }
@@ -67,9 +80,15 @@ export function normalizeDirectCronDeliveryPayloads(params: {
     }
   }
   if (accepted.length === 0) {
+    const silent = [
+      params.outputText,
+      params.summary,
+      params.synthesizedText,
+      ...params.deliveryPayloads.map((payload) => payload.text),
+    ].some((text) => typeof text === "string" && text.trim().length > 0);
     return {
       kind: "suppress",
-      reason: channelSuppressed ? "channel_transform" : "empty",
+      reason: channelSuppressed ? "channel_transform" : silent ? "silent" : "empty",
     };
   }
 

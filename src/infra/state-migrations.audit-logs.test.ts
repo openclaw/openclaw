@@ -596,19 +596,33 @@ describe("legacy core audit log migration", () => {
     },
   );
 
+  it("leaves malformed audit sources in place without partial imports", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { source } = audit.system;
+      const sourceBytes = `${JSON.stringify(systemAuditEvent("valid prefix"))}\n{bad json\n`;
+      await audit.write(source, sourceBytes);
+      const detected = audit.detect();
+
+      const result = await audit.migrate(detected);
+
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("Failed reading system-agent audit log");
+      await expect(fs.readFile(source, "utf8")).resolves.toBe(sourceBytes);
+      expect(audit.systemEntries()).toEqual([]);
+    });
+  });
+
   it("does not migrate newer audit generations before an older source is repaired", async () => {
     await withAuditMigrationFixture(async (audit) => {
       const { raw, source } = audit.system;
-      const malformed = `${JSON.stringify(systemAuditEvent("valid prefix"))}\n{bad json\n`;
-      await audit.write(raw, malformed);
+      await audit.write(raw, "{bad json\n");
       await audit.writeJsonLines(source, [systemAuditEvent("newer generation")]);
 
       const blocked = await audit.migrate();
 
       expect(blocked.changes).toEqual([]);
       expect(blocked.warnings.join("\n")).toContain("Failed reading system-agent audit log");
-      await expect(fs.readFile(raw, "utf8")).resolves.toBe(malformed);
-      expect(await audit.readJsonLines(source)).toEqual([systemAuditEvent("newer generation")]);
+      await fs.access(source);
       expect(audit.systemEntries()).toEqual([]);
 
       await audit.writeJsonLines(raw, [systemAuditEvent("repaired older generation")]);

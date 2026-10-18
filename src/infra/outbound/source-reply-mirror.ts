@@ -28,7 +28,6 @@ import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/tran
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
-import { resolveImplicitMessageActionTarget } from "./message-action-normalization.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 
@@ -252,27 +251,9 @@ function matchesCurrentSourceTarget(
   threadPlacement: SourceReplyThreadPlacement,
   targetMode: "send" | "reply" = "send",
 ): boolean {
-  let toolContext = params.toolContext;
+  const toolContext = params.toolContext;
   if (!toolContext) {
     return false;
-  }
-  if (
-    toolContext.currentChatType !== "direct" &&
-    (isMessageToolSendActionName(params.action) || params.action === "poll") &&
-    resolveChannelThreadAddressing(params.channel) === "address"
-  ) {
-    const deliveryTarget = resolveImplicitMessageActionTarget(toolContext, "send");
-    if (!deliveryTarget) {
-      return false;
-    }
-    // An address-threaded reply can leave its inbound message in the parent.
-    // Keep that native resource context out of delivery equality, including the
-    // plugin matcher. Direct chats still need native channel/recipient aliases.
-    toolContext = {
-      ...toolContext,
-      currentChannelId: deliveryTarget,
-      currentMessagingTarget: deliveryTarget,
-    };
   }
   const currentTargets = [
     normalizeOptionalString(toolContext.currentMessagingTarget),

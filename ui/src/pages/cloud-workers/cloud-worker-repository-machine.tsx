@@ -1,22 +1,40 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import { normalizeCloudRepo } from "../../../../src/config/cloud-worker-project-profiles.js";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
+import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import { readCloudWorkerProfiles } from "./cloud-worker-config.ts";
 import { buildCloudWorkerRepositoryProfilePatch } from "./cloud-worker-repositories-config.ts";
-import { useCloudWorkerConfig } from "./use-cloud-worker-config.ts";
 export function CloudWorkerRepositoryMachine(props: {
   repository: string;
   profileId?: string;
   defaultProfileId?: string;
   machineFacts: string;
 }) {
+  const context = useApplication();
+  const runtime = projectRuntimeConfig(context.runtimeConfig);
   const [editing, setEditing] = createSignal(false, { ownedWrite: true });
-  const editor = useCloudWorkerConfig(() => setEditing(false));
-  const profiles = createMemo(() => readCloudWorkerProfiles(editor.config()));
-  const configuredProfile = createMemo(() =>
-    profiles().find((profile) => profile.id === props.profileId),
-  );
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const save = new CloudWorkerConfigSave(() => setRevision((value) => value + 1));
+  const gateway = useGatewayPage({
+    getGateway: () => context.gateway,
+    invalidateRequests: () => {
+      setEditing(false);
+      save.update({ busy: false, error: null, notice: null });
+    },
+  });
+  const state = () => {
+    revision();
+    return save.state;
+  };
+  const config = () => resolveEditableSnapshotConfig(runtime.read().state.configSnapshot);
+  const configuredProfile = () =>
+    readCloudWorkerProfiles(config()).find((profile) => profile.id === props.profileId);
   const facts = () =>
     props.machineFacts ||
     [configuredProfile()?.backend, configuredProfile()?.machineClass, configuredProfile()?.target]
@@ -26,22 +44,34 @@ export function CloudWorkerRepositoryMachine(props: {
     () => props.repository,
     () => {
       setEditing(false);
-      editor.update({ error: null, notice: null });
+      save.update({ error: null, notice: null });
     },
   );
   const repository = () =>
     normalizeCloudRepo(`https://${props.repository}`) === props.repository
       ? props.repository
       : null;
-  const editable = () => Boolean(repository() && editor.editable());
+  const editable = () =>
+    Boolean(
+      repository() &&
+      canCallGatewayMethod(gateway.snapshot, "config.patch", "operator.admin") &&
+      runtime.read().state.configSnapshot?.hash &&
+      !runtime.read().state.configSaving &&
+      !state().busy,
+    );
   async function change(profileId: string) {
+    const scope = gateway.capture();
+    const runtimeConfig = context.runtimeConfig;
     const target = repository();
-    if (!target) {
+    if (!scope || !target || !editable()) {
       return;
     }
-    await editor.save({
+    const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
+    await save.save(runtimeConfig, isCurrent, {
       build: (base) => buildCloudWorkerRepositoryProfilePatch(base, target, profileId),
       note: `cloud environments: change machine for ${target}`,
+      canDispatch: () =>
+        isCurrent() && canCallGatewayMethod(gateway.snapshot, "config.patch", "operator.admin"),
       failed: () => t("cloudWorkersPage.errors.saveFailed"),
       success: () => {
         setEditing(false);
@@ -82,7 +112,7 @@ export function CloudWorkerRepositoryMachine(props: {
             <option value="" disabled>
               {t("cloudWorkersPage.selectProfile")}
             </option>
-            <For each={profiles()}>
+            <For each={readCloudWorkerProfiles(config())}>
               {(profile) => (
                 <option value={profile.id} selected={props.defaultProfileId === profile.id}>
                   {profile.id}
@@ -93,16 +123,16 @@ export function CloudWorkerRepositoryMachine(props: {
           <button
             type="button"
             class="btn btn--sm"
-            disabled={editor.state().busy}
+            disabled={state().busy}
             onClick={() => setEditing(false)}
           >
             {t("common.cancel")}
           </button>
         </Show>
       </div>
-      <Show when={editor.state().error}>
+      <Show when={state().error}>
         <div class="callout warning" role="alert">
-          {editor.state().error}
+          {state().error}
         </div>
       </Show>
     </SettingsSection>

@@ -11,8 +11,6 @@ type DreamingPhaseInfo = {
   nextRunAtMs?: number;
 };
 
-export type WikiPreviewState = { page: WikiPagePreview; loading: boolean; error: string | null };
-
 export type DreamingProps = {
   access: {
     canOpenConfig: boolean;
@@ -55,16 +53,14 @@ export type DreamingProps = {
   onRefreshImports: () => void;
   onRefreshWikiOverview: () => void;
   onOpenConfig: () => void;
-  onOpenWikiPage: (lookup: string) => Promise<void>;
-  onCloseWikiPreview: () => void;
-  wikiPreview: (WikiPreviewState & { request: WikiPreviewState }) | null;
+  onOpenWikiPage: (lookup: string) => Promise<WikiPagePreview | null>;
   onBackfillDiary: () => void;
   onCopyDreamingArchivePath: () => void;
   onDedupeDreamDiary: () => void;
   onResetDiary: () => void;
   onResetGroundedShortTerm: () => void;
   onRepairDreamingArtifacts: () => void;
-  onViewStateChange: (update: (state: DreamingViewState) => void) => void;
+  onViewStateChange: () => void;
 };
 
 export type DreamingViewState = {
@@ -73,7 +69,8 @@ export type DreamingViewState = {
   activeSubTab: "scene" | "diary" | "advanced";
   activeDiarySubTab: "dreams" | "insights" | "wiki";
   advancedWaitingSort: "recent" | "signals";
-  expandedInsightCards: Record<string, boolean>;
-  expandedWikiCards: Record<string, boolean>;
+  expandedInsightCards: Set<string>;
+  expandedWikiCards: Set<string>;
   diaryPage: number;
+  wikiPreview: { page: WikiPagePreview; loading: boolean; error: string | null } | null;
 };

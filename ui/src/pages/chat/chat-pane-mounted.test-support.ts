@@ -73,9 +73,6 @@ export function createMountedPanes(
         1,
       );
     }
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
     if (method === "sessions.describe") {
       await readBarrier;
       return { session: row ?? null };

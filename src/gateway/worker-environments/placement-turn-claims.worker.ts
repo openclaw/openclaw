@@ -17,7 +17,6 @@ import {
   resolvePlacementTurnEnvironment,
   type WorkerSessionTurnClaim,
   type WorkerTurnClaimInput,
-  type WorkerSessionTurnOwner,
 } from "./placement-record.js";
 import { find, getRequired, query } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
@@ -53,7 +52,7 @@ function operation<
     gatewayInstanceId?: string;
     sessionEntryCurrentSource?: SessionEntryCurrentSource;
   } & (
-    | { claim: { sessionId: string; owner: WorkerSessionTurnOwner } }
+    | { claim: { sessionId: string } }
     | { pending: WorkerWorkspacePendingResult }
     | { sessionId: string }
   ),
@@ -64,15 +63,6 @@ function operation<
 ) {
   return (input: Input, { open }: WorkerOperationContext): PlacementTurnClaimReceipt => {
     const database = open();
-    const simpleTurn =
-      type === "placementTurns.claim" ||
-      type === "placementTurns.release" ||
-      type === "placementTurns.releaseIfOwned";
-    const localTurn =
-      simpleTurn &&
-      "claim" in input &&
-      input.claim.owner.kind === "local" &&
-      input.claim.owner.environmentId === undefined;
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const sessionId =
@@ -89,8 +79,11 @@ function operation<
         const source = guardedWorkspaceWrite ? input.sessionEntryCurrentSource : undefined;
         const admit = (stage: "transaction" | "commit", facts: unknown) =>
           requestSessionEntryCurrentAdmission(source, { stage, facts }, { lookup: "logical" });
-        // The conditional local DML is the whole effect; admit before autocommit.
-        admit(localTurn ? "commit" : "transaction", {
+        const simpleTurn =
+          type === "placementTurns.claim" ||
+          type === "placementTurns.release" ||
+          type === "placementTurns.releaseIfOwned";
+        admit("transaction", {
           placement: simpleTurn ? undefined : find(db, sessionId),
           placementMove: move(),
         });
@@ -104,19 +97,17 @@ function operation<
           },
           input,
         );
-        if (!localTurn && !(simpleTurn && receipt.placement?.state === "local")) {
+        if (!(simpleTurn && receipt.placement?.state === "local")) {
           receipt.workspaceResult =
             listPendingWorkerWorkspaceResultsInDatabase(db, sessionId)[0] ?? null;
         }
         receipt.placementMove = move();
-        if (!localTurn) {
-          admit("commit", receipt);
-        }
+        admit("commit", receipt);
         deferSqliteWorkerCommitReceipt(db, receipt);
         return receipt;
       },
       { database },
-      { operationLabel: type, ...(localTurn ? { singleStatement: true } : {}) },
+      { operationLabel: type },
     );
   };
 }

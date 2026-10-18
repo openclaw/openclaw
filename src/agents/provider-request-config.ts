@@ -95,10 +95,9 @@ export function sanitizeConfiguredProviderRequest(
       auth = { mode: "provider-default" };
     } else if (rawAuth.mode === "authorization-bearer") {
       const token = sanitizeConfiguredRequestString(rawAuth.token, "request.auth.token");
-      if (!token) {
-        throw new Error("request.auth.token must resolve to a non-empty value");
+      if (token) {
+        auth = { mode: "authorization-bearer", token };
       }
-      auth = { mode: "authorization-bearer", token };
     } else if (rawAuth.mode === "header") {
       const headerName = sanitizeConfiguredRequestString(
         rawAuth.headerName,
@@ -106,15 +105,14 @@ export function sanitizeConfiguredProviderRequest(
       );
       const value = sanitizeConfiguredRequestString(rawAuth.value, "request.auth.value");
       const prefix = sanitizeConfiguredRequestString(rawAuth.prefix, "request.auth.prefix");
-      if (!headerName || !value) {
-        throw new Error("request.auth.headerName and request.auth.value must be non-empty");
+      if (headerName && value) {
+        auth = {
+          mode: "header",
+          headerName,
+          value,
+          ...(prefix ? { prefix } : {}),
+        };
       }
-      auth = {
-        mode: "header",
-        headerName,
-        value,
-        ...(prefix ? { prefix } : {}),
-      };
     }
   }
 

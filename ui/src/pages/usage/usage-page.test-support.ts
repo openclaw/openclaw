@@ -1,4 +1,5 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
+import { createMemo, createSignal } from "solid-js";
 import { expect, vi } from "vitest";
 import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
 import type { UsageOverviewOptions } from "../../../../src/shared/usage-types.js";
@@ -7,9 +8,11 @@ import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import type { UsageDetailsController } from "./detail-controller.ts";
+import type { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { page as usageRoute } from "./route.ts";
-import type { UsageRouteData, UsageSessionEntry } from "./types.ts";
-import { createUsagePage } from "./usage-page-state.ts";
+import type { UsageSessionEntry } from "./types.ts";
+import { UsagePageModel, type UsageRouteData } from "./usage-page-model.ts";
 
 export type TestUsagePage = Pick<
   HTMLElement,
@@ -22,12 +25,32 @@ export type TestUsagePage = Pick<
   readonly usageResult: SessionsUsageResult | null;
   readonly usageLoading: boolean;
   usageSelectedSessions: string[];
+  details: UsageDetailsController;
   providerUsageStalled: boolean;
+  providerUsageSummary: { updatedAt: number; providers: unknown[] } | null;
   providerUsageUnavailable: boolean;
-  read: ReturnType<typeof createUsagePage>["read"];
-  refresh: () => Promise<void>;
+  readonly refreshPolicy: UsageRefreshPolicy;
+  readonly gateway: {
+    applySnapshot: (
+      snapshot: ApplicationGatewaySnapshot,
+      binding: { initial: boolean; sourceChanged: boolean },
+    ) => void;
+  };
+  loadUsage: () => Promise<void>;
+  requestUpdate: () => void;
+  render: () => unknown;
   readonly updateComplete: Promise<boolean>;
 };
+
+type InspectedUsagePageModel = Pick<
+  TestUsagePage,
+  | "details"
+  | "loadUsage"
+  | "providerUsageSummary"
+  | "usageSelectedSessions"
+  | "refreshPolicy"
+  | "gateway"
+>;
 
 const pageCleanups = new Set<() => void>();
 
@@ -121,9 +144,8 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
 export async function createPage(
   client: GatewayBrowserClient,
   renderView = false,
-  initialContext: ApplicationContext = contextWithClient(client),
+  context: ApplicationContext = contextWithClient(client),
 ): Promise<TestUsagePage> {
-  let context = initialContext;
   // Legacy test fixtures describe canonical rows; expose the same server projection
   // as the real RPC so page tests exercise request ownership and presentation.
   const originalRequest = client.request.bind(client);
@@ -173,33 +195,43 @@ export async function createPage(
   }) as GatewayBrowserClient["request"];
   const content = renderView ? (await import("./usage-page.tsx")).UsagePageContent : undefined;
   const container = document.createElement("div");
-  let model: ReturnType<typeof createUsagePage>;
-  let routeData: UsageRouteData | undefined;
-  let disposeView: () => void;
+  const [revision, setRevision] = createSignal(0);
+  const notify = () => setRevision((value) => value + 1);
+  let model = new UsagePageModel(context, notify);
+  let disposeView: (() => void) | undefined;
   let disposed = false;
+  const inspect = () => model as unknown as InspectedUsagePageModel;
   const mount = () => {
-    disposeView = mountSolid(
-      () => {
-        model = createUsagePage(context);
-        return content?.({
-          get state() {
+    model.connect();
+    if (content) {
+      disposeView = mountSolid(
+        () => {
+          const state = createMemo(() => {
+            revision();
             return model.read();
-          },
-          context,
-          get result() {
-            return model.result();
-          },
-        });
-      },
-      { container },
-    ).unmount;
+          });
+          return content({
+            get state() {
+              return state();
+            },
+            context: model.context,
+            get result() {
+              revision();
+              return model.usageResult;
+            },
+          });
+        },
+        { container },
+      ).unmount;
+    }
   };
   const cleanup = () => {
     if (disposed) {
       return;
     }
     disposed = true;
-    disposeView();
+    disposeView?.();
+    model.dispose();
     pageCleanups.delete(cleanup);
   };
   const page: TestUsagePage = {
@@ -213,30 +245,32 @@ export async function createPage(
       return container.isConnected;
     },
     get context() {
-      return context;
+      return model.context;
     },
     set context(next: ApplicationContext) {
-      disposeView();
-      context = next;
+      const routeData = model.routeData;
+      disposeView?.();
+      model.dispose();
+      model = new UsagePageModel(next, notify);
       disposed = false;
       pageCleanups.add(cleanup);
       mount();
       if (routeData) {
         model.setRouteData(routeData);
       }
+      notify();
     },
     get routeData() {
-      return routeData;
+      return model.routeData;
     },
     set routeData(data: UsageRouteData | undefined) {
-      routeData = data;
       model.setRouteData(data);
     },
     get usageError() {
       return model.read().data.error;
     },
     get usageResult() {
-      return model.result();
+      return model.usageResult;
     },
     get usageLoading() {
       return model.read().data.loading;
@@ -244,16 +278,31 @@ export async function createPage(
     get usageSelectedSessions() {
       return model.read().filters.selectedSessions;
     },
+    set usageSelectedSessions(sessions: string[]) {
+      inspect().usageSelectedSessions = sessions;
+      notify();
+    },
+    get details() {
+      return inspect().details;
+    },
     get providerUsageStalled() {
       return model.read().data.providerUsageStalled;
+    },
+    get providerUsageSummary() {
+      return inspect().providerUsageSummary;
     },
     get providerUsageUnavailable() {
       return model.read().data.providerUsageUnavailable;
     },
-    read: () => model.read(),
-    refresh: async () => {
-      await model.read().callbacks.filters.onRefresh();
+    get refreshPolicy() {
+      return inspect().refreshPolicy;
     },
+    get gateway() {
+      return inspect().gateway;
+    },
+    loadUsage: () => inspect().loadUsage(),
+    requestUpdate: notify,
+    render: () => undefined,
     get updateComplete() {
       return Promise.resolve().then(() => {
         flush();

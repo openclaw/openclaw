@@ -542,7 +542,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       serviceStartedAtMs = Date.now();
       disposed = false;
       resolveServiceCron = () => resolveCronServiceFromGatewayContext(ctx);
-      void trackDreamingTask(async () => {
+      await trackDreamingTask(async () => {
         try {
           await reconcileManagedDreamingCron({
             reason: "startup",

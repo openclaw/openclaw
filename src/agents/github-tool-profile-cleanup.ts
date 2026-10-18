@@ -30,8 +30,7 @@ async function readCleanupDirectory(candidate: string, label: string, warnings: 
       warnings.push(`refused unsafe ${label}: ${candidate}`);
       return undefined;
     }
-    warnings.push(`failed to read ${label}: ${candidate}: ${String(error)}`);
-    return undefined;
+    throw error;
   }
   if (identity.realPath !== path.resolve(candidate)) {
     warnings.push(`refused escaped ${label}: ${candidate}`);

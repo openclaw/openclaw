@@ -582,10 +582,13 @@ export async function postMultipartRequest(params: GuardedPostRequestParams<Body
 // Keep the shipped transcription name on the canonical multipart transport.
 export { postMultipartRequest as postTranscriptionRequest };
 
-/** Empty strings represent silence; missing or non-string transcripts are malformed. */
-export function requireTranscriptionText(value: unknown, missingMessage: string): string {
-  if (typeof value !== "string") {
+export function requireTranscriptionText(
+  value: string | undefined,
+  missingMessage: string,
+): string {
+  const text = value?.trim();
+  if (!text) {
     throw new Error(missingMessage);
   }
-  return value.trim();
+  return text;
 }

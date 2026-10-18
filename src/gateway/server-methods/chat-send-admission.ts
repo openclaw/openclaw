@@ -42,11 +42,11 @@ import {
   finishAbortedChatSend,
 } from "./chat-send-admission-cleanup.js";
 import { prepareChatSendAdmissionContext } from "./chat-send-admission-context.js";
-import { respondChatSessionRoutingChanged } from "./chat-send-admission-errors.js";
 import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import {
   resolveChatSendRequestConflict,
   consumeChatSendCurrent,
+  respondChatSessionRoutingChanged,
 } from "./chat-send-pre-admission.js";
 import type { ChatSendAdmissionParams } from "./chat-send-pre-admission.types.js";
 import {
@@ -60,7 +60,6 @@ import { withCurrentChatSendSession, prepareChatSendSessionEntry } from "./chat-
 import {
   admitChatSendUploads,
   assertChatSendExclusiveAdmission,
-  assertChatSendWorkAdmissionCurrent,
   createChatSendWorkAdmission,
   consumeChatSendAdmissionRetry,
   prepareChatSendAdmissionRetry,
@@ -189,7 +188,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       abortPendingChatSend("restart");
       return false;
     }
-    if (!isFutureDateTimestampMs(currentReservation?.payload.expiresAtMs, { nowMs: Date.now() })) {
+    if (
+      !currentReservation ||
+      !isFutureDateTimestampMs(currentReservation.payload.expiresAtMs, { nowMs: Date.now() })
+    ) {
       abortPendingChatSend("timeout");
       return false;
     }
@@ -233,11 +235,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         const localRecovery = restartSafeRequest && !currentConfig.cloudWorkers?.requiredProfile;
         retryComparison = comparison;
         params.assertCurrent?.();
-        const retainedRequestConflict = resolveChatSendRequestConflict(
-          params,
-          retryComparison,
-          pendingAttemptId,
-        );
+        const retainedRequestConflict = resolveChatSendRequestConflict(params, retryComparison);
         if (retainedRequestConflict) {
           throw new Error(retainedRequestConflict.message);
         }
@@ -250,7 +248,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         const requestConflict = resolveChatSendRequestConflict(
           { ...params, session: { ...session, entry: latestEntry } },
           retryComparison,
-          pendingAttemptId,
         );
         if (requestConflict) {
           throw new Error(requestConflict.message);
@@ -299,7 +296,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }
         const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry, {
           allowPendingWorkspace: true,
-          restartResume: request.restartResume,
           providerReviewAcknowledgment: request.providerReviewAcknowledgment,
           runId: clientRunId,
         });
@@ -441,8 +437,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       onInterrupt: (reason) => {
         const stopReason = isAgentRunRestartAbortReason(reason) ? "restart" : "rpc";
         if (!admittedRunAbort) {
-          // Unstarted input remains with the client; a restart is not a terminal Stop receipt.
-          if (stopReason !== "restart" && !context.chatRunState.hasAbortMarker(clientRunId)) {
+          if (!context.chatRunState.hasAbortMarker(clientRunId)) {
             abortPendingChatSend(stopReason);
           }
         } else if (!admittedRunAbort.controller.signal.aborted) {
@@ -456,7 +451,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     });
     workPhase?.finish();
     retainedRequestConflict = await consumeChatSendCurrent(params, () =>
-      resolveChatSendRequestConflict(params, retryComparison, pendingAttemptId),
+      resolveChatSendRequestConflict(params, retryComparison),
     );
   } catch (err) {
     pendingReservation.clear();
@@ -473,7 +468,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     return { ok: false as const };
   }
   if (
-    requestIdentity !== undefined &&
     admittedRunAbort?.registered &&
     !reservationSuperseded &&
     !readChatSendDedupeResponse(context.dedupe, clientRunId)
@@ -562,7 +556,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     };
     // Authority stays fresh per segment; effects check cancellation themselves.
     // A cancelled admission callback must still reach the handler's abort settlement.
-    const consumeCurrent = <T>(consume: () => T): Promise<T> =>
+    const consumeCurrent = <T>(consume: () => T): Promise<T | undefined> =>
       consumeChatSendCurrent(params, () => {
         capturedOperator.authority?.assertCurrent();
         return consume();
@@ -579,6 +573,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           }),
         ),
       }));
+      if (!pending) {
+        return { ok: false as const };
+      }
       const interruption = await pending.interruption();
       interruptedActiveRun = interruption.interrupted;
       if (!interruption.settled) {
@@ -605,12 +602,17 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           : undefined,
       };
     });
+    if (!pending) {
+      return { ok: false as const };
+    }
     if (pending.admission) {
       if (!(await pending.admission())) {
         cleanupPreDispatchAdmission();
         return { ok: false as const };
       }
-      await consumeCurrent(() => undefined);
+      if (!(await consumeCurrent(() => true))) {
+        return { ok: false as const };
+      }
     }
   } catch (error) {
     // Join effects before releasing custody on reader failure; never replay them.
@@ -705,14 +707,19 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       acquireInputActor: () => retainedWork.acquireInputActor(),
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
       assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,
-      assertWorkAdmissionCurrent: () =>
-        assertChatSendWorkAdmissionCurrent({
-          retainedWork,
-          admission,
-          lifecycleGeneration,
-          controller: activeRunAbort.controller,
-          queued: context.chatQueuedTurns.get(clientRunId),
-        }),
+      assertWorkAdmissionCurrent: () => {
+        const queued = context.chatQueuedTurns.get(clientRunId);
+        // Collect retains admission after retiring source cancellation until aggregate settlement.
+        if (
+          !retainedWork.isActive() ||
+          !admission.isActive() ||
+          lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
+          (activeRunAbort.controller.signal.aborted &&
+            !(queued?.controller === activeRunAbort.controller && queued.abortable === false))
+        ) {
+          throw new Error("Chat admission ended or was cancelled; submit a new turn.");
+        }
+      },
       restartSafeAdmission,
       setDiscardAbandonedPreparedMedia: setDiscardPreparedMedia,
     },

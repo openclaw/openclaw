@@ -13,10 +13,10 @@ import {
   renderUserFacingText,
 } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   findCliTerminalStopError,
   findCliTimeoutError,
+  hasLocalWorkerTaskTimeout,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
 } from "../../agents/failover-error.js";
@@ -24,10 +24,6 @@ import {
   renderAssistantRequestFailureCopy,
   renderRuntimeCoordinationFailureCopy,
 } from "../../agents/failover/assistant-request-failure-copy.js";
-import {
-  ContextPreparationTimeoutError,
-  findLocalWorkerTaskTimeout,
-} from "../../agents/failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "../../agents/failover/message-patterns.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
@@ -47,13 +43,7 @@ import {
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
-import {
-  createMissingReplyNotice,
-  MISSING_REPLY_NOTICE_TEXT,
-  resolveReplyExpectation,
-  shouldDeliverMissingReplyNotice,
-  type ReplyExpectation,
-} from "../../agents/reply-completion.js";
+import type { ReplyCompletion, ReplyExpectation } from "../../agents/reply-completion.js";
 import {
   collectErrorGraphCandidates,
   formatErrorMessage,
@@ -70,6 +60,7 @@ import {
 } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 
 type ReplyFailoverFacts = ReturnType<typeof resolveReplyFailoverFacts>;
@@ -119,7 +110,6 @@ export function resolveReplyFailureSummary(params: {
             reason: params.reason,
             attempts,
             provider: failoverError?.provider,
-            code: failoverError?.code,
             rateLimitRetriesExhausted: failoverError?.rateLimitRetriesExhausted,
             cooldownExpiry: failoverError?.soonestCooldownExpiry,
             sanitizeText: (rawText) => sanitizeUserFacingText(rawText, { errorContext: true }),
@@ -176,11 +166,7 @@ export function buildPreflightCompactionFailureText(
   )
     .trim()
     .replace(/\s+/gu, " ");
-  const classification = classifyCompactionReason(reason);
-  if (classification === "unshrinkable_request") {
-    return `⚠️ ${reason}`;
-  }
-  const isTimeout = classification === "timeout";
+  const isTimeout = classifyCompactionReason(reason) === "timeout";
   const reasonSuffix = options?.includeDetails && reason && !isTimeout ? ` Reason: ${reason}.` : "";
   const summary = isTimeout
     ? "⚠️ This conversation is too long, and shortening it took too long."
@@ -272,16 +258,6 @@ export function buildExternalRunFailureReply(
       };
     }
     return buildUnclassifiedReply(true);
-  }
-  const localTimeout = findLocalWorkerTaskTimeout(error);
-  if (localTimeout) {
-    return {
-      text:
-        localTimeout instanceof ContextPreparationTimeoutError
-          ? localTimeout.message
-          : "A local worker task timed out. Please try again.",
-      isGenericRunnerFailure: false,
-    };
   }
   const failoverFacts =
     options?.failoverFacts ??
@@ -392,6 +368,12 @@ export function buildExternalRunFailureReply(
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
+  if (failoverFacts.reason === "timeout" && hasLocalWorkerTaskTimeout(error)) {
+    return {
+      text: "A local worker task timed out. Please try again.",
+      isGenericRunnerFailure: false,
+    };
+  }
   const classifiedFailure =
     failoverFacts.requestFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
   if (classifiedFailure) {
@@ -411,7 +393,9 @@ export function buildExternalRunFailureReply(
 
 export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T {
   const marked = markReplyPayloadForSourceSuppressionDelivery(payload);
-  marked.isError = true;
+  if (!isSilentReplyText(marked.text, SILENT_REPLY_TOKEN)) {
+    marked.isError = true;
+  }
   return marked;
 }
 
@@ -422,14 +406,14 @@ export function markPostCompactionModelFailurePayload(
   return postCompactionModelFailure === true &&
     payload.isError === true &&
     isReplyPayloadTerminalContent(payload) &&
-    payload.text !== undefined
+    typeof payload.text === "string"
     ? setReplyPayloadMetadata(payload, { postCompactionModelFailure: true })
     : payload;
 }
 
 export function renderPostCompactionModelFailurePayload(payload: ReplyPayload): ReplyPayload {
   return getReplyPayloadMetadata(payload)?.postCompactionModelFailure === true &&
-    payload.text !== undefined
+    typeof payload.text === "string"
     ? copyReplyPayloadMetadata(payload, {
         ...payload,
         text: `⚠️ Context compaction succeeded, but the later model request still failed. ${payload.text.replace(/^⚠️\s*/u, "")}`,
@@ -447,7 +431,7 @@ export function resolveAgentRunFailureText(params: {
   return params.replyExpectation === "optional" &&
     params.isGenericRunnerFailure &&
     !params.visibleReplyDelivered
-    ? ""
+    ? SILENT_REPLY_TOKEN
     : params.text;
 }
 
@@ -470,47 +454,14 @@ export function buildTerminalAgentRunFailureReplyPayload(params: {
   });
 }
 
-/** Lifts the owned failure notice without inventing chat output for a background empty turn. */
-export async function resolveTerminalAgentRunFailurePayload(params: {
-  result: EmbeddedAgentRunResult;
-  run: Parameters<typeof shouldDeliverMissingReplyNotice>[0];
-  useHeartbeatFailureCopy?: boolean;
-  visibleReplyDelivered: () => Promise<boolean>;
-}): Promise<ReplyPayload | undefined> {
-  const terminalError = params.result.meta?.error;
-  const missingReplyNotice =
-    terminalError?.kind === "incomplete_turn" &&
-    terminalError.message.startsWith(MISSING_REPLY_NOTICE_TEXT) &&
-    params.useHeartbeatFailureCopy !== true;
-  const suppressMissingReplyNotice =
-    missingReplyNotice && !shouldDeliverMissingReplyNotice(params.run);
-  const ownedFailureNotice = params.result.payloads?.find(
-    (payload) =>
-      payload.isError === true &&
-      payload.isStatusNotice === true &&
-      getReplyPayloadMetadata(payload)?.assistantTranscriptOwned === true,
-  );
-  if (ownedFailureNotice) {
-    params.result.payloads = params.result.payloads?.filter(
-      (payload) => payload !== ownedFailureNotice,
-    );
-    return suppressMissingReplyNotice
-      ? undefined
-      : markAgentRunFailureReplyPayload(ownedFailureNotice);
-  }
-  if (suppressMissingReplyNotice) {
+export function buildEmptyInteractiveReplyPayload(params: {
+  completion: ReplyCompletion;
+}): ReplyPayload | undefined {
+  if (params.completion.outcome !== "missing") {
     return undefined;
   }
-  if (missingReplyNotice) {
-    return markAgentRunFailureReplyPayload(createMissingReplyNotice(terminalError.message));
-  }
-  const replyExpectation = resolveReplyExpectation(params.run);
-  return buildTerminalAgentRunFailureReplyPayload({
-    isHeartbeat: params.run.isHeartbeat,
-    useHeartbeatFailureCopy: params.useHeartbeatFailureCopy,
-    replyExpectation,
-    visibleReplyDelivered:
-      replyExpectation === "optional" ? await params.visibleReplyDelivered() : false,
+  return markAgentRunFailureReplyPayload({
+    text: "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.",
   });
 }
 

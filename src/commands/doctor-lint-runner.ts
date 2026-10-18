@@ -63,7 +63,6 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import {
-  createDeferredInspectionExecution,
   createStateSnapshotFailureExecution,
   createStateSnapshotFailureFinding,
   detectDoctorLintOutputMode,
@@ -102,11 +101,11 @@ class DoctorLintStateSnapshotError extends Error {
   }
 }
 
-/** Only the rehearsal worker reports before disposal and inherits its CLI's budget anchor. */
+/** The rehearsal worker keeps its private state alive after publishing the check result. */
 export async function runDoctorLintCliInProcess(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
-  worker?: { commandStartedAtMs?: number },
+  reportBeforeDisposal = false,
 ): Promise<number> {
   let reported: DoctorLintExecution | undefined;
   const report = (execution: DoctorLintExecution) => {
@@ -115,13 +114,7 @@ export async function runDoctorLintCliInProcess(
   };
   try {
     const execution = await withArtifactPreservingStateReads(
-      () =>
-        prepareDoctorLintExecution(
-          runtime,
-          opts,
-          worker ? report : undefined,
-          worker?.commandStartedAtMs,
-        ),
+      () => prepareDoctorLintExecution(runtime, opts, reportBeforeDisposal ? report : undefined),
       { agentDatabases: true },
     );
     if (!reported) {
@@ -156,7 +149,6 @@ async function prepareDoctorLintExecution(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
   onChecksComplete?: (execution: DoctorLintExecution) => void,
-  commandStartedAtMs?: number,
 ): Promise<DoctorLintExecution> {
   const sevMin =
     opts.severityMin === undefined ? "warning" : parseHealthFindingSeverity(opts.severityMin);
@@ -175,18 +167,32 @@ async function prepareDoctorLintExecution(
       pluginValidation: "core-only",
     }).readConfigFileSnapshot();
     if (snapshot.valid) {
-      const budget = await resolveDoctorUpdateBudget({
-        cfg: snapshot.config,
-        env: sourceEnv,
-        commandStartedAtMs,
-      });
+      const budget = await resolveDoctorUpdateBudget({ cfg: snapshot.config, env: sourceEnv });
       if (
         budget &&
         !admitDoctorUpdateInspection(budget, "agent", [
           { id: "core/doctor/lint-inspection", label: "Doctor lint inspection" },
         ])
       ) {
-        return createDeferredInspectionExecution(runtime, opts, [...budget.deferred.values()]);
+        const warnings = [...budget.deferred.values()];
+        return {
+          checksRun: 0,
+          checksSkipped: 0,
+          exitCode: 0,
+          findings: warnings,
+          writeOutput() {
+            if (detectDoctorLintOutputMode(opts) === "json") {
+              writeJsonResult({ ok: true, checksRun: 0, checksSkipped: 0, findings: [], warnings });
+            } else {
+              for (const finding of warnings) {
+                runtime.log(
+                  `[warning] ${finding.checkId} [${finding.errorCode}]: ${finding.message}`,
+                );
+                runtime.log(finding.fixHint ?? "Run `openclaw doctor` after activation.");
+              }
+            }
+          },
+        };
       }
     }
   }

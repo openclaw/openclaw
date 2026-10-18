@@ -1,5 +1,4 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import type { ReplyExpectation } from "../agents/reply-completion.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
@@ -23,8 +22,6 @@ export type PrepareInProcessAgentExecutionOptions = {
 
 export type DispatchGatewayMethodInProcessOptions = {
   privateCompletion?: true;
-  /** Trusted input-owner policy; not accepted from the wire request. */
-  replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
   allowSyntheticModelOverride?: boolean;
   agentToolCaller?: TrustedAgentToolCaller;
@@ -33,10 +30,6 @@ export type DispatchGatewayMethodInProcessOptions = {
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
-  /** Host-only, request-scoped bridge for a plugin approval prompt. */
-  allowHostPluginApprovalRequest?: boolean;
-  internalDeliveryMediaUrls?: string[];
-  internalDeliverySuppressText?: boolean;
   nodeInvokeStream?: GatewayNodeInvokeStream;
   nodeInvokeApprovalSessionKey?: string;
   onAccepted?: (payload: unknown) => void;

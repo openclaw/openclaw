@@ -20,6 +20,7 @@ import { registerTranscriptsEnglish } from "../../i18n/locales/en-transcripts.ts
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { createSettingsStatus } from "./settings-status.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 registerEnglishCatalog(registerTranscriptsEnglish);
@@ -37,11 +38,11 @@ function supportsAutoStartSetup(provider: SourceProvider | undefined): boolean {
 }
 
 type SettingsProps = {
-  mutationDisabled?: boolean;
-  buildEditor?: () => JSX.Element;
-  advancedExpanded?: boolean;
+  mutationDisabled: boolean;
+  buildEditor: (() => JSX.Element) | undefined;
+  advancedExpanded: boolean;
 };
-export function MeetingCaptureSettings(props: SettingsProps) {
+function MeetingCaptureSettingsContent(props: SettingsProps) {
   const context = useApplication();
   const {
     client,
@@ -153,7 +154,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
         : retain(providerId, known),
     );
   }
-  function saveSource(event: SubmitEvent & { currentTarget: HTMLFormElement }) {
+  function saveSource(event: SubmitEvent) {
     event.preventDefault();
     const index = editing();
     if (disabled() || index === null) {
@@ -164,7 +165,8 @@ export function MeetingCaptureSettings(props: SettingsProps) {
       setEditError(t("meetingCapture.sourceChanged"));
       return;
     }
-    const form = event.currentTarget;
+    // SAFETY: SourceEditor calls this synchronously from its native form's submit binding.
+    const form = event.currentTarget as HTMLFormElement;
     if (!form.reportValidity()) {
       return;
     }
@@ -254,7 +256,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
         "sessionId",
       ] as const;
     return (
-      <form onSubmit={saveSource}>
+      <form onSubmit={(event: SubmitEvent) => saveSource(event)}>
         <SettingsSection
           title={t(
             editorProps.index === "new" ? "meetingCapture.addSource" : "meetingCapture.editSource",
@@ -271,7 +273,10 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                   required
                   disabled={disabled()}
                   value={editedProviderId()}
-                  onChange={(event) => selectProvider(event.currentTarget.value)}
+                  onChange={(event: Event) => {
+                    // SAFETY: This native select emits the change event handled by its own binding.
+                    selectProvider((event.target as HTMLSelectElement).value);
+                  }}
                 >
                   <option value="">{t("meetingCapture.chooseProvider")}</option>
                   <For each={options()} keyed={(option) => option.id}>
@@ -315,9 +320,10 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                         locatorRequirements()?.[key] === "required"
                       }
                       value={typeof source?.[key] === "string" ? source[key] : ""}
-                      onInput={(event) => {
+                      onInput={(event: Event) => {
                         // Health refreshes can remove metadata; unsaved locators must survive.
-                        sourceDraft[key] = event.currentTarget.value;
+                        // SAFETY: This native input emits the input event handled by its own binding.
+                        sourceDraft[key] = (event.target as HTMLInputElement).value;
                       }}
                     />
                   }
@@ -409,7 +415,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
       );
     });
   return (
-    <openclaw-meeting-capture-settings>
+    <>
       <SettingsPage>
         <div class="settings-stack" id={COMMUNICATION_SETTINGS_TARGET_IDS.meetingCapture}>
           <SettingsSection
@@ -583,6 +589,18 @@ export function MeetingCaptureSettings(props: SettingsProps) {
           {props.buildEditor?.()}
         </details>
       </ShellLayoutBoundary>
-    </openclaw-meeting-capture-settings>
+    </>
   );
 }
+
+export const MeetingCaptureSettings = defineSolidBridge<SettingsProps>(
+  "openclaw-meeting-capture-settings",
+  (props) => <MeetingCaptureSettingsContent {...props} />,
+  {
+    properties: {
+      mutationDisabled: { default: false, type: Boolean },
+      buildEditor: { default: undefined, attribute: false },
+      advancedExpanded: { default: false, type: Boolean },
+    },
+  },
+);

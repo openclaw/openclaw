@@ -273,7 +273,7 @@ export function sendGoogleMeetGatewayError(
   const payload = formatGoogleMeetGatewayError(err);
   respond(false, payload, {
     code,
-    message: payload.error,
+    message: typeof payload.error === "string" ? payload.error : "Google Meet request failed",
     details: payload,
   });
 }

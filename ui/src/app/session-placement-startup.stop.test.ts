@@ -11,7 +11,6 @@ import {
 import * as toast from "../lib/toast.ts";
 import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 import { PendingSessionPlacementRecoveryState } from "../pages/new-session/session-placement-recovery-state.ts";
-import { createStorageMock } from "../test-helpers/storage.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 import createRuntime from "./session-placement-startup.runtime.ts";
@@ -641,8 +640,7 @@ describe("placement startup Retry", () => {
 describe("placement startup reload", () => {
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
-    // Each case represents a fresh document, including in-memory reload ownership.
-    vi.stubGlobal("sessionStorage", createStorageMock());
+    sessionStorage.clear();
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -692,10 +690,7 @@ describe("placement startup reload", () => {
       );
       const { startup, input, gateway } = createPlacementStartupHarness(vi.fn(), { loadRuntime });
       const privateKey = "agent:cloud:incognito";
-      const saved = Array.from({ length: sessionStorage.length }, (_, index) => {
-        const key = sessionStorage.key(index)!;
-        return [key, sessionStorage.getItem(key)];
-      });
+      const saved = Object.entries(sessionStorage);
       try {
         startup.resumeRecovery();
         await flushStartupMicrotasks();
@@ -736,12 +731,7 @@ describe("placement startup reload", () => {
         ).toBe(false);
         expect(fetch).not.toHaveBeenCalled();
         expect(reload).not.toHaveBeenCalled();
-        expect(
-          Array.from({ length: sessionStorage.length }, (_, index) => {
-            const key = sessionStorage.key(index)!;
-            return [key, sessionStorage.getItem(key)];
-          }),
-        ).toEqual(saved);
+        expect(Object.entries(sessionStorage)).toEqual(saved);
         expect(startup.hasPendingTurn(privateKey)).toBe(true);
 
         // Credential replacement retires this input's authority; it cannot block the new owner.

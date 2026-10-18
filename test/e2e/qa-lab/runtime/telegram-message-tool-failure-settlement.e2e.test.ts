@@ -4,6 +4,7 @@ import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -116,6 +117,7 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");
           const gateway = await gatewayOwner.start({
             repoRoot,
+            command: createQaPreparedRepoCliCommand(repoRoot),
             providerBaseUrl: `${apiRoot}/v1`,
             transportBaseUrl: apiRoot,
             transport: {

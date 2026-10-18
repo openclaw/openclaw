@@ -233,23 +233,14 @@ export function createRepositoryGitHubPublicationRecovery(params: {
         }
       }
     },
-    async resumeSessionRequests(isStopping?: () => boolean): Promise<void> {
-      if (isStopping?.()) {
-        return;
-      }
+    async resumeSessionRequests(): Promise<void> {
       const failures: Error[] = [];
       const rows = await listRepositoryGitHubPublicationsAsync({
         ownerProfileId: null,
         pending: true,
       });
-      if (isStopping?.()) {
-        return;
-      }
       const currentPlacements = await placements.getManyAsync(rows.map((row) => row.session_id));
       for (const row of rows) {
-        if (isStopping?.()) {
-          break;
-        }
         try {
           if (
             currentPlacements.get(row.session_id)?.turnClaim ||

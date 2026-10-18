@@ -262,7 +262,9 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
   if (isGithubActions) {
     const eventAllowed =
       process.env.GITHUB_EVENT_NAME === "workflow_dispatch" ||
-      process.env.GITHUB_EVENT_NAME === "schedule";
+      (((platform === "ios" && destination === "testflight") ||
+        (platform === "android" && destination === "internal")) &&
+        process.env.GITHUB_EVENT_NAME === "schedule");
     if (
       !eventAllowed ||
       process.env.GITHUB_REPOSITORY !== "openclaw/openclaw" ||
@@ -270,7 +272,7 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
       sourceSha !== process.env.GITHUB_SHA
     ) {
       throw new Error(
-        "CI releases require the exact workflow_dispatch or schedule commit on openclaw/openclaw main.",
+        "CI releases require the exact workflow_dispatch commit on openclaw/openclaw main; scheduled events are accepted only for iOS TestFlight or Android internal testing.",
       );
     }
   } else if (git(root, "branch", "--show-current") !== "main") {

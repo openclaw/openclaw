@@ -816,8 +816,12 @@ describe("CI changed Node test plan", () => {
           for (const target of group.includePatterns ?? []) {
             expect(group.configs).toEqual([buildVitestRunPlans([target])[0]?.config]);
           }
-          expect(group.runner).toBe(owner.runner);
-          for (const key of ["planConcurrency", "pretestBuildMode", "timeoutMinutes"] as const) {
+          for (const key of [
+            "runner",
+            "planConcurrency",
+            "pretestBuildMode",
+            "timeoutMinutes",
+          ] as const) {
             expect(job[key], key).toEqual(ownerJob[key]);
           }
           expect(job.predictedSeconds).toBeGreaterThan(0);

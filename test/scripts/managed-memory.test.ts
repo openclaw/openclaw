@@ -192,7 +192,7 @@ it.each([
   expect(mocks.control).toHaveBeenCalledTimes(1);
 });
 
-it.each(["darwin"] as const)(
+it.each(["darwin", "win32"] as const)(
   "refuses an unqualified %s cap before starting a workload",
   async (platform) => {
     mocks.control.mockClear();
@@ -254,17 +254,14 @@ it.each([
 );
 
 it.each([
-  {
+  ...[undefined, "ENOENT"].map((code) => ({
     probe: response("LoadState=loaded\nActiveState=failed\n"),
-    original: Object.assign(new Error("workload failed"), { code: "ENOENT" }),
-  },
-  {
-    probe: {
-      error: Object.assign(new Error("spawn failed"), { code: "ENOMEM" }),
-      stdout: undefined,
-    },
+    original: Object.assign(new Error("workload failed"), { code }),
+  })),
+  ...[undefined, null].map((stdout) => ({
+    probe: { error: Object.assign(new Error("spawn failed"), { code: "ENOMEM" }), stdout },
     original: undefined,
-  },
+  })),
 ])(
   "retains admission and the original failure when cleanup is uncertain: %j",
   async ({ probe, original }) => {

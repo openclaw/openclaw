@@ -65,7 +65,7 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
               body: {
                 model: client.model,
                 input: chunk.text,
-                ...(client.outputDimensionality !== undefined
+                ...(typeof client.outputDimensionality === "number"
                   ? { dimensions: client.outputDimensionality }
                   : {}),
                 ...(inputType ? { input_type: inputType } : {}),

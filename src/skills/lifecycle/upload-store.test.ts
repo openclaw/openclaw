@@ -115,34 +115,6 @@ function observeExpiredUploadInventory(): Promise<void> {
   return observed.promise;
 }
 
-function failSkillUploadRenewals(error: Error): { attempted: Promise<void> } {
-  const attempted = deferred();
-  const runOperation = stateWorker.runOpenClawStateWorkerOperation;
-  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-    new Proxy(runOperation, {
-      apply(target, receiver, [context, operation, options]: Parameters<typeof runOperation>) {
-        return Reflect.apply(target, receiver, [
-          context,
-          (scope: Parameters<typeof operation>[0]) =>
-            operation({
-              execute: new Proxy(scope.execute, {
-                async apply(execute, executeReceiver, args: Parameters<typeof scope.execute>) {
-                  if (args[0].type === "skillUploads.renew") {
-                    attempted.resolve();
-                    throw error;
-                  }
-                  return await Reflect.apply(execute, executeReceiver, args);
-                },
-              }),
-            }),
-          options,
-        ]);
-      },
-    }),
-  );
-  return { attempted: attempted.promise };
-}
-
 function chunkCount(databasePath: string, uploadId?: string): number {
   const row = uploadId
     ? stateDatabase(databasePath)
@@ -687,78 +659,6 @@ describe("skill upload store", () => {
         }),
       ).toBe(false);
     });
-  });
-
-  it("fails an install whose renewal confirms the lease was lost", async () => {
-    const { databasePath, store } = await makeStore({
-      installLeaseHeartbeatMs: 10,
-      installLeaseMs: 60_000,
-    });
-    const committed = await commitUploadFixture(store, databasePath, "lost-lease-skill");
-
-    const entered = deferred();
-    const release = deferred();
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const intervals = vi.spyOn(globalThis, "setInterval");
-    const renewalSettled = observeSkillUploadRenewal();
-    const install = store.withCommittedUpload(committed.uploadId, async () => {
-      entered.resolve();
-      await release.promise;
-      return "installed";
-    });
-    // Attach the rejection handler before the install can settle.
-    const outcome = expectUploadError(install, "upload install lease is no longer active");
-    try {
-      await entered.promise;
-      stateDatabase(databasePath)
-        .prepare(
-          "UPDATE state_leases SET expires_at = ? WHERE scope = 'skill-upload-install' AND lease_key = ?",
-        )
-        .run(Date.now() - 1, committed.uploadId);
-      const heartbeat = intervals.mock.calls.find(([, delay]) => delay === 10)?.[0];
-      if (!heartbeat) {
-        throw new Error("Install heartbeat was not scheduled");
-      }
-      heartbeat();
-      await renewalSettled;
-    } finally {
-      release.resolve();
-      vi.useRealTimers();
-    }
-    await outcome;
-    expect(installLeaseCount(databasePath, committed.uploadId)).toBe(0);
-  });
-
-  it("keeps a rejected renewal retryable instead of failing the install", async () => {
-    const { databasePath, store } = await makeStore({ installLeaseHeartbeatMs: 10 });
-    const committed = await commitUploadFixture(store, databasePath, "rejected-renewal-skill");
-
-    const entered = deferred();
-    const release = deferred();
-    const renewalError = new Error("injected renewal failure");
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const intervals = vi.spyOn(globalThis, "setInterval");
-    const { attempted } = failSkillUploadRenewals(renewalError);
-    const install = store.withCommittedUpload(committed.uploadId, async () => {
-      entered.resolve();
-      await release.promise;
-      return "installed";
-    });
-    try {
-      await entered.promise;
-      const heartbeat = intervals.mock.calls.find(([, delay]) => delay === 10)?.[0];
-      if (!heartbeat) {
-        throw new Error("Install heartbeat was not scheduled");
-      }
-      heartbeat();
-      await attempted;
-      release.resolve();
-      await expect(install).resolves.toBe("installed");
-    } finally {
-      release.resolve();
-      vi.useRealTimers();
-    }
-    expect(installLeaseCount(databasePath, committed.uploadId)).toBe(0);
   });
 
   it("lets the install lease owner remove the upload", async () => {

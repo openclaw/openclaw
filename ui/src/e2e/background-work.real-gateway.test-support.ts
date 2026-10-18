@@ -27,8 +27,8 @@ export const backgroundWorkFixture = {
   nextReply: "This reply belongs to the new instruction.",
 };
 
-export async function createBackgroundWorkInstance(port: number, notifyOnExit = false) {
-  const instance = await createOpenClawTestInstance({
+export function createBackgroundWorkInstance(port: number, notifyOnExit = false) {
+  return createOpenClawTestInstance({
     name: "background-work",
     env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
     config: {
@@ -44,7 +44,6 @@ export async function createBackgroundWorkInstance(port: number, notifyOnExit = 
       agents: {
         ownership: "explicit",
         defaults: {
-          workspace: "${OPENCLAW_WORKSPACE_DIR}",
           model: "background-fixture/parent",
           modelPolicy: { allow: ["background-fixture/*"] },
         },
@@ -67,8 +66,6 @@ export async function createBackgroundWorkInstance(port: number, notifyOnExit = 
       plugins: { allow: [] },
     },
   });
-  instance.env.OPENCLAW_WORKSPACE_DIR = instance.state.path("public-workspace");
-  return instance;
 }
 
 function toolEvents(name: string, args: Record<string, unknown>) {

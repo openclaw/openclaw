@@ -12,16 +12,16 @@ import type {
   ChatQueueItem,
   ChatSelectionSource,
 } from "../../lib/chat/chat-types.ts";
-import type { PresentationValue } from "../../lib/presentation.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
+import type { PresentationValue } from "../../lit/presentation-binding.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { buildPendingInputQueueItems, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatProviderReviewController } from "./chat-provider-review-controller.tsx";
+import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPlacementStartupNoticeProps } from "./chat-view-notices.tsx";
@@ -36,8 +36,8 @@ import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
 import { showChatAnnotationEditor } from "./components/chat-selection-popup.ts";
-import type { ChatSwarmProgressProps } from "./components/chat-swarm-progress.solid.tsx";
-import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
+import type { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
+import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.ts";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
 import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
@@ -49,7 +49,6 @@ export type ChatProps = Omit<
   | "pendingInputs"
   | "runActive"
   | "runWorking"
-  | "runFinalizing"
   | "startupLabel"
   | "retryAt"
   | "failureActionsRunId"
@@ -82,7 +81,7 @@ export type ChatProps = Omit<
     ) => Promise<boolean>;
     presented?: PresentationValue;
     historyState?: ChatState;
-    awaitingActivity?: boolean;
+    startupStatus?: ChatRunStartupStatus | null;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
     providerReview?: ChatProviderReviewController;
@@ -100,7 +99,7 @@ export type ChatProps = Omit<
     ) => void | Promise<void>;
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
-    swarm?: ChatSwarmProgressProps;
+    swarm?: Parameters<typeof renderChatSwarmProgress>[0];
     chatMessageMaxWidth?: string | null;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;
@@ -235,15 +234,10 @@ export function createChatViewFrame(props: ChatProps) {
     pendingInputs: displayedPendingInputs,
     runActive: props.runActive === true,
     runWorking,
-    runFinalizing: !isSessionRunVisuallyActive(true, props.startupStatus?.phase),
     startupLabel: chatStartupStatusLabel(
       props.startupStatus,
       placementStartup,
       props.environmentStartStatus,
-      (runWorking || props.stream !== null) &&
-        props.awaitingActivity !== false &&
-        !props.stream?.trim() &&
-        props.toolMessages.length === 0,
     ),
     retryAt: props.startupStatus?.phase === "retrying" ? props.startupStatus.retryAt : undefined,
     failureActionsRunId: chatFailureRunId(props.runError, props.selectedSession),

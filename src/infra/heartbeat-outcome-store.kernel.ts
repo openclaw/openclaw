@@ -11,10 +11,10 @@ export type HeartbeatOutcomeRow = Selectable<OpenClawAgentKyselyDatabase["heartb
 export function persistHeartbeatOutcomeInDatabase(
   db: EngineConnection,
   values: HeartbeatOutcomeInput,
-): HeartbeatOutcomeRow | undefined {
+): undefined {
   const agentDb = getNodeSqliteKysely<HeartbeatDatabase>(db);
   const { session_key: _sessionKey, ...replacement } = values;
-  return executeSqliteQuerySync(
+  executeSqliteQuerySync(
     db,
     agentDb
       .insertInto("heartbeat_outcomes")
@@ -62,9 +62,8 @@ export function persistHeartbeatOutcomeInDatabase(
           context_run_id: null,
           context_claimed_at: null,
         }),
-      )
-      .returningAll(),
-  ).rows[0];
+      ),
+  );
 }
 
 export function claimHeartbeatOutcomeRowInDatabase(

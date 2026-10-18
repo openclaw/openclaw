@@ -27,14 +27,17 @@ function shouldPreserveForMaintenance(entry: SubagentRunMaintenanceRecord): bool
 }
 
 function protectedSubagentSessionKeys(runs: Iterable<SubagentRunMaintenanceRecord>): string[] {
-  const keys: string[] = [];
+  const keys = new Set<string>();
   for (const entry of runs) {
     if (!shouldPreserveForMaintenance(entry)) {
       continue;
     }
-    keys.push(entry.childSessionKey);
+    const childSessionKey = entry.childSessionKey.trim();
+    if (childSessionKey) {
+      keys.add(childSessionKey);
+    }
   }
-  return keys;
+  return [...keys];
 }
 
 registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {

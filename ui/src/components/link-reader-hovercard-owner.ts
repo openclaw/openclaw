@@ -60,13 +60,29 @@ export class HovercardOwner {
     private readonly providerClass: CustomElementConstructor,
   ) {}
 
+  get pagePreviewContext() {
+    return this.host.pagePreviewContext;
+  }
+  get claimedReaders() {
+    return this.host.claimedReaders;
+  }
+  get client() {
+    return this.host.client;
+  }
+  get agentId() {
+    return this.host.agentId;
+  }
+  get readers() {
+    return this.host.readers;
+  }
+
   propertyChanged(key: keyof HovercardProperties): void {
     if (key === "previewSeeds") {
       this.seeds = {
-        client: this.host.client,
-        agentId: this.host.agentId,
-        generation: this.host.client?.connectionGeneration,
-        recoveryScope: this.host.client?.recoveryScope,
+        client: this.client,
+        agentId: this.agentId,
+        generation: this.client?.connectionGeneration,
+        recoveryScope: this.client?.recoveryScope,
         previews: this.host.previewSeeds,
       };
     } else if (key === "pagePreviewContext") {
@@ -76,10 +92,10 @@ export class HovercardOwner {
     } else {
       if (key === "readers") {
         const previous = this.readerDescriptors;
-        this.readerDescriptors = this.host.readers;
+        this.readerDescriptors = this.readers;
         if (
-          previous.length === this.host.readers.length &&
-          previous.every((reader, index) => reader === this.host.readers[index])
+          previous.length === this.readers.length &&
+          previous.every((reader, index) => reader === this.readers[index])
         ) {
           return;
         }
@@ -96,21 +112,18 @@ export class HovercardOwner {
     }
     this.stopGateway?.();
     this.stopConfig?.();
-    this.stopGateway = this.host.pagePreviewContext?.gateway.subscribe(() => {
+    this.stopGateway = this.pagePreviewContext?.gateway.subscribe(() => {
       this.retirePage();
       this.update();
     });
     const syncConfig = () => {
-      if (
-        this.host.client &&
-        !this.host.pagePreviewContext?.config.current.automaticallyFetchFavicons
-      ) {
-        clearLinkPreviews(this.host.client);
+      if (this.client && !this.pagePreviewContext?.config.current.automaticallyFetchFavicons) {
+        clearLinkPreviews(this.client);
       }
       this.retirePage();
       this.update();
     };
-    this.stopConfig = this.host.pagePreviewContext?.config.subscribe(syncConfig);
+    this.stopConfig = this.pagePreviewContext?.config.subscribe(syncConfig);
     syncConfig();
   }
 
@@ -126,10 +139,10 @@ export class HovercardOwner {
     const seeds = this.seeds;
     if (
       !seeds ||
-      seeds.client !== this.host.client ||
-      seeds.agentId !== this.host.agentId ||
-      seeds.generation !== this.host.client?.connectionGeneration ||
-      seeds.recoveryScope !== this.host.client?.recoveryScope
+      seeds.client !== this.client ||
+      seeds.agentId !== this.agentId ||
+      seeds.generation !== this.client?.connectionGeneration ||
+      seeds.recoveryScope !== this.client?.recoveryScope
     ) {
       return undefined;
     }
@@ -153,9 +166,7 @@ export class HovercardOwner {
   }
 
   private syncPreviewContext(): PreviewContext | null {
-    const context = this.host.client
-      ? previewContextFor(this.host.client, this.host.agentId)
-      : null;
+    const context = this.client ? previewContextFor(this.client, this.agentId) : null;
     if (context !== this.previewContext) {
       // Clearing cached facts also updates inline projections under this new context.
       this.previewContext = context;
@@ -171,7 +182,7 @@ export class HovercardOwner {
       if (!this.ownsAnchor(anchor)) {
         continue;
       }
-      const target = resolveLinkReaderTarget(anchor.href, this.host.readers);
+      const target = resolveLinkReaderTarget(anchor.href, this.readers);
       const preview = target ? this.cachedPreview(target)?.preview : undefined;
       if (!preview?.badge) {
         delete anchor.dataset.linkReaderTone;
@@ -196,8 +207,8 @@ export class HovercardOwner {
   async prefetch(target: LinkReaderTarget, signal: AbortSignal): Promise<void> {
     if (
       !this.host.isConnected ||
-      !this.host.client?.connected ||
-      !this.host.readers.includes(target.reader) ||
+      !this.client?.connected ||
+      !this.readers.includes(target.reader) ||
       !target.reader.linkReader.previewMethod ||
       signal.aborted
     ) {
@@ -341,7 +352,7 @@ export class HovercardOwner {
       return;
     }
     const anchor = anchorFromNavigationEvent(event);
-    const target = anchor ? resolveHoverPreviewTarget(anchor, this.host) : null;
+    const target = anchor ? resolveHoverPreviewTarget(anchor, this) : null;
     if (!anchor || !target) {
       return;
     }
@@ -394,7 +405,7 @@ export class HovercardOwner {
   };
 
   private activateFocusedAnchor(anchor: HTMLAnchorElement): void {
-    const target = resolveHoverPreviewTarget(anchor, this.host);
+    const target = resolveHoverPreviewTarget(anchor, this);
     if (!target) {
       return;
     }
@@ -434,8 +445,8 @@ export class HovercardOwner {
       return;
     }
     if (
-      !this.host.client ||
-      !this.host.readers.includes(target.reader) ||
+      !this.client ||
+      !this.readers.includes(target.reader) ||
       !target.reader.linkReader.previewMethod
     ) {
       return;
@@ -529,15 +540,15 @@ export class HovercardOwner {
   }
 
   private currentPage(page: PageActivation): boolean {
-    const current = resolveHoverPreviewTarget(page.anchor, this.host);
+    const current = resolveHoverPreviewTarget(page.anchor, this);
     return (
       this.host.isConnected &&
       this.page === page &&
       page.anchor.isConnected &&
       this.ownsAnchor(page.anchor) &&
       Boolean(current && !current.reader && current.href === page.href) &&
-      canPreviewPages(this.host) &&
-      this.host.client === page.client &&
+      canPreviewPages(this) &&
+      this.client === page.client &&
       page.client.connectionGeneration === page.generation &&
       page.client.recoveryScope === page.recoveryScope
     );
@@ -555,8 +566,8 @@ export class HovercardOwner {
     trigger: "focus" | "pointer",
     delay: number,
   ): void {
-    const client = this.host.client;
-    if (!client || !canPreviewPages(this.host)) {
+    const client = this.client;
+    if (!client || !canPreviewPages(this)) {
       return;
     }
     this.syncPreviewContext();
@@ -673,12 +684,12 @@ export class HovercardOwner {
     }
 
     const controller = new AbortController();
-    const client = this.host.client;
+    const client = this.client;
     const context = this.previewContext;
-    const agentId = this.host.agentId;
+    const agentId = this.agentId;
     const load = async (): Promise<ControlUiLinkReaderPreview> => {
       const method = target.reader.linkReader.previewMethod;
-      if (!client || !method || !this.host.readers.includes(target.reader)) {
+      if (!client || !method || !this.readers.includes(target.reader)) {
         throw new Error("Link preview requires an available reader");
       }
       const response = await client.request<ControlUiLinkReaderPreview>(
@@ -701,8 +712,8 @@ export class HovercardOwner {
           if (
             !controller.signal.aborted &&
             this.cache.get(key) === entry &&
-            client === this.host.client &&
-            agentId === this.host.agentId &&
+            client === this.client &&
+            agentId === this.agentId &&
             client &&
             previewContextFor(client, agentId) === context
           ) {

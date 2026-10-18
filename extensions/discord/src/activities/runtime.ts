@@ -39,7 +39,7 @@ export class DiscordActivitiesRuntime {
   }
 
   resolveAccount(
-    accountId: string | null | undefined,
+    accountId: string,
     cfg = this.currentConfig(),
   ): ResolvedDiscordActivityAccount | null {
     const account = resolveDiscordAccount({ cfg, accountId });

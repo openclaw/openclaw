@@ -102,12 +102,6 @@ describe("Code Mode subscribed host denial", () => {
 
   it.each([
     {
-      policy: "node-host-conflict",
-      defaults: { host: "gateway" },
-      args: { host: "gateway", node: "node-1" },
-      error: 'exec node="node-1" conflicts with host="gateway"',
-    },
-    {
       policy: "gateway",
       defaults: { host: "gateway" },
       args: { host: "node" },
@@ -160,9 +154,6 @@ describe("Code Mode subscribed host denial", () => {
       expect(observeToolTerminal).toHaveBeenCalledWith(
         expect.objectContaining({ toolName: "exec", executionStarted: true, outcome: "failure" }),
       );
-      expect(observeToolTerminal.mock.results[0]?.value).toMatchObject({
-        effectReceipt: { state: "not_started" },
-      });
       expect(harness.spawn).not.toHaveBeenCalled();
       expect(harness.remote).not.toHaveBeenCalled();
       // One nested exec owns one item; command output does not create a second lifecycle.

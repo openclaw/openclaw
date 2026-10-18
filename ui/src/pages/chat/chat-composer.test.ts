@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
@@ -10,8 +11,8 @@ import {
   findComposerButton as button,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
-  renderComposerInto,
 } from "./chat-composer.test-support.ts";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatQuestionCard } from "./components/chat-question-card.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
@@ -175,7 +176,7 @@ function mountComposer(overrides: Parameters<typeof props>[0]) {
   const container = createComposerContainer();
   document.body.append(container);
   const composerProps = props(overrides);
-  const draw = () => renderComposerInto(container, composerProps);
+  const draw = () => render(renderChatComposer(composerProps), container);
   composerProps.onRequestUpdate = draw;
   draw();
   return { container };
@@ -235,7 +236,7 @@ describe("renderChatComposer controls", () => {
     composerProps.realtimeTalkDetail = "The selected microphone is unavailable";
     composerProps.onUseSystemDefaultMicrophone = vi.fn();
     composerProps.onDismissRealtimeTalkError = dismissRecovery;
-    const draw = () => renderComposerInto(container, composerProps);
+    const draw = () => render(renderChatComposer(composerProps), container);
     composerProps.onRequestUpdate = draw;
     draw();
     await vi.advanceTimersByTimeAsync(0);
@@ -516,8 +517,10 @@ describe("renderChatComposer controls", () => {
     const microphone = button(container, t("chat.composer.startVoiceInput"));
     microphone.dispatchEvent(dictationPointer("pointerdown", 10));
     await vi.advanceTimersByTimeAsync(801);
-    const dropdown = container.querySelector<HTMLElement>(".chat-talk-input-picker");
-    expect(dropdown?.hasAttribute("open")).toBe(true);
+    const dropdown = container.querySelector<HTMLElement & { open: boolean }>(
+      "wa-dropdown.chat-talk-input-picker",
+    );
+    expect(dropdown?.open).toBe(true);
     await vi.waitFor(() =>
       expect(
         container.querySelector(
@@ -528,7 +531,7 @@ describe("renderChatComposer controls", () => {
 
     document.dispatchEvent(dictationPointer("pointerup", 10));
     microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(dropdown?.hasAttribute("open")).toBe(true);
+    expect(dropdown?.open).toBe(true);
     expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
 
     microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -588,14 +591,14 @@ describe("renderChatComposer status", () => {
       onRequestUpdate,
     });
 
-    renderComposerInto(container, composerProps);
+    render(renderChatComposer(composerProps), container);
     let panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
     expect(panel.props!.model.questions[0]?.question).toBe("First prompt");
     expect(panel.props!.model.requestPosition).toEqual({ current: 1, total: 2 });
 
     panel.props!.onNextRequest?.();
     expect(onRequestUpdate).toHaveBeenCalledOnce();
-    renderComposerInto(container, composerProps);
+    render(renderChatComposer(composerProps), container);
     panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
     expect(panel.props!.model.questions[0]?.question).toBe("Second prompt");
     expect(panel.props!.model.requestPosition).toEqual({ current: 2, total: 2 });

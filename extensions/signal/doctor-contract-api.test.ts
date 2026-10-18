@@ -240,6 +240,26 @@ describe("signal transport compatibility", () => {
     expect(result.config.channels?.signal).not.toHaveProperty("cliPath");
   });
 
+  it("moves a sync-migrated accounts.default transport to the canonical root", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        accounts: {
+          default: {
+            account: "+15555550123",
+            httpPort: 8181,
+          },
+        },
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toEqual({
+      kind: "managed-native",
+      httpPort: 8181,
+    });
+    expect(result.config.channels?.signal?.accounts?.default).not.toHaveProperty("transport");
+  });
+
   it("moves an async-migrated accounts.default transport to the canonical root", async () => {
     const result = await migrateLegacySignalTransportConfig({
       cfg: signalConfig({
@@ -398,6 +418,23 @@ describe("signal transport compatibility", () => {
       );
     },
   );
+
+  it("keeps attachment suppression account-owned for external transports", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "container",
+        httpUrl: "signal:8080",
+        account: "+15555550123",
+        ignoreAttachments: true,
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toEqual({
+      kind: "container",
+      url: "http://signal:8080",
+    });
+    expect(result.config.channels?.signal?.ignoreAttachments).toBe(true);
+  });
 
   it("defers an explicit account-less container migration", () => {
     const cfg = signalConfig({
@@ -641,7 +678,6 @@ describe("signal transport compatibility", () => {
         httpHost: "signal",
         httpPort: 8181,
         account: "+15555550123",
-        ignoreAttachments: true,
       }),
       detect,
     });
@@ -654,7 +690,6 @@ describe("signal transport compatibility", () => {
       kind: "container",
       url: "http://signal:8181",
     });
-    expect(result.config.channels?.signal?.ignoreAttachments).toBe(true);
   });
 
   it("keeps a supplemental root UUID from creating a default transport", async () => {

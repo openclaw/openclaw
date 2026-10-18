@@ -231,11 +231,7 @@ describe("trusted plugin selected session facts", () => {
         for (const publish of [
           () => emitUserProfilesChanged(),
           () => bumpGatewayAccessRevision(),
-          () =>
-            setRuntimeConfigSnapshot({
-              ...fixture.cfg,
-              messages: { ...fixture.cfg.messages, responsePrefix: "Updated" },
-            }),
+          () => setRuntimeConfigSnapshot({ ...fixture.cfg }),
         ]) {
           publish();
           const next = await selected();

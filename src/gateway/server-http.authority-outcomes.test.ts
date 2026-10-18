@@ -1,6 +1,5 @@
 import { once } from "node:events";
-import { IncomingMessage, request, ServerResponse } from "node:http";
-import { Socket } from "node:net";
+import { request, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -16,7 +15,6 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   bindHttpResponseAuthority,
   captureHttpRequestAuthority,
-  runGatewayHttpRequest,
 } from "./http-request-authority.js";
 import { GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE } from "./operator-access-policy.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
@@ -85,39 +83,6 @@ afterAll(async () => {
     await connectionWork.drain();
   }
 });
-
-it.each([false, true])(
-  "admits shutdown closure only for an ended request lifetime (ended=%s)",
-  async (ended) => {
-    const work = new GatewayConnectionWork();
-    const entries = new GatewayRequestEntryLifetime();
-    if (ended) {
-      entries.beginClose();
-    }
-    await work.drain();
-    const req = new IncomingMessage(new Socket());
-    const res = new ServerResponse(req);
-    const handle = vi.fn(async (): Promise<undefined> => undefined);
-    try {
-      const result = runGatewayHttpRequest(
-        req,
-        res,
-        { requestEntryLifetime: entries, trackExecution: (run) => work.track(run) },
-        handle,
-      );
-      if (ended) {
-        await expect(result).resolves.toBeUndefined();
-        expect(res.destroyed).toBe(true);
-      } else {
-        await expect(result).rejects.toThrow("Async work scope is closed");
-      }
-      expect(handle).not.toHaveBeenCalled();
-    } finally {
-      res.destroy();
-      req.destroy();
-    }
-  },
-);
 
 it("serves HTTP work after the listener's startup scope has closed", async () => {
   const errors = vi.spyOn(console, "error").mockImplementation(() => {});

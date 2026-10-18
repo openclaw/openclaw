@@ -65,13 +65,11 @@ export function createMessageUpdateContext(
       vi.fn((text: string, options?: { final?: boolean }) =>
         partialReplyDirectiveAccumulator.consume(text, options),
       ),
-    getPartialReplySourceText: () => partialReplyDirectiveAccumulator.sourceText,
     emitReasoningStream: params.emitReasoningStream ?? vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
     flushAssistantStream: vi.fn(),
     blockChunker: new EmbeddedBlockChunker(),
-    resetAssistantMessageState:
-      params.resetAssistantMessageState ?? vi.fn(() => partialReplyDirectiveAccumulator.reset()),
+    resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
     captureModelEvent: vi.fn(),
     resetPartialReplyDirectives: () => {
       partialReplyDirectiveAccumulator.reset();

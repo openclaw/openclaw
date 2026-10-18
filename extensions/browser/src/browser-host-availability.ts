@@ -3,11 +3,7 @@ import { getRuntimeConfigSourceSnapshot } from "openclaw/plugin-sdk/runtime-conf
 import { getBrowserControlState } from "./browser-control-state.js";
 import { resolveBrowserExecutableForPlatform } from "./browser/chrome.executables.js";
 import { isChromeReachable } from "./browser/chrome.js";
-import {
-  resolveBrowserConfig,
-  resolveManagedBrowserHeadlessMode,
-  resolveProfile,
-} from "./browser/config.js";
+import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 
 /** Inspect local capability before routing, without launching or replaying a browser action. */
@@ -35,11 +31,7 @@ export async function isBrowserHostAvailable(
   try {
     if (
       resolveBrowserExecutableForPlatform(
-        {
-          ...resolved,
-          executablePath: profile.executablePath,
-          headless: resolveManagedBrowserHeadlessMode(resolved, profile).headless,
-        },
+        { ...resolved, executablePath: profile.executablePath },
         process.platform,
       )
     ) {

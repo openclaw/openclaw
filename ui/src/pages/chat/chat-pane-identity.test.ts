@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import type { ProgressCard, ProgressCardChangedEvent } from "@openclaw/gateway-protocol";
+import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
@@ -8,12 +9,8 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { emptyLegacyContent } from "../../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
@@ -45,7 +42,7 @@ describe("chat pane assistant identity snapshots", () => {
     const container = document.createElement("div");
     const draw = () => {
       pane.render();
-      renderPaneLegacyContent(renderChat(pane.chatProps!), container);
+      render(renderChat(pane.chatProps!), container);
     };
     try {
       draw();
@@ -72,7 +69,7 @@ describe("chat pane assistant identity snapshots", () => {
       draw();
       expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
     } finally {
-      renderPaneLegacyContent(emptyLegacyContent, container);
+      render(html``, container);
       resetTranscriptTestDom();
     }
   });
@@ -178,7 +175,7 @@ describe("chat pane assistant identity snapshots", () => {
     pane.context = context;
     pane.connectedClient = null;
     pane.sessionKey = "global";
-    pane.render = () => ({ layout: emptyLegacyContent, capabilityDialogs: undefined });
+    pane.render = () => ({ layout: html``, capabilityDialogs: undefined });
 
     try {
       pane.connectedCallback();
@@ -300,10 +297,6 @@ describe("chat pane approval requester identity", () => {
         decideApproval,
       } as unknown as ApplicationContext["overlays"],
       sessions: createSessionCapabilityFixture({
-        presentation: {
-          result: sessionsResult([{ ...host, label: "Unrelated pane title" }], 1),
-          agentId: "main",
-        },
         state: {
           result: null,
           agentId: "main",
@@ -321,6 +314,7 @@ describe("chat pane approval requester identity", () => {
     };
     const state = pane.initialize(context);
     state.sessionKey = host.key;
+    pane.presentationTitle = "Unrelated pane title";
     const now = Date.now();
     state.chatSessionApprovalQueue = projectSessionApprovalReplay(
       {
@@ -362,7 +356,7 @@ describe("chat pane approval requester identity", () => {
     const container = document.body.appendChild(createApplicationContextProvider(context));
     const redraw = vi.fn(() => {
       pane.render();
-      renderPaneLegacyContent(renderChat(pane.chatProps!), container);
+      render(renderChat(pane.chatProps!), container);
     });
     state.requestUpdate = redraw;
     const publications: Array<[GatewaySessionRow | undefined, string]> = [
@@ -408,7 +402,7 @@ describe("chat pane approval requester identity", () => {
       expect(decideApproval).toHaveBeenCalledExactlyOnceWith("allow-once", approval.id, approval);
     } finally {
       cancelChatStreamRenderFrame(state);
-      renderPaneLegacyContent(emptyLegacyContent, container);
+      render(html``, container);
       container.remove();
     }
   });
@@ -561,7 +555,7 @@ describe("global chat pane feature ownership", () => {
       const container = document.body.appendChild(createApplicationContextProvider(context));
       const draw = async () => {
         await pane.updateComplete;
-        renderPaneLegacyContent(renderChat(pane.chatProps!), container);
+        render(renderChat(pane.chatProps!), container);
         if (container.querySelector("openclaw-chat-question-card")) {
           await questionPanelIn(container);
         }
@@ -607,18 +601,14 @@ describe("global chat pane feature ownership", () => {
         await draw();
         expect(pane.chatProps?.gatewayQuestionPrompts).not.toBe(pendingQuestions);
         expect(container.querySelector(".chat-question-panel")).toBeNull();
-        await waitForSolid(() =>
-          expect(container.querySelector(".chat-question-summary")?.textContent).toContain(
-            "Skipped",
-          ),
-        );
+        expect(container.querySelector(".chat-question-summary")?.textContent).toContain("Skipped");
         await expectStableQuestions();
 
         select("main");
         await draw();
         expect(container.querySelector(".chat-question-summary, .chat-inline-approval")).toBeNull();
       } finally {
-        renderPaneLegacyContent(emptyLegacyContent, container);
+        render(html``, container);
         container.remove();
       }
     },

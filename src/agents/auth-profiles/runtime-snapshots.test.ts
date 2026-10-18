@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
 import * as authProfileClone from "./clone.js";
 import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
@@ -67,7 +66,7 @@ describe("runtime auth profile snapshots", () => {
       );
     }
     setRuntimeAuthProfileStoreSnapshot(createStore("reader-owner"), agentDir);
-    const reader = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
+    const reader = acquireAuthProfileReadDatabase(databasePath);
     expect(reader.status).toBe("readable");
     if (reader.status !== "readable") {
       throw new Error("Expected a pooled auth reader");
@@ -88,7 +87,7 @@ describe("runtime auth profile snapshots", () => {
 
       clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
       expect(reader.db.isOpen).toBe(false);
-      const replacement = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
+      const replacement = acquireAuthProfileReadDatabase(databasePath);
       expect(replacement.status).toBe("readable");
       if (replacement.status !== "readable") {
         throw new Error("Expected the pooled auth reader to reopen");

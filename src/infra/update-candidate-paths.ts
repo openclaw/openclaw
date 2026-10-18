@@ -56,7 +56,7 @@ export function queueStateDatabaseSpelling(
       !discovery.owners?.some(
         (current) =>
           current.role === owner.role &&
-          (current.role !== "agent" ||
+          (current.role === "global" ||
             (owner.role === "agent" && current.agentId === owner.agentId)),
       )
     ) {

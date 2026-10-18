@@ -49,7 +49,6 @@ export async function withSkillUploadInstallOwner<T>(
               cleanupContext,
               assertOwned,
               observed,
-              context.maintenanceScope,
             );
             if (!store) {
               throw new Error("Skill upload cleanup lost its original shared database");

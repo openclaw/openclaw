@@ -74,8 +74,15 @@ export function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknow
     stripPlainTextToolCallBlocks(withoutCitationMarkers),
   ])) {
     const directives = parseReplyDirectives(normalized, { extractMarkdownImages: true });
-    if (directives.replyToTag || directives.audioAsVoice || directives.mediaUrls?.length) {
-      throw sourceReplyPolicyError("Completion source replies cannot contain non-text directives.");
+    if (
+      directives.replyToTag ||
+      directives.audioAsVoice ||
+      directives.mediaUrls?.length ||
+      directives.isSilent
+    ) {
+      throw sourceReplyPolicyError(
+        "Completion source replies cannot contain non-text or silent directives.",
+      );
     }
   }
 }

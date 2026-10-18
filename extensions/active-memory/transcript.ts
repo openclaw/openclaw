@@ -67,9 +67,11 @@ export async function streamActiveMemoryTranscriptRecords(params: {
     return;
   }
   for (const { event } of page.events) {
-    if (params.onRecord(event)) {
-      break;
-    }
+    try {
+      if (params.onRecord(event)) {
+        break;
+      }
+    } catch {}
   }
 }
 

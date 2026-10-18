@@ -10,6 +10,10 @@ import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
+import {
+  SubscriptionsController,
+  type ControllerHost,
+} from "../../lit/subscriptions-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
 import { requestPlaceCatalog } from "./cloud-target.ts";
@@ -77,6 +81,10 @@ export class DraftGatewayState {
   private cloudProfileComplete: Promise<void> = Promise.resolve();
 
   constructor(
+    host: Pick<
+      ControllerHost,
+      "addController" | "removeController" | "requestUpdate" | "updateComplete"
+    >,
     private readonly read: () => DraftGatewaySnapshot,
     private readonly callbacks: DraftGatewayCallbacks,
   ) {
@@ -95,11 +103,20 @@ export class DraftGatewayState {
       }),
       callbacks,
     );
-  }
-
-  synchronizeMetadata() {
-    this.synchronizeGatewayName();
-    this.synchronizeCloudProfiles();
+    host.addController({
+      hostUpdate: () => {
+        this.synchronizeGatewayName();
+        this.synchronizeCloudProfiles();
+      },
+    });
+    // Shared system reads pause in background tabs; visibility must wake this one-shot task.
+    new SubscriptionsController(host).watch(
+      () => document,
+      (source, notify) => {
+        source.addEventListener("visibilitychange", notify);
+        return () => source.removeEventListener("visibilitychange", notify);
+      },
+    );
   }
 
   private synchronizeGatewayName() {

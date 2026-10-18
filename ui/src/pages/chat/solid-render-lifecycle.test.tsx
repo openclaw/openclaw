@@ -79,21 +79,26 @@ it("releases after-commit resources when deferred work completes", () => {
 
 it("runs batched callbacks after their DOM commit and fences reentrant requests", () => {
   const { source, view, lifecycle } = mountPane();
-  const observed: Array<string | null> = [];
+  const observed: Array<[string | null, number]> = [];
+  const before = lifecycle.commitGeneration;
   source.set({ text: "committed" });
   lifecycle.afterCommit(() => {
-    observed.push(view.container.textContent);
+    observed.push([view.container.textContent, lifecycle.commitGeneration]);
     source.set({ text: "next commit" });
     lifecycle.afterCommit(() => {
-      observed.push(view.container.textContent);
+      observed.push([view.container.textContent, lifecycle.commitGeneration]);
     });
   });
   lifecycle.afterCommit(() => {
-    observed.push(view.container.textContent);
+    observed.push([view.container.textContent, lifecycle.commitGeneration]);
   });
   expect(observed).toEqual([]);
   flush();
-  expect(observed).toEqual(["committed", "committed", "next commit"]);
+  expect(observed).toEqual([
+    ["committed", before + 1],
+    ["committed", before + 1],
+    ["next commit", before + 2],
+  ]);
 });
 
 it.each([true, false])(
@@ -109,6 +114,7 @@ it.each([true, false])(
     flush();
     expect(release).toHaveBeenCalledTimes(shown ? 1 : 0);
     const reads = read.mock.calls.length;
+    const generation = lifecycle.commitGeneration;
     const committed = vi.fn();
     lifecycle.afterCommit(committed);
     for (let count = 0; count < 5; count += 1) {
@@ -118,6 +124,7 @@ it.each([true, false])(
       flush();
     }
     expect(read).toHaveBeenCalledTimes(reads);
+    expect(lifecycle.commitGeneration).toBe(generation);
     expect(committed).not.toHaveBeenCalled();
     expect(view.container.textContent).toBe("initial");
     present(true);
@@ -125,6 +132,7 @@ it.each([true, false])(
     expect(read).toHaveBeenCalledTimes(reads + 1);
     expect(view.container.textContent).toBe("hidden 4");
     expect(view.container.querySelector("output")).toBe(output);
+    expect(lifecycle.commitGeneration).toBe(generation + 1);
     expect(committed).toHaveBeenCalledOnce();
     view.unmount();
     const retiredReads = read.mock.calls.length;

@@ -44,7 +44,6 @@ type GatewayWorkAdmissionState = {
   restartSignalGeneration: number;
   suspendPhase: GatewaySuspendAdmissionPhase;
   suspendGeneration: number;
-  suspendAttribution?: string;
   suspendInvalidated?: () => void;
   activeRootWork: Set<GatewayRootWorkAdmission>;
   currentRootWork: AsyncLocalStorage<GatewayRootWorkAdmission>;
@@ -115,8 +114,8 @@ export type GatewayRootWorkAdmissionContinuationScope = {
 type GatewaySuspendAdmissionLease = {
   drain: () => boolean;
   commit: () => boolean;
-  rollback: (reason?: string) => boolean;
-  release: (reason?: string) => boolean;
+  rollback: () => boolean;
+  release: () => boolean;
 };
 
 export type GatewayRestartSignalAdmissionLease = {
@@ -236,15 +235,8 @@ function invalidateSuspendAdmission(): void {
   resolveSuspendOpenWaiters();
   // Restart drain supersedes suspension without reopening process admission.
   if (GATEWAY_WORK_ADMISSION_STATE.restartDrainReason === undefined) {
-    admissionLog.info(
-      `admission reopened: suspend phase ${GATEWAY_WORK_ADMISSION_STATE.suspendAttribution} exit=invalidated`,
-    );
-  } else {
-    admissionLog.info(
-      `suspension superseded: ${GATEWAY_WORK_ADMISSION_STATE.suspendAttribution} exit=restart`,
-    );
+    admissionLog.info("admission reopened: suspend phase");
   }
-  GATEWAY_WORK_ADMISSION_STATE.suspendAttribution = undefined;
   callback?.();
   notifyGatewaySuspendAdmission();
 }
@@ -350,14 +342,7 @@ export function beginGatewayShutdownCleanup(): void {
 }
 
 export function isGatewayRestartDrainError(error: unknown): error is GatewayDrainingError {
-  if (!isGatewayRestartDraining()) {
-    return false;
-  }
-  try {
-    return error instanceof GatewayDrainingError;
-  } catch {
-    return false;
-  }
+  return error instanceof GatewayDrainingError && isGatewayRestartDraining();
 }
 
 /** Restart drain is one-way until the in-process restart resets runtime state. */
@@ -698,7 +683,6 @@ export function getActiveGatewayRootWorkHolders(opts?: { excludeCurrent?: boolea
 /** Atomically closes new suspension admission before synchronous inspection. */
 export function tryBeginGatewaySuspendAdmission(
   onInvalidated: () => void,
-  attribution?: { owner: string; leaseId: string; caller: string; reason: string },
 ): GatewaySuspendAdmissionLease | null {
   if (isGatewayWorkAdmissionClosed()) {
     return null;
@@ -706,22 +690,12 @@ export function tryBeginGatewaySuspendAdmission(
   GATEWAY_WORK_ADMISSION_STATE.suspendPhase = "preparing";
   const generation = ++GATEWAY_WORK_ADMISSION_STATE.suspendGeneration;
   GATEWAY_WORK_ADMISSION_STATE.suspendInvalidated = onInvalidated;
-  const description = JSON.stringify(
-    attribution ?? {
-      owner: "internal",
-      leaseId: String(generation),
-      caller: "in-process",
-      reason: "suspend",
-    },
-  );
-  GATEWAY_WORK_ADMISSION_STATE.suspendAttribution = description;
-  admissionLog.info(`admission closed: suspend phase ${description}`);
+  admissionLog.info("admission closed: suspend phase");
   notifyGatewaySuspendAdmission();
 
   const transition = (
     expected: GatewaySuspendAdmissionPhase,
     next: GatewaySuspendAdmissionPhase,
-    reason?: string,
   ): boolean => {
     if (
       GATEWAY_WORK_ADMISSION_STATE.suspendGeneration !== generation ||
@@ -733,8 +707,7 @@ export function tryBeginGatewaySuspendAdmission(
     if (next === "accepting") {
       GATEWAY_WORK_ADMISSION_STATE.suspendInvalidated = undefined;
       resolveSuspendOpenWaiters();
-      GATEWAY_WORK_ADMISSION_STATE.suspendAttribution = undefined;
-      admissionLog.info(`admission reopened: suspend phase ${description} exit=${reason}`);
+      admissionLog.info("admission reopened: suspend phase");
     }
     notifyGatewaySuspendAdmission();
     return true;
@@ -743,9 +716,8 @@ export function tryBeginGatewaySuspendAdmission(
   return {
     drain: () => transition("preparing", "draining"),
     commit: () => transition("preparing", "prepared") || transition("draining", "prepared"),
-    rollback: (reason = "rollback") => transition("preparing", "accepting", reason),
-    release: (reason = "released") =>
-      transition("draining", "accepting", reason) || transition("prepared", "accepting", reason),
+    rollback: () => transition("preparing", "accepting"),
+    release: () => transition("draining", "accepting") || transition("prepared", "accepting"),
   };
 }
 

@@ -33,7 +33,6 @@ type ActivityProps = {
   onExpandAll: () => void;
   onCollapseAll: () => void;
   onEntryToggle: (id: string, open: boolean) => void;
-  onStream?: (element: HTMLDivElement) => void;
   onScroll: JSX.EventHandler<HTMLDivElement, Event>;
 };
 
@@ -345,7 +344,6 @@ export function renderActivity(props: ActivityProps) {
         <LiveToolbar activity={props} toolNames={toolNames()} />
         <div
           class="activity-stream"
-          ref={(element) => props.onStream?.(element)}
           role="group"
           aria-label={t("activity.streamLabel")}
           onScroll={(event) => props.onScroll(event)}

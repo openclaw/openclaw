@@ -6,7 +6,9 @@ import type {
   MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
 import {
-  postJsonResponse,
+  assertOkOrThrowHttpError,
+  postJsonRequest,
+  readProviderJsonResponse,
   requireTranscriptionText,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
@@ -65,6 +67,10 @@ function resolveOpenRouterAudioFormat(params: { mime?: string; fileName?: string
   );
 }
 
+type OpenRouterSttResponse = {
+  text?: string;
+};
+
 async function transcribeOpenRouterAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
@@ -91,7 +97,7 @@ async function transcribeOpenRouterAudio(
     });
   const temperature = asFiniteNumber(params.query?.temperature);
 
-  const payload = await postJsonResponse({
+  const { response, release } = await postJsonRequest({
     url: `${baseUrl}/audio/transcriptions`,
     headers,
     body: {
@@ -109,14 +115,24 @@ async function transcribeOpenRouterAudio(
     allowPrivateNetwork,
     dispatcherPolicy,
     auditContext: "openrouter stt",
-    errorLabel: "OpenRouter audio transcription failed",
-    responseLabel: "openrouter.stt",
-    objectResponse: true,
   });
-  return {
-    text: requireTranscriptionText(payload.text, "OpenRouter transcription response missing text"),
-    model,
-  };
+
+  try {
+    await assertOkOrThrowHttpError(response, "OpenRouter audio transcription failed");
+    const payload = await readProviderJsonResponse<OpenRouterSttResponse>(
+      response,
+      "openrouter.stt",
+    );
+    return {
+      text: requireTranscriptionText(
+        payload.text,
+        "OpenRouter transcription response missing text",
+      ),
+      model,
+    };
+  } finally {
+    await release();
+  }
 }
 
 export const openrouterMediaUnderstandingProvider: MediaUnderstandingProvider = {

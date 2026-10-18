@@ -6,7 +6,7 @@ import {
   titleForRoute,
 } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import "../components/app-topbar-solid.tsx";
+import "../components/app-topbar.ts";
 import "../components/assistant-panel.ts";
 import type { RouteId } from "../app-routes.ts";
 import "../components/resizable-divider.ts";
@@ -70,7 +70,7 @@ import {
   type OptionalCustomElement,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
-import { createLazyRenderer } from "./lazy-renderer.ts";
+import { LazyRenderer } from "./lazy-renderer.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
@@ -92,7 +92,7 @@ export class ShellOwner
   readiness: ControlUiReadiness | undefined;
   onboarding = false;
   private readonly cleanups: Array<() => void> = [];
-  readonly shellLayout = new ShellLayoutOwner();
+  readonly shellLayout = new ShellLayoutOwner(() => this.invalidate());
   readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
@@ -156,10 +156,10 @@ export class ShellOwner
   readonly settingsPreloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
   // Settings navigation is needed only after entering the settings takeover.
   // Keep its search, update-card, and sidebar rendering graph off the startup path.
-  readonly settingsSidebar = createLazyRenderer(() =>
-    import("../components/settings-sidebar.tsx").then((module) => module.renderSettingsSidebar),
+  readonly settingsSidebar = new LazyRenderer(this, () =>
+    import("../components/settings-sidebar.ts").then((module) => module.renderSettingsSidebar),
   );
-  readonly debugOverlayFrame = createLazyRenderer(() =>
+  readonly debugOverlayFrame = new LazyRenderer(this, () =>
     import("../pages/debug/debug-overlay-frame.ts").then(
       (module) => module.renderPendingDebugOverlay,
     ),
@@ -172,7 +172,7 @@ export class ShellOwner
   // boot, so its template, icons, and strings stay off the startup chunk.
   // A rejected chunk must stay visible: the overlay is already open, so the
   // shell renders a recoverable failure instead of an empty dialog frame.
-  readonly devicePairSetup = createLazyRenderer(() =>
+  readonly devicePairSetup = new LazyRenderer(this, () =>
     import("../pages/devices/view-pairing.tsx").then((module) => module.DevicePairSetup),
   );
   private readonly shellNavigation = new ShellNavigationOwner(this);
@@ -254,7 +254,7 @@ export class ShellOwner
   get isConnected() {
     return this.element.isConnected;
   }
-  // Temporary callback ABI used by unported lazy-element and chrome owners.
+  // Temporary callback ABI used by unported lazy-element and layout owners.
   readonly requestUpdate = () => this.invalidate();
 
   replaceRuntime(runtime: ApplicationRuntime): void {
@@ -594,11 +594,19 @@ export class ShellOwner
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }
-    const { phase } = context.gateway.snapshot;
+    const { phase, lastError } = context.gateway.snapshot;
+    // A warm shell renders before hello; initial loading is not a lost connection.
+    const gatewayDisconnected =
+      phase !== "connected" &&
+      (Boolean(lastError) ||
+        phase === "reconnecting" ||
+        phase === "offline" ||
+        phase === "reload-required");
     let title = formatDocumentTitle({
       context: primaryContext,
       brandName: context.theme.branding.brandName,
       attentionCount: phase === "connected" ? context.overlays.snapshot.approvalQueue.length : 0,
+      gatewayDisconnected,
     });
     const environment = context.config?.current.environment;
     if (environment) {
@@ -635,6 +643,9 @@ export class ShellOwner
     const context = this.context;
     if (!context) {
       return;
+    }
+    if (this.querySelector(".settings-sidebar__agent")) {
+      void context.agentIdentity.ensure([context.settingsAgentSelection.state.selectedId]);
     }
     if (this.workspaceChromeVisible) {
       this.shellChrome.panels.restore();

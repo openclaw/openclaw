@@ -85,6 +85,7 @@ export async function withReplyToolAuthorityCohort<T>(params: {
       ) {
         throw new Error("Tool authority classification source changed");
       }
+      assertPrepared();
       return entry;
     },
   );

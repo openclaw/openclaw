@@ -18,7 +18,6 @@ export function createSessionPrimaryWindows(
   managedLists: Map<string, ManagedSessionList>,
   open: (scope: SessionListScope) => ManagedSessionList,
   onRetired: (agentIds: ReadonlySet<string>) => void,
-  readPrimary: () => SessionListSnapshot,
 ) {
   let invalidationRevision = 0;
   const retireWarmLists = (matches: (entry: ManagedSessionList) => boolean = () => true) => {
@@ -86,20 +85,6 @@ export function createSessionPrimaryWindows(
 
   return {
     subscribe,
-    snapshot(this: void, scope: SessionListScope): SessionListSnapshot {
-      if (isPrimarySessionListQuery(scope)) {
-        const { result, agentId, loading, error, startupPending } = readPrimary();
-        return { result, agentId, loading, error, startupPending };
-      }
-      return (
-        managedLists.get(sessionListQueryKey(scope))?.snapshot ?? {
-          result: null,
-          agentId: null,
-          loading: false,
-          error: null,
-        }
-      );
-    },
     /** Own an observed query subscription and fence explicit refresh against disposal. */
     observe(
       entry: ManagedSessionList,

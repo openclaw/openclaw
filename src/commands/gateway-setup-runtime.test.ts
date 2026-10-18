@@ -6,11 +6,7 @@ import { resolveDaemonInstallRuntimeInputs } from "./daemon-install-plan.shared.
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 
 const readPin = vi.hoisted(() => vi.fn<() => DaemonRuntimePinSnapshot>());
-// mock-isolation: Runtime selection tests use supplied pin snapshots without opening disk state.
-vi.mock("../daemon/runtime-pin-state.js", () => ({
-  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, run: () => T) => run(),
-  readDaemonRuntimePinForInstall: readPin,
-}));
+vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
 
 describe("setup runtime intent", () => {
   beforeEach(() => {
@@ -49,13 +45,13 @@ describe("setup runtime intent", () => {
     "suggests $suggested for $flow with Node at $nodePath",
     async ({ flow, nodePath, suggested }) => {
       const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-      Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+      Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
       const discoverNode = vi
         .spyOn(runtimePaths, "resolvePreferredNodePath")
         .mockResolvedValue(nodePath);
       const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
         status: "supported",
-        version: "1.4.3",
+        version: "1.4.2",
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
         nodeSharedSqlite: false,

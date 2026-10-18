@@ -269,12 +269,7 @@ async function expectResultRetained() {
       currentAgentId: "main",
       config: cfg,
     }),
-  ).resolves.toMatchObject({
-    runId,
-    status: "failed",
-    result: "launch failed",
-    error: "launch failed",
-  });
+  ).resolves.toMatchObject({ runId, status: "failed", result: "launch failed" });
 }
 
 test("a real registry write failure blocks reset publication and leaves cleanup retryable", async () => {
@@ -602,15 +597,7 @@ test("reset cannot publish while a terminal completion owns an awaited capture",
   });
   const id = "completing-owner";
   await startCollector(id);
-  // Leave producer metadata absent to hold the completion lock during transcript capture.
-  emitAgentEvent({
-    runId: id,
-    stream: "lifecycle",
-    data: {
-      phase: "end",
-      endedAt: Date.now(),
-    },
-  });
+  emitAgentEvent({ runId: id, stream: "lifecycle", data: { phase: "end", endedAt: Date.now() } });
   await entered.promise;
   const original = loadSessionEntry({ sessionKey: key });
   try {

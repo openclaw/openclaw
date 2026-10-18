@@ -30,8 +30,6 @@ export function resolveContextWindowInfo(params: {
   modelId: string;
   modelContextTokens?: number;
   modelContextWindow?: number;
-  /** Positively observed same-route serving limit, never a static catalog default. */
-  modelServingContextWindow?: number;
   modelContextWindowSource?: "synthetic";
   defaultTokens: number;
 }): ContextWindowInfo {
@@ -57,15 +55,11 @@ export function resolveContextWindowInfo(params: {
       : null;
   const defaultTokens =
     normalizePositiveInt(params.defaultTokens) ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS;
-  const resolved: ContextWindowInfo = fromModelsConfig
+  return fromModelsConfig
     ? { tokens: fromModelsConfig, source: "modelsConfig" }
     : fromModel
       ? { tokens: fromModel, source: "model" }
       : { tokens: estimate ?? defaultTokens, source: "default" };
-  const servingWindow = params.modelServingContextWindow;
-  return servingWindow !== undefined && servingWindow <= resolved.tokens
-    ? { tokens: servingWindow, source: "model" }
-    : resolved;
 }
 
 type ContextWindowGuardResult = ContextWindowInfo & {

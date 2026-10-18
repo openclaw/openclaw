@@ -186,13 +186,11 @@ export class CodexAppInventoryCache {
         }
       }
       const inventory = await readInstalledApps(params.request, {
-        // A missing thread-local entry does not mean Codex's shared snapshot is
-        // cold. Honor an explicit reuse request; unspecified cold reads still seed it.
+        // A cold upstream connector cache is empty until it is deliberately
+        // seeded. Later reads reuse its committed snapshot unless requested.
         forceRefresh:
           params.forceRefetch === true ||
-          (params.forceRefetch !== false &&
-            !this.entries.has(params.key) &&
-            !previousRefreshSucceeded),
+          (!this.entries.has(params.key) && !previousRefreshSucceeded),
         targetAppIds: params.targetAppIds,
       });
       this.revision += 1;

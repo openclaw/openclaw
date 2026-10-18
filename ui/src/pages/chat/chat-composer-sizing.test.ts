@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
@@ -73,7 +74,7 @@ describe("chat composer sizing", () => {
     flushFrames();
     expect(textarea.style.overflowY).toBe("hidden");
     expect(textarea.hasAttribute("data-scroll-fade-bottom")).toBe(false);
-    cleanupSolid();
+    render(html``, container);
     container.remove();
   });
 
@@ -116,7 +117,7 @@ describe("chat composer sizing", () => {
       });
       onTestFinished(() => {
         unsubscribe();
-        cleanupSolid();
+        render(html``, container);
       });
 
       inputDraft(container, "Short draft edited");

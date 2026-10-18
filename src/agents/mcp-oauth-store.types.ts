@@ -11,8 +11,6 @@ type McpOAuthAuthorizationChallenge = {
 };
 
 export type McpOAuthStore = {
-  /** Non-secret authorization incarnation; token refresh preserves it, reauthorization does not. */
-  authorizationId?: string;
   /** Provenance for token-less rows that Doctor must interpret during legacy import. */
   credentialState?: "uninitialized" | "cleared";
   clientInformation?: OAuthClientInformationMixed;
@@ -28,13 +26,7 @@ export type McpOAuthStore = {
 
 export type McpOAuthMutation =
   | { kind: "clientInformation"; clientInformation: OAuthClientInformationMixed }
-  | {
-      kind: "tokens";
-      tokens: OAuthTokens;
-      tokenExpiresAt: number | undefined;
-      replaceAuthorization?: boolean;
-    }
-  | { kind: "ensureAuthorization" }
+  | { kind: "tokens"; tokens: OAuthTokens; tokenExpiresAt: number | undefined }
   | {
       kind: "authorizationRedirect";
       authorizationUrl: string;

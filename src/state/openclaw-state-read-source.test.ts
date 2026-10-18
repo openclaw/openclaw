@@ -205,7 +205,7 @@ it("joins captured domain cleanup before retiring its pool and execution generat
   ]);
 });
 
-it.each(["workerPlacements.changeSnapshot", "agentDeletionJournal.status"] as const)(
+it.each(["workerPlacements.changeSnapshot", "cron.activeReceiptOwners"] as const)(
   "captures and charges selectors before queued dispatch (%s)",
   async (type) => {
     const { pathname, options } = source();
@@ -245,7 +245,7 @@ it.each(["workerPlacements.changeSnapshot", "agentDeletionJournal.status"] as co
       task.result.resolve(
         type === "workerPlacements.changeSnapshot"
           ? { ok: true, type, sourceAdmitted: true, placements: [] }
-          : { ok: true, type, sourceAdmitted: true, status: "absent" },
+          : { ok: true, type, sourceAdmitted: true, owners: [] },
       );
       await read;
       await transport.startClose().result;

@@ -12,14 +12,10 @@ import {
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
-import {
-  hasOrganizationTpmRateLimitEvidence,
-  hasLongWindowRateLimitEvidence,
-} from "../../failover/retry-evidence.js";
+import { hasLongWindowRateLimitEvidence } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "../../failover/user-copy.js";
 import { isConfigBackedInlineProviderApiKey } from "../../model-auth.js";
-import { markProbeAttempt, resolveProbeThrottleKey } from "../../model-fallback-cooldown.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
@@ -101,7 +97,6 @@ export function createEmbeddedRunFailoverRetryController(input: {
   const { provider, modelId, profileFailureStore } = preparedRuntime;
   const advanceAttemptAuthProfile = preparedRuntime.advanceAttemptAuthProfile;
   let rateLimitProfileRotations = 0;
-  let organizationTpmExhausted = false;
   let transientRetryCount = 0;
   let outputLimitRetryCount = 0;
   let rateLimitSeen = false;
@@ -118,7 +113,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
     resolveAuthProfileFailureReason({
       failoverReason,
       providerStarted: opts?.providerStarted,
-      transientRateLimit: organizationTpmExhausted ? false : opts?.transientRateLimit,
+      transientRateLimit: opts?.transientRateLimit,
       policy: params.authProfileFailurePolicy,
     });
 
@@ -178,9 +173,6 @@ export function createEmbeddedRunFailoverRetryController(input: {
   };
 
   const advanceRateLimitAuthProfile = async (context: RateLimitAuthProfileContext) => {
-    if (organizationTpmExhausted) {
-      return false;
-    }
     if (rateLimitProfileRotations >= MAX_RATE_LIMIT_PROFILE_ROTATIONS && fallbackConfigured) {
       const status = resolveFailoverStatus("rate_limit");
       log.warn(
@@ -223,7 +215,6 @@ export function createEmbeddedRunFailoverRetryController(input: {
         "providerRetryMaxRetries" | "hasSuccessfulModelResponse"
       >,
     ) => {
-      organizationTpmExhausted = false;
       transientRetryBudget = attempt.providerRetryMaxRetries;
       rateLimitRetriesExhausted = undefined;
       if (attempt.hasSuccessfulModelResponse) {
@@ -232,20 +223,8 @@ export function createEmbeddedRunFailoverRetryController(input: {
         transientRetryWindowStartMs = null;
       }
     },
-    advanceAuthProfile: (reason: FailoverReason | null, context: RateLimitAuthProfileContext) => {
-      if (
-        params.retryTransientErrors === false &&
-        (reason === "rate_limit" ||
-          reason === "overloaded" ||
-          reason === "server_error" ||
-          reason === "timeout")
-      ) {
-        return Promise.resolve(false);
-      }
-      return reason === "rate_limit"
-        ? advanceRateLimitAuthProfile(context)
-        : advanceAttemptAuthProfile();
-    },
+    advanceAuthProfile: (reason: FailoverReason | null, context: RateLimitAuthProfileContext) =>
+      reason === "rate_limit" ? advanceRateLimitAuthProfile(context) : advanceAttemptAuthProfile(),
     maybeMarkAuthProfileFailure,
     resolveAuthProfileFailureReason: resolveProfileFailureReason,
     recoverThrownHarnessAuthFailure: async (error: unknown): Promise<AuthRetryTrace | null> => {
@@ -284,7 +263,6 @@ export function createEmbeddedRunFailoverRetryController(input: {
     },
     maybeRetryTransient: async (retry: {
       reason: TransientRetryReason;
-      sameModelRetry?: boolean;
       message?: string;
       code?: string;
       retryAfterMs?: number;
@@ -305,9 +283,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         reason:
           | "non_transient"
           | "connection_retry_disabled"
-          | "transient_retry_disabled"
           | "long_window_rate_limit"
-          | "organization_tpm_exhausted"
           | "retry_budget_exhausted"
           | "retry_delay_unavailable"
           | "retry_delay_exceeds_cap"
@@ -323,10 +299,6 @@ export function createEmbeddedRunFailoverRetryController(input: {
           },
           { config: params.config },
         );
-      if (params.retryTransientErrors === false && retry.reason !== "output_limit") {
-        recordDecision("rejected", "transient_retry_disabled");
-        return false;
-      }
       if (
         params.retryConnectionErrors === false &&
         retry.code !== undefined &&
@@ -350,25 +322,8 @@ export function createEmbeddedRunFailoverRetryController(input: {
         recordDecision("rejected", "long_window_rate_limit");
         return false;
       }
-      if (
-        rateLimit &&
-        fallbackConfigured &&
-        params.isFinalFallbackAttempt !== true &&
-        retry.failoverEligible !== false &&
-        hasOrganizationTpmRateLimitEvidence(retry.message)
-      ) {
-        organizationTpmExhausted = true;
-        // This failed request already checked the primary; defer its next cooldown probe.
-        markProbeAttempt(Date.now(), resolveProbeThrottleKey(provider, agentDir));
-        recordDecision("rejected", "organization_tpm_exhausted");
-        return false;
-      }
-      if (retry.sameModelRetry === false) {
-        recordDecision("rejected", "non_transient");
-        return false;
-      }
-      // Bound replay-safe waits; the failover owner rotates credentials, tries
-      // configured models, or surfaces the existing error after exhaustion.
+      // Honor the SDK's retry-delay cap when replay-safe fallback is available.
+      // Otherwise a long Retry-After must wait: declining would end the turn.
       const retryDelayCapMs =
         retry.maxRetryDelayMs !== undefined &&
         Number.isFinite(retry.maxRetryDelayMs) &&
@@ -377,6 +332,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
           : undefined;
       if (
         rateLimit &&
+        fallbackConfigured &&
         retry.failoverEligible !== false &&
         retryDelayCapMs !== undefined &&
         retry.retryAfterMs !== undefined &&

@@ -93,11 +93,15 @@ async function applyActivityStoreIntent<T>(
 }
 
 export class DiscordActivityStore {
+  private lastWidgetCreatedAt = 0;
+
   constructor(private readonly stores: DiscordActivityStores) {}
 
   async createWidget(value: DiscordActivityWidget): Promise<string> {
     const id = randomBytes(16).toString("base64url");
-    await this.stores.widgets.register(id, { ...value, deliveredMessageId: null });
+    const createdAt = Math.max(value.createdAt, this.lastWidgetCreatedAt + 1);
+    this.lastWidgetCreatedAt = createdAt;
+    await this.stores.widgets.register(id, { ...value, createdAt, deliveredMessageId: null });
     return id;
   }
 

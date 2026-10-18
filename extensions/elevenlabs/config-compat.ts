@@ -86,7 +86,8 @@ export function migrateElevenLabsLegacyTalkConfig<T>(raw: T): { config: T; chang
   const nextRoot = structuredClone(raw) as JsonRecord;
   const nextTalk = ensureRecord(nextRoot, "talk");
   const providers = ensureRecord(nextTalk, "providers");
-  const migratedProvider = asNullableRecord(providers[providerId]) ?? {};
+  const existingProvider = asNullableRecord(providers[providerId]) ?? {};
+  const migratedProvider = structuredClone(existingProvider);
   const legacyFields: JsonRecord = {};
   const movedKeys: string[] = [];
 
@@ -101,6 +102,8 @@ export function migrateElevenLabsLegacyTalkConfig<T>(raw: T): { config: T; chang
 
   mergeMissing(migratedProvider, legacyFields);
   providers[providerId] = migratedProvider;
+  nextTalk.providers = providers;
+  nextRoot.talk = nextTalk;
 
   return {
     config: nextRoot as T,
@@ -114,6 +117,9 @@ function readApiKeyFromProfile(): string | null {
   const home = os.homedir();
   for (const candidate of PROFILE_CANDIDATES) {
     const fullPath = path.join(home, candidate);
+    if (!fs.existsSync(fullPath)) {
+      continue;
+    }
     try {
       const text = fs.readFileSync(fullPath, "utf-8");
       const match = text.match(

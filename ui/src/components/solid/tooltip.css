@@ -71,7 +71,7 @@ openclaw-tooltip-provider {
 
 .tooltip-rich-content {
   display: block;
-  pointer-events: inherit;
+  pointer-events: auto;
   text-align: left;
 }
 

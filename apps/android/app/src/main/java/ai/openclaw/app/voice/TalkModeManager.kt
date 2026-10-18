@@ -5,7 +5,6 @@ import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.TalkSessionCancelOutputResult
-import ai.openclaw.app.gateway.TalkSessionCloseDisposition
 import ai.openclaw.app.gateway.chatSendAckHistorySinceSeconds
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.hasPermission
@@ -468,20 +467,14 @@ class TalkModeManager internal constructor(
       start()
     } else {
       Log.d(tag, "disabled")
-      stop(TalkSessionCloseDisposition.Abort)
+      stop()
     }
   }
 
-  /**
-   * Stops continuous, one-shot, or push-to-talk capture regardless of the enabled flag.
-   * Cleanup preserves accepted work; only an explicit user Stop passes Abort.
-   */
-  fun stopAllCapture(
-    failure: NativeText? = null,
-    disposition: TalkSessionCloseDisposition = TalkSessionCloseDisposition.Detach,
-  ) {
+  /** Stops continuous, one-shot, or push-to-talk capture regardless of the enabled flag. */
+  fun stopAllCapture(failure: NativeText? = null) {
     _isEnabled.value = false
-    stop(disposition)
+    stop()
     failure?.let(::setTalkFailure)
   }
 
@@ -1007,7 +1000,7 @@ class TalkModeManager internal constructor(
     }
   }
 
-  private fun stop(disposition: TalkSessionCloseDisposition) {
+  private fun stop() {
     val cancelled =
       synchronized(realtimeCapturePauseLock) {
         stopRequested = true
@@ -1034,7 +1027,7 @@ class TalkModeManager internal constructor(
         clearRecognizedTranscript()
         _isListening.value = false
         setStatus(nativeText("Off"), state = TalkStatusState.Off)
-        stopRealtimeRelay(disposition = disposition)
+        stopRealtimeRelay()
         pendingRunId = null
         pendingFinal = null
         synchronized(completedRunsLock) {
@@ -1184,7 +1177,7 @@ class TalkModeManager internal constructor(
     if (!admitted) {
       // Stop never owned this session; the creator must close it even if its job was cancelled.
       withContext(NonCancellable) {
-        runCatching { lease.closeTalkSession(sessionId, TalkSessionCloseDisposition.Detach) }
+        runCatching { lease.request("talk.session.close", buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }.toString()) }
       }
       throw CancellationException("realtime talk stopped while connecting")
     }
@@ -1235,7 +1228,7 @@ class TalkModeManager internal constructor(
       var sourceCloseQueued = false
 
       suspend fun closeSource() {
-        change.lease.closeTalkSession(change.originalSessionId, TalkSessionCloseDisposition.Detach) { enqueue ->
+        change.lease.request("talk.session.close", buildJsonObject { put("sessionId", JsonPrimitive(change.originalSessionId)) }.toString()) { enqueue ->
           enqueue()
           sourceCloseQueued = true
         }
@@ -1783,7 +1776,6 @@ class TalkModeManager internal constructor(
     closeSession: Boolean = true,
     preserveStatus: Boolean = false,
     preserveVoiceChange: Boolean = false,
-    disposition: TalkSessionCloseDisposition = TalkSessionCloseDisposition.Detach,
   ) = synchronized(realtimeCapturePauseLock) {
     if (!preserveVoiceChange) cancelRealtimeVoiceChange()
     val status = currentStatus
@@ -1819,13 +1811,7 @@ class TalkModeManager internal constructor(
     if (preserveStatus) setStatus(status)
     _isListening.value = false
     if (closeSession && sessionId != null && lease != null) {
-      gatewayWorkScope.launch {
-        try {
-          lease.closeTalkSession(sessionId, disposition)
-        } catch (err: Throwable) {
-          if (err !is CancellationException) Log.d(tag, "realtime close ignored: ${err.message ?: err::class.simpleName}")
-        }
-      }
+      gatewayWorkScope.launch { closeRealtimeSession(sessionId, lease) }
     }
   }
 
@@ -1925,6 +1911,20 @@ class TalkModeManager internal constructor(
 
       RealtimeCaptureResume.Disconnected -> {
         disableRealtimeModeAndNotifyOwner(generation, nativeText("Gateway not connected"))
+      }
+    }
+  }
+
+  private suspend fun closeRealtimeSession(
+    sessionId: String,
+    lease: GatewaySession.RequestLease,
+  ) {
+    try {
+      val params = buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }
+      lease.request("talk.session.close", params.toString(), timeoutMs = 5_000)
+    } catch (err: Throwable) {
+      if (err !is CancellationException) {
+        Log.d(tag, "realtime close ignored: ${err.message ?: err::class.simpleName}")
       }
     }
   }

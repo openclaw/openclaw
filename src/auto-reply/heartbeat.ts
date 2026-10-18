@@ -1,7 +1,7 @@
 /** Heartbeat prompt defaults, scratch detection, and acknowledgment handling. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
-import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN, isSilentReplyPayloadText } from "./tokens.js";
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
@@ -151,10 +151,12 @@ export function stripHeartbeatToken(
 
   const mode: StripHeartbeatMode = opts.mode ?? "message";
   const maxAckCharsRaw = opts.maxAckChars;
+  const parsedAckChars =
+    typeof maxAckCharsRaw === "string" ? Number(maxAckCharsRaw) : maxAckCharsRaw;
   const maxAckChars = Math.max(
     0,
-    maxAckCharsRaw !== undefined && Number.isFinite(maxAckCharsRaw)
-      ? maxAckCharsRaw
+    typeof parsedAckChars === "number" && Number.isFinite(parsedAckChars)
+      ? parsedAckChars
       : DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
 
@@ -187,5 +189,8 @@ export function isHeartbeatAcknowledgementText(
   text: string | undefined,
   maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
 ): boolean {
-  return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars }).shouldSkip;
+  return (
+    isSilentReplyPayloadText(text) ||
+    stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars }).shouldSkip
+  );
 }

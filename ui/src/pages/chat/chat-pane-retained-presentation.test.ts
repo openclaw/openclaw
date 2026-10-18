@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-retained.test/"} */
 
+import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -124,7 +125,7 @@ describe("chat pane retained presentation lifecycle", () => {
       state.handleChatDraftChange = vi.fn();
       state.loadAssistantIdentity = vi.fn(async () => undefined);
       mounted.render = () => ({
-        layout: emptyLegacyContent,
+        layout: html`${emptyLegacyContent}`,
         capabilityDialogs: undefined,
       });
       mounted.active = true;
@@ -395,7 +396,7 @@ describe("chat pane retained presentation lifecycle", () => {
     ]);
   });
 
-  it("ignores an open shortcut menu in an inactive retained pane", () => {
+  it("ignores an open dropdown in an inactive retained pane", () => {
     const app = document.body.appendChild(document.createElement("openclaw-app"));
     const activePane = app.appendChild(document.createElement("section"));
     const composer = document.createElement("div");
@@ -409,16 +410,14 @@ describe("chat pane retained presentation lifecycle", () => {
     );
     const retainedPane = app.appendChild(document.createElement("div"));
     retainedPane.setAttribute("inert", "");
-    const retainedMenu = retainedPane.appendChild(document.createElement("div"));
-    retainedMenu.setAttribute("role", "menu");
-    retainedMenu.setAttribute("popover", "manual");
-    const shortcut = retainedMenu.appendChild(document.createElement("button"));
-    shortcut.dataset.shortcut = "4";
-    retainedMenu.showPopover();
+    const retainedDropdown = retainedPane.appendChild(
+      document.createElement("wa-dropdown"),
+    ) as HTMLElement & { open: boolean };
+    retainedDropdown.open = true;
 
     try {
       target.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "4", bubbles: true, composed: true }),
+        new KeyboardEvent("keydown", { key: " ", bubbles: true, composed: true }),
       );
 
       expect(focus).toHaveBeenCalledWith({ preventScroll: true });

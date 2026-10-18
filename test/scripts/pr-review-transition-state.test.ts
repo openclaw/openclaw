@@ -13,44 +13,38 @@ function git(root: string, ...args: string[]) {
   return result.stdout.trim();
 }
 
-function conflictFixture(renamed = false) {
+function conflictFixture() {
   const root = tempDirs.make("pr-committed-resolve-undo-");
   git(root, "init", "--initial-branch=main");
   git(root, "config", "user.name", "OpenClaw Test");
   git(root, "config", "user.email", "test@openclaw.invalid");
   git(root, "config", "commit.gpgsign", "false");
-  const originalPath = renamed ? "conflict.ts" : "conflict.txt";
-  const context = renamed ? "unchanged context\n".repeat(8) : "";
-  writeFileSync(join(root, originalPath), `base\n${context}`);
+  writeFileSync(join(root, "conflict.txt"), "base\n");
   git(root, "add", ".");
   git(root, "commit", "-m", "base");
   git(root, "branch", "side");
-  writeFileSync(join(root, originalPath), `main\n${context}`);
+  writeFileSync(join(root, "conflict.txt"), "main\n");
   git(root, "commit", "-am", "main");
   const target = git(root, "rev-parse", "HEAD");
   git(root, "checkout", "side");
-  const pathname = renamed ? "conflict.tsx" : originalPath;
-  if (renamed) {
-    git(root, "mv", originalPath, pathname);
-  }
-  writeFileSync(join(root, pathname), `side\n${context}`);
+  writeFileSync(join(root, "conflict.txt"), "side\n");
   git(root, "commit", "-am", "side");
-  return { root, target, pathname, context };
+  return { root, target };
 }
 
-function mergedFixture(renamed = false) {
-  const { root, target, pathname, context } = conflictFixture(renamed);
+function mergedFixture() {
+  const { root, target } = conflictFixture();
   const merge = spawnSync("git", ["merge", "--no-edit", "main"], {
     cwd: root,
     encoding: "utf8",
   });
   expect(merge.status, merge.stdout + merge.stderr).toBe(1);
   expect(git(root, "ls-files", "--unmerged").split("\n")).toHaveLength(3);
-  writeFileSync(join(root, pathname), `resolved\n${context}`);
-  git(root, "add", pathname);
+  writeFileSync(join(root, "conflict.txt"), "resolved\n");
+  git(root, "add", "conflict.txt");
   git(root, "commit", "--no-edit");
   expect(git(root, "ls-files", "--resolve-undo").split("\n")).toHaveLength(3);
-  return { root, target, pathname };
+  return { root, target };
 }
 
 function rebasedFixture() {
@@ -72,15 +66,15 @@ function rebasedFixture() {
   return { root, target };
 }
 
-function injectForeignUndo(root: string, pathname = "conflict.txt") {
-  const oid = git(root, "rev-parse", `HEAD:${pathname}`);
+function injectForeignUndo(root: string) {
+  const oid = git(root, "rev-parse", "HEAD:conflict.txt");
   const result = spawnSync("git", ["update-index", "--index-info"], {
     cwd: root,
     encoding: "utf8",
-    input: `0 ${"0".repeat(40)}\t${pathname}\n100644 ${oid} 1\t${pathname}\n100644 ${oid} 2\t${pathname}\n100644 ${oid} 3\t${pathname}\n`,
+    input: `0 ${"0".repeat(40)}\tconflict.txt\n100644 ${oid} 1\tconflict.txt\n100644 ${oid} 2\tconflict.txt\n100644 ${oid} 3\tconflict.txt\n`,
   });
   expect(result.status, result.stderr).toBe(0);
-  git(root, "add", pathname);
+  git(root, "add", "conflict.txt");
 }
 
 function validate(root: string, target: string) {
@@ -95,21 +89,6 @@ function validate(root: string, target: string) {
 }
 
 describe("native transition of committed conflict resolutions", () => {
-  it.each(["committed", "foreign"])(
-    "validates renamed conflict stages without changing the index (%s)",
-    (kind) => {
-      const { root, target, pathname } = mergedFixture(true);
-      if (kind === "foreign") {
-        injectForeignUndo(root, pathname);
-      }
-      const result = validate(root, target);
-      expect(result.status, result.stdout + result.stderr).toBe(kind === "committed" ? 0 : 1);
-      if (kind === "foreign") {
-        expect(result.stderr).toContain(`Unowned transition resolve-undo entry "${pathname}"`);
-      }
-    },
-  );
-
   it.each([false, true])(
     "accepts committed merge undo without changing the index (followup=%s)",
     (followup) => {

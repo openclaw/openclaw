@@ -12,7 +12,7 @@ import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 
-const { TEST_STATE_DIR, PREVIOUS_OPENCLAW_STATE_DIR } = vi.hoisted(() => {
+const { TEST_STATE_DIR, PREVIOUS_OPENCLAW_STATE_DIR, SANDBOX_REGISTRY_PATH } = vi.hoisted(() => {
   const nodePath = require("node:path");
   const { mkdtempSync } = require("node:fs");
   const { tmpdir } = require("node:os");
@@ -23,6 +23,7 @@ const { TEST_STATE_DIR, PREVIOUS_OPENCLAW_STATE_DIR } = vi.hoisted(() => {
   return {
     TEST_STATE_DIR: baseDir,
     PREVIOUS_OPENCLAW_STATE_DIR: previousStateDir,
+    SANDBOX_REGISTRY_PATH: nodePath.join(baseDir, "containers.json"),
   };
 });
 
@@ -61,6 +62,7 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(path.join(TEST_STATE_DIR, "state"), { recursive: true, force: true });
+  await fs.rm(SANDBOX_REGISTRY_PATH, { force: true });
 });
 
 afterAll(async () => {
@@ -353,6 +355,22 @@ describe("registry race safety", () => {
     } finally {
       hostSql.mockRestore();
     }
+  });
+
+  it("does not migrate legacy registry files from runtime reads", async () => {
+    // Runtime reads should ignore old monolithic files; explicit doctor/repair
+    // owns migration so normal startup cannot mutate registry layout.
+    const legacyEntry = containerEntry({ containerName: "legacy-container" });
+    await fs.writeFile(
+      SANDBOX_REGISTRY_PATH,
+      `${JSON.stringify({ entries: [legacyEntry] }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    await expect(readRegistry()).resolves.toEqual({ entries: [] });
+    await expect(readRegistryEntry("legacy-container")).resolves.toBeNull();
+    await fs.access(SANDBOX_REGISTRY_PATH);
+    await expectPathMissing(path.join(TEST_STATE_DIR, "state", "openclaw.sqlite"));
   });
 
   it("captures a Podman target and preserves immutable fields across usage updates", async () => {

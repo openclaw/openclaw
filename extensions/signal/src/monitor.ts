@@ -38,10 +38,7 @@ import {
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount, resolveSignalReplyToMode } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
-import {
-  addSignalApprovalReactionHintToStructuredPayload,
-  registerSignalApprovalReactionTargetForDeliveredPayload,
-} from "./approval-reactions.js";
+import { addSignalApprovalReactionHintToStructuredPayload } from "./approval-reactions.js";
 import { signalRpcRequest } from "./client-adapter.js";
 import type { SignalTransportKind } from "./client-adapter.js";
 import { createSignalDaemonLifecycle } from "./daemon-lifecycle.js";
@@ -55,6 +52,7 @@ import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type { SignalEventHandlerDeps } from "./monitor/event-handler.types.js";
 import { createSignalNativeReplyIdPlan } from "./native-reply.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
+import { registerSignalReactionTargetsForDeliveredPayload } from "./reaction-targets.js";
 import { sendMessageSignal } from "./send.js";
 import { startSignalIngressMonitor, type SignalIngressMonitor } from "./signal-ingress.js";
 import {
@@ -266,7 +264,7 @@ export async function deliverReplies(
       sendMedia: ({ mediaUrl, caption }) => send(caption ?? "", mediaUrl),
     });
     if (delivered !== "empty") {
-      await registerSignalApprovalReactionTargetForDeliveredPayload({
+      await registerSignalReactionTargetsForDeliveredPayload({
         cfg: params.cfg,
         target: {
           channel: "signal",

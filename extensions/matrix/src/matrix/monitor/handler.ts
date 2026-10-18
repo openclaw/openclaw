@@ -1,5 +1,6 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  createChannelInboundEnvelopeBuilderAsync,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -14,10 +15,12 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-r
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { prepareMatrixReplyPayload } from "../../outbound.js";
 import { isPollEventType } from "../poll-types.js";
 import type { LocationMessageEventContent } from "../sdk.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
+import { resolveMatrixMonitorLiveUserAllowlist } from "./config.js";
 import { createMatrixEventContextResolver } from "./event-context.js";
 import { resolveMatrixInboundContext } from "./handler-context.js";
 import { createMatrixDraftController } from "./handler-draft-controller.js";
@@ -67,12 +70,21 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     inboundDeduper,
     directTracker,
     getMemberDisplayName,
+    resolveLiveUserAllowlist = resolveMatrixMonitorLiveUserAllowlist,
+    resolveStorePath: resolveStorePathImpl = resolveStorePath,
+    createChannelInboundEnvelopeBuilderAsync:
+      createChannelInboundEnvelopeBuilderImpl = createChannelInboundEnvelopeBuilderAsync,
+    resolveHumanDelayConfig: resolveHumanDelayConfigImpl = resolveHumanDelayConfig,
   } = params;
   const handlerConfig: MatrixHandlerRuntimeConfig = {
     ...params,
     allowFromResolvedEntries,
     groupAllowFromResolvedEntries,
     configuredBotUserIds,
+    resolveLiveUserAllowlist,
+    resolveStorePath: resolveStorePathImpl,
+    createChannelInboundEnvelopeBuilderAsync: createChannelInboundEnvelopeBuilderImpl,
+    resolveHumanDelayConfig: resolveHumanDelayConfigImpl,
   };
   const handlerState = createMatrixHandlerState({
     core,
@@ -80,6 +92,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     runtime,
     allowFromResolvedEntries,
     groupAllowFromResolvedEntries,
+    resolveLiveUserAllowlist,
   });
   const resolveThreadContext = createMatrixEventContextResolver({
     kind: "thread",
@@ -324,7 +337,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const replyDispatcher = createMatrixReplyDispatcher({
         cfg,
         prefixOptions,
-        humanDelay: resolveHumanDelayConfig(cfg, _route.agentId),
+        humanDelay: resolveHumanDelayConfigImpl(cfg, _route.agentId),
         typingCallbacks,
         streaming,
         draftStream,

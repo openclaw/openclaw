@@ -56,10 +56,19 @@ const LINE_LOCATION_LABEL_LIMIT = 100;
 // delivery, while rejected responses keep their status with prefix-only diagnostics.
 const LINE_PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024;
 
-// Completion order also orders expiry; evict the oldest fetch on overflow.
+// Refresh insertion order so overflow evicts expired entries first, then the oldest live fetch.
 function rememberLineIdentity<T>(cache: LineIdentityCache<T>, key: string, value: T): void {
+  const entry = { value, fetchedAt: Date.now() };
   cache.values.delete(key);
-  cache.values.set(key, { value, fetchedAt: Date.now() });
+  cache.values.set(key, entry);
+  if (cache.values.size <= PROFILE_CACHE_MAX_ENTRIES) {
+    return;
+  }
+  for (const [cachedKey, cached] of cache.values) {
+    if (entry.fetchedAt - cached.fetchedAt >= PROFILE_CACHE_TTL_MS) {
+      cache.values.delete(cachedKey);
+    }
+  }
   pruneMapToMaxSize(cache.values, PROFILE_CACHE_MAX_ENTRIES);
 }
 
@@ -120,6 +129,7 @@ type LinePushOpts = Pick<
 >;
 
 interface LinePushBehavior {
+  errorContext?: string;
   verboseMessage?: (chatId: string, messageCount: number) => string;
 }
 
@@ -315,6 +325,21 @@ export function createLocationMessage(location: LineLocation): LocationMessage |
   };
 }
 
+function logLineHttpError(err: unknown, context: string): void {
+  if (!err || typeof err !== "object") {
+    return;
+  }
+  const { status, statusText, body } = err as {
+    status?: number;
+    statusText?: string;
+    body?: string;
+  };
+  if (typeof body === "string") {
+    const summary = status ? `${status} ${statusText ?? ""}`.trim() : "unknown status";
+    logVerbose(`line: ${context} failed (${summary}): ${body}`);
+  }
+}
+
 function recordLineOutboundActivity(
   accountId: string,
   delivery: { messageIds: string[]; receipt?: LineSendResult["receipt"] },
@@ -374,18 +399,23 @@ async function pushLineMessages(
   // an attempt that was accepted before its outcome reached us.
   const retryKey = randomUUID();
 
-  const response = await runLinePushWithRetries(
-    () =>
-      sendLineProviderMessages(
+  const response = await runLinePushWithRetries(async () => {
+    try {
+      return await sendLineProviderMessages(
         "push",
         token,
         { to: chatId, messages: normalizedMessages },
         retryKey,
         opts.authorize,
         opts.assertDirectAdapterHandoff,
-      ),
-    "line:push",
-  );
+      );
+    } catch (err) {
+      if (behavior.errorContext) {
+        logLineHttpError(err, behavior.errorContext);
+      }
+      throw err;
+    }
+  }, "line:push");
   const { messageId, messageIds } = resolveLineProviderMessageIds(response, "push");
   const result: LineSendResult = {
     messageId,
@@ -473,7 +503,9 @@ export async function pushMessagesLine(
   messages: Message[],
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  return pushLineMessages(to, messages, opts);
+  return pushLineMessages(to, messages, opts, {
+    errorContext: "push message",
+  });
 }
 
 export function createFlexMessage(
@@ -504,6 +536,7 @@ export async function pushFlexMessage(
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
   return pushLineMessages(to, [createFlexMessage(altText, contents)], opts, {
+    errorContext: "push flex message",
     verboseMessage: (chatId) => `line: pushed flex message to ${chatId}`,
   });
 }

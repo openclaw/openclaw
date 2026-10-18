@@ -88,6 +88,9 @@ export function createSqliteWalMaintenanceScheduler(
           const admission = admissions.get(database);
           if (admission?.execute) {
             result = await admission.execute(request);
+            if (!prepare(remaining)) {
+              return;
+            }
             if (result?.checkpoint) {
               observe(result.checkpoint);
             }
@@ -107,7 +110,11 @@ export function createSqliteWalMaintenanceScheduler(
         }
       };
       pending = run()
-        .catch(onError)
+        .catch((error: unknown) => {
+          if (prepare(0)) {
+            onError(error);
+          }
+        })
         .finally(() => {
           pending = undefined;
         });

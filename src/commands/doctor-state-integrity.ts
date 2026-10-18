@@ -539,7 +539,7 @@ export function stateIntegrityIssueToHealthFinding(
         "error",
       );
   }
-  return issue satisfies never;
+  return assertNeverStateIntegrityIssue(issue);
 }
 
 export function stateIntegrityIssueToRepairEffect(
@@ -568,7 +568,13 @@ export function stateIntegrityIssueToRepairEffect(
     case "runtime-dir-not-writable":
       return effect("would-repair-runtime-state-dir-permissions");
   }
-  return issue satisfies never;
+  return assertNeverStateIntegrityIssue(issue);
+}
+
+function assertNeverStateIntegrityIssue(issue: never): never {
+  throw new Error(
+    `Unhandled state integrity issue kind: ${String((issue as { kind?: unknown }).kind)}`,
+  );
 }
 
 /** Emits state integrity warnings and applies selected runtime repairs. */
@@ -937,14 +943,14 @@ export async function noteStateIntegrity(
       }
 
       await runPluginSessionStateDoctorRepairs({
-        scan: await sqlitePluginStateScanner.result(),
+        scan: sqlitePluginStateScanner.result(),
         store: { kind: "sqlite", agentId, path: sqliteStorePath },
         prompter,
         warnings,
         changes,
       });
       await runPluginSessionStateDoctorRepairs({
-        scan: await legacyPluginStateScanner.result(),
+        scan: legacyPluginStateScanner.result(),
         store: { kind: "legacy", path: absoluteStorePath },
         prompter,
         warnings,

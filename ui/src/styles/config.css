@@ -920,13 +920,9 @@
   font-weight: 580;
 }
 
-div.mcp-server-form__actions {
+.mcp-server-form__actions {
   display: flex;
   gap: var(--space-2);
-}
-
-.mcp-server-form > .mcp-server-message {
-  grid-column: 1 / -1;
 }
 
 .mcp-server-message {

@@ -42,6 +42,7 @@ type DeferredTurnMaintenanceRunState = {
   activeEngine: ContextEngine;
   pendingParams?: DeferredTurnMaintenanceScheduleParams;
   engines: DeferredTurnMaintenanceScheduleParams[];
+  disposedEngines: WeakRef<ContextEngine>[];
   disposals: Set<Promise<void>>;
   closing: boolean;
 };
@@ -127,6 +128,20 @@ function scheduleDeferredTurnMaintenance(
       );
       return undefined;
     }
+    activeRun.disposedEngines = activeRun.disposedEngines.filter(
+      (ref) => ref.deref() !== undefined,
+    );
+    if (
+      activeRun.disposedEngines.some((ref) => {
+        const engine = ref.deref();
+        return engine !== undefined && hasSameContextEngineInstance(engine, params.contextEngine);
+      })
+    ) {
+      params.onDeferredMaintenanceFailure?.(
+        new Error("Context engine was disposed before deferred maintenance could be scheduled"),
+      );
+      return undefined;
+    }
     const superseded = activeRun.pendingParams;
     activeRun.pendingParams = params;
     retainEngine(activeRun, params);
@@ -153,6 +168,7 @@ function scheduleDeferredTurnMaintenance(
     promise: maintenance.track(completion.promise),
     activeEngine: params.contextEngine,
     engines: [params],
+    disposedEngines: [],
     disposals: new Set(),
     closing: false,
   };
@@ -251,6 +267,8 @@ async function disposeRetainedEngine(
   }
   const [entry] = state.engines.splice(index, 1);
   if (entry?.disposeContextEngineAfterMaintenance) {
+    state.disposedEngines = state.disposedEngines.filter((ref) => ref.deref() !== undefined);
+    state.disposedEngines.push(new WeakRef(entry.contextEngine));
     await disposeDeferredMaintenanceContextEngine(entry, state.maintenance);
   }
 }

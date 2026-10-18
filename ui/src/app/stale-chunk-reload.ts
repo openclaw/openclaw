@@ -22,7 +22,6 @@ const ATTEMPT_COOLDOWN_MS = 5_000;
 // another probe immediately while the gateway is still unreachable.
 const DOCUMENT_PROBE_TIMEOUT_MS = 3_000;
 const BUILD_RELOAD_JITTER_MS = 2_000;
-const RELOAD_GUARD_WINDOW_MS = 30_000;
 
 // WebKit, Chromium, Firefox, and Vite's preload helper use these four phrases.
 const MODULE_IMPORT_ERROR_PATTERN =
@@ -39,7 +38,6 @@ type RecoveryState = {
   buildId: string | null;
   attemptedAt: number;
   pending?: Promise<boolean>;
-  controller?: AbortController;
 };
 
 const recoveryByStorage = new WeakMap<object, RecoveryState>();
@@ -104,7 +102,7 @@ function persistGuardBuildId(
     return false;
   }
   try {
-    storage.setItem(RELOAD_GUARD_STORAGE_KEY, JSON.stringify({ buildId, at: Date.now() }));
+    storage.setItem(RELOAD_GUARD_STORAGE_KEY, buildId);
     return true;
   } catch {
     return false;
@@ -124,14 +122,12 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   }
   const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
   const buildId = deps.buildId ?? CONTROL_UI_BUILD_INFO.buildId;
-  // A recent automatic reload of this build defers the next one instead of refusing it:
-  // a broken build reloads at most once per window, while a later network blip still
-  // recovers on its own.
-  let guardDelayMs = 0;
+  // One automatic reload per build id: if the reloaded document still fails
+  // with the same build, the build itself is broken and reloading cannot help.
+  // A genuinely newer deployment ships a new build id and may recover again.
   try {
-    const guard = JSON.parse(storage?.getItem(RELOAD_GUARD_STORAGE_KEY) ?? "null");
-    if (guard?.buildId === buildId && typeof guard.at === "number") {
-      guardDelayMs = Math.max(0, guard.at + RELOAD_GUARD_WINDOW_MS - Date.now());
+    if (storage?.getItem(RELOAD_GUARD_STORAGE_KEY) === buildId) {
+      return false;
     }
   } catch {
     // Unreadable storage follows the same safe path as unavailable storage.
@@ -139,13 +135,14 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   const now = Date.now();
   const storageIdentity = storage ?? unavailableStorage;
   let recovery = recoveryByStorage.get(storageIdentity);
-  // This document already issued a reload and is being replaced.
-  if (recovery?.buildId === null) {
-    return false;
-  }
   // A generic chunk failure cannot replace the server build already being
   // recovered. Only the Gateway owns a new target artifact and retry lifetime.
-  if (deps.buildId === undefined && recovery?.pending && recovery.buildId !== buildId) {
+  if (
+    deps.buildId === undefined &&
+    recovery &&
+    recovery.buildId !== buildId &&
+    (recovery.buildId === null || recovery.pending)
+  ) {
     return false;
   }
   if (
@@ -156,25 +153,19 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
     return false;
   }
   if (recovery?.buildId !== buildId || !recovery.pending) {
-    recovery?.controller?.abort();
-    const controller = new AbortController();
-    const target: RecoveryState = { buildId, attemptedAt: now, controller };
+    const target: RecoveryState = { buildId, attemptedAt: now };
     recoveryByStorage.set(storageIdentity, target);
     const wait = () =>
       waitForReachableControlUiDocument(
-        { timeoutMs: deps.buildId === undefined ? Infinity : undefined },
+        { timeoutMs: deps.buildId === undefined ? 0 : undefined },
         () =>
           recoveryByStorage.get(storageIdentity) === target &&
           target.buildId === buildId &&
           canReloadControlUiDocument(),
-        controller.signal,
       );
-    const delayMs = Math.max(
-      guardDelayMs,
-      deps.buildId === undefined ? 0 : Math.floor(Math.random() * BUILD_RELOAD_JITTER_MS),
-    );
-    target.pending =
-      delayMs > 0 ? sleepWithAbort(delayMs, controller.signal).then(wait, () => false) : wait();
+    const delayMs =
+      deps.buildId === undefined ? 0 : Math.floor(Math.random() * BUILD_RELOAD_JITTER_MS);
+    target.pending = delayMs > 0 ? sleepWithAbort(delayMs).then(wait) : wait();
     recovery = target;
   }
   try {
@@ -216,11 +207,10 @@ type ReachableReloadDeps = StaleChunkReloadDeps & {
 async function waitForReachableControlUiDocument(
   deps: ReachableReloadDeps,
   isCurrent: () => boolean,
-  signal?: AbortSignal,
 ): Promise<boolean> {
   const deadline = Date.now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
   for (let attempt = 0; ; attempt += 1) {
-    if (signal?.aborted || !isCurrent()) {
+    if (!isCurrent()) {
       return false;
     }
     const remaining = deadline - Date.now();
@@ -230,10 +220,10 @@ async function waitForReachableControlUiDocument(
     // timeoutMs: 0 remains one bounded request.
     const reachable = await raceWithTimeout(
       probeControlUiDocument,
-      remaining > 0 ? Math.min(remaining, DOCUMENT_PROBE_TIMEOUT_MS) : DOCUMENT_PROBE_TIMEOUT_MS,
+      remaining > 0 ? remaining : DOCUMENT_PROBE_TIMEOUT_MS,
       () => false,
     );
-    if (signal?.aborted || !isCurrent()) {
+    if (!isCurrent()) {
       return false;
     }
     if (reachable) {
@@ -243,53 +233,7 @@ async function waitForReachableControlUiDocument(
     if (remainingWait <= 0) {
       return false;
     }
-    if (Number.isFinite(deadline)) {
-      await sleepWithAbort(Math.min(REACHABLE_WAIT_INTERVAL_MS, remainingWait), signal).catch(
-        () => {},
-      );
-    } else {
-      await waitForRecoverySignal(Math.min(1_000 * 2 ** Math.min(attempt, 4), 15_000), signal);
-    }
-  }
-}
-
-function waitForRecoverySignal(delayMs: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const finish = () => {
-      clearTimeout(timer);
-      window.removeEventListener("online", finish);
-      document.removeEventListener("visibilitychange", onVisibility);
-      signal?.removeEventListener("abort", finish);
-      resolve();
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        finish();
-      }
-    };
-    const timer = setTimeout(finish, delayMs);
-    window.addEventListener("online", finish);
-    document.addEventListener("visibilitychange", onVisibility);
-    signal?.addEventListener("abort", finish, { once: true });
-    if (signal?.aborted) {
-      finish();
-    }
-  });
-}
-
-/**
- * A dismissed failure surface retires pending recovery for the running build. Gateway
- * build targets keep theirs, and surfaces still showing a failure re-arm on render.
- */
-export function cancelStaleChunkRecovery(
-  storage: Pick<Storage, "getItem" | "setItem"> | null = getSafeSessionStorage(),
-): void {
-  const storageIdentity = storage ?? unavailableStorage;
-  const recovery = recoveryByStorage.get(storageIdentity);
-  if (recovery?.pending && recovery.buildId === CONTROL_UI_BUILD_INFO.buildId) {
-    recovery.controller?.abort();
-    // Unregister now: a surface failing before the aborted probe unwinds starts fresh.
-    recoveryByStorage.delete(storageIdentity);
+    await sleepWithAbort(Math.min(REACHABLE_WAIT_INTERVAL_MS, remainingWait));
   }
 }
 
@@ -297,10 +241,6 @@ export function cancelStaleChunkRecovery(
 export async function retryStaleChunkReloadWhenReachable(
   deps: ReachableReloadDeps = {},
 ): Promise<boolean> {
-  // Automatic recovery keeps running: a manual retry during an outage may fail, and a
-  // successful one retires the shared target before the automatic wait can reload.
-  const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
-  const storageIdentity = storage ?? unavailableStorage;
   if (
     !(await waitForReachableControlUiDocument(
       deps,
@@ -311,6 +251,8 @@ export async function retryStaleChunkReloadWhenReachable(
   ) {
     return false;
   }
+  const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
+  const storageIdentity = storage ?? unavailableStorage;
   const reload = deps.reload ?? reloadControlUiDocument;
   const recovery = recoveryByStorage.get(storageIdentity) ?? {
     buildId: CONTROL_UI_BUILD_INFO.buildId,
@@ -379,8 +321,10 @@ export function installMissingStylesheetRecovery(): () => void {
     }
     detected = true;
     removeListeners();
-    showBanner();
-    await scheduleStaleChunkReload();
+    const reloaded = await scheduleStaleChunkReload();
+    if (!reloaded) {
+      showBanner();
+    }
   };
 
   function checkStylesheet() {

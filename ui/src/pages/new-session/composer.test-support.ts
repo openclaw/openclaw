@@ -8,30 +8,21 @@ import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import {
-  createNewSessionComposerTextarea,
-  type NewSessionComposerTextarea,
-} from "./composer-controller.ts";
+import { NewSessionComposerTextareaController } from "./composer-controller.ts";
 import { NewSessionComposer, type NewSessionComposerOptions } from "./composer.tsx";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
-const textareaControllers: NewSessionComposerTextarea[] = [];
+const textareaControllers: NewSessionComposerTextareaController[] = [];
 
 export function composerContext(
   snapshot: Partial<ApplicationGatewaySnapshot> & { client: GatewayBrowserClient | null },
 ) {
   return {
-    gateway: {
-      snapshot,
-      connection: { gatewayUrl: "ws://gateway.test" },
-      connectionRevision: 0,
-      subscribe: () => () => {},
-    },
-    agents: { subscribe: () => () => {} },
-    config: { current: {}, subscribe: () => () => {} },
-    sessions: { state: { result: null }, subscribe: () => () => {} },
+    gateway: { snapshot, connection: { gatewayUrl: "ws://gateway.test" }, connectionRevision: 0 },
+    config: { current: {} },
+    sessions: { state: { result: null } },
     theme: {
       branding: resolveThemeBranding(undefined),
       settings: { lobsterPetVisits: true, lobsterPetSounds: false },
@@ -64,7 +55,7 @@ export function renderComposer(
     onInput?: (message: string) => void;
     onSubmit?: () => void;
     onBackgroundSubmit?: () => void;
-    textareaController?: NewSessionComposerTextarea;
+    textareaController?: NewSessionComposerTextareaController;
   } = {},
 ) {
   onTestFinished(installChatComposerPickerDismissal(document));
@@ -74,7 +65,8 @@ export function renderComposer(
     () => undefined,
   );
   attachmentDrafts.push(attachmentDraft);
-  const textareaController = overrides.textareaController ?? createNewSessionComposerTextarea();
+  const textareaController =
+    overrides.textareaController ?? new NewSessionComposerTextareaController();
   if (!textareaControllers.includes(textareaController)) {
     textareaControllers.push(textareaController);
   }
@@ -126,7 +118,6 @@ export function renderComposer(
     container,
     textareaController,
     rerender: renderCurrent,
-    unmount: mounted.unmount,
     rerenderWithMessage: (nextMessage: string) => {
       message = nextMessage;
       renderCurrent();

@@ -1,5 +1,4 @@
 import { createMemo, For } from "solid-js";
-import { registryFor } from "../../components/overlay-registry.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -231,8 +230,9 @@ export function handleSessionsSearchKeydown(
     !input.value ||
     props.sessionMenu ||
     document.openClawModalLayers?.size ||
-    registryFor(document).stack.some((overlay) => overlay.open) ||
-    document.querySelector("dialog[open], [aria-modal='true'], openclaw-menu-surface")
+    document.querySelector(
+      "dialog[open], [aria-modal='true'], openclaw-menu-surface, wa-dropdown[open], wa-popover[open], wa-select[open]",
+    )
   ) {
     return;
   }

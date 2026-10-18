@@ -184,7 +184,7 @@ export function resolveDiscordNativeCommandAccessContext(params: {
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: guild ?? undefined,
-    guildId: guild?.id,
+    guildId: guild?.id ?? undefined,
     guildEntries: params.discordConfig?.guilds,
   });
   const channelConfig = guild
@@ -312,11 +312,21 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   }
   const sender = resolveDiscordSenderIdentity({ author: user, pluralkitInfo: null });
   const channelContext = await resolveDiscordNativeInteractionChannelContext(interaction, "");
-  const { isDirectMessage, isGroupDm, channelName, channelSlug, rawChannelId, memberRoleIds } =
-    channelContext;
+  const {
+    isDirectMessage,
+    isGroupDm,
+    isThreadChannel,
+    channelName,
+    channelSlug,
+    rawChannelId,
+    threadParentId,
+  } = channelContext;
   if (params.isPolicyCurrent?.() === false) {
     return false;
   }
+  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
+    ? interaction.rawData.member.roles.slice()
+    : [];
   const channelAccess = resolveDiscordNativeCommandAccessContext({
     cfg,
     accountId,
@@ -385,12 +395,18 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     const routeState = resolveDiscordNativeInteractionRouteState({
       cfg,
       accountId,
-      interaction,
-      channelContext,
-      threadBindings: params.threadBindings,
+      guildId: interaction.guild?.id,
+      memberRoleIds,
+      isDirectMessage,
+      isGroupDm,
+      directUserId: user.id,
+      conversationId: rawChannelId,
+      parentConversationId: threadParentId,
+      threadBinding: isThreadChannel
+        ? params.threadBindings?.getByThreadId(rawChannelId)
+        : undefined,
     });
     const { ctxPayload } = await buildDiscordNativeInteractionContext({
-      cfg,
       buildContext: params.buildContext,
       interaction,
       channelContext,

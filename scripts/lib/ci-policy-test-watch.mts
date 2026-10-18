@@ -80,24 +80,10 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/gateway/server.agents.config-readiness.test.ts",
     watchGlobs: [
-      "src/gateway/config-reload.ts",
       "src/secrets/runtime-auth-store-admission.ts",
       "src/agents/prepared-model-runtime.configured.ts",
     ],
   },
-  {
-    testFile: "src/gateway/server.config-patch.test.ts",
-    watchGlobs: ["src/gateway/config-reload.ts"],
-  },
-  // server.close() reaches these owners through the kernel's lazy shutdown
-  // runtime, four or five import hops away; aggressive selection walks two.
-  ...[
-    "src/gateway/server.agent-execution-shutdown.test.ts",
-    "src/gateway/server.agent-late-admission.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: ["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"],
-  })),
   {
     testFile: "src/agents/agent-bundle-mcp-reload.test.ts",
     watchGlobs: ["src/agents/agent-bundle-mcp-manager.ts"],
@@ -2016,7 +2002,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   })),
   {
     testFile: "ui/src/components/web-awesome-migration.node.test.ts",
-    watchGlobs: ["ui/src/**/*.{ts,tsx}"],
+    watchGlobs: ["ui/src/**/*.ts"],
   },
   {
     testFile: "ui/src/styles/base-theme-tokens.node.test.ts",

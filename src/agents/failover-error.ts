@@ -26,7 +26,6 @@ import {
   readDirectErrorMessage,
   type CliTimeoutContext,
 } from "./failover/error.js";
-import { findLocalWorkerTaskTimeout } from "./failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
@@ -316,6 +315,28 @@ function hasPreparedModelRuntimeOwnerNotPublished(err: unknown): boolean {
   );
 }
 
+/** A local worker-task deadline is runtime infrastructure failure, not a provider timeout. */
+export function hasLocalWorkerTaskTimeout(err: unknown): boolean {
+  let localTimeout = false;
+  for (const candidate of collectErrorGraphCandidates(err, resolveNestedErrors)) {
+    // Failover wrappers may synthesize HTTP-like statuses; original HTTP facts still win.
+    if (isFailoverError(candidate)) {
+      continue;
+    }
+    const record = asOptionalObjectRecord(candidate);
+    if (record?.status !== undefined || record?.statusCode !== undefined) {
+      return false;
+    }
+    if (
+      readErrorName(candidate) === "WorkerTaskError" &&
+      readStringField(record, "code") === "timeout"
+    ) {
+      localTimeout = true;
+    }
+  }
+  return localTimeout;
+}
+
 function hasDirectProviderFailureIdentity(err: unknown): boolean {
   if (isFailoverError(err)) {
     return true;
@@ -479,7 +500,7 @@ export function resolveFailoverClassificationFromError(
 ): FailoverClassification | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
-  if (isAgentHarnessPreflightError(err) || findLocalWorkerTaskTimeout(err)) {
+  if (isAgentHarnessPreflightError(err)) {
     return null;
   }
   // Local coordination codes such as SQLite "overloaded" are not provider signals.
@@ -552,10 +573,6 @@ export function describeFailoverError(err: unknown): {
   sessionId?: string;
   lane?: string;
 } {
-  const localTimeout = findLocalWorkerTaskTimeout(err);
-  if (localTimeout) {
-    return { message: localTimeout.message };
-  }
   if (isAgentHarnessPreflightError(err)) {
     return { message: err.message };
   }
@@ -595,6 +612,13 @@ type FailoverErrorContext = {
   sessionId?: string;
   lane?: string;
   timeout?: FailoverError["timeout"];
+  /**
+   * When false, do not fabricate an HTTP status from the failover reason. Used
+   * for local worker-task deadlines, which are runtime infrastructure failure
+   * and must not surface as a provider HTTP status even though they advance the
+   * configured fallback chain.
+   */
+  synthesizeHttpStatus?: boolean;
 };
 
 type ModelFallbackErrorResolution =
@@ -609,9 +633,6 @@ export function coerceToFailoverError(
   context?: FailoverErrorContext,
 ): FailoverError | null {
   if (isFailoverError(err)) {
-    if (findLocalWorkerTaskTimeout(err)) {
-      return null;
-    }
     const status = normalizeFailoverStatus(err.status, err.code);
     if (
       !Object.is(status, err.status) ||
@@ -659,7 +680,10 @@ export function coerceToFailoverError(
   const signal = normalizeErrorSignal(err);
   const message = signal.message ?? String(err);
   const code = signal.code;
-  const status = signal.status ?? resolveFailoverStatus(reason, code);
+  const status =
+    context?.synthesizeHttpStatus === false
+      ? signal.status
+      : (signal.status ?? resolveFailoverStatus(reason, code));
 
   // Suspend when hitting rate limits or billing issues in an attributed session
   const shouldSuspend =
@@ -704,9 +728,14 @@ export function resolveModelFallbackError(
   }
   // Gateway admission can fail before any provider turn starts. Preserve that
   // identity through wrappers and aggregates so fallback cannot blame a model.
-  if (hasRuntimeCoordinationFailure(err) || findLocalWorkerTaskTimeout(err)) {
+  if (hasRuntimeCoordinationFailure(err)) {
     return { kind: "coordination", error: err };
   }
+  // A local worker-task deadline is runtime infrastructure failure, not a
+  // provider timeout. Attribution stays local (the reply renders the
+  // "local worker task timed out" copy), but routing deliberately preserves the
+  // configured fallback chain: a later candidate rebuilds its own context, so it
+  // can recover from an intermittent worker deadline.
   const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);
   if (
     staleLifecycleFailure &&
@@ -727,7 +756,13 @@ export function resolveModelFallbackError(
   if (isAgentHarnessPreflightError(err)) {
     return { kind: "coordination", error: err };
   }
-  const failoverError = coerceToFailoverError(err, context);
+  const failoverError = coerceToFailoverError(err, {
+    ...context,
+    // A local worker-task deadline carries no HTTP fact; do not synthesize a
+    // provider HTTP status from its timeout reason. Routing still advances the
+    // configured chain, but attribution stays local.
+    synthesizeHttpStatus: hasLocalWorkerTaskTimeout(err) ? false : context?.synthesizeHttpStatus,
+  });
   if (failoverError) {
     return { kind: "failover", error: failoverError };
   }

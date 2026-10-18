@@ -204,10 +204,9 @@ export function createClickClackActivityPublisher(params: {
       void enqueue(async () => {
         // Late read is intentional: if the body was upgraded before this POST
         // ran, post the richer body directly and skip the follow-up PATCH.
-        const submittedBody = row.body;
-        const posted = await postRow(kind, submittedBody);
+        const posted = await postRow(kind, row.body);
         row.messageId = posted.id;
-        row.sentBody = submittedBody;
+        row.sentBody = row.body;
       });
       return;
     }
@@ -217,9 +216,8 @@ export function createClickClackActivityPublisher(params: {
     existing.body = body;
     void enqueue(async () => {
       if (existing.messageId && existing.body !== existing.sentBody) {
-        const submittedBody = existing.body;
-        await params.client.updateMessageBody(existing.messageId, submittedBody);
-        existing.sentBody = submittedBody;
+        await params.client.updateMessageBody(existing.messageId, existing.body);
+        existing.sentBody = existing.body;
       }
     });
   };

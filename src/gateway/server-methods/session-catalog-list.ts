@@ -242,21 +242,41 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     client,
   );
   const pending = operations.pending.get(listKey);
+  if (pending) {
+    // progressId is connection-owned and excluded from the work key.
+    subscribe(pending.progress);
+    const finishCoalesced = diagnostics?.startWait("coalesced");
+    let result: CatalogListEnumeration;
+    try {
+      result = await pending.result;
+    } finally {
+      finishCoalesced?.();
+    }
+    let finishFinalProjection: (() => void) | undefined;
+    try {
+      while (projection.needsSelectionPreparation({ metadataOnly: true })) {
+        finishFinalProjection ??= diagnostics?.startWait("projection_final");
+        await projection.prepareSelection({ metadataOnly: true });
+      }
+    } finally {
+      finishFinalProjection?.();
+    }
+    respondWithCatalog(result);
+    return;
+  }
   // An in-flight list may finish with its original registry after a hot reload.
   // Delivery still applies current caller visibility; the next request refreshes registrations.
-  const progress =
-    pending?.progress ??
-    new SessionCatalogListLifetime(
-      [
-        getGatewayRestartDrainSignal(),
-        context.requestEntryLifetime?.signal,
-        operations.retirement.signal,
-        signal,
-      ].filter((candidate): candidate is AbortSignal => candidate !== undefined),
-      selected.map((provider) => provider.id),
-    );
+  const progress = new SessionCatalogListLifetime(
+    [
+      getGatewayRestartDrainSignal(),
+      context.requestEntryLifetime?.signal,
+      operations.retirement.signal,
+      signal,
+    ].filter((candidate): candidate is AbortSignal => candidate !== undefined),
+    selected.map((provider) => provider.id),
+  );
   subscribe(progress);
-  const enumerate = async () => {
+  const operation = (async () => {
     let requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot> | undefined;
     const finishPlanning = diagnostics?.startSync("planning");
     try {
@@ -315,7 +335,6 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
                 // The final response also reconciles these snapshots if a slow client drops a frame.
                 progress.publish(catalog, providerInstances);
               };
-              let catalog: SessionCatalog;
               try {
                 const hosts = await progress.runProvider(onHost, (lifetime) => {
                   const providerParams = {
@@ -339,21 +358,19 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
                 for (const host of hosts) {
                   requestEntries?.captureHostInstances(host, providerInstances);
                 }
-                catalog = catalogResult(provider, shareRoute, hosts, undefined, createTarget);
+                return {
+                  catalogs: [catalogResult(provider, shareRoute, hosts, undefined, createTarget)],
+                  instancesByCatalog: new Map([[provider.id, providerInstances]]),
+                  publishedHosts,
+                };
               } catch (error) {
-                catalog = catalogResult(
-                  provider,
-                  shareRoute,
-                  [],
-                  catalogError(error),
-                  createTarget,
-                );
+                return {
+                  catalogs: [
+                    catalogResult(provider, shareRoute, [], catalogError(error), createTarget),
+                  ],
+                  instancesByCatalog: new Map([[provider.id, providerInstances]]),
+                };
               }
-              return {
-                catalogs: [catalog],
-                instancesByCatalog: new Map([[provider.id, providerInstances]]),
-                ...(catalog.error ? {} : { publishedHosts }),
-              };
             },
           );
           instancesByCatalog.set(provider.id, page.instancesByCatalog.get(provider.id)!);
@@ -364,21 +381,12 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
       finishProvider?.();
     }
     return { catalogs: catalogList, instancesByCatalog, publishedHosts };
-  };
-  const operation = pending?.result ?? enumerate();
-  const entry = pending ?? { progress, result: operation };
+  })();
+  const entry = { progress, result: operation };
   // Coalesce only concurrent requests; each subsequent list sees current provider rows.
-  if (!pending) {
-    operations.pending.set(listKey, entry);
-  }
-  const finishCoalesced = pending ? diagnostics?.startWait("coalesced") : undefined;
+  operations.pending.set(listKey, entry);
   try {
-    let result: CatalogListEnumeration;
-    try {
-      result = await operation;
-    } finally {
-      finishCoalesced?.();
-    }
+    const result = await operation;
     let finishFinalProjection: (() => void) | undefined;
     try {
       while (projection.needsSelectionPreparation({ metadataOnly: true })) {
@@ -390,16 +398,12 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     }
     respondWithCatalog(result);
   } catch (error) {
-    if (!pending) {
-      progress.retire(error);
-    }
+    progress.retire(error);
     throw error;
   } finally {
-    if (!pending) {
-      if (operations.pending.get(listKey) === entry) {
-        operations.pending.delete(listKey);
-      }
-      progress.finishListing();
+    if (operations.pending.get(listKey) === entry) {
+      operations.pending.delete(listKey);
     }
+    progress.finishListing();
   }
 };

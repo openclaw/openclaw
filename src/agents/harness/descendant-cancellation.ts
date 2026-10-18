@@ -1,4 +1,7 @@
-import { captureAgentHarnessLifecycleHooks } from "./registry-lifecycle.js";
+import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
+import { getPluginRegistryState } from "../../plugins/runtime-state.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import type { AgentHarness, AgentHarnessDescendantCancellationResult } from "./types.js";
 
 type CancellationParams = Parameters<NonNullable<AgentHarness["withDescendantCancellation"]>>[0];
@@ -8,7 +11,25 @@ export async function withAgentHarnessDescendantCancellation<T>(
   params: CancellationParams,
   run: (cancel: () => Promise<AgentHarnessDescendantCancellationResult>) => Promise<T>,
 ): Promise<T> {
-  const owners = captureAgentHarnessLifecycleHooks("withDescendantCancellation");
+  const scopedRegistry = () =>
+    getPluginRuntimeGenerationRegistry() ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const scoped = scopedRegistry();
+  const registry = scoped ?? getPluginRegistryState()?.activeRegistry;
+  const owners =
+    registry?.agentHarnesses.flatMap((registration) => {
+      const prepare = registration.harness.withDescendantCancellation;
+      if (!prepare) {
+        return [];
+      }
+      const record = registry.plugins.find((plugin) => plugin.id === registration.pluginId);
+      const current =
+        record || registration.pluginId === "core"
+          ? capturePluginLifecycleAuthority(registry, record, {
+              scopedRuntime: scoped === registry,
+            })
+          : undefined;
+      return [{ registration, prepare, current }];
+    }) ?? [];
   const cancellations: Array<() => Promise<AgentHarnessDescendantCancellationResult>> = [];
   const prepareNext = async (index: number): Promise<T> => {
     const owner = owners[index];
@@ -43,7 +64,13 @@ export async function withAgentHarnessDescendantCancellation<T>(
     let active = true;
     const assertCurrent = () => {
       params.assertCurrent();
-      if (!active || !owner.isCurrent()) {
+      if (
+        !active ||
+        !owner.current?.() ||
+        (scoped && scopedRegistry() !== scoped) ||
+        !registry?.agentHarnesses.includes(owner.registration) ||
+        owner.registration.harness.withDescendantCancellation !== owner.prepare
+      ) {
         throw new Error("Descendant cancellation harness owner changed");
       }
     };

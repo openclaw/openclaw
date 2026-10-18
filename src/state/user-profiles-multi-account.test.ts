@@ -19,10 +19,8 @@ import {
   readUserProfileGitHubCommand,
   resolveUserProfileGitHubAttribution,
 } from "./user-profile-github-identity.js";
-import {
-  getUserProfileListItem,
-  readUserProfileSnapshotSync,
-} from "./user-profile-list-item.test-support.js";
+import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
 import { getUserProfileDisplay, prepareUserProfileCatalog } from "./user-profile-list.js";
 import {
   readUserProfileDirectory,

@@ -110,10 +110,11 @@ export async function discoverClaudeCliModels(params: {
       if (option.value === "default") {
         defaultAliasIds.add(id);
       }
-      const supportedEffortLevels = Array.isArray(option.supportedEffortLevels)
-        ? option.supportedEffortLevels
-        : [];
-      const levels = NATIVE_EFFORT_LEVELS.filter((level) => supportedEffortLevels.includes(level));
+      const levels = NATIVE_EFFORT_LEVELS.filter(
+        (level) =>
+          Array.isArray(option.supportedEffortLevels) &&
+          option.supportedEffortLevels.includes(level),
+      );
       models.set(id, {
         id,
         name: displayName,

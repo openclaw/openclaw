@@ -183,13 +183,7 @@ export function captureDirectEmbeddedMessageInjectionTarget(
           personalToolParticipants: toolAuthority.personalToolParticipants,
           options:
             params.options?.isInboundUserMessage && params.allowPendingUserInputAnswer !== false
-              ? {
-                  ...params.options,
-                  terminalReplyExpectation:
-                    backend.terminalReplyExpectation === "result-required"
-                      ? "result-required"
-                      : "required",
-                }
+              ? { ...params.options, terminalReplyExpectation: "required" }
               : params.options,
         });
         if (!("injection" in resolved)) {

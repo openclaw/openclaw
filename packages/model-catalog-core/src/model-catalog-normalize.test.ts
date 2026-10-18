@@ -12,7 +12,7 @@ describe("model catalog normalization", () => {
       api: "openai-completions",
       baseUrl: "https://proxy.example/v1",
       headers: { "x-model": "gpt-5.4" },
-      input: ["text", "image", "video", "document"],
+      input: ["text", "image", "document"],
       reasoning: true,
       contextWindow: 256000,
       contextWindows: [

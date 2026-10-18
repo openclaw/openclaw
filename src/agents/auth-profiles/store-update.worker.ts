@@ -6,13 +6,6 @@ import {
   requestSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { authProfileCredentialPublication } from "../../state/user-model-account-authority.js";
-import {
-  prepareAuthProfileAuthorizationWrite,
-  readAuthProfileAuthorizationLifetimes,
-  restoreAuthProfileAuthorizationWriteIntents,
-  type AuthProfileAuthorizationLifetimes,
-  type AuthProfileAuthorizationWriteIntents,
-} from "./authorization-lifetime.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
 import type { RuntimeExternalOAuthProfile } from "./oauth-shared.js";
@@ -47,10 +40,8 @@ export type AuthStoreUpdatePrepared = {
 };
 export type AuthStoreUpdateCommitted = {
   store: AuthProfileStore;
-  authorizationLifetimes: AuthProfileAuthorizationLifetimes;
   publication: AuthStoreUpdatePublication;
-  /** JSON-safe owner metadata; native settlement carries the credential receipt. */
-  credentialOwner?: { identity: string; canonicalPath?: string };
+  credentialFacts?: ReturnType<typeof authProfileCredentialPublication.bound>;
   compensation?: AuthStoreCompensation;
 };
 type AuthStoreCompensation = {
@@ -78,12 +69,6 @@ export type AuthStoreUpdateResponse =
         pruneOrderProfileIds?: string[];
       };
     };
-
-export type AuthStoreUpdateResponseWire =
-  | { save: false }
-  | (Extract<AuthStoreUpdateResponse, { save: true }> & {
-      authorizationIntents: AuthProfileAuthorizationWriteIntents;
-    });
 
 /** A definite mismatch needs no write lock; possible matches reread inside the transaction. */
 export function authProfilePeerGenerationMayMatch(
@@ -176,18 +161,12 @@ export function updateAuthProfileStoreInDatabase(
       [port2],
     );
     // SAFETY: The host queues one complete typed response before granting this private exchange.
-    const response = receiveAuthProfileUpdateValue(port1) as AuthStoreUpdateResponseWire;
+    const response = receiveAuthProfileUpdateValue(port1) as AuthStoreUpdateResponse;
     if (!response || typeof response.save !== "boolean") {
       throw new Error("Auth profile updater produced no response");
     }
     if (!response.save) {
       return;
-    }
-    if ("store" in response) {
-      restoreAuthProfileAuthorizationWriteIntents(
-        response.store.profiles,
-        response.authorizationIntents,
-      );
     }
     const { existingRaw, existingState, localStore, mainStore } = prepared ?? prepareStores();
     const restoring = "restore" in response ? response.restore : undefined;
@@ -228,19 +207,11 @@ export function updateAuthProfileStoreInDatabase(
         ...next.profiles,
       },
     });
-    // Compensation restores credential bytes, not a previously revoked authorization.
     const payload = restoring
-      ? restoredRaw === null &&
-        Object.keys(readAuthProfileAuthorizationLifetimes(existingRaw)).length === 0
-        ? null
-        : prepareAuthProfileAuthorizationWrite(
-            existingRaw,
-            restoredRaw ?? { version: AUTH_STORE_VERSION, profiles: {} },
-          )
+      ? restoredRaw
       : "deleteEmptyStore" in response &&
           response.deleteEmptyStore &&
-          Object.keys(mutation.payload.profiles).length === 0 &&
-          Object.keys(readAuthProfileAuthorizationLifetimes(mutation.payload)).length === 0
+          Object.keys(mutation.payload.profiles).length === 0
         ? null
         : mutation.payload;
     const statePayload = restoring ? restoredState : mutation.statePayload;
@@ -250,7 +221,7 @@ export function updateAuthProfileStoreInDatabase(
       stateChanged: !isDeepStrictEqual(existingState, statePayload),
       ...(restoring ? { selectionChanged: !isDeepStrictEqual(existingState, statePayload) } : {}),
     };
-    let credentialOwner: AuthStoreUpdateCommitted["credentialOwner"];
+    let credentialFacts: AuthStoreUpdateCommitted["credentialFacts"];
     if (publication.credentialsChanged) {
       const { receipt } = authProfileCredentialPublication.capture(
         sqlPublicationAnchor(database),
@@ -262,13 +233,7 @@ export function updateAuthProfileStoreInDatabase(
           }
         },
       );
-      const credentialFacts = authProfileCredentialPublication.bound(receipt);
-      const identity =
-        "source" in credentialFacts ? credentialFacts.source.identity : credentialFacts.identity;
-      if (typeof identity !== "string") {
-        throw new Error("Auth profile credential publication has no admitted owner");
-      }
-      credentialOwner = { identity, canonicalPath: credentialFacts.canonicalPath };
+      credentialFacts = authProfileCredentialPublication.bound(receipt);
       deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(database), {
         authCredentials: credentialFacts,
       });
@@ -282,9 +247,8 @@ export function updateAuthProfileStoreInDatabase(
     }
     sendAuthProfileUpdateValue(port1, {
       store: markRuntimePersistedProfiles(next),
-      authorizationLifetimes: readAuthProfileAuthorizationLifetimes(payload),
       publication,
-      credentialOwner,
+      credentialFacts,
       ...("captureCompensation" in response && response.captureCompensation
         ? {
             compensation: {

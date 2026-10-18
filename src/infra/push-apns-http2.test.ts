@@ -86,12 +86,20 @@ const {
     }),
     request: vi.fn(() => fakeRequestLocal),
   });
-  const fakeProxySocketLocal = { destroy: vi.fn() };
+  const fakeProxySocketLocal = Object.assign(new FakeEmitter(), {
+    destroy: vi.fn(),
+    unshift: vi.fn(),
+  });
   const fakeTlsSocketLocal = Object.assign(new FakeEmitter(), {
+    encrypted: true,
     alpnProtocol: "h2" as string | false,
+    destroyed: false,
     destroy: vi.fn(),
   });
-  let targetTlsEvent: "secureConnect" | undefined = "secureConnect";
+  fakeTlsSocketLocal.destroy.mockImplementation(() => {
+    fakeTlsSocketLocal.destroyed = true;
+  });
+  let targetTlsEvent: "secureConnect" | "close" | "error" | undefined = "secureConnect";
   return {
     fakeProxySocket: fakeProxySocketLocal,
     fakeRequest: fakeRequestLocal,
@@ -103,7 +111,11 @@ const {
       const event = targetTlsEvent;
       if (event) {
         queueMicrotask(() => {
-          fakeTlsSocketLocal.emit(event);
+          if (event === "error") {
+            fakeTlsSocketLocal.emit("error", new Error("target TLS failed"));
+          } else {
+            fakeTlsSocketLocal.emit(event);
+          }
         });
       }
       return fakeTlsSocketLocal;
@@ -154,7 +166,9 @@ describe("connectApnsHttp2Session", () => {
     tunnelSpy.mockClear();
     tlsConnectSpy.mockClear();
     setTargetTlsEvent("secureConnect");
+    fakeProxySocket.reset();
     fakeProxySocket.destroy.mockClear();
+    fakeProxySocket.unshift.mockClear();
     fakeRequest.reset();
     fakeRequest.setEncoding.mockClear();
     fakeRequest.end.mockClear();
@@ -166,6 +180,7 @@ describe("connectApnsHttp2Session", () => {
     fakeSession.request.mockClear();
     fakeTlsSocket.reset();
     fakeTlsSocket.alpnProtocol = "h2";
+    fakeTlsSocket.destroyed = false;
     fakeTlsSocket.destroy.mockClear();
   });
 

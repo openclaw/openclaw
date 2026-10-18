@@ -171,7 +171,6 @@ function toWorkerAssistantMessage(message: AssistantMessage): WorkerTranscriptAs
     ...(message.errorCode ? { errorCode: message.errorCode } : {}),
     ...(message.errorType ? { errorType: message.errorType } : {}),
     ...(message.errorBody ? { errorBody: redactWorkerDiagnosticText(message.errorBody) } : {}),
-    ...(message.retryAfterMs === undefined ? {} : { retryAfterMs: message.retryAfterMs }),
     timestamp: message.timestamp,
   };
 }

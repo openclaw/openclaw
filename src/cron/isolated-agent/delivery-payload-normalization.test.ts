@@ -49,8 +49,8 @@ describe("cron canonical speech payload delivery", () => {
     vi.restoreAllMocks();
   });
 
-  it("preserves prepared literal text and direct-delivery ownership", () => {
-    const text = "NO_REPLY";
+  it("preserves direct-delivery ownership while stripping control text", () => {
+    const text = "NO_REPLY\nReport complete.";
     const metadata = {
       tts: { tagged: true as const, text: "The report is complete." },
       channelReplyTransformOwner: {},
@@ -63,7 +63,7 @@ describe("cron canonical speech payload delivery", () => {
     if (normalized.kind !== "deliver") {
       throw new Error("expected visible report after normalization");
     }
-    expect(normalized.payload).toEqual([{ text }]);
+    expect(normalized.payload).toEqual([{ text: "Report complete." }]);
     expect(getReplyPayloadMetadata(normalized.payload[0]!)).toEqual(metadata);
     expect(source.text).toBe(text);
   });

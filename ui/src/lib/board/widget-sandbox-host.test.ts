@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../../../packages/gateway-protocol/src/schema/canvas.ts";
 import type { BoardWidget } from "./types.ts";
 import { BoardWidgetSandboxHost } from "./widget-sandbox-host.ts";
@@ -766,25 +766,14 @@ describe("BoardWidgetSandboxHost", () => {
   it("reloads a deleted and recreated widget without reloading routine ticket renewals", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
-    const sourceUrl = "https://gateway.example/__openclaw__/board/session/weather/index.html";
-    const originalFetch = globalThis.fetch.bind(globalThis);
-    const fetchMock = vi.fn<typeof fetch>(
-      async () => new Response("<!doctype html><p>generation</p>"),
-    );
-    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = input instanceof Request ? input.url : String(input);
-      // Other resources can load in the shared worker while this widget settles.
-      return url.split(/[?#]/u, 1)[0] === sourceUrl
-        ? fetchMock(input, init)
-        : originalFetch(input, init);
-    });
+    const fetchMock = vi.fn(async () => new Response("<!doctype html><p>generation</p>"));
+    vi.stubGlobal("fetch", fetchMock);
     const onLoaded = vi.fn();
     const baseOptions = hostOptions(frame, {
       resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=ticket",
       onLoaded,
     });
     const host = new BoardWidgetSandboxHost(baseOptions);
-    onTestFinished(() => host.dispose());
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
 
@@ -794,13 +783,7 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=renewed-ticket",
     });
     await Promise.resolve();
-    expect(
-      fetchMock,
-      JSON.stringify({
-        requests: fetchMock.mock.calls,
-        frameUrls: vi.mocked(baseOptions.onFrameUrl).mock.calls,
-      }),
-    ).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
 
     host.update({
       ...baseOptions,

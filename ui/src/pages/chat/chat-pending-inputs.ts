@@ -45,6 +45,7 @@ type PendingInputView = {
   before?: number;
   readonly loading: boolean;
   error?: string;
+  revision: number;
   request?: PendingInputRequest;
 };
 const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
@@ -292,6 +293,7 @@ export function applyChatPendingInputs(
       receiptRunIds: [],
       queuedCount: displayPage.queuedCount ?? 0,
       queueBefore: displayPage.nextBefore,
+      revision: 0,
       get loading() {
         return this.request?.kind === "navigation";
       },
@@ -301,6 +303,7 @@ export function applyChatPendingInputs(
     view.queuedInputs = queuedInputs;
     view.queuedCount = displayPage.queuedCount ?? 0;
     view.queueBefore = displayPage.nextBefore;
+    view.revision += 1;
     if (view.request && !ownsPendingInputRequest(state, view, view.request)) {
       view.request = undefined;
     }
@@ -350,6 +353,7 @@ async function requestPendingInputPage(
   const current = () => ownsPendingInputRequest(state, view, request);
   try {
     while (current()) {
+      const revision = view.revision;
       const inputRunIds = readChatInputRunIds(state);
       const result = await client.request<{
         sessionId?: string;
@@ -366,8 +370,10 @@ async function requestPendingInputPage(
       if (!current() || result.sessionId !== view.sessionId) {
         return;
       }
-      // An overlapping live update may leave this page briefly behind; the next
-      // ordinary refresh catches it up without restarting navigation reads.
+      // Coalesce newer custody publications into a fresh read of the same target.
+      if (view.revision !== revision) {
+        continue;
+      }
       const page = reconcilePendingInputPage(state, result.pendingInputs, result.inputReceipts);
       view.queuedInputs = reconcileQueuedInputs(
         view.queuedInputs,

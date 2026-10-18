@@ -16,8 +16,7 @@ export type DashboardPreviewProps = {
   error?: string | null;
 };
 
-export function DashboardPreview(props: DashboardPreviewProps) {
-  let host!: HTMLElement;
+export function DashboardPreviewContent(props: DashboardPreviewProps, host: HTMLElement) {
   const [nearVisible, setNearVisible] = createSignal(false);
   onSettled(() => {
     let active = true;
@@ -35,48 +34,34 @@ export function DashboardPreview(props: DashboardPreviewProps) {
     };
   });
   return (
-    <openclaw-dashboard-preview
-      ref={(element) => {
-        host = element;
-      }}
-    >
-      <Show when={nearVisible()}>
-        <Show
-          when={!props.error}
-          fallback={
-            <div class="dashboard-preview__error">
-              {t("dashboardDocument.loadFailed", { error: props.error ?? "" })}
-            </div>
-          }
-        >
-          <>
-            {createErrorBoundary(
-              () => (
-                <Loading>
-                  <BoardDocument
-                    passive={true}
-                    gatewaySnapshot={props.gatewaySnapshot}
-                    preparedSession={{ sessionKey: props.sessionKey ?? "", agentId: props.agentId }}
-                  />
-                </Loading>
-              ),
-              (error) => (
-                <div class="dashboard-preview__error">
-                  {t("dashboardDocument.loadFailed", { error: formatUiError(error()) })}
-                </div>
-              ),
-            )}
-          </>
-        </Show>
+    <Show when={nearVisible()}>
+      <Show
+        when={!props.error}
+        fallback={
+          <div class="dashboard-preview__error">
+            {t("dashboardDocument.loadFailed", { error: props.error ?? "" })}
+          </div>
+        }
+      >
+        <>
+          {createErrorBoundary(
+            () => (
+              <Loading>
+                <BoardDocument
+                  passive={true}
+                  gatewaySnapshot={props.gatewaySnapshot}
+                  preparedSession={{ sessionKey: props.sessionKey ?? "", agentId: props.agentId }}
+                />
+              </Loading>
+            ),
+            (error) => (
+              <div class="dashboard-preview__error">
+                {t("dashboardDocument.loadFailed", { error: formatUiError(error()) })}
+              </div>
+            ),
+          )}
+        </>
       </Show>
-    </openclaw-dashboard-preview>
+    </Show>
   );
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-dashboard-preview": HTMLAttributes<HTMLElement>;
-    }
-  }
 }

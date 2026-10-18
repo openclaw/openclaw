@@ -1562,7 +1562,6 @@
       "sql": "(\"source\" IN ('state', 'model', 'operator'))"
     }
   ],
-  "triggers": [],
   "preData": [
     0,
     6963

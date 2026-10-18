@@ -2,7 +2,6 @@
  * Shared WebSocket connection fixtures for gateway server tests.
  */
 import { EventEmitter } from "node:events";
-import type { Socket } from "node:net";
 import { expect, vi } from "vitest";
 import type { WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
@@ -106,7 +105,6 @@ export function attachGatewayWsForTest(params: {
   host?: string;
   options?: Partial<AttachGatewayWsConnectionParams>;
   prepareIngressAttribution?: typeof prepareGatewayIngressAttribution;
-  requestSocket?: Socket;
   socket?: GatewayWsTestSocket;
   trustedProxies?: string[];
 }) {
@@ -120,25 +118,19 @@ export function attachGatewayWsForTest(params: {
   const transportEvents = new EventEmitter();
   const upgradeReq = {
     headers: { host: params.host ?? "127.0.0.1:19001", ...params.headers },
-    socket:
-      params.requestSocket ??
-      Object.assign(transportEvents, {
-        cork: vi.fn(),
-        uncork: vi.fn(),
-        remoteAddress: socket["_socket"].remoteAddress,
-        localAddress: socket["_socket"].localAddress,
-        localPort: socket["_socket"].localPort,
-        timeout: 0,
-        timeoutTimer: undefined as ReturnType<typeof setTimeout> | undefined,
-        setTimeout(ms: number) {
-          clearTimeout(this.timeoutTimer);
-          this.timeout = ms;
-          this.timeoutTimer = ms
-            ? setTimeout(() => transportEvents.emit("timeout"), ms)
-            : undefined;
-          return this;
-        },
-      }),
+    socket: Object.assign(transportEvents, {
+      remoteAddress: socket["_socket"].remoteAddress,
+      localAddress: socket["_socket"].localAddress,
+      localPort: socket["_socket"].localPort,
+      timeout: 0,
+      timeoutTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+      setTimeout(ms: number) {
+        clearTimeout(this.timeoutTimer);
+        this.timeout = ms;
+        this.timeoutTimer = ms ? setTimeout(() => transportEvents.emit("timeout"), ms) : undefined;
+        return this;
+      },
+    }),
   };
   (params.prepareIngressAttribution ?? prepareGatewayIngressAttribution)({
     req: upgradeReq as never,

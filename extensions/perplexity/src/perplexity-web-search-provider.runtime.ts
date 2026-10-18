@@ -387,14 +387,14 @@ export async function executePerplexitySearch(
       : {
           transport: runtime.transport,
           count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-          country,
+          country: country ?? undefined,
           searchDomainFilter: domainFilter,
           searchRecencyFilter: freshness,
           searchLanguageFilter: language ? [language] : undefined,
           searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
           searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
-          maxTokens,
-          maxTokensPerPage,
+          maxTokens: maxTokens ?? undefined,
+          maxTokensPerPage: maxTokensPerPage ?? undefined,
         }),
   });
   const resultFields = Array.isArray(result)

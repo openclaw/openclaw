@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "./test-helpers/service-audit-mocks.js";
 import {
-  auditGatewayServiceConfig as inspectGatewayServiceConfig,
+  auditGatewayServiceConfig,
   checkTokenDrift,
   needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES as codes,
@@ -17,24 +17,10 @@ import {
   resolveBunRuntimeInfoMock,
   resolveNodeRuntimeInfoMock,
 } from "./test-helpers/service-audit-fixtures.js";
-import { seedCompletedRuntimePinMigration } from "./test-helpers/service-audit-runtime-pin.js";
 
-type AuditOptions = Parameters<typeof inspectGatewayServiceConfig>[0];
+type AuditOptions = Parameters<typeof auditGatewayServiceConfig>[0];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let runtimePinStateDir: string;
-beforeEach(() => {
-  resetServiceAuditMocks();
-  runtimePinStateDir = tempDirs.make("service-audit-runtime-pin-");
-});
-
-async function auditGatewayServiceConfig(options: AuditOptions) {
-  const env = {
-    ...options.env,
-    OPENCLAW_STATE_DIR: options.env.OPENCLAW_STATE_DIR ?? runtimePinStateDir,
-  };
-  await seedCompletedRuntimePinMigration(env);
-  return inspectGatewayServiceConfig({ ...options, env });
-}
+beforeEach(resetServiceAuditMocks);
 
 function audit(
   command: Partial<NonNullable<AuditOptions["command"]>> = {},
@@ -61,19 +47,6 @@ function minimalPath(platform: NodeJS.Platform, env: AuditOptions["env"]) {
 }
 
 describe("auditGatewayServiceConfig runtime", () => {
-  it("reports pending pin migration without recommending a different runtime", async () => {
-    const result = await inspectGatewayServiceConfig({
-      env: { HOME: runtimePinStateDir, OPENCLAW_STATE_DIR: runtimePinStateDir },
-      platform: "linux",
-      command: {
-        programArguments: ["/home/user/.nvm/versions/node/v24.21.0/bin/node", "gateway"],
-      },
-    });
-    expect(result.runtimeNote).toBe("Runtime pin migration pending; run openclaw doctor.");
-    expect(hasIssue(result, codes.gatewayRuntimeNodeVersionManager)).toBe(false);
-    expect(hasIssue(result, codes.gatewayRuntimeNodeSystemMissing)).toBe(false);
-  });
-
   const auditBun = () =>
     audit({ programArguments: ["/opt/homebrew/bin/bun", "gateway"] }, { platform: "darwin" });
 
@@ -82,7 +55,7 @@ describe("auditGatewayServiceConfig runtime", () => {
     async (sqliteSelectionError) => {
       const sqliteVersion = sqliteSelectionError ? null : "3.51.2";
       resolveBunRuntimeInfoMock.mockResolvedValue({
-        version: sqliteSelectionError ? "1.4.3" : "1.4.0",
+        version: sqliteSelectionError ? "1.4.2" : "1.4.0",
         sqliteVersion,
         sqliteProbe: {
           available: !sqliteSelectionError,
@@ -99,9 +72,7 @@ describe("auditGatewayServiceConfig runtime", () => {
       expect(result.issues).toContainEqual(
         expect.objectContaining({
           code: codes.gatewayRuntimeBun,
-          message: expect.stringContaining(
-            "Bun 1.4.3+ with WAL-reset-safe node:sqlite is required",
-          ),
+          message: expect.stringContaining("Bun 1.4+ with WAL-reset-safe node:sqlite is required"),
           detail: sqliteSelectionError
             ? `/opt/homebrew/bin/bun: ${sqliteSelectionError}`
             : "/opt/homebrew/bin/bun",
@@ -168,7 +139,7 @@ describe("auditGatewayServiceConfig runtime", () => {
     const result = await audit({ environment: undefined }, { timeoutMs: 1234 });
     expect(resolveNodeRuntimeInfoMock).toHaveBeenCalledWith(
       "/usr/bin/node",
-      { HOME: "/tmp", OPENCLAW_STATE_DIR: runtimePinStateDir },
+      { HOME: "/tmp" },
       1234,
     );
     expect(result.issues).toContainEqual(
@@ -420,7 +391,7 @@ describe("auditGatewayServiceConfig systemd", () => {
     manager(["LoadState=loaded", ...effective]);
     expect(systemdCodes(await auditUnit(321))).toEqual(expected);
     expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
-      { ...env(), OPENCLAW_STATE_DIR: runtimePinStateDir },
+      env(),
       [
         "show",
         "openclaw-audit.service",

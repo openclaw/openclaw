@@ -105,7 +105,6 @@ describe("runEmbeddedAgentEntry", () => {
               ? {
                   finalAssistantVisibleText: "fallback complete",
                   finalAssistantRawText: "fallback complete",
-                  terminalReply: { disposition: "visible", text: "fallback complete" },
                   executionTrace: {
                     winnerProvider: provider,
                     winnerModel: model,
@@ -613,7 +612,6 @@ describe("runEmbeddedAgentEntry", () => {
             meta: {
               finalAssistantVisibleText: "done",
               finalAssistantRawText: "done",
-              terminalReply: { disposition: "visible", text: "done" },
               agentMeta: {
                 sessionId: "session-1",
                 provider,
@@ -649,19 +647,13 @@ describe("runEmbeddedAgentEntry", () => {
       name: "CLI delivered source reply",
       meta: { finalAssistantRawText: "NO_REPLY" },
       sourceReplyDelivered: true as const,
-      expected: { disposition: "silent" as const },
+      expected: { disposition: "silent" },
     },
     {
       name: "final internal source reply after silence",
       meta: { finalAssistantRawText: "NO_REPLY" },
       sourceReplies: [{ text: "forward this reply", sourceReplyFinal: true }],
-      expected: { disposition: "visible" as const, text: "forward this reply" },
-    },
-    {
-      name: "prepared visible literal NO_REPLY",
-      meta: { finalAssistantRawText: "NO_REPLY\nNO_REPLY" },
-      sourceReplies: [{ text: "NO_REPLY", sourceReplyFinal: true }],
-      expected: { disposition: "visible" as const, text: "NO_REPLY" },
+      expected: { disposition: "visible", text: "forward this reply" },
     },
   ])(
     "records the producer-owned terminal snapshot for $name",
@@ -684,7 +676,6 @@ describe("runEmbeddedAgentEntry", () => {
           meta: {
             ...makeResult({ provider, model }).meta,
             ...meta,
-            terminalReply: expected,
             agentMeta: Object.assign(
               {
                 sessionId: sourceReplyDelivered ? "native-cli-session" : "session-1",

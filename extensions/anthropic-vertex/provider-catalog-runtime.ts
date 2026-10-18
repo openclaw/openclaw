@@ -14,7 +14,10 @@ export function mergeImplicitAnthropicVertexProvider(params: {
   return {
     ...implicit,
     ...existing,
-    models: existing.models?.length ? existing.models : implicit.models,
+    models:
+      Array.isArray(existing.models) && existing.models.length > 0
+        ? existing.models
+        : implicit.models,
   };
 }
 

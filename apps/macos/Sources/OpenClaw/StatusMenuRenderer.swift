@@ -197,11 +197,7 @@ final class StatusMenuRenderer: NSObject {
         switch content.kind {
         case .header:
             Self.configureHostedView(
-                item,
-                rootView: StatusMenuHeaderView(
-                    state: self.state,
-                    isSleeping: self.isSleeping,
-                    onCheckForUpdates: self.onInstallUpdate))
+                item, rootView: StatusMenuHeaderView(state: self.state, isSleeping: self.isSleeping))
         case let .session(row):
             StatusMenuSessions.shared.configureSessionItem(item, row: row)
         case let .approval(request):

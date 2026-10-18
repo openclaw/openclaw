@@ -11,7 +11,6 @@ import type {
   ActivateSetupInferenceResult,
   VerifySetupInferenceResult,
 } from "../../system-agent/setup-inference.js";
-import type { WizardProgress } from "../../wizard/prompts.js";
 import type { GatewayRequestContext } from "./types.js";
 
 // Hosted setup must reject a failing sub-step without exiting the Gateway.
@@ -87,25 +86,16 @@ export async function verifyGatewaySetupInference(params: {
 }
 
 export async function activateGatewaySetupInference(
-  params: Omit<ActivateSetupInferenceParams, "onActivationCompletion" | "onActivationStarted">,
+  params: Omit<ActivateSetupInferenceParams, "onActivationCompletion">,
 ): Promise<ActivateSetupInferenceResult> {
   let complete: (() => Promise<boolean>) | undefined;
   let restartRequired: boolean | undefined;
-  let activationProgress: WizardProgress | undefined;
   let result: ActivateSetupInferenceResult;
   try {
     result = await runSystemAgentGatewayTask(async () => {
       const { activateSetupInference } = await import("../../system-agent/setup-inference.js");
       return activateSetupInference({
         ...params,
-        onActivationStarted: () => {
-          const message = "Turning on your AI connection…";
-          if (activationProgress) {
-            activationProgress.update(message);
-          } else {
-            activationProgress = params.prompter?.progress(message);
-          }
-        },
         onActivationCompletion: (completion) => {
           complete = completion;
         },
@@ -113,11 +103,7 @@ export async function activateGatewaySetupInference(
     });
   } finally {
     // Reload drains setup's queue. Keep the admitted request through application and recovery.
-    try {
-      restartRequired = await complete?.();
-    } finally {
-      activationProgress?.stop();
-    }
+    restartRequired = await complete?.();
   }
   return result.ok && restartRequired ? { ...result, gatewayRestartRequired: true } : result;
 }

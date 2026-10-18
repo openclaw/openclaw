@@ -19,11 +19,14 @@ export async function storeSessionLearning(params: {
   sessionKey: string;
   learning: string;
 }): Promise<void> {
-  const store = getMSTeamsRuntime().state.openKeyedStoreV2<FeedbackLearningEntry>({
+  const store = getMSTeamsRuntime().state.openKeyedStore<FeedbackLearningEntry>({
     namespace: LEARNINGS_NAMESPACE,
     maxEntries: MAX_LEARNING_ENTRIES,
   });
   const key = learningStoreKey(params.storePath, params.sessionKey);
+  if (!store.observe || !store.compareAndApply) {
+    throw new Error("plugin state atomic comparison is unavailable");
+  }
   const prepared = {
     sessionKey: params.sessionKey,
     learning: params.learning,

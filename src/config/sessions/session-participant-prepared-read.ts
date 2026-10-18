@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { SessionParticipantProjection } from "./session-membership-facts.types.js";
 
@@ -13,7 +14,12 @@ export function withPreparedSessionParticipants<T>(read: ParticipantRead, consum
   const previous = preparedRead;
   preparedRead = read;
   try {
-    return consume();
+    const value = consume();
+    if (isPromiseLike(value)) {
+      void Promise.resolve(value).catch(() => {});
+      throw new Error("Prepared participant consumers must remain synchronous");
+    }
+    return value;
   } finally {
     preparedRead = previous;
   }

@@ -1,4 +1,3 @@
-import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
 import { createEffect, createMemo, createSignal, Show, untrack } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
@@ -9,11 +8,12 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
-import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
+import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
+import { LitContent, solidContent, emptyLegacyContent } from "../../lit/solid-content.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
@@ -31,18 +31,16 @@ import { ComposerQueue } from "./components/chat-composer-regions.tsx";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
-import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
-import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
-import { ChatSessionSuggestions } from "./components/chat-session-suggestions.solid.tsx";
-import { ChatSwarmProgress } from "./components/chat-swarm-progress.solid.tsx";
-import { ChatTaskSuggestionTray } from "./components/chat-task-suggestions.tsx";
+import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
+import { renderChatSelectionAnnotations } from "./components/chat-selection-annotations.ts";
+import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
+import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
+import { renderChatTaskSuggestionTray } from "./components/chat-task-suggestions.ts";
 import {
-  getTranscriptState,
-  closeTranscriptSearch,
+  renderTranscriptSearch,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
-import { TranscriptSearch } from "./components/chat-transcript-search.tsx";
 import "../../components/resizable-divider.ts";
 export type { ChatProps } from "./chat-view-frame.ts";
 
@@ -112,35 +110,40 @@ function ChatFooterContent(input: ChatViewInput) {
         </div>
       </Show>
       <Show when={!input.props.detailsEnabled}>
-        <ChatPullRequests
-          pullRequests={input.props.pullRequests ?? []}
-          gateway={input.props.pullRequestsGateway}
-          sessionId={input.props.pullRequestsSessionId}
-          sessionKey={scopedSessionArtifactKey(
-            input.props.sessionKey,
-            input.props.currentAgentId ?? undefined,
-          )}
-          presented={input.props.presented ?? true}
-          branch={input.props.pullRequestsBranch}
-          branchDismissed={input.props.pullRequestsBranchDismissed}
-          status={input.props.pullRequestsStatus ?? "ready"}
-          onDismiss={(pullRequest) => input.props.onDismissPullRequest?.(pullRequest)}
-          onDismissBranch={input.props.onDismissPullRequestsBranch}
-          onOpenSessionDiff={input.props.onOpenSessionDiff}
-          publication={input.props.githubPublication}
+        <LitContent
+          value={renderChatPullRequests({
+            pullRequests: input.props.pullRequests ?? [],
+            gateway: input.props.pullRequestsGateway,
+            sessionId: input.props.pullRequestsSessionId,
+            sessionKey: scopedSessionArtifactKey(
+              input.props.sessionKey,
+              input.props.currentAgentId ?? undefined,
+            ),
+            presented: input.props.presented ?? true,
+            branch: input.props.pullRequestsBranch,
+            branchDismissed: input.props.pullRequestsBranchDismissed,
+            status: input.props.pullRequestsStatus ?? "ready",
+            onDismiss: (pullRequest) => input.props.onDismissPullRequest?.(pullRequest),
+            onDismissBranch: input.props.onDismissPullRequestsBranch,
+            onOpenSessionDiff: input.props.onOpenSessionDiff,
+            publication: input.props.githubPublication,
+          })}
         />
       </Show>
-      <ChatSessionSuggestions
-        suggestions={input.props.sessionSuggestions ?? []}
-        role={input.props.sessionSuggestionRole}
-        busyIds={input.props.sessionSuggestionBusyIds ?? new Set()}
-        archived={input.props.sessionSuggestionsArchived === true}
-        canResolve={input.props.canResolveSessionSuggestions === true}
-        onResolve={(suggestion, resolution) =>
-          input.props.onResolveSessionSuggestion?.(suggestion, resolution)
-        }
+      <LitContent
+        value={renderChatSessionSuggestions({
+          suggestions: input.props.sessionSuggestions ?? [],
+          role: input.props.sessionSuggestionRole,
+          busyIds: input.props.sessionSuggestionBusyIds ?? new Set(),
+          archived: input.props.sessionSuggestionsArchived === true,
+          canResolve: input.props.canResolveSessionSuggestions === true,
+          onResolve: (suggestion, resolution) =>
+            input.props.onResolveSessionSuggestion?.(suggestion, resolution),
+        })}
       />
-      <Show when={input.props.swarm}>{(swarm) => <ChatSwarmProgress {...swarm()} />}</Show>
+      <Show when={input.props.swarm}>
+        <LitContent value={renderChatSwarmProgress(input.props.swarm!)} />
+      </Show>
       <Show when={input.application}>
         <openclaw-plugin-contributions
           prop:kind="composer"
@@ -197,14 +200,11 @@ function ChatComposerCompanion(input: ChatViewInput) {
         }
       />
       <Show when={!input.props.suggestionComposer}>
-        <ChatSelectionAnnotations {...input.props} disabled={!input.props.canSend} />
+        <LitContent
+          value={renderChatSelectionAnnotations({ ...input.props, disabled: !input.props.canSend })}
+        />
       </Show>
-      <Show when={input.props.composerRecovery}>
-        {(recovery) => {
-          const Recovery = dynamic(() => recovery().component);
-          return <Recovery {...recovery()} />;
-        }}
-      </Show>
+      <LitContent value={input.props.composerRecovery ?? emptyLegacyContent} />
     </div>
   );
 }
@@ -236,18 +236,35 @@ function ChatSurface(input: {
   view: Component<ChatViewInput>;
   companion?: Component<ChatViewInput>;
 }) {
+  const app = useOptionalApplication();
+  const runtime = projectSource(app?.plugins, {
+    read: (source) => source,
+    subscribe: (source, publish) => source?.subscribe(publish) ?? (() => {}),
+    equality: "revision",
+  });
+  const selected = createMemo(() =>
+    runtime.read()?.selectedReplacement(input.binding["prop:surface"]),
+  );
   return (
-    <PluginSurface
-      surface={input.binding["prop:surface"]}
-      props={input.binding["prop:props"]}
-      presented={input.viewProps.presented}
-      renderDefault={() => <ChatSurfaceContent view={input.view} viewProps={input.viewProps} />}
-      renderCompanion={() => (
-        <Show when={input.companion} keyed>
-          {(View) => <ChatSurfaceContent view={View} viewProps={input.viewProps} />}
-        </Show>
-      )}
-    />
+    <Show when={selected()} fallback={<input.view {...input.viewProps} />}>
+      <openclaw-plugin-view
+        {...input.binding}
+        prop:presented={input.viewProps.presented}
+        data-plugin-composer={input.binding["prop:surface"] === "composer" ? "" : undefined}
+        prop:defaultView={solidContent(ChatSurfaceContent, {
+          view: input.view,
+          viewProps: input.viewProps,
+        })}
+        prop:replacementCompanion={
+          input.companion
+            ? solidContent(ChatSurfaceContent, {
+                view: input.companion,
+                viewProps: input.viewProps,
+              })
+            : undefined
+        }
+      />
+    </Show>
   );
 }
 
@@ -314,6 +331,7 @@ function ChatContent(input: { props: ChatProps }) {
       </button>
     </div>
   );
+  const taskSuggestionTray = createMemo(() => renderChatTaskSuggestionTray(input.props));
   return (
     <section
       class={["chat", { "chat--bubbles": input.props.chatBubbleMode }]}
@@ -383,16 +401,8 @@ function ChatContent(input: { props: ChatProps }) {
                     prop:presented={presented()}
                   />
                 </Show>
-                <TranscriptSearch
-                  revision={frame()}
-                  state={getTranscriptState(input.props.paneId)}
-                  requestUpdate={frame().requestUpdate}
-                  onClose={() =>
-                    closeTranscriptSearch(
-                      getTranscriptState(input.props.paneId),
-                      frame().requestUpdate,
-                    )
-                  }
+                <LitContent
+                  value={renderTranscriptSearch(input.props.paneId, frame().requestUpdate)}
                 />
                 <div class="chat-main__conversation-frame">
                   <div
@@ -441,7 +451,7 @@ function ChatContent(input: { props: ChatProps }) {
                     </Show>
                     <Show
                       when={
-                        input.props.detailsEnabled || (input.props.taskSuggestions?.length ?? 0) > 0
+                        input.props.detailsEnabled || taskSuggestionTray() !== emptyLegacyContent
                       }
                     >
                       <div
@@ -455,7 +465,7 @@ function ChatContent(input: { props: ChatProps }) {
                             <ChatTopbarNotices {...input.props} />
                           </Show>
                         </div>
-                        <ChatTaskSuggestionTray view={input.props} />
+                        <LitContent value={taskSuggestionTray()} />
                       </div>
                     </Show>
                     <div class="chat-footer">

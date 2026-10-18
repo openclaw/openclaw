@@ -22,7 +22,6 @@ import {
   seedHeartbeatScratchForTest,
   seedMainSessionStore,
   setHeartbeatAgentTurnStatus,
-  setHeartbeatSilentCompletion,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 import { isRetryableHeartbeatSkipReason } from "./heartbeat-wake.js";
@@ -300,10 +299,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   it("recalculates isolated runtime instructions and suppresses a quiet text fallback", async () => {
     await withHeartbeat(
       async ({ replySpy, run, sendTelegram }) => {
-        replySpy.mockImplementation(async (_ctx, options) => {
-          setHeartbeatSilentCompletion(options);
-          return undefined;
-        });
+        replySpy.mockResolvedValue({ text: SILENT_REPLY_TOKEN });
         expect((await run()).status).toBe("ran");
         expectToolPrompt(replySpy);
         const context = replySpy.mock.calls[0]?.[0];

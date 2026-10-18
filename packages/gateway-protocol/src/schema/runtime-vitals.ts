@@ -1,12 +1,17 @@
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 /** Process observations shared by health snapshots and host resource polling. */
 export const GatewayEventLoopHealthSchema = closedObject({
   degraded: Type.Boolean(),
   degradedSinceMs: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
-  reasons: Type.Array(stringLiteralUnion(["event_loop_delay", "event_loop_utilization", "cpu"])),
+  reasons: Type.Array(
+    Type.Union([
+      Type.Literal("event_loop_delay"),
+      Type.Literal("event_loop_utilization"),
+      Type.Literal("cpu"),
+    ]),
+  ),
   intervalMs: Type.Number({ minimum: 0 }),
   delayP99Ms: Type.Number({ minimum: 0 }),
   delayMaxMs: Type.Number({ minimum: 0 }),

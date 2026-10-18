@@ -147,18 +147,12 @@ capture; they do not replace it with already migrated state. State-directory
 relocation leaves its original location and recorded paths intact.
 Continuation verifies the recorded live updater's process identity and ancestry;
 unreadable supervisors above that updater do not prevent its Doctor from reusing the capture.
-If ancestry cannot be verified through the live updater, Doctor defers maintenance
-with a warning and directs you to `openclaw update repair`. A verified update
-stays installed; this process-inspection failure does not trigger rollback.
 Inherited control-plane and managed-helper runs retain their existing capture
 behavior. Standalone `doctor --fix` preserves a separate pre-repair copy; that
 copy does not replace an earlier update's originals. Standalone `doctor --fix`
 snapshots databases under its own maintenance custody with a single isolated backup worker.
 Shared database families larger than 64 MiB keep discovery copies in an isolated process
 so a slow copy does not block Doctor's main thread from processing cancellation.
-Official image activation keeps one such copy per container: after a capture
-succeeds, later starts of the same container skip the repeated full copy, keep
-that copy, and still retire other expired Doctor captures.
 Standalone Doctor captures are retained for 30 days: the next standalone `doctor --fix`
 retires older sealed Doctor captures and reports each removal; incomplete captures
 and update captures are never retired automatically, so take a verified backup
@@ -178,13 +172,7 @@ during capture; an observed change leaves the capture incomplete and produces a
 warning. For databases, the warning names each database that changed after its
 snapshot or had no stable generation during it, followed by the backup's
 database warnings. A running Gateway that writes during capture is enough to
-cause this. Capture is best effort: when it fails, the update warns that it
-continues without the original-state capture, names the step and source paths
-that failed (for example, database generation verification), and proceeds.
-Database rollback uses the pre-migration snapshots the update takes after the
-Gateway stops, described in
-[Recovery limits](/cli/update/how-updates-run#recovery-limits).
-The set is not an atomic snapshot across active stores. Missing,
+cause this. The set is not an atomic snapshot across active stores. Missing,
 unreadable, or incomplete captures do not establish a safe
 rollback point. The updater process keeps optional debug-proxy persistence
 disabled because its update history can use an older database schema. Doctor
@@ -493,13 +481,9 @@ named work through its owning terminal or service, then retry; do not delete the
 lease database. Repair retains unreadable helper paths in its census instead of
 assuming their work has stopped.
 
-On Windows, run repair as the same Windows account that started the update and
-preserve its profile and state overrides. New handoffs record the launching account's
-SID in update history. When that SID matches, processes that deny access entirely cannot be children
-of the handoff, which never elevates its children; unrelated protected processes
-do not block repair. Positive process ancestry or retained-artifact references
-still block repair. Older handoffs without a recorded SID, or repair from a different
-or unverified account, retain the conservative refusal for unreadable processes.
+On Windows, identifying foreign process owners can require Administrator privileges.
+If repair requests elevation, use the same Windows account and preserve the failed
+update's profile and state overrides. Unknown ownership remains unverified.
 
 When no rollback step is recorded, repair uses ordinary current-installation
 finalization and records a handoff settlement in update history before releasing
@@ -923,8 +907,7 @@ cleanup and remains gated on a compatible serving bridge. Its descriptor policy
 and release-generation inventory record ownership without deleting directories
 or snapshots. They do not make immutable releases eligible for `update cleanup`; see the
 [immutable release-retention inventory](/reference/database-schemas/layout#immutable-release-retention-inventory).
-Doctor's `<database>.pre-startup-migration-<id>.bak` groups, including their
-`.scoped.bak` members, become eligible only
+Doctor's `<database>.pre-startup-migration-<id>.bak` groups become eligible only
 after Doctor verifies migration completion and update history records a successful
 update that started later. Until then they appear as protected. Changed or
 unrecorded backups remain protected or blocked; cleanup never infers permission

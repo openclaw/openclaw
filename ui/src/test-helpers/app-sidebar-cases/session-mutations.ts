@@ -26,7 +26,7 @@ import {
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../modal-dialog.ts";
-import { menuItemLabels, openSubmenu, selectMenuValue } from "../session-menu.ts";
+import { menuItem, menuItemLabels } from "../session-menu.ts";
 import { sessionOwnerProfiles } from "../session-owner-menu.ts";
 import { waitForFast } from "../wait-for.ts";
 
@@ -165,7 +165,7 @@ describe("AppSidebar session mutation feedback", () => {
 
     // The filtered roster changes before rendering; the primary roster keeps its old row.
     publish([current]);
-    await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
+    menu.querySelector<HTMLElement>(actionSelector)!.click();
     expect(run.mock.calls.length).toBe(1);
     expect(run.mock.calls[0]![0].sessionKey).toBe(row.key);
     expect(run.mock.calls[0]![0].session).toEqual(current);
@@ -173,7 +173,7 @@ describe("AppSidebar session mutation feedback", () => {
 
     menu = await openMenu();
     publish([{ ...current, hasActiveRun: true }]);
-    await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
+    menu.querySelector<HTMLElement>(actionSelector)!.click();
     expect(run.mock.calls.length).toBe(1);
     await waitForFast(() => expect(toast.textContent).toContain("Reopen the session menu."));
   });
@@ -188,7 +188,7 @@ describe("AppSidebar session mutation feedback", () => {
       const toast = await mountToastHost();
       const menu = await openMenu();
       publish(rows);
-      await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
+      menu.querySelector<HTMLElement>(actionSelector)!.click();
       expect(run.mock.calls.length).toBe(0);
       await waitForFast(() => expect(toast.textContent).toContain("Reopen the session menu."));
       toast.remove();
@@ -314,15 +314,22 @@ describe("AppSidebar session mutation feedback", () => {
     const menu = await openSessionMenu(sidebar, row.key);
     await waitForFast(() => expect(menu.textContent).toContain("Bob"));
     expect(menuItemLabels(menu)).toContain("Assign to…");
-    const assignmentMenu = await openSubmenu(menu, "Assign to…");
+    const assignmentMenu = menuItem(menu, "Assign to…");
     await waitForFast(() =>
       expect(
-        Array.from(assignmentMenu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')).map(
-          (item) => item.querySelector(".session-menu__text")?.textContent?.trim(),
-        ),
+        Array.from(
+          assignmentMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[slot="submenu"]') ?? [],
+        ).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
       ).toEqual(["Me", "Bob"]),
     );
-    await selectMenuValue(menu, "assign-owner:human:profile-bob");
+    menu.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: {
+          item: menu.querySelector('wa-dropdown-item[value="assign-owner:human:profile-bob"]')!,
+        },
+      }),
+    );
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledWith("sessions.assignOwner", {
@@ -340,8 +347,15 @@ describe("AppSidebar session mutation feedback", () => {
 
     const selfMenu = await openSessionMenu(sidebar, row.key);
     await waitForFast(() => expect(menuItemLabels(selfMenu)).toContain("Assign to…"));
-    await openSubmenu(selfMenu, "Assign to…");
-    await selectMenuValue(selfMenu, "assign-owner:human:profile-ada");
+    const selfItem = selfMenu.querySelector<HTMLElement>(
+      ':scope > wa-dropdown > wa-dropdown-item wa-dropdown-item[slot="submenu"][value="assign-owner:human:profile-ada"]',
+    );
+    selfMenu.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: selfItem },
+      }),
+    );
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request).toHaveBeenNthCalledWith(2, "sessions.assignOwner", {
@@ -668,8 +682,7 @@ describe("AppSidebar session mutation feedback", () => {
       },
     });
     const menu = await openSessionMenu(sidebar, "agent:main:a");
-    await openSubmenu(menu, "Advanced");
-    await selectMenuValue(menu, "delete");
+    menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
     await waitForFast(() => expect(harness.deleteSession).toHaveBeenCalledOnce());
 

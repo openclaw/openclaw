@@ -12,7 +12,7 @@ import {
 import { resolveIncompleteTurnPayloadText } from "./incomplete-turn-resolution.js";
 
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
-  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current state; do not restart from scratch.";
+  "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 
@@ -58,7 +58,7 @@ describe("incomplete-turn recovery policy", () => {
     { terminalReplyExpectation: "optional", owner: "active lifecycle item" },
     { terminalReplyExpectation: "optional", owner: "unfinished lifecycle item" },
   ] as const)(
-    "honors silence without cancelling $owner (reply=$terminalReplyExpectation)",
+    "keeps $owner out of completed silence (reply=$terminalReplyExpectation)",
     ({ terminalReplyExpectation, owner }) => {
       const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
       const attempt = makeEmbeddedRunnerAttempt({
@@ -77,17 +77,16 @@ describe("incomplete-turn recovery policy", () => {
         currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
       });
       const state = { payloadCount: 0, aborted: false, timedOut: false, attempt };
-      // Outward silence does not prove delivery or authorize replaying pending work.
+      // Silence must not steal completion ownership from background work. Nor
+      // may it trigger a replay or a spurious warning while that owner continues.
       expect(
         shouldTreatEmptyAssistantReplyAsSilent({
           ...state,
           allowEmptyAssistantReplyAsSilent: true,
           terminalReplyExpectation,
         }),
-      ).toBe(true);
-      expect(
-        resolveEmptyResponseRetryInstruction({ ...state, replyDeliveryState: "missing" }),
-      ).toBeNull();
+      ).toBe(false);
+      expect(resolveEmptyResponseRetryInstruction(state)).toBeNull();
       expect(resolveIncompleteTurnPayloadText({ ...state, externalAbort: false })).toBeNull();
     },
   );
@@ -95,7 +94,6 @@ describe("incomplete-turn recovery policy", () => {
   it.each([
     { name: "visible terminal stop", text: "The final answer.", stopReason: "stop" },
     { name: "failed terminal sentinel", text: "NO_REPLY", stopReason: "error" },
-    { name: "media-bearing sentinel", text: "NO_REPLY\nMEDIA:/tmp/image.png", stopReason: "stop" },
     { name: "aborted terminal sentinel", text: "NO_REPLY", stopReason: "aborted" },
   ] as const)("does not revive earlier silence after $name", ({ text, stopReason }) => {
     const assistant = emptyAssistant({ content: [{ type: "text", text }], stopReason });
@@ -120,27 +118,8 @@ describe("incomplete-turn recovery policy", () => {
           timedOut: false,
           attempt,
         }),
-      ).toBe("No answer was returned. Ask again if you still need one.");
+      ).toContain("couldn't generate a response");
     }
-  });
-
-  it("does not treat a tool-call preamble as a silent final", () => {
-    const assistant = emptyAssistant({
-      stopReason: "toolUse",
-      content: [
-        { type: "text", text: "NO_REPLY" },
-        { type: "toolCall", id: "send", name: "message", arguments: {} },
-      ],
-    });
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt: emptyAttempt(assistant),
-      }),
-    ).toBe(false);
   });
 
   it.each([
@@ -175,7 +154,6 @@ describe("incomplete-turn recovery policy", () => {
           provider,
           modelId,
           modelApi,
-          replyDeliveryState: "missing",
           payloadCount: 0,
           aborted: false,
           timedOut: false,
@@ -194,7 +172,6 @@ describe("incomplete-turn recovery policy", () => {
       resolveEmptyResponseRetryInstruction({
         provider: "openai",
         modelId: "gpt-5.4",
-        replyDeliveryState: "missing",
         payloadCount: 0,
         aborted: false,
         timedOut: false,

@@ -1523,18 +1523,19 @@ extension GatewayChannelActor {
         {
             return error
         }
-        if error is URLError,
-           let failure = (self.session as? GatewayTLSFailureProviding)?.consumeLastTLSFailure()
-        {
-            return GatewayTLSValidationError(failure: failure, context: context)
+        if let urlError = error as? URLError {
+            if let failure = (self.session as? GatewayTLSFailureProviding)?.consumeLastTLSFailure() {
+                return GatewayTLSValidationError(failure: failure, context: context)
+            }
+            let desc = urlError.localizedDescription.isEmpty ? "cancelled" : urlError.localizedDescription
+            return NSError(
+                domain: URLError.errorDomain,
+                code: urlError.errorCode,
+                userInfo: [NSLocalizedDescriptionKey: "\(context): \(desc)"])
         }
         let ns = error as NSError
-        let fallback = error is URLError ? "cancelled" : "unknown"
-        let desc = ns.localizedDescription.isEmpty ? fallback : ns.localizedDescription
-        var userInfo = ns.userInfo
-        // Keep the producer's causal chain and metadata; only presentation gains context.
-        userInfo[NSLocalizedDescriptionKey] = "\(context): \(desc)"
-        return NSError(domain: ns.domain, code: ns.code, userInfo: userInfo)
+        let desc = ns.localizedDescription.isEmpty ? "unknown" : ns.localizedDescription
+        return NSError(domain: ns.domain, code: ns.code, userInfo: [NSLocalizedDescriptionKey: "\(context): \(desc)"])
     }
 
     private func encodeRequest(

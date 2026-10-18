@@ -157,12 +157,7 @@ describe("loaded-only systemd runtime", () => {
       const runtime = await observation;
       expect(runtime).toMatchObject({
         status: "running",
-        systemd: {
-          scope: "system",
-          unit: unitName,
-          managerUid: 0,
-          controlGroup: "/user.slice/openclaw-owned.service",
-        },
+        systemd: { scope: "system", unit: unitName, managerUid: 0 },
       });
       expect(runtime.systemd?.transport).toBeUndefined();
     } else {
@@ -175,6 +170,36 @@ describe("loaded-only systemd runtime", () => {
         ([args]) => args.includes("--auto-start=no") && !args.includes("LoadUnit"),
       ),
     ).toBe(true);
+  });
+
+  it("reads the owned loaded unit without systemctl show or unit activation", async () => {
+    const runtime = await readSystemdServiceRuntime(env, { requireLoaded: true, timeoutMs: 1000 });
+    expect(runtime).toMatchObject({
+      status: "running",
+      pid: 412,
+      state: "active",
+      subState: "running",
+      lastExitStatus: 0,
+      lastExitReason: "exited",
+      systemd: {
+        unit: unitName,
+        result: "success",
+        nRestarts: 2,
+        tasksCurrent: 8,
+        memoryCurrent: 2048,
+        controlGroup: "/user.slice/openclaw-owned.service",
+      },
+    });
+    expect(systemctl).not.toHaveBeenCalled();
+    expect(
+      busctl.mock.calls.every(
+        ([selected, args]) =>
+          selected === env && args.includes("--auto-start=no") && !args.includes("LoadUnit"),
+      ),
+    ).toBe(true);
+    const pinned = busctl.mock.calls.filter(([, args]) => !args.includes("GetNameOwner"));
+    expect(pinned).toHaveLength(4);
+    expect(pinned.every(([, args]) => args.includes(":1.42"))).toBe(true);
   });
 
   it.each(["bus"])(
@@ -204,31 +229,7 @@ describe("loaded-only systemd runtime", () => {
           requireLoaded: transport === "bus",
           commandInspection: { kind: "present" },
         });
-        expect(runtime).toMatchObject({
-          status: "running",
-          pid: 412,
-          state: "active",
-          subState: "running",
-          lastExitStatus: 0,
-          lastExitReason: "exited",
-          systemd: {
-            unit: unitName,
-            result: "success",
-            nRestarts: 2,
-            tasksCurrent: 8,
-            memoryCurrent: 2048,
-          },
-        });
-        expect(systemctl).not.toHaveBeenCalled();
-        expect(
-          busctl.mock.calls.every(
-            ([selected, args]) =>
-              selected === env && args.includes("--auto-start=no") && !args.includes("LoadUnit"),
-          ),
-        ).toBe(true);
-        const pinned = busctl.mock.calls.filter(([, args]) => !args.includes("GetNameOwner"));
-        expect(pinned).toHaveLength(4);
-        expect(pinned.every(([, args]) => args.includes(":1.42"))).toBe(true);
+        expect(runtime).toMatchObject({ status: "running", pid: 412 });
         expect(
           inspectServiceProcessMembershipSync(runtime.pid!, "linux", runtime.systemd?.controlGroup),
         ).toBe("unknown");

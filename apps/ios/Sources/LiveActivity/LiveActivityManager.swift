@@ -159,7 +159,8 @@ final class LiveActivityManager {
         else { return }
         self.pendingVoiceSample = sample
         guard self.voiceSampleTask == nil else { return }
-        self.voiceSampleTask = Task {
+        self.voiceSampleTask = Task { [weak self] in
+            guard let self else { return }
             try? await Task.sleep(for: self.voiceSamplePublishDelay)
             guard !Task.isCancelled else { return }
             self.voiceSampleTask = nil
@@ -276,8 +277,9 @@ final class LiveActivityManager {
     /// renewal so stale work pauses; ending either producer leaves the other alive.
     private func ensureStaleRefreshTask() {
         guard self.staleRefreshTask == nil else { return }
-        self.staleRefreshTask = Task {
+        self.staleRefreshTask = Task { [weak self] in
             while !Task.isCancelled {
+                guard let self else { return }
                 try? await Task.sleep(for: self.staleRefreshDelay)
                 guard !Task.isCancelled else { return }
                 let staleDate = Date().addingTimeInterval(self.transientStaleSeconds)
@@ -328,14 +330,16 @@ final class LiveActivityManager {
         self.currentStaleDate = staleDate
         self.pendingActivityUpdate = ActivityContent(state: state, staleDate: staleDate)
         guard self.activityUpdateTask == nil else { return }
-        self.activityUpdateTask = Task {
+        self.activityUpdateTask = Task { [weak self] in
             while !Task.isCancelled {
-                guard let pending = self.pendingActivityUpdate else { break }
+                guard let self,
+                      let pending = self.pendingActivityUpdate
+                else { break }
                 self.pendingActivityUpdate = nil
                 await activity.update(pending)
             }
 
-            guard !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled else { return }
             self.activityUpdateTask = nil
         }
     }
@@ -419,6 +423,7 @@ final class LiveActivityManager {
         now: Date,
         maximumStartAge: TimeInterval = 300) -> Bool
     {
+        guard status != .idle, status != .disconnected else { return false }
         if let staleDate, staleDate <= now {
             return false
         }

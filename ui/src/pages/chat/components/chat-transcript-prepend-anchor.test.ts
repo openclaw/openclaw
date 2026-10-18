@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
-import { Virtualizer } from "@tanstack/virtual-core";
+import { VirtualizerController } from "@tanstack/lit-virtual";
+import type { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import {
@@ -159,23 +160,31 @@ describe("transcript prepend anchor", () => {
       onReaderScroll: vi.fn(),
       onComposerLayout: vi.fn(),
     };
-    const instance = new Virtualizer<HTMLDivElement, HTMLElement>({
-      count: 1,
-      estimateSize: () => 2000,
-      initialOffset: 200,
-      getScrollElement: () => scroller,
-      observeElementRect: (_, callback) => {
-        callback({ width: 800, height: 500 });
+    const controller = new VirtualizerController<HTMLDivElement, HTMLElement>(
+      {
+        addController: vi.fn(),
+        removeController: vi.fn(),
+        requestUpdate: vi.fn(),
+        updateComplete: Promise.resolve(true),
       },
-      observeElementOffset: (virtualizer, callback) =>
-        observeTranscriptOffset(owner, virtualizer, callback),
-      scrollToFn: (offset) => {
-        scroller.scrollTop = offset;
+      {
+        count: 1,
+        estimateSize: () => 2000,
+        initialOffset: 200,
+        getScrollElement: () => scroller,
+        observeElementRect: (_, callback) => {
+          callback({ width: 800, height: 500 });
+        },
+        observeElementOffset: (virtualizer, callback) =>
+          observeTranscriptOffset(owner, virtualizer, callback),
+        scrollToFn: (offset) => {
+          scroller.scrollTop = offset;
+        },
       },
-    });
-    const { _didMount: mountVirtualizer, _willUpdate: updateVirtualizer } = instance;
-    const dispose = mountVirtualizer();
-    updateVirtualizer();
+    );
+    const instance = controller.getVirtualizer();
+    controller.hostConnected();
+    controller.hostUpdated();
     scroller.dispatchEvent(new Event("scroll"));
     try {
       scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
@@ -189,7 +198,7 @@ describe("transcript prepend anchor", () => {
       expect(scroller.scrollTop).toBe(190);
       expect(bubble.getBoundingClientRect().top).toBe(130);
     } finally {
-      dispose();
+      controller.hostDisconnected();
     }
   });
 });

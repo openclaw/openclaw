@@ -1,5 +1,4 @@
 /** Builds stable identities for cron scheduling inputs. */
-import { stableStringify } from "@openclaw/normalization-core";
 import {
   asSafeIntegerInRange,
   parseStrictFiniteNumber,
@@ -10,7 +9,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { parseCronPacingBounds } from "./pacing.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
-import { isCronEventSchedule } from "./source-schedule.js";
 import { normalizeCronStaggerMs } from "./stagger.js";
 import type { CronSchedule } from "./types.js";
 
@@ -42,8 +40,7 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
     rawKind === "every" ||
     rawKind === "cron" ||
     rawKind === "on-exit" ||
-    rawKind === "stream" ||
-    rawKind === "event"
+    rawKind === "stream"
       ? rawKind
       : at
         ? "at"
@@ -53,9 +50,6 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
             ? "cron"
             : undefined;
 
-  if (kind === "event") {
-    return isCronEventSchedule(schedule) ? schedule : undefined;
-  }
   if (kind === "at") {
     return at ? { kind: "at", at } : undefined;
   }
@@ -126,7 +120,7 @@ export function tryCronScheduleIdentity(job: CronScheduleIdentityInput): string 
   return JSON.stringify({
     version: 2,
     enabled: typeof job.enabled === "boolean" ? job.enabled : true,
-    schedule: schedule.kind === "event" ? JSON.parse(stableStringify(schedule)) : schedule,
+    schedule,
     pacing,
     hasTrigger: job.trigger !== undefined && job.trigger !== null,
   });

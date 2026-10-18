@@ -33,8 +33,6 @@ export {
   findLlamacppGbnfSchemaViolations,
   findOpenAIStrictSchemaViolations,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
-  SCHEMA_MAP_KEYS,
-  SCHEMA_NESTED_KEYS,
   stripUnsupportedSchemaKeywords,
 };
 

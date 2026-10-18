@@ -283,9 +283,7 @@ async function readOpenRouterAudioStream(
     void reader.cancel().catch(() => {});
     try {
       reader.releaseLock();
-    } catch {
-      // A timed-out read can still be pending while transport cancellation settles.
-    }
+    } catch {}
   }
 }
 

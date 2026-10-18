@@ -54,9 +54,12 @@ type RailPinTouchPress = {
   opened: boolean;
 };
 
-export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
+export function renderSidebarRail(
+  host: AppSidebarRenderHost,
+  TeamNewSession?: () => JSX.Element,
+): JSX.Element {
   const newSessionAccess = createMemo(() => host.readNewSessionAccess());
-  const zone = createMemo(() => host.reconciledSidebarZone());
+  const zone = () => host.reconciledSidebarZone();
   const pins = createMemo(() =>
     (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).map(
       (entry) => parseSidebarEntry(entry)!,
@@ -68,7 +71,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       ? t("nav.pages")
       : view === "sessions"
         ? titleForRoute("sessions")
-        : t("presence.usersTitle");
+        : t("presence.rosterTitle");
   return (
     <nav
       class="sidebar-rail"
@@ -77,24 +80,29 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
     >
       {renderSidebarAgentCard(host)}
       <div class="sidebar-rail__create">
-        {renderNewSessionLink({
-          get basePath() {
-            return host.basePath;
-          },
-          get agentId() {
-            return host.expandedAgentId();
-          },
-          class: "sidebar-rail__button sidebar-new-session",
-          get label() {
-            return t("agentChip.newConversation");
-          },
-          showShortcut: true,
-          get disabledReason() {
-            const access = newSessionAccess();
-            return access.allowed ? undefined : access.reason;
-          },
-          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-        })}
+        <Show
+          when={host.sidebarAgentsMode === "roster"}
+          fallback={renderNewSessionLink({
+            get basePath() {
+              return host.basePath;
+            },
+            get agentId() {
+              return host.expandedAgentId();
+            },
+            className: "sidebar-rail__button sidebar-new-session",
+            get label() {
+              return t("agentChip.newConversation");
+            },
+            showShortcut: true,
+            get disabledReason() {
+              const access = newSessionAccess();
+              return access.allowed ? undefined : access.reason;
+            },
+            onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+          })}
+        >
+          {TeamNewSession ? <TeamNewSession /> : undefined}
+        </Show>
       </div>
       <div class="sidebar-rail__views">
         <For each={views}>
@@ -103,7 +111,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
               type="button"
               class="sidebar-rail__button"
               title={
-                host.navigationView === view && view !== "online"
+                host.navigationView === view
                   ? `${viewLabel(view)} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`
                   : viewLabel(view)
               }
@@ -117,10 +125,13 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
               onClick={() => {
                 const active = host.navigationView === view;
                 host.navigationView = view;
-                if (
-                  !isMobileNavLayout() &&
-                  ((active && view !== "online") || host.navigationCollapsed)
-                ) {
+                if (view === "online") {
+                  host.teamOnlineExpanded = true;
+                  if (host.collapsedSessionSections.has("online")) {
+                    host.toggleSection("online");
+                  }
+                }
+                if (!isMobileNavLayout() && (active || host.navigationCollapsed)) {
                   host.onToggleSidebar?.();
                 }
                 host.requestUpdate();
@@ -426,12 +437,9 @@ function RailSessionGlyph(props: { session: SidebarRecentSession; label: string 
           </span>
         )
       }
-      running={
-        (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) ||
-        props.session.runningChildCount > 0
-      }
+      running={props.session.hasActiveRun || props.session.runningChildCount > 0}
       queued={
-        (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) &&
+        props.session.hasActiveRun &&
         props.session.status === "queued" &&
         props.session.runningChildCount === 0
       }
@@ -442,13 +450,13 @@ function RailSessionGlyph(props: { session: SidebarRecentSession; label: string 
 
 /** Pages is the accessible destination catalog, not another favorites list. */
 export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
-  const zone = createMemo(() => host.reconciledSidebarZone());
+  const zone = () => host.reconciledSidebarZone();
   const dashboards = () => host.navigationCatalog.dashboards;
   const dashboardRows = createMemo(() =>
     host.sidebarSnapshot
-      ? host.sidebarSnapshot.pages
-          .filter((row) => !row.archived)
-          .map((row) => restoreSnapshotSession(row, host.getRouteSessionKey()))
+      ? host.sidebarSnapshot.pages.map((row) =>
+          restoreSnapshotSession(row, host.getRouteSessionKey()),
+        )
       : (dashboards()?.result?.sessions ?? []).map((row) =>
           host.getSessionNavigationState().toSidebarSession(row),
         ),
@@ -491,13 +499,9 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
         {(entry) => {
           const fixedEntry = untrack(entry);
           const key = serializeSidebarEntry(fixedEntry);
-          // Allocate once per entry; the rendered link owns its reactive fields.
-          const content = untrack(() =>
-            renderAppSidebarPageEntry(host, fixedEntry, rows, () => zone().pluginTabs),
-          );
           return (
             <div class="sidebar-pages__entry">
-              {content}
+              {renderAppSidebarPageEntry(host, fixedEntry, rows, () => zone().pluginTabs)}
               <button
                 type="button"
                 class={[

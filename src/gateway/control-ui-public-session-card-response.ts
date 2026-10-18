@@ -17,7 +17,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
-/** Uses the document's admission/cache owner to retain the rendered PNG bytes. */
+/** Uses the document's admission/cache owner; PNG bytes are cached as base64 text. */
 export async function servePublicSessionCardRepresentation(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -58,13 +58,14 @@ export async function servePublicSessionCardRepresentation(params: {
           return entry?.role === "user" ? publicSessionMessageText(entry) : undefined;
         })
         .find((text) => text);
-      return card.render({
+      const png = await card.render({
         ...session.cardFacts,
         title: publicSessionTitle(session.title),
         quote,
         messageCount: session.totalMessages,
         host: params.host,
       });
+      return png.toString("base64");
     },
   });
   if (result.kind !== "ok") {
@@ -78,13 +79,13 @@ export async function servePublicSessionCardRepresentation(params: {
       const representation = result.value;
       if (
         !representation ||
-        !Buffer.isBuffer(representation.body) ||
+        typeof representation.body !== "string" ||
         !representation.isCurrent() ||
         !isPublicSessionShareActive(config, locator, projection)
       ) {
         return false;
       }
-      const body = representation.body;
+      const body = Buffer.from(representation.body, "base64");
       res.statusCode = 200;
       res.setHeader("Cache-Control", "public, max-age=300");
       res.setHeader("Content-Type", "image/png");

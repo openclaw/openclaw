@@ -518,7 +518,14 @@ enum WatchPromptNotificationBridge {
         if !categoryIdentifier.isEmpty {
             content.categoryIdentifier = categoryIdentifier
         }
-        content.interruptionLevel = (params.priority ?? .active).interruptionLevel
+        switch params.priority ?? .active {
+        case .passive:
+            content.interruptionLevel = .passive
+        case .timeSensitive:
+            content.interruptionLevel = .timeSensitive
+        case .active:
+            content.interruptionLevel = .active
+        }
 
         let request = UNNotificationRequest(
             identifier: "watch.prompt.\(invokeID)",

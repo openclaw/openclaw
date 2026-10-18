@@ -9,7 +9,6 @@ export function prepareDevicePairingBinding(
   const state = resolveNodePairingState(device);
   return {
     deviceId,
-    device,
     binding: state
       ? {
           identity: state.identity.key,

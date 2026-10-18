@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import type { PluginBlobEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +9,7 @@ import {
   loadMemoryWikiCompiledCache,
   readMemoryWikiDashboardState,
   reconcileMemoryWikiCompiledCacheOwner,
+  resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
 } from "./compiled-cache.js";
@@ -150,7 +150,7 @@ describe("Memory Wiki compiled publication ownership", () => {
       const topClaim = digestPage.topClaims[0];
       assert.ok(relationship && topClaim);
       const serialized = JSON.stringify(snapshot);
-      const generation = createHash("sha256").update(serialized).digest("hex");
+      const generation = resolveMemoryWikiCompiledCacheGeneration(snapshot);
       const identity = {
         vaultGeneration: "vault-generation",
         compiledCachePublicationId: "publication",
@@ -158,6 +158,7 @@ describe("Memory Wiki compiled publication ownership", () => {
       await writeMemoryWikiCompiledCache(
         config,
         snapshot,
+        generation,
         identity.compiledCachePublicationId,
         null,
         async () => {
@@ -178,7 +179,7 @@ describe("Memory Wiki compiled publication ownership", () => {
       const [blob] = blobs;
       assert.ok(blob);
       expect(gunzipSync(blob).toString("utf8")).toBe(serialized);
-      expect(createHash("sha256").update(JSON.stringify(cached)).digest("hex")).toBe(generation);
+      expect(resolveMemoryWikiCompiledCacheGeneration(cached)).toBe(generation);
 
       // Cover nested digest, claim, and both dashboard payloads, not just the
       // original overview snippet. None may remain shared with compiler state.
@@ -212,7 +213,7 @@ describe("Memory Wiki compiled publication ownership", () => {
       assert.ok(reloaded);
       expect(reloaded).toEqual(cached);
       expect(JSON.stringify(reloaded)).toBe(serialized);
-      expect(createHash("sha256").update(JSON.stringify(reloaded)).digest("hex")).toBe(generation);
+      expect(resolveMemoryWikiCompiledCacheGeneration(reloaded)).toBe(generation);
     },
   );
 });

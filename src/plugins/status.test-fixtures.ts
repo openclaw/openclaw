@@ -59,9 +59,7 @@ export const REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE =
   "references removed session/transcript file APIs; migrate to session identity, SessionTranscriptUpdate.target, and Gateway/runtime session helpers.";
 
 export function createCompatibilityNotice(
-  params: Pick<PluginCompatibilityNotice, "pluginId"> & {
-    code: "hook-only" | "removed-session-transcript-file-api";
-  },
+  params: Pick<PluginCompatibilityNotice, "pluginId" | "code">,
 ): PluginCompatibilityNotice {
   switch (params.code) {
     case "hook-only":

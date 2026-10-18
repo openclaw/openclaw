@@ -34,7 +34,7 @@ function forEachMediaEventBatch(params: {
   database: DatabaseSync;
   table: "trajectory_runtime_events" | "transcript_events";
   legacyTextStorage?: boolean;
-  visit: (rows: Array<{ event_json: string; seq: number; session_id: string }>) => void;
+  visit: (rows: Array<{ event_json: string; seq: number; session_id: string }>) => "stop" | void;
 }): void {
   const db = getNodeSqliteKysely<MediaMigrationDatabase>(params.database);
   const eventJson =
@@ -59,14 +59,18 @@ function forEachMediaEventBatch(params: {
     }
     const rowBytes = Buffer.byteLength(row.event_json);
     if (rows.length > 0 && bytes + rowBytes > MEDIA_MIGRATION_BATCH_BYTES) {
-      params.visit(rows);
+      if (params.visit(rows) === "stop") {
+        return;
+      }
       rows = [];
       bytes = 0;
     }
     rows.push(row);
     bytes += rowBytes;
     if (rows.length >= MEDIA_MIGRATION_ROW_BATCH_SIZE || bytes >= MEDIA_MIGRATION_BATCH_BYTES) {
-      params.visit(rows);
+      if (params.visit(rows) === "stop") {
+        return;
+      }
       rows = [];
       bytes = 0;
     }
@@ -79,9 +83,8 @@ function forEachMediaEventBatch(params: {
 export function scanTranscriptRows(params: {
   database: DatabaseSync;
   pathname: string;
-  writer: OpenClawAgentDatabase;
+  writer?: OpenClawAgentDatabase;
   legacyTextStorage: boolean;
-  beforeRewrite: () => void;
   onChangedSession?: (sessionId: string) => void;
 }): number {
   const { database, pathname, writer } = params;
@@ -92,7 +95,7 @@ export function scanTranscriptRows(params: {
     database,
     table: "transcript_events",
     legacyTextStorage: params.legacyTextStorage,
-    visit: (rows) => {
+    visit: (rows): "stop" | void => {
       const sessionIds = [...new Set(rows.map((row) => row.session_id))];
       const sessionKeys = new Map(
         executeSqliteQuerySync(
@@ -124,6 +127,10 @@ export function scanTranscriptRows(params: {
           changedSessions += 1;
           params.onChangedSession?.(row.session_id);
         }
+        // Detection only selects the repair path; that transaction validates every row.
+        if (!writer) {
+          return "stop";
+        }
         const rewrites = rewritesBySession.get(row.session_id) ?? [];
         rewrites.push({
           event: transformed.event,
@@ -132,18 +139,21 @@ export function scanTranscriptRows(params: {
         });
         rewritesBySession.set(row.session_id, rewrites);
       }
-      for (const [sessionId, rewrites] of rewritesBySession) {
-        const sessionKey = sessionKeys.get(sessionId);
-        if (!sessionKey) {
-          throw new Error(`${pathname}:${sessionId} has transcript rows without a session window`);
+      if (writer) {
+        for (const [sessionId, rewrites] of rewritesBySession) {
+          const sessionKey = sessionKeys.get(sessionId);
+          if (!sessionKey) {
+            throw new Error(
+              `${pathname}:${sessionId} has transcript rows without a session window`,
+            );
+          }
+          rewriteSqliteTranscriptEventRowsInTransaction(
+            writer,
+            { agentId: writer.agentId, path: pathname, sessionId, sessionKey },
+            rewrites,
+            { legacyTextStorage: params.legacyTextStorage },
+          );
         }
-        params.beforeRewrite();
-        rewriteSqliteTranscriptEventRowsInTransaction(
-          writer,
-          { agentId: writer.agentId, path: pathname, sessionId, sessionKey },
-          rewrites,
-          { legacyTextStorage: params.legacyTextStorage },
-        );
       }
     },
   });
@@ -179,15 +189,15 @@ function rewriteTrajectoryEventJson(eventJson: string, owner: string): string {
 export function scanTrajectoryRows(params: {
   database: DatabaseSync;
   pathname: string;
-  beforeRewrite: () => void;
+  rewrite: boolean;
 }): number {
-  const { database, pathname } = params;
+  const { database, pathname, rewrite } = params;
   const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
   let changedRows = 0;
   forEachMediaEventBatch({
     database,
     table: "trajectory_runtime_events",
-    visit: (rows) => {
+    visit: (rows): "stop" | void => {
       for (const row of rows) {
         const rewrittenEventJson = rewriteTrajectoryEventJson(
           row.event_json,
@@ -197,7 +207,9 @@ export function scanTrajectoryRows(params: {
           continue;
         }
         changedRows += 1;
-        params.beforeRewrite();
+        if (!rewrite) {
+          return "stop";
+        }
         executeSqliteQuerySync(
           database,
           db

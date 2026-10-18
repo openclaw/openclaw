@@ -17,6 +17,7 @@ import { resolveSessionStorePathForScope } from "../config/sessions/session-stor
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isAssistantTextContentType } from "./chat-display-projection.helpers.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { isSuppressedControlReplyText } from "./control-reply-text.js";
 import { prepareSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
@@ -110,7 +111,11 @@ function projectContentItem(
     return undefined;
   }
   const text = typeof value === "string" ? value : block?.text;
-  if (typeof text !== "string" || !text.trim()) {
+  if (
+    typeof text !== "string" ||
+    !text.trim() ||
+    (role === "assistant" && isSuppressedControlReplyText(text))
+  ) {
     return undefined;
   }
   return { type: role === "user" ? "userMessage" : "agentMessage", ...boundedText(text) };

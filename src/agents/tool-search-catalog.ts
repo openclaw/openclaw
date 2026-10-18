@@ -256,11 +256,10 @@ function finalizeCatalogAvailability(
 function registerToolSearchCatalog(params: {
   catalogRef: ToolSearchCatalogRef;
   entries: ToolSearchCatalogEntry[];
-  mode?: "append" | "reuse";
+  append?: boolean;
   toolExecutionAllow?: readonly string[];
-}): boolean {
-  const existing = params.catalogRef.current;
-  const prior = params.mode === "append" ? existing : undefined;
+}): void {
+  const prior = params.append ? params.catalogRef.current : undefined;
   // Appending client definitions cannot widen the current run's execution policy.
   const toolExecutionAllow = prior
     ? catalogMetadata.get(prior)?.toolExecutionAllow
@@ -269,23 +268,8 @@ function registerToolSearchCatalog(params: {
   for (const entry of params.entries) {
     byId.set(entry.id, entry);
   }
-  // Callable bindings can change while descriptors stay equal; finalize before reuse.
-  const entries = finalizeCatalogAvailability(Array.from(byId.values()), toolExecutionAllow);
-  const fingerprint = catalogEntriesFingerprint(entries);
-  const metadata = existing && catalogMetadata.get(existing);
-  const reboundEntries =
-    params.mode === "reuse" &&
-    existing &&
-    metadata?.fingerprint === fingerprint &&
-    stableStringify(metadata.toolExecutionAllow) === stableStringify(toolExecutionAllow)
-      ? rebindCatalogExecutors(existing.entries, entries)
-      : undefined;
-  if (existing && reboundEntries) {
-    existing.entries = reboundEntries;
-    return true;
-  }
   const next = {
-    entries,
+    entries: finalizeCatalogAvailability(Array.from(byId.values()), toolExecutionAllow),
     // Appended client tools extend the same counter lifetime. A replacement
     // gets a new scope so telemetry consumers never infer resets from values.
     // Hex avoids credential-shaped substrings that transcript redaction would alter.
@@ -296,7 +280,7 @@ function registerToolSearchCatalog(params: {
   };
   // Finalization can narrow schemas after last-write-wins registration.
   catalogMetadata.set(next, {
-    fingerprint,
+    fingerprint: catalogEntriesFingerprint(next.entries),
     toolExecutionAllow,
   });
   params.catalogRef.current = next;
@@ -304,7 +288,6 @@ function registerToolSearchCatalog(params: {
     disposeCodeModeResults(params.catalogRef);
   }
   delete params.catalogRef.closedTelemetry;
-  return false;
 }
 
 export function clearToolSearchCatalog(params: { catalogRef?: ToolSearchCatalogRef }): void {
@@ -459,7 +442,7 @@ export function applyToolCatalogCompaction(
   }
 
   const visible: AnyAgentTool[] = [];
-  const catalog: ToolSearchCatalogEntry[] = [];
+  let catalog: ToolSearchCatalogEntry[] = [];
   for (const tool of params.tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(
@@ -481,12 +464,27 @@ export function applyToolCatalogCompaction(
     }
     visible.push(tool);
   }
-  const catalogReused = registerToolSearchCatalog({
-    catalogRef,
-    entries: catalog,
-    mode: "reuse",
-    toolExecutionAllow: params.toolExecutionAllow,
-  });
+  // Callable bindings can change while descriptors stay equal; normalize before cache reuse.
+  catalog = finalizeCatalogAvailability(catalog, params.toolExecutionAllow);
+  const existingCatalog = catalogRef.current;
+  const incomingFingerprint = existingCatalog ? catalogEntriesFingerprint(catalog) : undefined;
+  const metadata = existingCatalog && catalogMetadata.get(existingCatalog);
+  const reboundEntries =
+    existingCatalog &&
+    metadata &&
+    metadata.fingerprint === incomingFingerprint &&
+    stableStringify(metadata.toolExecutionAllow) === stableStringify(params.toolExecutionAllow)
+      ? rebindCatalogExecutors(existingCatalog.entries, catalog)
+      : undefined;
+  if (existingCatalog && reboundEntries) {
+    existingCatalog.entries = reboundEntries;
+  } else {
+    registerToolSearchCatalog({
+      catalogRef,
+      entries: catalog,
+      toolExecutionAllow: params.toolExecutionAllow,
+    });
+  }
   catalogRef.directOnlyToolNames = new Set(
     visible.filter((tool) => tool.catalogMode === "direct-only").map((tool) => tool.name),
   );
@@ -496,7 +494,7 @@ export function applyToolCatalogCompaction(
     compacted: catalog.length > 0,
     catalogToolCount: catalog.length,
     catalogRegistered: true,
-    catalogReused,
+    catalogReused: reboundEntries !== undefined,
   };
 }
 
@@ -512,7 +510,7 @@ export function addClientToolsToToolCatalog(params: {
   registerToolSearchCatalog({
     catalogRef,
     entries: params.tools.map((tool) => toCatalogEntry(tool, "client")),
-    mode: "append",
+    append: true,
   });
   return { tools: [], compacted: params.tools.length > 0, catalogToolCount: params.tools.length };
 }

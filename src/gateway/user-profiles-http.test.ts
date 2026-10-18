@@ -142,7 +142,12 @@ describe("profile avatar HTTP endpoint", () => {
   });
 
   it.each([
+    { method: "GET", revision: undefined, conditional: false, immutable: false },
     { method: "GET", revision: "old-png", conditional: false, immutable: false },
+    { method: "GET", revision: "1725000123456", conditional: false, immutable: false },
+    { method: "GET", revision: "saved-png", conditional: false, immutable: true },
+    { method: "HEAD", revision: "saved-png", conditional: false, immutable: true },
+    { method: "GET", revision: "saved-png", conditional: true, immutable: true },
     { method: "GET", revision: "old-png", conditional: true, immutable: false },
   ])(
     "serves $method revision=$revision conditional=$conditional with immutable=$immutable",
@@ -332,27 +337,17 @@ describe("profile avatar HTTP endpoint", () => {
         await Promise.all(
           Array.from({ length: 300 }, async () => {
             const res = response();
-            const pathname = `/control/api/users/${profile.id}/avatar`;
-            const req = request(`${pathname}?v=${etag.slice(1, -1)}`, {
-              ...headers,
-              origin: "https://control.example",
-            });
+            const req = request("/ignored", headers);
             req.method = method;
-            await handleUserProfileAvatarHttpRequest(req, res.response, pathname, {
-              auth: {} as never,
-              basePath: "/control",
-            });
+            await handleUserProfileAvatarHttpRequest(
+              req,
+              res.response,
+              `/api/users/${profile.id}/avatar`,
+              { auth: {} as never },
+            );
             expect(res.writeHead).toHaveBeenCalledWith(
               code,
-              expect.objectContaining({
-                ETag: etag,
-                "Cache-Control": "private, max-age=31536000, immutable",
-              }),
-            );
-            expect(res.setHeader).toHaveBeenCalledWith("Vary", "Origin, Authorization, Cookie");
-            expect(res.setHeader).toHaveBeenCalledWith(
-              "Access-Control-Allow-Origin",
-              "https://control.example",
+              expect.objectContaining({ ETag: etag }),
             );
             if (code === 200) {
               expect(res.writeHead).toHaveBeenCalledWith(

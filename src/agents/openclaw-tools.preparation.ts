@@ -2,7 +2,6 @@ import { selectApplicableRuntimeConfig } from "../config/config.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   hasMultipleSessionSharingIdentities,
   isUserProfileCatalogReady,
@@ -108,7 +107,7 @@ export async function prepareOpenClawTools(
   let personalInstructionsEnabled = false;
   if (!isEmbeddedMode()) {
     const profileOptions = { env: shared.env };
-    const catalog = isUserProfileCatalogReady(resolveOpenClawStateSqlitePath(shared.env))
+    const catalog = isUserProfileCatalogReady(profileOptions)
       ? undefined
       : await prepareUserProfileCatalog(profileOptions);
     try {

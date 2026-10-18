@@ -14,14 +14,21 @@ type OsFacts = Omit<OsSummary, "label"> & {
   runtimeLabel?: string;
   summary?: OsSummary;
 };
-let cachedOsFacts: OsFacts | undefined;
+const cachedOsFactsByKey = new Map<string, OsFacts>();
 
 function resolveOsFacts(): OsFacts {
-  return (cachedOsFacts ??= {
-    platform: os.platform(),
-    release: os.release(),
-    arch: os.arch(),
-  });
+  const platform = os.platform();
+  const release = os.release();
+  const arch = os.arch();
+  // Preserve the raw OS tuple identity: a product-version update alone does not
+  // invalidate metadata already observed during this process.
+  const cacheKey = `${platform}\0${release}\0${arch}`;
+  let facts = cachedOsFactsByKey.get(cacheKey);
+  if (!facts) {
+    facts = { platform, arch, release };
+    cachedOsFactsByKey.set(cacheKey, facts);
+  }
+  return facts;
 }
 
 // Startup and first-turn probes share one timeout and kill policy. spawnSync

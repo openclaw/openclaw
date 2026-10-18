@@ -514,25 +514,35 @@ describe("FRV continuation preflight", () => {
     expect(fixture.client.rerunParent).not.toHaveBeenCalled();
   });
 
-  it.each(["parent", "child"])("rechecks the producer before %s mutation", async (target) => {
+  it("rechecks the producer after child inspection and before parent mutation", async () => {
+    const fixture = artifactFixture();
+    const read = fixture.client.getRun.getMockImplementation()!;
+    fixture.client.getRun.mockImplementation(async (id) => {
+      if (id === "77") {
+        fixture.producer.head_sha = "c".repeat(40);
+      }
+      return read(id);
+    });
+    await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+      "identity changed",
+    );
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the producer before retrying a failed diagnostic child", async () => {
     const fixture = artifactFixture();
     const read = fixture.client.getRun.getMockImplementation()!;
     let childReads = 0;
     fixture.client.getRun.mockImplementation(async (id) => {
-      if (target === "child" && id === "101") {
+      if (id === "101") {
         if (++childReads === 2) {
           fixture.producer.head_sha = "c".repeat(40);
         }
         return runFor(child("normalCi", "101"), 1, "failure");
       }
-      if (target === "parent" && id === "77") {
-        fixture.producer.head_sha = "c".repeat(40);
-      }
       return read(id);
     });
-    if (target === "child") {
-      fixture.client.getAttemptJobs = async () => [job("test", "failure")];
-    }
+    fixture.client.getAttemptJobs = async () => [job("test", "failure")];
     await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
       "identity changed",
     );
@@ -1759,24 +1769,19 @@ const unsealedWatcherReads = {
   },
 };
 
-function watcherPlan() {
-  const immutable = executionPlanArtifact();
-  const source = sourceFact();
-  Object.assign(immutable, {
-    sourceAdmissionContract: "1",
-    sourceAdmission: sourceFact({
-      workflow: { ...source.workflow, ref: `refs/heads/${SOURCE_REF}` },
-      coverage: { ...source.coverage, release_profile: "beta" },
-    }),
-  });
-  immutable.sha256 = releaseExecutionPlanSha256(immutable);
-  return immutable;
-}
-
 describe("FRV watch", () => {
   it("resumes a missing or retired watcher with the immutable candidate, fresh tip, and no duplicate terminal notification", async () => {
     const statePath = path.join(tempDirs.make("frv-candidate-watch-"), "state.json");
-    const immutable = watcherPlan();
+    const immutable = executionPlanArtifact();
+    const source = sourceFact();
+    Object.assign(immutable, {
+      sourceAdmissionContract: "1",
+      sourceAdmission: sourceFact({
+        workflow: { ...source.workflow, ref: `refs/heads/${SOURCE_REF}` },
+        coverage: { ...source.coverage, release_profile: "beta" },
+      }),
+    });
+    immutable.sha256 = releaseExecutionPlanSha256(immutable);
     let tip = TARGET_SHA;
     let conclusion: string | null = null;
     const events: {
@@ -2107,6 +2112,9 @@ describe("FRV watch", () => {
     ]);
     expect(getJobLog).toHaveBeenCalledExactlyOnceWith(5, expect.anything());
   });
+});
+
+describe("FRV watch completion", () => {
   it("waits for lagging dispatch and job snapshots before declaring the release terminal", async () => {
     const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
     const ci = child("normalCi", "101");
@@ -2156,7 +2164,7 @@ describe("FRV watch", () => {
   });
 });
 
-describe("FRV client", () => {
+describe("FRV rerun API", () => {
   it("uses the direct failed-jobs and parent rerun endpoints", async () => {
     const calls: string[][] = [];
     const client = createClient(REPOSITORY, {
@@ -2173,32 +2181,29 @@ describe("FRV client", () => {
       ["api", "-X", "POST", `repos/${REPOSITORY}/actions/runs/77/rerun`],
     ]);
   });
-  it.each([30_000, -1])("verifies within the remaining %i ms budget", async (budgetMs) => {
+});
+
+describe("FRV strict verifier", () => {
+  it("uses the immutable trusted workflow identity and remaining operation budget", async () => {
     let args: string[] = [];
     let timeoutMs = 0;
-    let spawns = 0;
     const client = createClient(REPOSITORY, {
       execCommand: async (
         _command: string,
         commandArgs: string[],
         options: { timeoutMs: number },
       ) => {
-        spawns += 1;
         args = commandArgs;
         timeoutMs = options.timeoutMs;
         return "{}";
       },
     });
-    const verification = client.verify("77", executionPlanArtifact(), Date.now() + budgetMs, {
-      "77": 2,
-      "101": 2,
-    });
-    if (budgetMs < 0) {
-      await expect(verification).rejects.toThrow("FRV verification timed out");
-      expect(spawns).toBe(0);
-      return;
-    }
-    await expect(verification).resolves.toBe("{}");
+    await expect(
+      client.verify("77", executionPlanArtifact(), Date.now() + 30_000, {
+        "77": 2,
+        "101": 2,
+      }),
+    ).resolves.toBe("{}");
     expect(args).toEqual(
       expect.arrayContaining([
         "--validate-run",
@@ -2212,7 +2217,21 @@ describe("FRV client", () => {
       ]),
     );
     expect(timeoutMs).toBeGreaterThan(0);
-    expect(timeoutMs).toBeLessThanOrEqual(budgetMs);
+    expect(timeoutMs).toBeLessThanOrEqual(30_000);
+  });
+
+  it("rejects an expired verification budget before spawning the verifier", async () => {
+    let spawns = 0;
+    const client = createClient(REPOSITORY, {
+      execCommand: async () => {
+        spawns += 1;
+        return "{}";
+      },
+    });
+    await expect(client.verify("77", executionPlanArtifact(), Date.now() - 1)).rejects.toThrow(
+      "FRV verification timed out",
+    );
+    expect(spawns).toBe(0);
   });
 
   it("treats only typed verifier refresh failures as rerunnable", async () => {

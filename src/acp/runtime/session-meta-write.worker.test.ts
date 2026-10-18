@@ -238,20 +238,16 @@ it.each(["incognito", "file"] as const)(
           expect(initialize).toHaveBeenCalledOnce();
           expect(update).toHaveBeenCalledOnce();
           expect(update.mock.calls[0]?.[0]).toEqual(META);
-          if (!incognito) {
-            expect(maintenance.mock.calls.length).toBeGreaterThan(0);
-            expect(
-              maintenance.mock.calls.every(([input]) => input.maintenanceConfig?.maxEntries === 37),
-            ).toBe(true);
-          }
-          maintenance.mockClear();
           const cleared = await upsertAcpSessionMeta({ ...scope, mutate: () => null });
           expect(cleared?.acp).toBeUndefined();
           expect(observedAcp.at(-1)?.acp).toBeNull();
           if (!incognito) {
             expect(await readMetadata(created)).toEqual([null]);
+            expect(maintenance.mock.calls.length).toBeGreaterThan(0);
+            expect(
+              maintenance.mock.calls.every(([input]) => input.maintenanceConfig?.maxEntries === 37),
+            ).toBe(true);
           }
-          expect(maintenance).not.toHaveBeenCalled();
           expect(observe.queries).toEqual([]);
         } finally {
           releaseFacts();
@@ -278,7 +274,7 @@ it.each(["incognito", "file"] as const)(
               ...invalid,
               mutate: () => ({ ...META, uncloneable: () => undefined }),
             }),
-          ).rejects.toMatchObject({ name: "DataCloneError" });
+          ).rejects.toThrow(/could not be cloned/);
           expect(loadExactSessionEntry(invalid)?.entry).toBeUndefined();
         }
       },

@@ -51,16 +51,10 @@ it("keeps the shared-state command worker independent of host runtime discovery"
 
 it.each([
   {
-    type: "pluginState.clearRuntimeHealth",
-    input: {
-      pluginId: "lazy-fixture",
-      namespace: "missing",
-      processId: 1,
-      selection: { kind: "context-engine" },
-    },
+    type: "pluginState.lookup",
+    input: { pluginId: "lazy-fixture", namespace: "missing", key: "value" },
   },
   { type: "deviceAuth.prepare", input: undefined },
-  { type: "plugins.deferredMigrations.read", input: { artifactPreservingReadOnly: true } },
 ] as const)(
   "prepares cold $type without unrelated commands or creating a database",
   async (command) => {
@@ -78,14 +72,8 @@ it.each([
       try {
         expect(existsSync(databasePath)).toBe(false);
         await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type);
-        // A Promise tells the transport to flush newly loaded compile-cache entries.
-        expect(backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type)).toBeUndefined();
         expect(runWithSqliteWorkerStateContext(context, () => backend.execute(command))).toEqual(
-          command.type === "pluginState.clearRuntimeHealth"
-            ? { ok: true, value: undefined }
-            : command.type === "plugins.deferredMigrations.read"
-              ? []
-              : undefined,
+          command.type === "pluginState.lookup" ? { ok: true, value: undefined } : undefined,
         );
         if (command.type === "deviceAuth.prepare") {
           expect(

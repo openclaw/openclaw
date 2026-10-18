@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For } from "solid-js";
+import { createMemo, For } from "solid-js";
 import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -32,7 +32,6 @@ type CronRunsSectionProps = Pick<
   | "onRefresh"
   | "onRunsFiltersChange"
   | "onViewRunTranscript"
-  | "onHighlightedRun"
 > & {
   conditionActivity?: {
     checkCount: number;
@@ -354,7 +353,6 @@ export function RunsSection(props: CronRunsSectionProps) {
                 entry={entry()}
                 formatTimestamp={formatTimestamp()}
                 highlightedRunId={props.highlightedRunId}
-                onHighlightedRun={(element, link) => props.onHighlightedRun?.(element, link)}
                 onViewRunTranscript={(targetEntry, trigger) =>
                   props.onViewRunTranscript?.(targetEntry, trigger)
                 }
@@ -402,7 +400,6 @@ function Run(props: {
   formatTimestamp: ReturnType<typeof createMsFormatter>;
   highlightedRunId?: string | null;
   onViewRunTranscript?: CronProps["onViewRunTranscript"];
-  onHighlightedRun?: (element: HTMLElement, link: string) => (() => void) | undefined;
 }) {
   const status = () =>
     runStatusLabel(props.entry.status ?? "unknown", props.entry.completionStatus);
@@ -434,22 +431,10 @@ function Run(props: {
       usageSummary(),
     ].filter(Boolean),
   );
-  const highlighted = createMemo(() =>
-    props.highlightedRunId && cronRunEntryMatchesLink(props.highlightedRunId, props.entry)
-      ? props.highlightedRunId
-      : null,
-  );
-  let row!: HTMLDivElement;
-  createEffect(highlighted, (selected) =>
-    selected ? props.onHighlightedRun?.(row, selected) : undefined,
-  );
+  const highlighted = () =>
+    Boolean(props.highlightedRunId && cronRunEntryMatchesLink(props.highlightedRunId, props.entry));
   return (
-    <div
-      ref={(element) => {
-        row = element;
-      }}
-      class={["cron-run-entry", { "cron-run-entry--highlighted": Boolean(highlighted()) }]}
-    >
+    <div class={["cron-run-entry", { "cron-run-entry--highlighted": highlighted() }]}>
       <div class="cron-run-entry__header">
         <div class="cron-run-entry__main">
           <div class="cron-run-entry__title">

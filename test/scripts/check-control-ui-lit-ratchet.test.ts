@@ -37,31 +37,6 @@ function fixture(source = "export {};\n") {
 }
 
 describe("Control UI Lit ratchet", () => {
-  it("keeps controller growth advisory until all production controllers are retired", () => {
-    const root = fixture("class OldController { hostConnected() {} }\n");
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const target = path.join(root, "ui/src/new.ts");
-    fs.writeFileSync(target, "class NewController { hostDisconnected() {} requestUpdate() {} }\n");
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
-    expect(log.mock.calls.flat().join("\n")).toContain("controllerPatterns");
-
-    fs.writeFileSync(path.join(root, "ui/src/view.ts"), "// class OldController {}\n");
-    fs.writeFileSync(target, 'const text = "hostConnected requestUpdate";\n');
-    fs.writeFileSync(path.join(root, "ui/src/view.test.ts"), "class TestController {}\n");
-    git(root, ["add", "."]);
-    git(root, ["commit", "-m", "retire production controllers"]);
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
-    for (const source of [
-      "class NewController {}",
-      "const host = { hostConnected() {}, hostDisconnected() {}, requestUpdate() {} };",
-      "host.requestUpdate();",
-    ]) {
-      fs.writeFileSync(target, source);
-      expect(main(root, ["--base", "HEAD"]), source).toBe(1);
-    }
-  });
-
   it("allows the named interop owner but rejects a new sibling Lit implementation", () => {
     const root = fixture();
     const content =
@@ -74,6 +49,20 @@ describe("Control UI Lit ratchet", () => {
     fs.writeFileSync(path.join(root, "ui/src/lit/another-content.tsx"), content);
     expect(main(root, ["--base", "HEAD"])).toBe(1);
   });
+
+  it.each(["new.ts", "new.tsx", "new.js", "new.cts"])(
+    "rejects a new Lit production file: %s",
+    (file) => {
+      const root = fixture();
+      fs.writeFileSync(path.join(root, "ui/src", file), legacy);
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      expect(main(root, ["--base", "HEAD"])).toBe(1);
+      expect(errors.mock.calls.flat().join("\n")).toContain(`ui/src/${file}`);
+      expect(errors.mock.calls.flat().join("\n")).toContain(".agents/skills/solid/SKILL.md");
+      expect(errors.mock.calls.flat().join("\n")).toContain("defineSolidBridge");
+    },
+  );
 
   it("preserves staged and explicit base scope through the full lint entry point", () => {
     const root = fixture();
@@ -173,6 +162,29 @@ describe("Control UI Lit ratchet", () => {
       stateDecorators: 0,
       tasks: 0,
     });
+  });
+
+  it("reports every metric's growth in an existing file without failing", () => {
+    const root = fixture(legacy);
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    fs.writeFileSync(path.join(root, "ui/src/view.ts"), `${legacy}\n${legacy}`);
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(errors).not.toHaveBeenCalled();
+    const report = logs.mock.calls.flat().join("\n");
+    expect(report).toContain("totals (advisory)");
+    expect(report).toContain("Per-file increases (advisory)");
+    for (const metric of [
+      "litImports",
+      "htmlTemplates",
+      "waTags",
+      "requestUpdate",
+      "stateDecorators",
+      "tasks",
+      "todoSolid2",
+    ]) {
+      expect(report).toContain(`ui/src/view.ts [${metric}]`);
+    }
   });
 
   it.each([

@@ -183,8 +183,6 @@ async function withRecoveryRuntime(
       },
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
-      isStopping: () => false,
-      beginClose: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const warn = vi.fn();

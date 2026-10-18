@@ -1,11 +1,15 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
-import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
-import { WizardBusyButton, WizardStepControls } from "../../components/wizard-step-controls.tsx";
+import { renderChannelIcon } from "../../components/channel-icon.ts";
+import {
+  renderWizardBusyButton,
+  renderWizardStepControls,
+} from "../../components/wizard-step-controls.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import "../../components/modal-dialog.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
-import type { ChannelWizardState } from "./wizard-runner.ts";
+import type { ChannelWizardState } from "./wizard-controller.ts";
 
 type ChannelWizardViewProps = {
   wizard: ChannelWizardState;
@@ -54,32 +58,34 @@ function WizardStepBody(props: {
     <Show
       when={informational()}
       fallback={
-        <WizardStepControls
-          step={props.wizard.step}
-          value={
-            props.wizard.step.type === "multiselect"
-              ? props.controls.multiselectValues
-              : props.wizard.step.type === "text"
-                ? props.controls.textValue
-                : props.wizard.step.initialValue
+        <LitContent
+          render={() =>
+            renderWizardStepControls({
+              step: props.wizard.step,
+              value:
+                props.wizard.step.type === "multiselect"
+                  ? props.controls.multiselectValues
+                  : props.wizard.step.type === "text"
+                    ? props.controls.textValue
+                    : props.wizard.step.initialValue,
+              busy: props.wizard.busy,
+              inputId: "channel-wizard-text-input",
+              validationErrorId: props.wizard.validationError
+                ? "channel-wizard-validation-error"
+                : undefined,
+              presentation: "channels",
+              channelSelect: props.wizard.channel === null,
+              answerLabel: t("channels.setup.continue"),
+              busyLabel: t("channels.setup.working"),
+              sensitiveRevealed: props.controls.secretVisible,
+              onValueChange:
+                props.wizard.step.type === "text"
+                  ? (value) => props.controls.onTextInput(typeof value === "string" ? value : "")
+                  : props.controls.onToggleMultiselect,
+              onAnswer: props.controls.onAnswer,
+              onToggleSensitiveVisibility: props.controls.onToggleSecretVisibility,
+            })
           }
-          busy={props.wizard.busy}
-          inputId="channel-wizard-text-input"
-          validationErrorId={
-            props.wizard.validationError ? "channel-wizard-validation-error" : undefined
-          }
-          presentation="channels"
-          channelSelect={props.wizard.channel === null}
-          answerLabel={t("channels.setup.continue")}
-          busyLabel={t("channels.setup.working")}
-          sensitiveRevealed={props.controls.secretVisible}
-          onValueChange={
-            props.wizard.step.type === "text"
-              ? (value) => props.controls.onTextInput(typeof value === "string" ? value : "")
-              : props.controls.onToggleMultiselect
-          }
-          onAnswer={props.controls.onAnswer}
-          onToggleSensitiveVisibility={props.controls.onToggleSecretVisibility}
         />
       }
     >
@@ -87,18 +93,20 @@ function WizardStepBody(props: {
         <div class="channels-wizard__message">{props.wizard.step.title}</div>
       ) : undefined}
       {message() ? <div class={outputClass()}>{message()}</div> : undefined}
-      <openclaw-modal-actions class="channels-wizard__footer">
+      <div class="channels-wizard__footer">
         {gatewayOwned() ? renderCloseButton(props.controls, "common.cancel") : undefined}
         {gatewayOwned() || props.wizard.busy ? (
-          <WizardBusyButton
-            statusLabel={(gatewayOwned() && message()) || t("channels.setup.working")}
+          <LitContent
+            render={() =>
+              renderWizardBusyButton((gatewayOwned() && message()) || t("channels.setup.working"))
+            }
           />
         ) : (
           <button type="button" class="btn primary" onClick={() => props.controls.onAnswer(null)}>
             {t("channels.setup.continue")}
           </button>
         )}
-      </openclaw-modal-actions>
+      </div>
     </Show>
   );
 }
@@ -127,13 +135,15 @@ function renderWhatsAppLinking(props: ChannelWizardViewProps) {
           <div class="channels-wizard__note">{t("channels.setup.whatsappScanHelp")}</div>
         </>
       )}
-      <openclaw-modal-actions class="channels-wizard__footer">
+      <div class="channels-wizard__footer">
         {connected() ? (
           renderCloseButton(props, "channels.setup.finish", true)
         ) : (
           <>
             {props.whatsappBusy ? (
-              <WizardBusyButton statusLabel={t("channels.setup.whatsappQrLoading")} />
+              <LitContent
+                render={() => renderWizardBusyButton(t("channels.setup.whatsappQrLoading"))}
+              />
             ) : (
               <>
                 <button type="button" class="btn" onClick={() => props.onWhatsAppStart(true)}>
@@ -149,7 +159,7 @@ function renderWhatsAppLinking(props: ChannelWizardViewProps) {
             {renderCloseButton(props, "channels.setup.linkLater")}
           </>
         )}
-      </openclaw-modal-actions>
+      </div>
     </>
   );
 }
@@ -167,9 +177,9 @@ function renderDoneBody(channels: readonly string[], props: ChannelWizardViewPro
       <div class="channels-wizard__note">
         {t(changed ? "channels.setup.doneBody" : "channels.setup.doneNoChangesBody")}
       </div>
-      <openclaw-modal-actions class="channels-wizard__footer">
+      <div class="channels-wizard__footer">
         {renderCloseButton(props, changed ? "channels.setup.finish" : "common.close", true)}
-      </openclaw-modal-actions>
+      </div>
     </>
   );
 }
@@ -204,11 +214,12 @@ function WizardDialog(props: {
         <div class="channels-wizard__header">
           <Show when={props.wizard.channel}>
             {(channel) => (
-              <ChannelIcon
-                channelId={channel()}
-                label={label()}
-                variant="tile"
-                pluginIconUrl={props.controls.channelIconUrl?.(channel())}
+              <LitContent
+                render={() =>
+                  renderChannelIcon(channel(), label(), "tile", {
+                    pluginIconUrl: props.controls.channelIconUrl?.(channel()),
+                  })
+                }
               />
             )}
           </Show>
@@ -245,9 +256,9 @@ function WizardDialog(props: {
             )}
           </Show>
           <Show when={props.wizard.phase === "starting"}>
-            <openclaw-modal-actions class="channels-wizard__footer">
-              <WizardBusyButton statusLabel={t("channels.setup.starting")} />
-            </openclaw-modal-actions>
+            <div class="channels-wizard__footer">
+              <LitContent render={() => renderWizardBusyButton(t("channels.setup.starting"))} />
+            </div>
           </Show>
           <Show when={error()}>
             {(failure) => (
@@ -255,9 +266,9 @@ function WizardDialog(props: {
                 <div class="channels-wizard__error" role="alert">
                   {failure().message}
                 </div>
-                <openclaw-modal-actions class="channels-wizard__footer">
+                <div class="channels-wizard__footer">
                   {renderCloseButton(props.controls, "common.close")}
-                </openclaw-modal-actions>
+                </div>
               </>
             )}
           </Show>

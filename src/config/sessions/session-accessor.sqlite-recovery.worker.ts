@@ -141,18 +141,11 @@ export function recoverRestartTombstoneInDatabase(
 
   const identityKeys = [sourceTarget.canonicalKey, successorTarget.canonicalKey];
   const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-  const successor = writeSessionEntry(
-    database,
-    successorTarget.canonicalKey,
-    params.successorEntry,
-  );
-  const writtenSource = writeSessionEntry(database, sourceTarget.canonicalKey, nextSource, {
+  writeSessionEntry(database, successorTarget.canonicalKey, params.successorEntry);
+  writeSessionEntry(database, sourceTarget.canonicalKey, nextSource, {
     previousEntry: source,
   });
-  const currentIdentity = new Map([
-    [successorTarget.canonicalKey, successor],
-    [sourceTarget.canonicalKey, writtenSource],
-  ]);
+  const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
   const result: RestartTombstoneRecoveryResult = {
     status: "created",
     sourceEntry: structuredClone(nextSource),

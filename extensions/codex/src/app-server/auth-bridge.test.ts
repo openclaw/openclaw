@@ -276,13 +276,7 @@ function createStartOptions(
   };
 }
 
-const MANAGED_AUTH_ARGS = [
-  "-c",
-  'cli_auth_credentials_store="ephemeral"',
-  "-c",
-  "thread_unload_delay_secs=0",
-  "app-server",
-];
+const EPHEMERAL_AUTH_ARGS = ["-c", 'cli_auth_credentials_store="ephemeral"', "app-server"];
 
 async function expectPathMissing(filePath: string): Promise<void> {
   try {
@@ -452,7 +446,7 @@ describe("Codex auth bridge", () => {
       authRequirement: "api-key",
     });
     expect(startOptions).toMatchObject({
-      args: MANAGED_AUTH_ARGS,
+      args: EPHEMERAL_AUTH_ARGS,
       env: { CODEX_HOME: codexHomeDir(agentDir) },
     });
 
@@ -616,31 +610,6 @@ describe("Codex auth bridge", () => {
     expect(desktop.service).toHaveBeenCalledTimes(1);
   });
 
-  baseIt.each([
-    { transport: "stdio" as const, homeScope: "agent" as const, proxy: false, managed: true },
-    { transport: "stdio" as const, homeScope: "user" as const, proxy: false, managed: false },
-    { transport: "stdio" as const, homeScope: "agent" as const, proxy: true, managed: false },
-    { transport: "websocket" as const, homeScope: "agent" as const, proxy: false, managed: false },
-    { transport: "unix" as const, homeScope: "agent" as const, proxy: false, managed: false },
-  ])(
-    "owns unload retention only for managed local starts: $transport/$homeScope/proxy=$proxy",
-    async ({ transport, homeScope, proxy, managed }) => {
-      const agentDir = agentDirs.make();
-      vi.stubEnv("CODEX_HOME", path.join(agentDir, "native-home"));
-      const startOptions = createStartOptions({
-        transport,
-        homeScope,
-        args: ["-c", "thread_unload_delay_secs=25", "app-server", ...(proxy ? ["proxy"] : [])],
-      });
-      const bridged = await bridgeStart({ startOptions, agentDir, authProfileId: null });
-      expect(bridged.args).toEqual(
-        managed
-          ? ["-c", "thread_unload_delay_secs=25", "-c", "thread_unload_delay_secs=0", "app-server"]
-          : startOptions.args,
-      );
-    },
-  );
-
   it("uses the native user Codex home for coexistence mode", async ({ agentDir: root }) => {
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(root, "user-codex-home");
@@ -676,7 +645,7 @@ describe("Codex auth bridge", () => {
       }),
     ).resolves.toEqual({
       ...startOptions,
-      args: MANAGED_AUTH_ARGS,
+      args: EPHEMERAL_AUTH_ARGS,
       env: {
         CODEX_HOME: codexHome,
         HOME: nativeHome,
@@ -721,7 +690,7 @@ describe("Codex auth bridge", () => {
       }),
     ).resolves.toEqual({
       ...startOptions,
-      args: MANAGED_AUTH_ARGS,
+      args: EPHEMERAL_AUTH_ARGS,
       env: {
         EXISTING: "1",
         CODEX_HOME: codexHomeDir(agentDir),
@@ -752,7 +721,7 @@ describe("Codex auth bridge", () => {
         });
         expect(bridged).toEqual({
           ...startOptions,
-          args: MANAGED_AUTH_ARGS,
+          args: EPHEMERAL_AUTH_ARGS,
           env: { CODEX_HOME: codexHomeDir(agentDir) },
           clearEnv: ["FOO", "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
         });
@@ -865,7 +834,7 @@ describe("Codex auth bridge", () => {
       }),
     ).resolves.toEqual({
       ...startOptions,
-      args: MANAGED_AUTH_ARGS,
+      args: EPHEMERAL_AUTH_ARGS,
       env: {
         CODEX_HOME: codexHomeDir(agentDir),
       },

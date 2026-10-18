@@ -1,41 +1,22 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { flush } from "solid-js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { openChatLayoutMenu } from "../../test-helpers/chat-layout-menu.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
-import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
-async function openPanelMenu(container: HTMLElement) {
-  return openChatLayoutMenu({
-    container,
-    click: async (element) => {
-      element.click();
-      await Promise.resolve();
-      flush();
-    },
-  });
-}
-
-async function selectPanel(container: HTMLElement, value: string) {
-  const menu = await openPanelMenu(container);
-  const item = menu.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`);
-  if (!item) {
-    throw new Error(`Expected Layout panel action: ${value}`);
-  }
-  item.click();
-  await waitForSolid(() =>
-    expect(menu.querySelector(".oc-menu")?.matches(":popover-open")).toBe(false),
-  );
+function selectPanel(container: HTMLElement, value: string) {
+  const menu = container.querySelector(".chat-pane__layout-menu")!;
+  menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
+  menu.dispatchEvent(new CustomEvent("wa-after-hide"));
 }
 
 function desktopHello(methods: string[], scopes: string[]): GatewayHelloOk {
@@ -52,16 +33,13 @@ function createTerminalPane(client: GatewayBrowserClient) {
     client,
     sessions: createSessionCapabilityFixture(),
   });
-  const container = document.body.appendChild(document.createElement("div"));
-  onTestFinished(() => container.remove());
+  const container = document.createElement("div");
   const paint = (
     row: GatewaySessionRow | undefined,
     workspace = createPaneHeaderWorkspaceFixture(state),
   ) => {
-    renderPaneHeaderInto(
-      pane.renderPaneHeader(workspace, row, false, undefined, false, null),
-      container,
-    );
+    render(pane.renderPaneHeader(workspace, row, false, undefined, false, null), container);
+    container.querySelector(".chat-pane__layout-menu")?.dispatchEvent(new Event("wa-show"));
     flush();
   };
   return { pane, state, container, paint };
@@ -142,7 +120,7 @@ describe("chat pane terminal action", () => {
     );
   });
 
-  it("exposes the terminal as a side-panel tab only when available", async () => {
+  it("exposes the terminal as a side-panel tab only when available", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { state, container, paint } = createTerminalPane(client);
     const session = {
@@ -159,23 +137,21 @@ describe("chat pane terminal action", () => {
           : undefined,
       });
     const panelActions = () =>
-      container.querySelectorAll('.chat-pane__layout-menu button[role^="menuitem"]');
+      container.querySelectorAll(".chat-pane__layout-menu wa-dropdown-item");
 
     renderHeader();
-    expect(
-      container.querySelector('button[aria-label="Toggle terminal"]:not([role^="menuitem"])'),
-    ).toBeNull();
-    await selectPanel(container, "terminal");
+    expect(container.querySelector('button[aria-label="Toggle terminal"]')).toBeNull();
+    selectPanel(container, "terminal");
     expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toContain("terminal");
 
     state.terminalAvailable = false;
     renderHeader();
-    expect(
-      [...panelActions()].some((action) => action.getAttribute("data-value") === "terminal"),
-    ).toBe(false);
+    expect([...panelActions()].some((action) => action.getAttribute("value") === "terminal")).toBe(
+      false,
+    );
   });
 
-  it("exposes Desktop as a side-panel action only for observable session targets", async () => {
+  it("exposes Desktop as a side-panel action only for observable session targets", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state, container, paint } = createTerminalPane(client);
     const localSession = {
@@ -185,15 +161,13 @@ describe("chat pane terminal action", () => {
     } satisfies GatewaySessionRow;
     const renderHeader = paint;
     const panelActionIds = () =>
-      [...container.querySelectorAll('.chat-pane__layout-menu button[role^="menuitem"]')].map(
-        (item) => item.getAttribute("data-value"),
+      [...container.querySelectorAll(".chat-pane__layout-menu wa-dropdown-item")].map((item) =>
+        item.getAttribute("value"),
       );
     const snapshot = pane.context.gateway.snapshot;
     snapshot.hello = desktopHello([], ["operator.admin"]);
     renderHeader(localSession);
-    expect(
-      container.querySelector('button[aria-label="Toggle desktop panel"]:not([role^="menuitem"])'),
-    ).toBeNull();
+    expect(container.querySelector('button[aria-label="Toggle desktop panel"]')).toBeNull();
 
     snapshot.hello = desktopHello(["desktop.observe"], ["operator.admin"]);
     const onToggleDesktop = vi.fn();
@@ -223,14 +197,9 @@ describe("chat pane terminal action", () => {
       ];
       for (const testCase of targetCases) {
         renderDesktopHeader(testCase.session);
-        await openPanelMenu(container);
-        expect(
-          container.querySelector(
-            'button[aria-label="Toggle desktop panel"]:not([role^="menuitem"])',
-          ),
-        ).toBeNull();
+        expect(container.querySelector('button[aria-label="Toggle desktop panel"]')).toBeNull();
         expect(panelActionIds(), testCase.name).toContain("desktop");
-        await selectPanel(container, "desktop");
+        selectPanel(container, "desktop");
         expect(onToggleDesktop, testCase.name).toHaveBeenCalledTimes(1);
         onToggleDesktop.mockClear();
       }
@@ -244,35 +213,21 @@ describe("chat pane terminal action", () => {
           execNode: "must-not-fall-back",
           placement: placement as GatewaySessionRow["placement"],
         });
-        await openPanelMenu(container);
-        expect(
-          container.querySelector(
-            'button[aria-label="Toggle desktop panel"]:not([role^="menuitem"])',
-          ),
-        ).toBeNull();
+        expect(container.querySelector('button[aria-label="Toggle desktop panel"]')).toBeNull();
         expect(panelActionIds()).not.toContain("desktop");
       }
 
       renderDesktopHeader(undefined);
-      await openPanelMenu(container);
-      expect(
-        container.querySelector(
-          'button[aria-label="Toggle desktop panel"]:not([role^="menuitem"])',
-        ),
-      ).toBeNull();
+      expect(container.querySelector('button[aria-label="Toggle desktop panel"]')).toBeNull();
       expect(panelActionIds()).not.toContain("desktop");
 
       snapshot.hello = desktopHello(["desktop.observe"], ["operator.read"]);
       renderDesktopHeader(localSession);
-      expect(
-        container.querySelector(
-          'button[aria-label="Toggle desktop panel"]:not([role^="menuitem"])',
-        ),
-      ).toBeNull();
+      expect(container.querySelector('button[aria-label="Toggle desktop panel"]')).toBeNull();
     }
   });
 
-  it("keeps Browser reachable in the topbar", async () => {
+  it("keeps Browser reachable in the topbar", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { state, container, paint } = createTerminalPane(client);
     const session = {
@@ -282,22 +237,20 @@ describe("chat pane terminal action", () => {
     } satisfies GatewaySessionRow;
     const renderHeader = () => paint(session);
     const panelActionIds = () =>
-      [...container.querySelectorAll('.chat-pane__layout-menu button[role^="menuitem"]')].map(
-        (item) => item.getAttribute("data-value"),
+      [...container.querySelectorAll(".chat-pane__layout-menu wa-dropdown-item")].map((item) =>
+        item.getAttribute("value"),
       );
 
     state.browserPanelAvailable = false;
     renderHeader();
-    await openPanelMenu(container);
     expect(container.querySelector(".chat-browser-panel-toggle")).toBeNull();
     expect(panelActionIds()).not.toContain("browser");
 
     state.browserPanelAvailable = true;
     const onToggleBrowser = vi.fn();
     paint(session, { ...createPaneHeaderWorkspaceFixture(state), onToggleBrowser });
-    await openPanelMenu(container);
     expect(panelActionIds()).toContain("browser");
-    await selectPanel(container, "browser");
-    await waitForSolid(() => expect(onToggleBrowser).toHaveBeenCalledOnce());
+    selectPanel(container, "browser");
+    expect(onToggleBrowser).toHaveBeenCalledOnce();
   });
 });

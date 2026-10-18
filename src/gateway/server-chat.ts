@@ -2,8 +2,10 @@
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { Value } from "typebox/value";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
+  ChatStatusEventSchema,
   projectChatErrorDetail,
   type ChatEvent,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -14,8 +16,6 @@ import {
   classifyAgentRunTerminalOutcome,
   isDefinitiveRunLifecycle,
 } from "../agents/agent-run-terminal-outcome.js";
-import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
-import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { renderCodexAppServerFailureCopy } from "../agents/failover/user-copy.js";
@@ -40,7 +40,10 @@ import {
   appendChatCanvasBlocksToMessage,
   extractChatToolResultCanvasPreview,
 } from "./chat-display-projection.canvas.js";
-import { shouldSuppressAssistantEventForLiveChat } from "./live-chat-projector.js";
+import {
+  projectLiveAssistantBufferedText,
+  shouldSuppressAssistantEventForLiveChat,
+} from "./live-chat-projector.js";
 import type {
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
@@ -64,7 +67,6 @@ import {
   chatWireProjection,
   liveTextDelivery,
   prepareAgentWirePayload,
-  projectChatStatusEvent,
   scheduleLiveTextFlush,
 } from "./server-chat-live-text.js";
 import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
@@ -514,12 +516,10 @@ export function createAgentEventHandler({
               abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
               yielded: yieldedWaiting ? true : undefined,
               errorObservation: evt.data?.errorObservation,
-              suppressErrorNotice: evt.data?.suppressErrorNotice === true,
               assistantTranscriptIdempotencyKey: readStringValue(
                 evt.data?.assistantTranscriptIdempotencyKey,
               ),
               terminalPersistence,
-              terminalReply: normalizeAgentRunTerminalReplySnapshot(evt.data?.terminalReply),
               isCurrent: () =>
                 shouldProcessOwnedEvent(evt.runId, evt.contextClaimId, evt.lifecycleGeneration),
             },
@@ -807,10 +807,8 @@ export function createAgentEventHandler({
       abortErrorMessage?: string;
       yielded?: true;
       errorObservation?: unknown;
-      suppressErrorNotice?: boolean;
       assistantTranscriptIdempotencyKey?: string;
       terminalPersistence?: Promise<void>;
-      terminalReply?: AgentRunTerminalReplySnapshot;
       isCurrent?: () => boolean;
     },
   ) => {
@@ -819,12 +817,15 @@ export function createAgentEventHandler({
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
-      text: terminalBuffer.text,
+      text: terminalBuffer.text.trim(),
       isHeartbeat: delivery.isHeartbeat,
     });
-    const text = normalizedHeartbeatText.text;
+    const projected = projectLiveAssistantBufferedText(normalizedHeartbeatText.text.trim(), {
+      suppressLeadFragments: false,
+    });
+    const text = projected.text.trim();
     const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress || opts?.terminalReply?.disposition === "silent";
+      normalizedHeartbeatText.suppress || (projected.suppress && !terminalBuffer.displayText);
     const hasDisplayContent = Boolean(text || terminalBuffer.displayText);
     // Flush any paced delta so streaming clients receive the complete text
     // before the final event.
@@ -868,7 +869,8 @@ export function createAgentEventHandler({
     if (jobState !== "error") {
       const run = chatRunState.runs.get(clientRunId);
       const canvasBlocks = run?.canvasBlocks ?? [];
-      // Prepared silent output has no model text; tool-owned widgets remain visible.
+      // Empty tool-only turns can render widgets; explicit silent/control replies
+      // still suppress their message, even when an earlier tool hosted a widget.
       const canvasOnly =
         jobState === "done" &&
         canvasBlocks.length > 0 &&
@@ -907,7 +909,6 @@ export function createAgentEventHandler({
         ? (renderCodexAppServerFailureCopy(errorMessage) ?? errorMessage)
         : undefined,
       ...(errorKind && { errorKind }),
-      ...(opts?.suppressErrorNotice ? { suppressErrorNotice: true } : {}),
       ...(errorDetail ? { errorDetail } : {}),
       ...(stopReason && { stopReason }),
     };
@@ -1277,13 +1278,34 @@ export function createAgentEventHandler({
       );
     }
     if (evt.stream === "run_status" && chatLink && isControlUiVisible && sessionKey && !isAborted) {
-      const payload = projectChatStatusEvent(evt, {
+      const payload = {
         runId: clientRunId,
         sessionKey,
-        agentId: sessionAgentId,
-        spawnedBy,
-      });
-      if (payload) {
+        ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+        ...(spawnedBy && { spawnedBy }),
+        seq: evt.seq,
+        state: "status" as const,
+        ...(evt.data.phase === "retrying"
+          ? {
+              phase: "starting_model",
+              ...(["rate_limit", "overloaded", "server_error", "timeout", "output_limit"].includes(
+                String(evt.data.reason),
+              )
+                ? {
+                    retry: {
+                      attempt: evt.data.attempt,
+                      maxAttempts: evt.data.maxAttempts,
+                      reason: evt.data.reason,
+                      ...(typeof evt.data.retryAt === "number" && Number.isFinite(evt.data.retryAt)
+                        ? { retryAt: evt.data.retryAt }
+                        : {}),
+                    },
+                  }
+                : {}),
+            }
+          : { phase: evt.data.phase }),
+      };
+      if (Value.Check(ChatStatusEventSchema, payload)) {
         sendLivePayload("chat", sessionKey, payload, {
           agentId: sessionAgentId,
           controlUiVisible: true,

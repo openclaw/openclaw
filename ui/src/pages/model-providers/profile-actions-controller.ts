@@ -21,7 +21,7 @@ type PendingProfileOrder = {
   optimisticOrder: string[];
 };
 
-type ProfileActionsOptions = {
+type ProfileActionsControllerOptions = {
   getAgentEpoch: () => number;
   getAgentId: () => string;
   getClient: () => GatewayBrowserClient | null;
@@ -42,33 +42,35 @@ type ProfileActionsOptions = {
   isCurrentClient: (client: GatewayBrowserClient, epoch: number) => boolean;
 };
 
-export function createModelProviderProfileActions(options: ProfileActionsOptions) {
-  let probeEpochs = new Map<string, number>();
-  const pendingOrders = new Map<string, PendingProfileOrder>();
-  const activeOrderProviders = new Set<string>();
+export class ModelProviderProfileActionsController {
+  private probeEpochs = new Map<string, number>();
+  private readonly pendingOrders = new Map<string, PendingProfileOrder>();
+  private readonly activeOrderProviders = new Set<string>();
 
-  function resetProbes(): void {
-    probeEpochs = new Map();
+  constructor(private readonly options: ProfileActionsControllerOptions) {}
+
+  resetProbes(): void {
+    this.probeEpochs = new Map();
   }
 
-  function clearProbe(cardId: string): void {
-    probeEpochs.set(cardId, (probeEpochs.get(cardId) ?? 0) + 1);
-    options.setBusy("probe:" + cardId, false);
-    options.setProbeResult(cardId, null);
+  clearProbe(cardId: string): void {
+    this.probeEpochs.set(cardId, (this.probeEpochs.get(cardId) ?? 0) + 1);
+    this.options.setBusy("probe:" + cardId, false);
+    this.options.setProbeResult(cardId, null);
   }
 
-  async function probe(cardId: string, providers: string[]) {
-    const client = options.getClient();
+  async probe(cardId: string, providers: string[]) {
+    const client = this.options.getClient();
     const key = `probe:${cardId}`;
-    if (!client || !options.canMutate() || options.isBusy(key)) {
+    if (!client || !this.options.canMutate() || this.options.isBusy(key)) {
       return;
     }
-    const { agentId, isCurrent } = captureScope(client);
-    const probeEpoch = (probeEpochs.get(cardId) ?? 0) + 1;
-    probeEpochs.set(cardId, probeEpoch);
-    const ownsProbe = () => isCurrent() && probeEpochs.get(cardId) === probeEpoch;
-    options.setBusy(key, true);
-    options.clearMessage(cardId);
+    const { agentId, isCurrent } = this.captureScope(client);
+    const probeEpoch = (this.probeEpochs.get(cardId) ?? 0) + 1;
+    this.probeEpochs.set(cardId, probeEpoch);
+    const ownsProbe = () => isCurrent() && this.probeEpochs.get(cardId) === probeEpoch;
+    this.options.setBusy(key, true);
+    this.options.clearMessage(cardId);
     try {
       const results: ModelsProbeResult[] = [];
       for (const provider of providers) {
@@ -80,58 +82,58 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
         );
       }
       if (ownsProbe()) {
-        options.setProbeResult(cardId, mergeProbeResults(cardId, results));
+        this.options.setProbeResult(cardId, mergeProbeResults(cardId, results));
       }
     } catch (error) {
       if (!ownsProbe()) {
         return;
       }
-      options.setProbeError(cardId, modelProviderErrorMessage(error));
+      this.options.setProbeError(cardId, modelProviderErrorMessage(error));
     } finally {
       if (ownsProbe()) {
-        options.setBusy(key, false);
+        this.options.setBusy(key, false);
       }
     }
   }
 
-  function resetOrders(): void {
-    pendingOrders.clear();
-    options.setOrders({});
+  resetOrders(): void {
+    this.pendingOrders.clear();
+    this.options.setOrders({});
   }
 
-  function setOrder(cardId: string, provider: string, profileIds: string[] | null): void {
-    const providerStatus = options
+  setOrder(cardId: string, provider: string, profileIds: string[] | null): void {
+    const providerStatus = this.options
       .getData()
       ?.authStatus?.providers.find((candidate) => candidate.provider === provider);
     const optimisticOrder =
       profileIds ?? providerStatus?.profiles.map((profile) => profile.profileId) ?? [];
-    options.setOrders({ ...options.getOrders(), [provider]: optimisticOrder });
-    pendingOrders.set(provider, { profileIds, optimisticOrder });
-    options.clearMessage(cardId);
-    void flushOrder(provider);
+    this.options.setOrders({ ...this.options.getOrders(), [provider]: optimisticOrder });
+    this.pendingOrders.set(provider, { profileIds, optimisticOrder });
+    this.options.clearMessage(cardId);
+    void this.flushOrder(provider);
   }
 
-  function flushPendingOrders(): void {
-    if (!options.canMutate()) {
+  flushPendingOrders(): void {
+    if (!this.options.canMutate()) {
       return;
     }
-    for (const provider of pendingOrders.keys()) {
-      void flushOrder(provider);
+    for (const provider of this.pendingOrders.keys()) {
+      void this.flushOrder(provider);
     }
   }
 
-  async function logout(cardId: string, target: ModelProviderLogoutTarget): Promise<void> {
-    const client = options.getClient();
+  async logout(cardId: string, target: ModelProviderLogoutTarget): Promise<void> {
+    const client = this.options.getClient();
     const key = `logout:${cardId}`;
-    if (!client || !options.canMutate() || options.isBusy(key)) {
+    if (!client || !this.options.canMutate() || this.options.isBusy(key)) {
       return;
     }
-    const { agentId, isCurrent } = captureScope(client);
-    clearProbe(cardId);
-    options.setBusy(key, true);
-    options.clearMessage(cardId);
+    const { agentId, isCurrent } = this.captureScope(client);
+    this.clearProbe(cardId);
+    this.options.setBusy(key, true);
+    this.options.clearMessage(cardId);
     try {
-      const result = await options.getConfig().runExternalMutation(
+      const result = await this.options.getConfig().runExternalMutation(
         async (activeClient) => {
           const receipt = await activeClient.request<ModelAuthLogoutResult>("models.authLogout", {
             ...target,
@@ -140,21 +142,21 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
           invalidateModelAuthStatusRequests(activeClient);
           return receipt;
         },
-        { canDispatch: () => isCurrent() && options.canMutate() },
+        { canDispatch: () => isCurrent() && this.options.canMutate() },
       );
       if (!isCurrent()) {
         return;
       }
       if (!result.ok) {
-        await options.refresh();
+        await this.options.refresh();
         if (isCurrent()) {
           showProfileActionError(result.error);
         }
         return;
       }
       const warning = await modelProviderMutationWarnings(result, async () => {
-        await options.refresh();
-        return options.getData()?.error;
+        await this.options.refresh();
+        return this.options.getData()?.error;
       });
       if (isCurrent()) {
         showProfileLogoutSuccess(warning || undefined);
@@ -165,28 +167,28 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
       }
     } finally {
       if (isCurrent()) {
-        options.setBusy(key, false);
+        this.options.setBusy(key, false);
       }
     }
   }
 
-  async function flushOrder(provider: string): Promise<void> {
-    if (activeOrderProviders.has(provider)) {
+  private async flushOrder(provider: string): Promise<void> {
+    if (this.activeOrderProviders.has(provider)) {
       return;
     }
-    activeOrderProviders.add(provider);
+    this.activeOrderProviders.add(provider);
     try {
       while (true) {
-        const pending = pendingOrders.get(provider);
+        const pending = this.pendingOrders.get(provider);
         if (!pending) {
           return;
         }
-        const client = options.getClient();
-        if (!client || !options.canMutate()) {
+        const client = this.options.getClient();
+        if (!client || !this.options.canMutate()) {
           return;
         }
-        pendingOrders.delete(provider);
-        const { agentId, isCurrent } = captureScope(client);
+        this.pendingOrders.delete(provider);
+        const { agentId, isCurrent } = this.captureScope(client);
         try {
           const result = await client.request<ModelAuthOrderSetResult>("models.authOrderSet", {
             provider,
@@ -198,61 +200,61 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
             return;
           }
           if (pending.profileIds && !result.warning) {
-            options.cancelRefresh();
-            applyOrder(provider, pending.profileIds);
-            void options.refresh();
+            this.options.cancelRefresh();
+            this.applyOrder(provider, pending.profileIds);
+            void this.options.refresh();
           } else {
-            await options.refresh();
+            await this.options.refresh();
             if (!isCurrent()) {
               return;
             }
           }
-          if (clearOptimisticOrder(provider, pending.optimisticOrder) && result.warning) {
+          if (this.clearOptimisticOrder(provider, pending.optimisticOrder) && result.warning) {
             showProfileActionError(result.warning);
           }
         } catch (error) {
           if (!isCurrent()) {
             return;
           }
-          if (clearOptimisticOrder(provider, pending.optimisticOrder)) {
+          if (this.clearOptimisticOrder(provider, pending.optimisticOrder)) {
             showProfileActionError(error);
           }
         }
       }
     } finally {
-      activeOrderProviders.delete(provider);
+      this.activeOrderProviders.delete(provider);
       // A stale save can finish after a new agent queued the same provider.
       // Re-enter after releasing the slot so the new scope's intent is not stranded.
-      if (pendingOrders.has(provider) && options.canMutate()) {
-        void flushOrder(provider);
+      if (this.pendingOrders.has(provider) && this.options.canMutate()) {
+        void this.flushOrder(provider);
       }
     }
   }
 
-  function captureScope(client: GatewayBrowserClient) {
-    const clientEpoch = options.getClientEpoch();
-    const agentId = options.getAgentId();
-    const agentEpoch = options.getAgentEpoch();
+  private captureScope(client: GatewayBrowserClient) {
+    const clientEpoch = this.options.getClientEpoch();
+    const agentId = this.options.getAgentId();
+    const agentEpoch = this.options.getAgentEpoch();
     return {
       agentId,
       isCurrent: () =>
-        options.isCurrentClient(client, clientEpoch) &&
-        options.getAgentEpoch() === agentEpoch &&
-        options.getAgentId() === agentId,
+        this.options.isCurrentClient(client, clientEpoch) &&
+        this.options.getAgentEpoch() === agentEpoch &&
+        this.options.getAgentId() === agentId,
     };
   }
 
-  function clearOptimisticOrder(provider: string, expected: string[]): boolean {
-    const orders = options.getOrders();
+  private clearOptimisticOrder(provider: string, expected: string[]): boolean {
+    const orders = this.options.getOrders();
     if (orders[provider] !== expected) {
       return false;
     }
-    options.setOrders(updateRecordEntry<string[]>(orders, provider, null));
+    this.options.setOrders(updateRecordEntry<string[]>(orders, provider, null));
     return true;
   }
 
-  function applyOrder(provider: string, profileIds: string[]): void {
-    const data = options.getData();
+  private applyOrder(provider: string, profileIds: string[]): void {
+    const data = this.options.getData();
     const authStatus = data?.authStatus;
     if (!data || !authStatus) {
       return;
@@ -262,7 +264,6 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
         ? { ...candidate, profileOrder: [...profileIds], profileOrderStored: true }
         : candidate,
     );
-    options.setData({ ...data, authStatus: { ...authStatus, providers } });
+    this.options.setData({ ...data, authStatus: { ...authStatus, providers } });
   }
-  return { resetProbes, clearProbe, probe, resetOrders, setOrder, flushPendingOrders, logout };
 }

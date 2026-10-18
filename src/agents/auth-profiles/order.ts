@@ -25,7 +25,6 @@ import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import {
   clearExpiredCooldowns,
   isProfileInCooldown,
-  readAuthProfileUsageStats,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
@@ -254,7 +253,7 @@ export function resolveAuthProfileOrderWithMetadata(
   const isInCooldown = (profileId: string) =>
     isProfileInCooldown(store, profileId, now, cooldownModel);
   const unusableUntil = (profileId: string) =>
-    resolveProfileUnusableUntil(readAuthProfileUsageStats(store, profileId) ?? {}, cooldownModel);
+    resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}, cooldownModel);
 
   const available: string[] = [];
   const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];

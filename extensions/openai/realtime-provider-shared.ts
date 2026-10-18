@@ -2,6 +2,7 @@ import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-r
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
+  asOptionalObjectRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
@@ -29,9 +30,13 @@ export function readRealtimeErrorDetail(error: unknown): string {
 
 export function resolveOpenAIProviderConfigRecord(
   config: Record<string, unknown>,
-): Record<string, unknown> {
+): Record<string, unknown> | undefined {
   const providers = asOptionalRecord(config.providers);
-  return asOptionalRecord(providers?.openai) ?? asOptionalRecord(config.openai) ?? config;
+  return (
+    asOptionalRecord(providers?.openai) ??
+    asOptionalRecord(config.openai) ??
+    asOptionalRecord(config)
+  );
 }
 
 type OpenAIRealtimeClientSecretRequest = {
@@ -95,10 +100,10 @@ export async function createOpenAIRealtimeClientSecret(
   } finally {
     await release();
   }
-  const record = asOptionalRecord(payload);
+  const record = asOptionalObjectRecord(payload);
   const nestedSecret = record?.client_secret;
   const clientSecret =
-    normalizeOptionalString(record?.value) ??
+    normalizeOptionalString(asOptionalRecord(payload)?.value) ??
     normalizeOptionalString(asOptionalRecord(nestedSecret)?.value);
   if (!clientSecret) {
     throw new Error(`${label} client secret response did not include a value`);

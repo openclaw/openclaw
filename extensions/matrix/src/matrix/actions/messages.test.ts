@@ -5,7 +5,8 @@ import { PollStartEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollStart
 import { describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
-import { editMatrixMessage, readMatrixMessages } from "./messages.js";
+import * as sendModule from "../send.js";
+import { editMatrixMessage, readMatrixMessages, sendMatrixMessage } from "./messages.js";
 
 const MATRIX_ACTION_TEST_CFG = {
   channels: {
@@ -194,6 +195,34 @@ function mockCallArg(
 }
 
 describe("matrix message actions", () => {
+  it("preserves workspace media access through the shared Matrix send helper", async () => {
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw-matrix-test"],
+      readFile: async () => Buffer.from("chart"),
+      workspaceDir: "/tmp/openclaw-matrix-test",
+    };
+    const sendSpy = vi.spyOn(sendModule, "sendMessageMatrix").mockResolvedValue({
+      messageId: "$sent",
+      roomId: "!room:example.org",
+    } as never);
+
+    try {
+      await sendMatrixMessage("!room:example.org", "caption", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+        mediaUrl: "chart.png",
+        mediaAccess,
+        mediaLocalRoots: mediaAccess.localRoots,
+      });
+
+      const options = sendSpy.mock.calls[0]?.[2];
+      expect(options?.mediaUrl).toBe("chart.png");
+      expect(options?.mediaAccess).toBe(mediaAccess);
+      expect(options?.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    } finally {
+      sendSpy.mockRestore();
+    }
+  });
+
   it("rejects whitespace-only Matrix edits", async () => {
     await expect(
       editMatrixMessage("!room:example.org", "$original", "   \n  ", {

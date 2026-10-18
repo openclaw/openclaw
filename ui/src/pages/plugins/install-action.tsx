@@ -1,4 +1,4 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
+import type { JSX } from "@solidjs/web";
 import { createEffect, createSignal, onCleanup, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
@@ -6,6 +6,8 @@ import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-ma
 import { formatUnit } from "../../lib/format.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import "./custom-elements.ts";
 import "./install-action.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
 
@@ -18,15 +20,20 @@ export type PluginInstallActionProps = {
   pluginName?: string;
   buttonClass?: string;
   primary?: boolean;
-  actionLabel?: string;
-  busyLabel?: string;
   onInstall?: () => void;
 };
 
-type PluginInstallActionElement = HTMLElement & { dismiss(): void };
+type PluginInstallActionMethods = { dismiss(): void };
+export type PluginInstallActionElement = SolidBridgeElement<
+  PluginInstallActionProps,
+  PluginInstallActionMethods
+>;
+const dismissers = new WeakMap<HTMLElement, () => void>();
 
-export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.Element {
-  let host!: HTMLElement;
+function InstallActionContent(
+  props: PluginInstallActionProps,
+  host: PluginInstallActionElement,
+): JSX.Element {
   const [button, setButton] = createSignal<HTMLButtonElement>();
   const [open, setOpen] = createSignal(false);
   let popover: PopoverHandle | undefined;
@@ -38,9 +45,8 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
     pinned = false;
     popover?.overlay.request(false, "return");
   };
-  onCleanup(() => {
-    popover = undefined;
-  });
+  dismissers.set(host, dismiss);
+  onCleanup(() => dismissers.delete(host));
   createEffect(
     () => open() && Boolean(props.progress),
     (expanded) => {
@@ -77,195 +83,197 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
         )
       : 0;
   return (
-    <openclaw-plugin-install-action
-      ref={(element) => {
-        host = Object.assign(element, { dismiss });
+    <span
+      class="plugin-install-action"
+      onMouseEnter={() => {
+        hovering = true;
+        popover?.show();
+      }}
+      onMouseLeave={() => {
+        hovering = false;
+        if (!pinned && !host.contains(document.activeElement)) {
+          popover?.hide();
+        }
+      }}
+      onFocusIn={(event: FocusEvent) => {
+        // The owner's return focus during close must not reopen the panel.
+        if (
+          popover?.overlay.phase !== "closing" &&
+          !(event.relatedTarget instanceof Node && host.contains(event.relatedTarget))
+        ) {
+          popover?.show();
+        }
+      }}
+      onFocusOut={(event: FocusEvent) => {
+        if (
+          !pinned &&
+          !hovering &&
+          !(event.relatedTarget instanceof Node && host.contains(event.relatedTarget))
+        ) {
+          popover?.hide();
+        }
       }}
     >
-      <span
-        class="plugin-install-action"
-        onMouseEnter={() => {
-          hovering = true;
-          popover?.show();
-        }}
-        onMouseLeave={() => {
-          hovering = false;
-          if (!pinned && !host.contains(document.activeElement)) {
-            popover?.hide();
-          }
-        }}
-        onFocusIn={(event: FocusEvent) => {
-          // The owner's return focus during close must not reopen the panel.
-          if (
-            popover?.overlay.phase !== "closing" &&
-            !(event.relatedTarget instanceof Node && host.contains(event.relatedTarget))
-          ) {
-            popover?.show();
-          }
-        }}
-        onFocusOut={(event: FocusEvent) => {
-          if (
-            !pinned &&
-            !hovering &&
-            !(event.relatedTarget instanceof Node && host.contains(event.relatedTarget))
-          ) {
-            popover?.hide();
+      <button
+        ref={setButton}
+        type="button"
+        class={[
+          props.buttonClass,
+          "plugin-install-action__button",
+          {
+            primary: props.primary && !failed(),
+            "oc-action-primary": props.primary && !failed(),
+            "oc-action-secondary": !props.primary || failed(),
+            "plugin-install-action__button--failed": failed(),
+          },
+        ]}
+        disabled={props.disabled && canInstall()}
+        aria-label={
+          props.pluginName && (canInstall() || failed())
+            ? t(
+                canInstall()
+                  ? failed()
+                    ? "pluginsPage.retryInstallNamed"
+                    : "pluginsPage.installNamed"
+                  : "pluginsPage.viewInstallStatusNamed",
+                { name: props.pluginName },
+              )
+            : undefined
+        }
+        aria-busy={active() && !failed() ? "true" : undefined}
+        aria-expanded={progress() ? (open() ? "true" : "false") : undefined}
+        aria-controls={progress() ? progressId : undefined}
+        onClick={(event: MouseEvent) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (canInstall()) {
+            if (!props.disabled) {
+              props.onInstall?.();
+            }
+          } else {
+            pinned = !pinned;
+            if (pinned) {
+              popover?.show();
+            } else {
+              popover?.hide();
+            }
           }
         }}
       >
-        <button
-          ref={setButton}
-          type="button"
-          class={[
-            props.buttonClass,
-            "plugin-install-action__button",
-            {
-              primary: props.primary && !failed(),
-              "oc-action-primary": props.primary && !failed(),
-              "oc-action-secondary": !props.primary || failed(),
-              "plugin-install-action__button--failed": failed(),
-            },
-          ]}
-          disabled={props.disabled && canInstall()}
-          aria-label={
-            props.pluginName && (canInstall() || failed())
-              ? t(
-                  canInstall()
-                    ? failed()
-                      ? "pluginsPage.retryInstallNamed"
-                      : "pluginsPage.installNamed"
-                    : "pluginsPage.viewInstallStatusNamed",
-                  { name: props.pluginName },
-                )
-              : undefined
-          }
-          aria-busy={active() && !failed() ? "true" : undefined}
-          aria-expanded={progress() ? (open() ? "true" : "false") : undefined}
-          aria-controls={progress() ? progressId : undefined}
-          onClick={(event: MouseEvent) => {
-            event.preventDefault();
-            event.stopPropagation();
-            if (canInstall()) {
-              if (!props.disabled) {
-                props.onInstall?.();
-              }
-            } else {
-              pinned = !pinned;
-              if (pinned) {
-                popover?.show();
-              } else {
-                popover?.hide();
-              }
+        {active() && !failed() ? <span class="btn__spinner" aria-hidden="true" /> : undefined}
+        {t(
+          canInstall()
+            ? failed()
+              ? "pluginsPage.retryInstall"
+              : "pluginsPage.install"
+            : failed()
+              ? "pluginsPage.installProgress.viewStatus"
+              : "pluginsPage.installing",
+        )}
+        {progress() ? <Icon name="chevronDown" /> : undefined}
+      </button>
+      {progress() && button() ? (
+        <Popover
+          id={progressId}
+          label={t("pluginsPage.installProgress.title")}
+          anchor={button()}
+          class="plugin-install-action__popup"
+          placement="bottom-start"
+          ref={(handle) => {
+            popover = handle;
+            setOpen(handle.overlay.open);
+            if (hovering || pinned || host.contains(document.activeElement)) {
+              handle.show();
             }
           }}
+          dismissOutsidePointer={false}
+          dismissOutsideFocus={false}
+          onOpenChange={(value) => {
+            if (!value) {
+              pinned = false;
+            }
+            setOpen(value);
+          }}
         >
-          {active() && !failed() ? <span class="btn__spinner" aria-hidden="true" /> : undefined}
-          {canInstall() && !failed()
-            ? (props.actionLabel ?? t("pluginsPage.install"))
-            : active() && !failed()
-              ? (props.busyLabel ?? t("pluginsPage.installing"))
-              : t(
-                  failed() && canInstall()
-                    ? "pluginsPage.retryInstall"
-                    : "pluginsPage.installProgress.viewStatus",
-                )}
-          {progress() ? <Icon name="chevronDown" /> : undefined}
-        </button>
-        {progress() && button() ? (
-          <Popover
-            id={progressId}
-            label={t("pluginsPage.installProgress.title")}
-            anchor={button()}
-            class="plugin-install-action__popup"
-            placement="bottom-start"
-            ref={(handle) => {
-              popover = handle;
-              setOpen(handle.overlay.open);
-              if (hovering || pinned || host.contains(document.activeElement)) {
-                handle.show();
-              }
-            }}
-            dismissOutsidePointer={false}
-            dismissOutsideFocus={false}
-            onOpenChange={(value) => {
-              if (!value) {
-                pinned = false;
-              }
-              setOpen(value);
-            }}
+          <section
+            class="plugin-install-progress"
+            role="status"
+            aria-label={t("pluginsPage.installProgress.title")}
           >
-            <section
-              class="plugin-install-progress"
-              role="status"
-              aria-label={t("pluginsPage.installProgress.title")}
-            >
-              <div class="plugin-install-progress__header">
-                <strong>
-                  {props.progress!.failure?.title ??
-                    t(
-                      failed()
-                        ? "pluginsPage.installProgress.stopped"
-                        : "pluginsPage.installProgress.title",
-                    )}
-                </strong>
-                <span aria-hidden="true">{formatUnit({ value: duration(), unit: "second" })}</span>
-              </div>
-              {props.progress!.failure && !props.progress!.canRetry ? (
-                <p class="plugin-install-progress__recovery">{props.progress!.failure.recovery}</p>
-              ) : undefined}
-              <ol class="plugin-install-progress__activities">
-                <For each={props.progress!.activities}>
-                  {(activity) => (
-                    <li
-                      class={`plugin-install-progress__activity plugin-install-progress__activity--${activity.status}`}
-                    >
-                      <span class="plugin-install-progress__icon" aria-hidden="true">
-                        {activity.status === "completed" ? (
-                          <Icon name="check" />
-                        ) : activity.status === "failed" ? (
-                          "!"
-                        ) : undefined}
-                      </span>
-                      <span>
-                        {t(`pluginsPage.installProgress.${activity.stage}.${activity.status}`)}
-                      </span>
-                    </li>
+            <div class="plugin-install-progress__header">
+              <strong>
+                {props.progress!.failure?.title ??
+                  t(
+                    failed()
+                      ? "pluginsPage.installProgress.stopped"
+                      : "pluginsPage.installProgress.title",
                   )}
-                </For>
-                {failed() &&
-                !props.progress!.activities.some((activity) => activity.status === "failed") ? (
-                  <li class="plugin-install-progress__activity plugin-install-progress__activity--failed">
+              </strong>
+              <span aria-hidden="true">{formatUnit({ value: duration(), unit: "second" })}</span>
+            </div>
+            {props.progress!.failure && !props.progress!.canRetry ? (
+              <p class="plugin-install-progress__recovery">{props.progress!.failure.recovery}</p>
+            ) : undefined}
+            <ol class="plugin-install-progress__activities">
+              <For each={props.progress!.activities}>
+                {(activity) => (
+                  <li
+                    class={`plugin-install-progress__activity plugin-install-progress__activity--${activity.status}`}
+                  >
                     <span class="plugin-install-progress__icon" aria-hidden="true">
-                      !
+                      {activity.status === "completed" ? (
+                        <Icon name="check" />
+                      ) : activity.status === "failed" ? (
+                        "!"
+                      ) : undefined}
                     </span>
-                    <span>{t("pluginsPage.installProgress.failure")}</span>
+                    <span>
+                      {t(`pluginsPage.installProgress.${activity.stage}.${activity.status}`)}
+                    </span>
                   </li>
-                ) : undefined}
-              </ol>
-              {props.progress!.failure ? (
-                <details class="plugin-install-progress__failure">
-                  <summary>{t("pluginsPage.installProgress.details")}</summary>
-                  <p>{props.progress!.failure.detail}</p>
-                </details>
+                )}
+              </For>
+              {failed() &&
+              !props.progress!.activities.some((activity) => activity.status === "failed") ? (
+                <li class="plugin-install-progress__activity plugin-install-progress__activity--failed">
+                  <span class="plugin-install-progress__icon" aria-hidden="true">
+                    !
+                  </span>
+                  <span>{t("pluginsPage.installProgress.failure")}</span>
+                </li>
               ) : undefined}
-            </section>
-          </Popover>
-        ) : undefined}
-      </span>
-    </openclaw-plugin-install-action>
+            </ol>
+            {props.progress!.failure ? (
+              <details class="plugin-install-progress__failure">
+                <summary>{t("pluginsPage.installProgress.details")}</summary>
+                <p>{props.progress!.failure.detail}</p>
+              </details>
+            ) : undefined}
+          </section>
+        </Popover>
+      ) : undefined}
+    </span>
   );
 }
+
+export const PluginInstallAction = defineSolidBridge<
+  PluginInstallActionProps,
+  PluginInstallActionMethods
+>("openclaw-plugin-install-action", InstallActionContent, {
+  properties: {
+    progress: { default: undefined, attribute: false },
+    busy: { default: false, attribute: false },
+    disabled: { default: false, attribute: false },
+    pluginName: { default: "", attribute: false },
+    buttonClass: { default: "", attribute: false },
+    primary: { default: false, attribute: false },
+    onInstall: { default: undefined, attribute: false },
+  },
+  methods: { dismiss: (host) => dismissers.get(host)?.() },
+});
 
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-plugin-install-action": PluginInstallActionElement;
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-plugin-install-action": HTMLAttributes<HTMLElement>;
-    }
   }
 }

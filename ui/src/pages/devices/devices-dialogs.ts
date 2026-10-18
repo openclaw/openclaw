@@ -38,21 +38,23 @@ export type DevicesDialogHost = {
   setDevicesError: (message: string) => void;
 };
 
-export function createDevicesDialogs(host: DevicesDialogHost) {
-  let pending: AbortController | null = null;
+export class DevicesDialogController {
+  private pending: AbortController | null = null;
 
-  function cancel() {
-    pending?.abort();
-    pending = null;
+  constructor(private readonly host: DevicesDialogHost) {}
+
+  cancel() {
+    this.pending?.abort();
+    this.pending = null;
   }
 
   // Alias edits and destructive confirmations share one slot, retired on reconnect.
-  async function editAlias(device: DeviceAliasTarget): Promise<void> {
-    if (!host.canManagePairing() || pending) {
+  async editAlias(device: DeviceAliasTarget): Promise<void> {
+    if (!this.host.canManagePairing() || this.pending) {
       return;
     }
     const controller = new AbortController();
-    pending = controller;
+    this.pending = controller;
     try {
       const { showInputDialog } = await import("../../components/input-dialog.ts");
       await showInputDialog({
@@ -63,25 +65,25 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
         requireValue: true,
         requireChange: true,
         submit: (label) => {
-          if (!host.canManagePairing()) {
+          if (!this.host.canManagePairing()) {
             return Promise.resolve(t("devices.readOnly.pairingRequired"));
           }
-          return host.runPageTask((pageState) =>
+          return this.host.runPageTask((pageState) =>
             renameDevice(pageState, { deviceId: device.id, label }),
           );
         },
       });
     } catch (error) {
-      host.setDevicesError(formatUiError(error));
+      this.host.setDevicesError(formatUiError(error));
     } finally {
-      if (pending === controller) {
-        pending = null;
+      if (this.pending === controller) {
+        this.pending = null;
       }
     }
   }
 
-  function confirmInventoryRemoval(prompt: InventoryRemovalPrompt): Promise<void> {
-    return confirmDestructiveAction(
+  confirmInventoryRemoval(prompt: InventoryRemovalPrompt): Promise<void> {
+    return this.confirmDestructiveAction(
       {
         confirmLabel: t("devices.inventory.remove"),
         ...(prompt.kind === "entry"
@@ -106,8 +108,8 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     );
   }
 
-  function confirmPairingReject(target: "device" | "node", requestId: string): Promise<void> {
-    return confirmDestructiveAction(
+  confirmPairingReject(target: "device" | "node", requestId: string): Promise<void> {
+    return this.confirmDestructiveAction(
       {
         title: t(
           target === "device"
@@ -124,8 +126,8 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     );
   }
 
-  function confirmTokenRevoke(deviceId: string, role: string): Promise<void> {
-    return confirmDestructiveAction(
+  confirmTokenRevoke(deviceId: string, role: string): Promise<void> {
+    return this.confirmDestructiveAction(
       {
         title: t("devices.inventory.revokePromptTitle", { role }),
         message: t("devices.inventory.revokePromptBody"),
@@ -135,7 +137,7 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
       (pageState) =>
         revokeDeviceToken(pageState, {
           deviceId,
-          gatewayUrl: host.gatewayUrl(),
+          gatewayUrl: this.host.gatewayUrl(),
           role,
         }),
     );
@@ -148,12 +150,12 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
    * request to place, so the post-await revalidation is only that this dialog is
    * still the page's current one — a false result must leave every field alone.
    */
-  async function confirmExecApprovalsDiscard(): Promise<boolean> {
-    if (pending) {
+  async confirmExecApprovalsDiscard(): Promise<boolean> {
+    if (this.pending) {
       return false;
     }
     const controller = new AbortController();
-    pending = controller;
+    this.pending = controller;
     const confirmed = await showConfirmDialog({
       title: t("devices.execApprovals.discardPromptTitle"),
       message: t("devices.execApprovals.discardPromptBody"),
@@ -161,8 +163,8 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
       danger: true,
       signal: controller.signal,
     });
-    if (pending === controller) {
-      pending = null;
+    if (this.pending === controller) {
+      this.pending = null;
     }
     return confirmed && !controller.signal.aborted;
   }
@@ -170,43 +172,35 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
   // Every destructive Devices action confirms here, never through window.confirm: the
   // awaited dialog lets the gateway reconnect or swap clients mid-prompt, so the captured
   // scope and current authority are revalidated before the operation runs.
-  async function confirmDestructiveAction(
+  private async confirmDestructiveAction(
     prompt: Omit<ConfirmDialogOptions, "danger" | "signal">,
     run: (pageState: DevicesPageDataState) => unknown,
   ) {
-    if (!host.canManagePairing() || pending) {
+    if (!this.host.canManagePairing() || this.pending) {
       return;
     }
     const controller = new AbortController();
-    pending = controller;
-    const generation = host.requestGeneration();
-    const client = host.gatewayClient();
+    this.pending = controller;
+    const generation = this.host.requestGeneration();
+    const client = this.host.gatewayClient();
     const confirmed = await showConfirmDialog({
       ...prompt,
       danger: true,
       signal: controller.signal,
     });
-    if (pending === controller) {
-      pending = null;
+    if (this.pending === controller) {
+      this.pending = null;
     }
     if (
       !confirmed ||
       controller.signal.aborted ||
-      generation !== host.requestGeneration() ||
-      client !== host.gatewayClient() ||
-      !host.gatewayConnected() ||
-      !host.canManagePairing()
+      generation !== this.host.requestGeneration() ||
+      client !== this.host.gatewayClient() ||
+      !this.host.gatewayConnected() ||
+      !this.host.canManagePairing()
     ) {
       return;
     }
-    await host.runPageTask(run);
+    await this.host.runPageTask(run);
   }
-  return {
-    cancel,
-    editAlias,
-    confirmInventoryRemoval,
-    confirmPairingReject,
-    confirmTokenRevoke,
-    confirmExecApprovalsDiscard,
-  };
 }

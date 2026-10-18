@@ -1,14 +1,41 @@
 // Fal tests cover music generation provider plugin behavior.
-import {
-  getProviderHttpMocks,
-  installProviderHttpMockCleanup,
-} from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildFalMusicGenerationProvider } from "./music-generation-provider.js";
 
-const { postJsonRequestMock, resolveApiKeyForProviderMock } = getProviderHttpMocks();
+const {
+  assertOkOrThrowHttpErrorMock,
+  postJsonRequestMock,
+  resolveApiKeyForProviderMock,
+  resolveProviderHttpRequestConfigMock,
+} = vi.hoisted(() => ({
+  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  postJsonRequestMock: vi.fn(),
+  resolveApiKeyForProviderMock: vi.fn(async () => ({
+    apiKey: "fal-key",
+    source: "env",
+    mode: "api-key",
+  })),
+  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+    allowPrivateNetwork: false,
+    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+    dispatcherPolicy: undefined,
+  })),
+}));
 
-installProviderHttpMockCleanup();
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
+  const original = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
+  return {
+    ...original,
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    postJsonRequest: postJsonRequestMock,
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  };
+});
 
 function postRequest(): Record<string, unknown> {
   const request = postJsonRequestMock.mock.calls[0]?.[0];
@@ -38,15 +65,11 @@ function falMusicJsonResponse(value: unknown) {
 }
 
 describe("fal music generation provider", () => {
-  beforeEach(async () => {
-    const { fetchWithTimeout } = await import("openclaw/plugin-sdk/provider-http");
-    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "fal-key" });
-    vi.mocked(fetchWithTimeout).mockImplementation((url, init, _timeoutMs, fetchFn = fetch) =>
-      fetchFn(url, init),
-    );
-  });
-
   afterEach(() => {
+    assertOkOrThrowHttpErrorMock.mockClear();
+    postJsonRequestMock.mockReset();
+    resolveApiKeyForProviderMock.mockClear();
+    resolveProviderHttpRequestConfigMock.mockClear();
     vi.unstubAllGlobals();
   });
 

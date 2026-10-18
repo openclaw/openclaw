@@ -1,9 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, getOwner } from "solid-js";
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import {
   releaseChatMediaResourceSubscriber,
@@ -14,7 +13,7 @@ import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 const observations: Array<{ element: Element; show: () => void }> = [];
 const subscribers = new Set<() => void>();
-const views = new Set<ReturnType<typeof mountSolid>>();
+const containers = new Set<HTMLElement>();
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -37,14 +36,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const view of views) {
-    view.unmount();
-    view.container.remove();
+  for (const container of containers) {
+    render(null, container);
+    container.remove();
   }
   for (const subscriber of subscribers) {
     releaseChatMediaResourceSubscriber(subscriber);
   }
-  views.clear();
+  containers.clear();
   subscribers.clear();
   observations.length = 0;
   vi.unstubAllGlobals();
@@ -64,39 +63,22 @@ function mount(
   presentation: "inline" | "card" | "preview" = "inline",
 ) {
   const container = document.body.appendChild(document.createElement("div"));
+  containers.add(container);
   let current = item;
-  let setProps: (props: { item: AttachmentItem; options: ImageRenderOptions }) => void;
-  const update = () => {
-    setProps({ item: current, options: { ...options, onRequestUpdate: update } });
-    if (!getOwner()) {
-      flush();
-    }
-  };
-  const view = mountSolid(
-    () => {
-      const [props, setCurrent] = createSignal<{
-        item: AttachmentItem;
-        options: ImageRenderOptions;
-      }>({ item: current, options: { ...options, onRequestUpdate: update } }, { ownedWrite: true });
-      setProps = setCurrent;
-      return createComponent(MessageAttachment, {
-        get item() {
-          return props().item;
-        },
-        get options() {
-          return props().options;
-        },
+  const update = () =>
+    render(
+      solidContent(MessageAttachment, {
+        item: current,
+        options: { ...options, onRequestUpdate: update },
         onOpenSidebar,
         presentation,
-      });
-    },
-    { container },
-  );
-  views.add(view);
+      }),
+      container,
+    );
   subscribers.add(update);
+  update();
   return {
     container,
-    unmount: view.unmount,
     replace(next: AttachmentItem) {
       current = next;
       update();
@@ -189,7 +171,7 @@ describe("nonimage attachment source admission", () => {
     expect(fetchMock).not.toHaveBeenCalled();
 
     const current = observations.at(-1);
-    view.unmount();
+    render(null, view.container);
     await settle();
     current?.show();
     await settle();

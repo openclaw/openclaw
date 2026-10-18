@@ -31,6 +31,7 @@ import type {
   PublicationMutationReceipt,
   PublicationMutationResult,
 } from "./github-publication-worker.types.js";
+import { publicationReadOperations } from "./github-publication.read.worker.js";
 import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -328,6 +329,7 @@ function sharedMutation(database: OpenClawStateDatabase, input: SharedPublicatio
 }
 
 export const publicationOperations = {
+  ...publicationReadOperations,
   ...publicationRequestOperations,
   "githubPublications.maintenance": (
     input: PublicationWorkerOperations["githubPublications.maintenance"]["input"],

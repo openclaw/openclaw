@@ -16,7 +16,6 @@ import {
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
-  persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -112,29 +111,6 @@ async function seedSession(sessionKey: string, sessionId = sessionKey) {
   await upsertSessionEntryCore(
     { agentId: parseAgentSessionKey(sessionKey)!.agentId, sessionKey },
     { sessionId, updatedAt: 1 },
-  );
-}
-
-async function writeFinal(sessionKey: string, runId: string, text: string, sessionId = sessionKey) {
-  await persistSessionTranscriptTurn(
-    { agentId: parseAgentSessionKey(sessionKey)!.agentId, sessionKey, sessionId },
-    {
-      config: TEST_CONFIG,
-      runId,
-      expectedSessionId: sessionId,
-      touchSessionEntry: false,
-      updateMode: "none",
-      messages: [
-        {
-          message: {
-            role: "assistant",
-            phase: "final_answer",
-            stopReason: "stop",
-            content: [{ type: "text", text }],
-          },
-        },
-      ],
-    },
   );
 }
 
@@ -489,7 +465,6 @@ describe("sessions tools", () => {
       if (request.method === "agent.wait") {
         waitObserved = true;
         deliveredMessages.push(marker);
-        await writeFinal(sessionKey, "run-source-reply", marker, "source-session");
         return {
           runId: "run-source-reply",
           status: "ok",
@@ -509,7 +484,7 @@ describe("sessions tools", () => {
       }
       if (request.method === "chat.history") {
         return {
-          messages: [],
+          messages: waitObserved ? [{ role: "assistant", content: marker, timestamp: 20 }] : [],
         };
       }
       if (request.method === "send") {
@@ -651,10 +626,7 @@ describe("sessions tools", () => {
           return { runId: "inline-result", status: "accepted" };
         }
         if (request.method === "agent.wait") {
-          return {
-            status: "ok",
-            terminalReply: { disposition: "visible", text: "initial" },
-          };
+          return { status: "ok", terminalReply: { disposition: "visible", text: "initial" } };
         }
         return {};
       });

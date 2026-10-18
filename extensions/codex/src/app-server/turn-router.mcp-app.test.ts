@@ -15,6 +15,9 @@ vi.mock("openclaw/plugin-sdk/extension-shared", () => ({
 vi.mock("./event-projector-diagnostics.js", () => ({
   redactCodexEventKind: (value: string) => value,
 }));
+vi.mock("./protocol-validators.js", () => ({
+  readCodexTurnCompletedNotification: () => undefined,
+}));
 function fixture() {
   let dispatch: (
     request: CodexAppServerServerRequest,

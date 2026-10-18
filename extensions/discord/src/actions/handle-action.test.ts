@@ -14,47 +14,6 @@ const {
 } = await import("../active-turn-thread-route.js");
 const { discordInboundEventDelivery } = await import("../inbound-event-delivery.js");
 
-const sessionKey = "agent:main:discord:channel:channel-1";
-const sourceRoute = {
-  accountId: "account-1",
-  sourceChannelId: "channel-1",
-  sourceMessageId: "message-1",
-};
-const threadContext = { accountId: sourceRoute.accountId, sessionKey };
-function runAction(
-  action: Parameters<typeof handleDiscordMessageAction>[0]["action"],
-  params: Record<string, unknown>,
-  context: Partial<
-    Omit<Parameters<typeof handleDiscordMessageAction>[0], "action" | "params">
-  > = {},
-) {
-  return handleDiscordMessageAction({ cfg: discordConfig(), ...context, action, params });
-}
-
-async function expectRejected(error: string | RegExp, ...args: Parameters<typeof runAction>) {
-  await expect(runAction(...args)).rejects.toThrow(error);
-  expect(handleDiscordActionMock).not.toHaveBeenCalled();
-}
-
-function sendPayload(overrides: Record<string, unknown>) {
-  return {
-    action: "sendMessage",
-    accountId: undefined,
-    to: "channel:123",
-    content: "hello",
-    mediaUrl: undefined,
-    filename: undefined,
-    replyTo: undefined,
-    components: undefined,
-    embeds: undefined,
-    asVoice: false,
-    silent: false,
-    __sessionKey: undefined,
-    __agentId: undefined,
-    ...overrides,
-  };
-}
-
 describe("handleDiscordMessageAction", () => {
   beforeEach(() => {
     handleDiscordActionMock.mockClear();
@@ -93,34 +52,37 @@ describe("handleDiscordMessageAction", () => {
 
   it("rejects fractional moderation durations before invoking Discord runtime", async () => {
     const cfg = discordConfig({ moderation: true });
-    await expectRejected(
-      "durationMin must be a non-negative integer",
-      "timeout",
-      {
-        guildId: "guild-1",
-        userId: "user-2",
-        durationMin: 5.5,
-      },
-      {
+    await expect(
+      handleDiscordMessageAction({
+        action: "timeout",
+        params: {
+          guildId: "guild-1",
+          userId: "user-2",
+          durationMin: 5.5,
+        },
         cfg,
         requesterSenderId: "trusted-sender-id",
         toolContext: { currentChannelProvider: "discord" },
-      },
-    );
+      }),
+    ).rejects.toThrow("durationMin must be a non-negative integer");
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it("rejects invalid autoArchiveMin before Discord thread-create runtime", async () => {
     const cfg = discordConfig({ threads: true });
-    await expectRejected(
-      "autoArchiveMin must be one of 60, 1440, 4320, or 10080 minutes",
-      "thread-create",
-      {
-        channelId: "channel-1",
-        threadName: "proof-thread",
-        autoArchiveMin: 999,
-      },
-      { cfg, toolContext: { currentChannelProvider: "discord" } },
-    );
+    await expect(
+      handleDiscordMessageAction({
+        action: "thread-create",
+        params: {
+          channelId: "channel-1",
+          threadName: "proof-thread",
+          autoArchiveMin: 999,
+        },
+        cfg,
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).rejects.toThrow("autoArchiveMin must be one of 60, 1440, 4320, or 10080 minutes");
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it("uses Discord requesterSenderId for guild admin actions and ignores params senderUserId", async () => {
@@ -149,18 +111,19 @@ describe("handleDiscordMessageAction", () => {
 
   it("rejects non-Discord requester ids for Discord guild admin actions", async () => {
     const cfg = discordConfig({ channels: true });
-    await expectRejected(
-      "trusted Discord sender identity",
-      "channel-delete",
-      {
-        channelId: "channel-1",
-      },
-      {
+    await expect(
+      handleDiscordMessageAction({
+        action: "channel-delete",
+        params: {
+          channelId: "channel-1",
+        },
         cfg,
         requesterSenderId: "telegram-user-id",
         toolContext: { currentChannelProvider: "telegram" },
-      },
-    );
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it("keeps no-context Discord guild admin actions on the manual runtime path", async () => {
@@ -186,32 +149,36 @@ describe("handleDiscordMessageAction", () => {
 
   it("rejects no-context Discord guild admin actions without owner trust", async () => {
     const cfg = discordConfig({ channels: true });
-    await expectRejected(
-      "trusted Discord sender identity",
-      "channel-delete",
-      {
-        channelId: "channel-1",
-      },
-      { cfg },
-    );
+    await expect(
+      handleDiscordMessageAction({
+        action: "channel-delete",
+        params: {
+          channelId: "channel-1",
+        },
+        cfg,
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it("rejects non-Discord requester ids for Discord moderation actions", async () => {
     const cfg = discordConfig({ moderation: true });
-    await expectRejected(
-      "trusted Discord sender identity",
-      "timeout",
-      {
-        guildId: "guild-1",
-        userId: "user-2",
-        durationMin: 5,
-      },
-      {
+    await expect(
+      handleDiscordMessageAction({
+        action: "timeout",
+        params: {
+          guildId: "guild-1",
+          userId: "user-2",
+          durationMin: 5,
+        },
         cfg,
         requesterSenderId: "telegram-user-id",
         toolContext: { currentChannelProvider: "telegram" },
-      },
-    );
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -359,7 +326,22 @@ describe("handleDiscordMessageAction", () => {
     });
 
     expectDiscordActionCall({
-      payload: sendPayload({ to: "channel:thread-1", threadName: "Renamed thread" }),
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:thread-1",
+        content: "hello",
+        threadName: "Renamed thread",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        components: undefined,
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
       cfg,
       options: defaultActionOptions(),
     });
@@ -389,13 +371,13 @@ describe("handleDiscordMessageAction", () => {
   ])(
     "records room-event delivery only after $action receives a positive receipt",
     async ({ action, params }) => {
-      const deliverySessionKey = "agent:main:discord:channel:c1";
+      const sessionKey = "agent:main:discord:channel:c1";
 
       for (const ok of [false, true]) {
         const markDelivered = vi.fn();
         const onThreadAdopted = vi.fn();
         const endDelivery = discordInboundEventDelivery.begin(
-          deliverySessionKey,
+          sessionKey,
           {
             outboundTo: "channel:c1",
             outboundAccountId: "default",
@@ -405,7 +387,7 @@ describe("handleDiscordMessageAction", () => {
         );
         const endThreadRoute =
           action === "thread-create"
-            ? beginDiscordActiveTurnThreadRoute(deliverySessionKey, {
+            ? beginDiscordActiveTurnThreadRoute(sessionKey, {
                 accountId: "default",
                 sourceChannelId: "c1",
                 sourceMessageId: "message-1",
@@ -428,7 +410,7 @@ describe("handleDiscordMessageAction", () => {
             params,
             cfg: discordConfig({ threads: true, polls: true, stickers: true }),
             accountId: "default",
-            sessionKey: deliverySessionKey,
+            sessionKey,
             inboundEventKind: "room_event",
           });
 
@@ -446,36 +428,54 @@ describe("handleDiscordMessageAction", () => {
   );
 
   it("requires a file path for upload-file", async () => {
-    await expectRejected(/upload-file requires filePath, path, or media/i, "upload-file", {
-      to: "channel:123",
-    });
+    await expect(
+      handleDiscordMessageAction({
+        action: "upload-file",
+        params: {
+          to: "channel:123",
+        },
+        cfg: discordConfig(),
+      }),
+    ).rejects.toThrow(/upload-file requires filePath, path, or media/i);
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it("rejects upload-file with a buffer and points at send", async () => {
-    await expectRejected(
+    await expect(
+      handleDiscordMessageAction({
+        action: "upload-file",
+        params: {
+          to: "channel:123",
+          filename: "report.pdf",
+          contentType: "application/pdf",
+          buffer: Buffer.from("report").toString("base64"),
+        },
+        cfg: discordConfig(),
+      }),
+    ).rejects.toThrow(
       'Use action: "send" for base64 buffer attachments; upload-file requires filePath, path, or media.',
-      "upload-file",
-      {
-        to: "channel:123",
-        filename: "report.pdf",
-        contentType: "application/pdf",
-        buffer: Buffer.from("report").toString("base64"),
-      },
     );
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it("adopts a thread created from the active source message and confirms replies there", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
     const onThreadAdopted = vi.fn();
     const onThreadReplyDelivered = vi.fn();
     const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
-      ...sourceRoute,
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
       onThreadAdopted,
       onThreadReplyDelivered,
     });
     try {
       expect(
         notifyDiscordActiveTurnThreadReplyDelivered({
-          ...threadContext,
+          sessionKey,
+          accountId: "account-1",
         }),
       ).toBe(false);
 
@@ -491,7 +491,8 @@ describe("handleDiscordMessageAction", () => {
           threadName: "investigation",
         },
         cfg: discordConfig({ threads: true }),
-        ...threadContext,
+        accountId: "account-1",
+        sessionKey,
       });
 
       expect(onThreadAdopted).toHaveBeenCalledWith("thread-1");
@@ -507,7 +508,8 @@ describe("handleDiscordMessageAction", () => {
           message: "unrelated",
         },
         cfg: discordConfig({ threads: true }),
-        ...threadContext,
+        accountId: "account-1",
+        sessionKey,
       });
 
       expect(mismatchedResult.details).toEqual({ ok: true });
@@ -524,7 +526,8 @@ describe("handleDiscordMessageAction", () => {
           message: "done",
         },
         cfg: discordConfig({ threads: true }),
-        ...threadContext,
+        accountId: "account-1",
+        sessionKey,
       });
 
       expect(result.details).toEqual({
@@ -538,15 +541,19 @@ describe("handleDiscordMessageAction", () => {
   });
 
   it("confirms only the matching adopted thread across concurrent routes", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
     const firstReplyDelivered = vi.fn();
     const secondReplyDelivered = vi.fn();
     const endFirstRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
-      ...sourceRoute,
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
       onThreadAdopted: vi.fn(),
       onThreadReplyDelivered: firstReplyDelivered,
     });
     const endSecondRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
-      ...sourceRoute,
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
       sourceMessageId: "message-2",
       onThreadAdopted: vi.fn(),
       onThreadReplyDelivered: secondReplyDelivered,
@@ -554,19 +561,23 @@ describe("handleDiscordMessageAction", () => {
     try {
       await notifyDiscordActiveTurnThreadCreated({
         sessionKey,
-        ...sourceRoute,
+        accountId: "account-1",
+        sourceChannelId: "channel-1",
+        sourceMessageId: "message-1",
         threadId: "thread-1",
       });
       await notifyDiscordActiveTurnThreadCreated({
         sessionKey,
-        ...sourceRoute,
+        accountId: "account-1",
+        sourceChannelId: "channel-1",
         sourceMessageId: "message-2",
         threadId: "thread-2",
       });
 
       expect(
         notifyDiscordActiveTurnThreadReplyDelivered({
-          ...threadContext,
+          sessionKey,
+          accountId: "account-1",
           threadId: "thread-2",
         }),
       ).toBe(true);
@@ -579,6 +590,7 @@ describe("handleDiscordMessageAction", () => {
   });
 
   it("keeps a successful thread-create result when progress migration fails", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
     const onThreadAdoptionError = vi.fn();
     const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
       sourceChannelId: "channel-1",
@@ -631,50 +643,76 @@ describe("handleDiscordMessageAction", () => {
     });
 
     expectDiscordActionCall({
-      payload: sendPayload({ components }),
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:123",
+        content: "hello",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        components,
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
       cfg,
       options: defaultActionOptions(),
     });
   });
 
   it("does not use another provider's current target for Discord sends", async () => {
-    await expectRejected(
-      /channel target is required/i,
-      "send",
-      {
-        message: "hello",
-      },
-      {
+    await expect(
+      handleDiscordMessageAction({
+        action: "send",
+        params: {
+          message: "hello",
+        },
+        cfg: discordConfig(),
         toolContext: {
           currentChannelProvider: "telegram",
           currentChannelId: "channel:123",
         },
-      },
-    );
+      }),
+    ).rejects.toThrow(/channel target is required/i);
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it("does not use another provider's current target for Discord reactions", async () => {
-    await expectRejected(
-      /channel target is required/i,
-      "react",
-      {
-        emoji: "ok",
-      },
-      {
+    await expect(
+      handleDiscordMessageAction({
+        action: "react",
+        params: {
+          emoji: "ok",
+        },
+        cfg: discordConfig(),
         toolContext: {
           currentChannelProvider: "telegram",
           currentChannelId: "user:U1",
           currentMessageId: "9001",
         },
-      },
-    );
+      }),
+    ).rejects.toThrow(/channel target is required/i);
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it("rejects reactions when no message id source is available", async () => {
-    await expectRejected(/messageId required/i, "react", {
-      channelId: "123",
-      emoji: "ok",
-    });
+    await expect(
+      handleDiscordMessageAction({
+        action: "react",
+        params: {
+          channelId: "123",
+          emoji: "ok",
+        },
+        cfg: discordConfig(),
+      }),
+    ).rejects.toThrow(/messageId required/i);
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it("does not inject session channel when guildId is explicit and no channel filters are provided", async () => {
@@ -708,16 +746,21 @@ describe("handleDiscordMessageAction", () => {
   });
 
   it("classifies generic sends only when targeting the active adopted thread", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
     const onThreadReplyDelivered = vi.fn();
     const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
-      ...sourceRoute,
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
       onThreadAdopted: vi.fn(),
       onThreadReplyDelivered,
     });
     try {
       await notifyDiscordActiveTurnThreadCreated({
         sessionKey,
-        ...sourceRoute,
+        accountId: "account-1",
+        sourceChannelId: "channel-1",
+        sourceMessageId: "message-1",
         threadId: "thread-1",
       });
 
@@ -728,7 +771,8 @@ describe("handleDiscordMessageAction", () => {
           message: "unrelated",
         },
         cfg: discordConfig(),
-        ...threadContext,
+        accountId: "account-1",
+        sessionKey,
       });
 
       expect(unrelatedResult.details).toEqual({ ok: true });
@@ -741,7 +785,8 @@ describe("handleDiscordMessageAction", () => {
           message: "done",
         },
         cfg: discordConfig(),
-        ...threadContext,
+        accountId: "account-1",
+        sessionKey,
       });
 
       expect(result.details).toEqual({

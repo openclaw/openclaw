@@ -6,11 +6,7 @@ import {
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationContextRequest,
-} from "../app/context.ts";
+import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import {
   bumpCanvasWidgetFrameConnectionGeneration,
@@ -83,11 +79,9 @@ function mount(
   };
   gateways.set(view, gateway);
   view.addEventListener("context-request", (event) => {
-    // SAFETY: This listener handles the native application context protocol.
-    const contextRequest = event as ApplicationContextRequest;
-    if (contextRequest.context === applicationContext) {
+    if (event.context === applicationContext) {
       event.stopPropagation();
-      contextRequest.callback({ gateway } as unknown as ApplicationContext);
+      event.callback({ gateway } as unknown as ApplicationContext);
     }
   });
   view.docId = docId;
@@ -101,12 +95,7 @@ function mount(
 }
 
 async function frameFor(view: OpenClawCanvasWidgetView) {
-  await expect
-    .poll(() => {
-      flush();
-      return view.querySelector("iframe");
-    })
-    .not.toBeNull();
+  await expect.poll(() => view.querySelector("iframe")).not.toBeNull();
   return view.querySelector("iframe")!;
 }
 
@@ -583,11 +572,32 @@ describe("Canvas widget view", () => {
 
   it.each([
     {
+      label: "short Unicode title",
+      title: "Ready 😀",
+      expectedTitle: "Ready 😀",
+      message: "x".repeat(600),
+      expectedMessage: "x".repeat(500),
+    },
+    {
+      label: "ASCII title limit",
+      title: "x".repeat(81),
+      expectedTitle: "x".repeat(80),
+      message: "x".repeat(600),
+      expectedMessage: "x".repeat(500),
+    },
+    {
       label: "surrogate title boundary",
       title: `${"x".repeat(79)}😀tail`,
       expectedTitle: "x".repeat(79),
       message: "x".repeat(600),
       expectedMessage: "x".repeat(500),
+    },
+    {
+      label: "short Unicode message",
+      title: "Status",
+      expectedTitle: "Status",
+      message: "Ready 😀",
+      expectedMessage: "Ready 😀",
     },
     {
       label: "surrogate message boundary",

@@ -31,7 +31,6 @@ import {
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
 } from "./tool-result-error.js";
-import { runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
   prepareToolSearchCatalogExecutionTool,
@@ -132,6 +131,12 @@ async function validateCatalogSchemaValue(
   }
   try {
     if (schemaName === "outputSchema") {
+      if (
+        outputSelection &&
+        readToolOutputSchemaVariants(schema)?.inputProperty !== outputSelection.inputProperty
+      ) {
+        throw new Error("Tool output discriminator changed during execution.");
+      }
       schema = selectToolOutputSchema(
         schema,
         outputSelection ? { [outputSelection.inputProperty]: outputSelection.value } : undefined,
@@ -323,38 +328,11 @@ export class ToolSearchRuntime {
     );
   };
 
-  callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
-    const catalog = resolveCatalog(this.ctx);
-    return projectToolResultValue(
-      (
-        await this.callEntry(
-          findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
-          input,
-          options,
-          true,
-        )
-      ).result,
-    );
-  };
+  callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
+    projectToolResultValue((await this.call(id, input, options)).result);
 
-  callExactValue = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) => {
-    const catalog = resolveCatalog(this.ctx);
-    return projectToolResultValue(
-      (
-        await this.callEntry(
-          findEntry(
-            catalog,
-            id,
-            { ...options, codeModeSkills: this.ctx.codeModeSkills },
-            "exact-id",
-          ),
-          input,
-          options,
-          true,
-        )
-      ).result,
-    );
-  };
+  callExactValue = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) =>
+    projectToolResultValue((await this.callExactId(id, input, options)).result);
 
   observeNetworkContent(parentToolCallId: string): void {
     const state = this.networkInvocations.get(parentToolCallId) ?? { active: 0, observed: false };
@@ -404,16 +382,13 @@ export class ToolSearchRuntime {
     entry: ToolSearchCatalogEntry,
     input?: unknown,
     options?: ToolSearchCallOptions,
-    fullValue = false,
   ) =>
     runScheduledToolSearchCall({
       ctx: this.ctx,
       entry,
       signal: options?.signal,
       execute: (currentEntry, signal) =>
-        runWithToolResultDelivery(fullValue, () =>
-          this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
-        ),
+        this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
     });
 
   private readonly executeEntry = async (

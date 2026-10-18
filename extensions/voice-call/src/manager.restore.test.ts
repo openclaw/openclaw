@@ -6,7 +6,7 @@ import {
 // Voice Call tests cover manager.restore plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { normalizeVoiceCallConfig } from "./config.js";
+import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
   createTestStorePath,
@@ -76,7 +76,7 @@ describe("CallManager verification on restore", () => {
 
     const provider = params?.provider ?? new FakeProvider();
 
-    const config = normalizeVoiceCallConfig({
+    const config = VoiceCallConfigSchema.parse({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",
@@ -118,7 +118,7 @@ describe("CallManager verification on restore", () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     const provider = new FakeProvider();
     const status = vi.spyOn(provider, "getCallStatus");
-    const config = normalizeVoiceCallConfig({
+    const config = VoiceCallConfigSchema.parse({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",
@@ -174,7 +174,7 @@ describe("CallManager verification on restore", () => {
       },
     });
 
-    const config = normalizeVoiceCallConfig({
+    const config = VoiceCallConfigSchema.parse({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",
@@ -206,7 +206,7 @@ describe("CallManager verification on restore", () => {
         state: "answered",
       }),
     ]);
-    const config = normalizeVoiceCallConfig({
+    const config = VoiceCallConfigSchema.parse({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",
@@ -327,7 +327,7 @@ describe("CallManager verification on restore", () => {
       }
       throw new Error("network failure");
     };
-    const config = normalizeVoiceCallConfig({
+    const config = VoiceCallConfigSchema.parse({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",
@@ -428,7 +428,7 @@ describe("CallManager verification on restore", () => {
     await writeCallsToStore(storePath, [persisted]);
 
     const provider = new FakeProvider();
-    const config = normalizeVoiceCallConfig({
+    const config = VoiceCallConfigSchema.parse({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",

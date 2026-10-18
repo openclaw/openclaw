@@ -9,8 +9,9 @@ import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { ChatImageLightbox } from "../chat/components/chat-image-lightbox-view.tsx";
-import { MessageImages } from "../chat/components/chat-message-images-solid.tsx";
+import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
+import { renderMessageImages } from "../chat/components/chat-message-images.ts";
 import {
   assistantMediaPolicyKey,
   releaseChatMediaResourceSubscriber,
@@ -92,8 +93,10 @@ export type ActivitySessionMediaProps = {
   session?: GatewaySessionRow;
 };
 
-export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
-  let host!: HTMLElement;
+function ActivitySessionMediaContent(
+  props: ActivitySessionMediaProps,
+  host: SolidBridgeElement<ActivitySessionMediaProps>,
+) {
   const [revision, setRevision] = createSignal(0);
   let visible = false;
   let observer: IntersectionObserver | undefined;
@@ -293,7 +296,6 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
   };
 
   function imageOptions() {
-    revision();
     const imageOwner = owner!;
     const gateway = props.context.gateway;
     const { client, hello } = gateway.snapshot;
@@ -395,25 +397,21 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
       {loadLabel()}
     </button>
   );
-  const galleryImages = () => {
+  const gallery = () => {
     revision();
-    return displayedImages;
+    // The unported chat gallery owns these children and its resource directives.
+    const previews = older() ? [olderButton] : [];
+    return renderMessageImages(displayedImages, imageOptions(), previews);
   };
-  const lightboxItem = () => {
+  const lightboxContent = () => {
     revision();
-    return lightbox;
+    return renderChatImageLightbox(lightbox, () => closeImage());
   };
   return (
-    <openclaw-activity-session-media ref={(element) => (host = element)}>
+    <>
       {(hasImages() || showNote()) && (
         <div class="activity-feed__media">
-          {hasImages() && (
-            <MessageImages
-              images={galleryImages()}
-              options={imageOptions()}
-              previews={older() ? [olderButton] : []}
-            />
-          )}
+          {hasImages() && <LitContent render={gallery} />}
           {showNote() && (
             <div class="activity-feed__note">
               {displayEntry()?.omitted && <span>{t("activity.images.incomplete")}</span>}
@@ -431,15 +429,21 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
           )}
         </div>
       )}
-      <ChatImageLightbox item={lightboxItem()} onClose={closeImage} />
-    </openclaw-activity-session-media>
+      <LitContent render={lightboxContent} />
+    </>
   );
 }
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-activity-session-media": HTMLAttributes<HTMLElement>;
-    }
-  }
-}
+export const ActivitySessionMedia = defineSolidBridge<ActivitySessionMediaProps>(
+  "openclaw-activity-session-media",
+  ActivitySessionMediaContent,
+  {
+    properties: {
+      context: { default: undefined!, attribute: false },
+      sessionKey: { default: "" },
+      agentId: { default: "" },
+      revision: { default: 0, type: Number },
+      session: { default: undefined, attribute: false },
+    },
+  },
+);

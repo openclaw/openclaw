@@ -31,7 +31,6 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
   profileId?: string;
   profileStore: AuthProfileStore;
   provider: string;
-  modelId?: string;
   agentDir?: string;
   runId: string;
   sessionId: string;
@@ -47,7 +46,6 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
   const bookkeeping = markAuthProfileSuccess({
     store: input.profileStore,
     provider: successProvider,
-    modelId: input.modelId,
     profileId: successProfileId,
     agentDir: input.agentDir,
   })

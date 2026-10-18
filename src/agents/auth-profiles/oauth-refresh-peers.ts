@@ -5,10 +5,6 @@ import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worke
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import {
-  continueAuthProfileAuthorization,
-  continueAuthProfileAuthorizationInheritance,
-} from "./authorization-lifetime.js";
-import {
   fenceCandidateAuthProfileStore,
   listCandidateAuthProfileStores,
   loadCandidateAuthProfileStoreAsync,
@@ -223,9 +219,7 @@ export async function fenceOAuthRefreshPeers(params: {
           }
           // Retain provisional custody if COMMIT succeeds but its reply is lost.
           claims.push({ candidate, original: { ...credential } });
-          store.profiles[params.profileId] = continueAuthProfileAuthorization(credential, {
-            ...params.fence,
-          });
+          store.profiles[params.profileId] = { ...params.fence };
           return true;
         },
       });
@@ -269,9 +263,7 @@ export async function rollbackOAuthRefreshPeerClaims(
         params.profileId,
         params.fence,
         (store) => {
-          store.profiles[params.profileId] = continueAuthProfileAuthorization(params.fence, {
-            ...claim.original!,
-          });
+          store.profiles[params.profileId] = { ...claim.original! };
         },
       );
       if (restored.changed) {
@@ -338,11 +330,6 @@ export async function settleOAuthRefreshPeerClaims(
               (!hasOAuthIdentity(claim.original) &&
                 isExactOAuthCredential(inherited, params.replacement)));
           if (canInherit) {
-            continueAuthProfileAuthorizationInheritance(
-              store.profiles,
-              params.profileId,
-              params.fence,
-            );
             delete store.profiles[params.profileId];
           } else {
             store.profiles[params.profileId] = createFailedOAuthRefreshFence(params.fence);

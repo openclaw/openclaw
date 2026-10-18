@@ -310,9 +310,6 @@ export function activateCodexAttemptTurn(
         await enqueueNotification(
           {
             method: "turn/completed",
-            threadId: resourceState.thread.threadId,
-            turnId: activeTurnId,
-            completedTurn: turn.turn,
             params: {
               threadId: resourceState.thread.threadId,
               turnId: activeTurnId,
@@ -409,8 +406,8 @@ export function activateCodexAttemptTurn(
       };
     },
     beforeSubmit: async (items) => {
-      // User input owns transcript custody before dispatch. Internal guidance
-      // is recorded only once Codex accepts it, so a rejected steer cannot replay.
+      // Commit preceding answers and user custody before Codex can act on the
+      // steer. Its acknowledgment and user-message echo can both arrive later.
       const transcriptItems = items.filter(
         (item) =>
           item.isInboundUserMessage === true || item.userTurnTranscriptRecorder !== undefined,
@@ -444,9 +441,6 @@ export function activateCodexAttemptTurn(
         assertSteeringActive();
       }
       for (const item of transcriptItems) {
-        if (item.isInboundUserMessage === false) {
-          continue;
-        }
         const recorder = item.userTurnTranscriptRecorder;
         if (!recorder) {
           continue;
@@ -508,36 +502,18 @@ export function activateCodexAttemptTurn(
         });
       }
     }
-    let unconfirmed: CodexSteeringAcceptedUnconfirmedError | undefined;
     try {
       await activeSteeringQueue.queue(text, optionsLocal, canClaim, preparation);
     } catch (error) {
-      if (!(error instanceof CodexSteeringAcceptedUnconfirmedError)) {
-        throw error;
-      }
-      unconfirmed = error;
-    }
-    const recorder =
-      optionsLocal?.isInboundUserMessage === false
-        ? optionsLocal.userTurnTranscriptRecorder
-        : undefined;
-    if (recorder) {
-      recorder.markSentToProvider?.();
-      try {
-        await recorder.persistApproved();
-        if (!recorder.hasPersisted()) {
-          throw new Error("Accepted Codex steering could not be persisted");
-        }
-      } catch (error) {
+      if (error instanceof CodexSteeringAcceptedUnconfirmedError) {
         return {
           transcriptCommit: "unconfirmed" as const,
           errorMessage: formatErrorMessage(error),
         };
       }
+      throw error;
     }
-    return unconfirmed
-      ? { transcriptCommit: "unconfirmed" as const, errorMessage: formatErrorMessage(unconfirmed) }
-      : undefined;
+    return undefined;
   };
   const messageInjection = {
     version: 2 as const,

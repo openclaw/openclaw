@@ -4,6 +4,7 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
   assertSqliteSchemaContains,
+  collectSqliteSchemaIssues,
   createSqliteTableContractReader,
   readSqliteSchemaCookie,
   type SqliteTableContractReader,
@@ -25,7 +26,10 @@ import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
-import { STATE_RUNTIME_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
+import {
+  isOpenClawStateStartupRepairableSchemaIssue,
+  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+} from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export function needsOpenClawStateDatabaseSchemaRepair(
@@ -103,9 +107,18 @@ export function isOpenClawStateSchemaFastPathEligible(
         if (typeof schemaVersion !== "number") {
           throw new Error(`Shared-state database ${pathname} schema version is unavailable.`);
         }
-        // Repair must collect fresh facts after this read transaction ends.
+        // Both policies see this read transaction; repair must collect fresh facts after it ends.
         const readTable = createSqliteTableContractReader(database);
         assertCurrentStateRuntimeSchema(database, pathname, readTable);
+        const startupRepairRequired = collectSqliteSchemaIssues(
+          database,
+          OPENCLAW_STATE_SCHEMA_SQL,
+          STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+          readTable,
+        ).some(isOpenClawStateStartupRepairableSchemaIssue);
+        if (startupRepairRequired) {
+          return false;
+        }
         assertNoLegacyStateRuntimeRepair(database, pathname);
         publishIntegrity = assertOpenClawStateRuntimeIntegrity(
           database,

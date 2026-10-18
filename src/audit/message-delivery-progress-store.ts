@@ -300,18 +300,17 @@ export function recordOutboundMessageProgressInDatabase(
     return runOpenClawStateWriteTransaction(({ db }) => {
       cacheDatabase = db;
       const executionBinding = confirmMessageExecutionBinding(db, executionToken);
-      const insert = executeSqliteQueryTakeFirstSync(
+      const insert = executeSqliteQuerySync(
         db,
         progressDb(db)
           .insertInto("outbound_message_progress")
           .values(bindProgressRow(db, input, executionBinding))
-          .onConflict((conflict) => conflict.column("source_id").doNothing())
-          .returning("sequence"),
+          .onConflict((conflict) => conflict.column("source_id").doNothing()),
       );
-      if (!insert) {
+      if (insert.insertId === undefined) {
         return undefined;
       }
-      const sequence = insert.sequence;
+      const sequence = Number(insert.insertId);
       if (!Number.isSafeInteger(sequence) || sequence < 1) {
         throw new Error("outbound message progress sequence is outside the supported range");
       }

@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -39,6 +39,7 @@ import {
   updatePairedDeviceMetadata,
   updatePairedDevicePresence,
 } from "./device-pairing.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
@@ -146,14 +147,14 @@ test("keeps node authority available while retained setup cleanup is pending", a
   });
 });
 
-test.for([
+test.each([
   "session-host consent",
   "host stats",
   "skill bins",
   "rename",
   "token revocation",
   "metadata after a failed read",
-] as const)("retains only usable node authority during %s", async (change, { signal }) => {
+] as const)("retains only usable node authority during %s", async (change) => {
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);
   const generation = await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, () =>
     captureNodePairingGeneration("node"),
@@ -167,9 +168,7 @@ test.for([
       .spyOn(stateReads, "executeExistingOpenClawStateRead")
       .mockRejectedValueOnce(new Error("pairing read unavailable"));
     try {
-      await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
-        "pairing read unavailable",
-      );
+      await expect(getPairedDevice("node", baseDir)).rejects.toThrow("pairing read unavailable");
     } finally {
       read.mockRestore();
     }
@@ -227,8 +226,6 @@ test.for([
       );
     } else {
       expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
-      // Discovery must finish while the write is still queued, using committed facts.
-      expect(await withinTest(readDevicePairingNodeSnapshot(baseDir), signal)).toBe(snapshot);
     }
     releaseMutation.resolve();
     expect(await mutation).toEqual(
@@ -314,18 +311,17 @@ test.each(["lookup", "pending read", "token revocation"] as const)(
   },
 );
 
-test.for([
+test.each([
   "token verification",
   "connection record",
   "presence update",
   "metadata update",
   "token revocation",
-] as const)("keeps other node authority during %s", async (change, { signal }) => {
+] as const)("keeps other node authority readable during one device's %s", async (change) => {
   const node = expectDefined(await getPairedDevice("node", baseDir), "paired node");
   const other = {
     ...structuredClone(node),
     deviceId: "other",
-    approvedScopes: [],
     publicKey: "synthetic-other-key",
     tokens: {
       node: { token: "synthetic-other-token", role: "node", scopes: [], createdAtMs: 1 },
@@ -391,18 +387,12 @@ test.for([
   };
   const mutation = mutate();
   try {
-    if (change === "token verification") {
-      expect(await mutation).toEqual({ ok: true });
-      await withinTest(entered.promise, signal);
-    } else {
-      await awaitGateBeforeSettlement(entered.promise, mutation, "pairing mutation was not held");
-    }
+    await awaitGateBeforeSettlement(entered.promise, mutation, "pairing mutation was not held");
     expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(nodeBinding);
     // Until COMMIT, the stored row remains authoritative for the changing device too.
     expect(getPublishedPairedDeviceBinding("other", baseDir)).toEqual(otherBinding);
     release.resolve();
     await mutation;
-    await withDevicePairingLock(async () => {});
     const committedOther = change === "token revocation" ? null : otherBinding;
     // The first read after COMMIT drains and installs the receipt itself.
     expect(afterCommit).toEqual([committedOther, nodeBinding]);
@@ -514,17 +504,11 @@ test("retains pairing admission through final publication preparation and synchr
   expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
 });
 
-test.each(["worker commit", "native owner commit"] as const)(
+test.each(["worker commit", "sibling owner commit"] as const)(
   "does not restore revoked node authority from a read delayed past a newer %s",
   async (commit) => {
     await listDevicePairing(baseDir);
     expect(getPublishedPairedDeviceBinding("node", baseDir)).not.toBeNull();
-    // A native owner's commit retires the resident rows, forcing this read through the worker.
-    const state = {
-      pendingById: {},
-      pairedByDeviceId: { node: (await getPairedDevice("node", baseDir))! },
-    };
-    persistDevicePairingStoreState(state, baseDir, "paired");
     const releaseRead = createDeferredCore();
     const releaseMutation = createDeferredCore();
     const mutationQueued = createDeferredCore();
@@ -571,11 +555,12 @@ test.each(["worker commit", "native owner commit"] as const)(
             releaseMutation.resolve();
             await mutation;
           } else {
-            persistDevicePairingStoreState(
-              { pendingById: {}, pairedByDeviceId: {} },
-              baseDir,
-              "paired",
-            );
+            const other = openNodeSqliteDatabase(database.path);
+            try {
+              other.prepare("DELETE FROM device_pairing_paired WHERE device_id = ?").run("node");
+            } finally {
+              other.close();
+            }
             expect(await getPairedDevice("node", baseDir)).toBeNull();
           }
           expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();

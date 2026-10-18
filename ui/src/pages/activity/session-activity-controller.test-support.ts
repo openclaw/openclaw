@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { createSessionActivity } from "./session-activity-owner.ts";
+import { SessionActivityController } from "./session-activity-controller.ts";
 
 export function useSessionActivityControllerFixture() {
   const active: GatewaySessionRow = {
@@ -23,7 +23,7 @@ export function useSessionActivityControllerFixture() {
     sessions,
     defaults: { model: null, modelProvider: null, contextTokens: null },
   });
-  const controllers = new Set<ReturnType<typeof createSessionActivity>>();
+  const controllers = new Set<SessionActivityController>();
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
   });
@@ -42,7 +42,7 @@ export function useSessionActivityControllerFixture() {
       const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
       const request = vi.spyOn(client, "request").mockResolvedValue(listing([active]));
       const publications: Array<readonly GatewaySessionRow[] | undefined> = [];
-      const controller = createSessionActivity(() => {
+      const controller = new SessionActivityController(() => {
         publications.push(controller.result?.sessions);
       });
       controllers.add(controller);

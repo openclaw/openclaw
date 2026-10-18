@@ -112,7 +112,6 @@ export function buildConversationToolPolicyPipelineSteps(params: {
 export function projectConversationToolNames<TName extends string>(params: {
   capabilityProfile: ResolvedConversationCapabilityProfile;
   toolNames: readonly TName[];
-  toolMeta?: (tool: { name: TName }) => { pluginId: string } | undefined;
   warn: (message: string) => void;
 }): TName[] {
   const policies = resolveConversationToolPolicies({
@@ -121,7 +120,7 @@ export function projectConversationToolNames<TName extends string>(params: {
   const tools = params.toolNames.map((name) => ({ name }));
   return applyToolPolicyPipeline({
     tools,
-    toolMeta: params.toolMeta ?? (() => undefined),
+    toolMeta: () => undefined,
     warn: params.warn,
     steps: buildConversationToolPolicyPipelineSteps({
       capabilityProfile: params.capabilityProfile,
@@ -134,13 +133,11 @@ export function projectConversationToolNames<TName extends string>(params: {
 export function isConversationToolAllowed(
   capabilityProfile: ResolvedConversationCapabilityProfile,
   toolName: string,
-  toolMeta?: { pluginId: string },
 ): boolean {
   return (
     projectConversationToolNames({
       capabilityProfile,
       toolNames: [toolName],
-      toolMeta: () => toolMeta,
       warn: () => undefined,
     }).length === 1
   );

@@ -405,14 +405,12 @@ describe("managed image actions Gateway E2E", () => {
           thumbnailUrl.pathname = thumbnailUrl.pathname.replace(/\/full$/u, "/thumbnail");
           const thumbnail = await fetch(thumbnailUrl);
           expect(thumbnail.status).toBe(200);
-          expect(thumbnail.headers.get("content-type")).toBe("image/webp");
+          expect(thumbnail.headers.get("content-type")).toBe("image/png");
           const thumbnailBytes = Buffer.from(await thumbnail.arrayBuffer());
           expect(readImageProbeFromHeader(thumbnailBytes)).toMatchObject({
-            format: "webp",
-            width: 960,
-            height: 269,
+            width: 1200,
+            height: 336,
           });
-          expect(thumbnailBytes.byteLength).toBeLessThanOrEqual(256 * 1024);
 
           const authenticated = await fetch(new URL(imageUrl, fullUrl), {
             headers: { Authorization: `Bearer ${GATEWAY_TOKEN}` },

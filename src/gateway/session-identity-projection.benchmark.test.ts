@@ -47,7 +47,6 @@ it("benchmarks warm identity filtering across viewers", () => {
       paths: new Map([[storePath, 0]]),
       agentId: "main",
       configuredAgentIds,
-      ownerAgentIds: configuredAgentIds,
     },
     false,
     () => context,

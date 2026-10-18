@@ -125,7 +125,7 @@ type UsageCallbacks = {
     onScopeChange: (
       scope: Partial<Pick<UsageFilterState, "scope" | "creatorKey" | "timeZone">>,
     ) => void;
-    onRefresh: () => void | Promise<void>;
+    onRefresh: () => void;
     onToggleHeaderPinned: () => void;
     onSelectDay: (day: string, shiftKey: boolean, orderedDays: string[]) => void;
     onSelectHour: (hour: number, shiftKey: boolean) => void;

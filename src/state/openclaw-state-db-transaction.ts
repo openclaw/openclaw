@@ -14,6 +14,7 @@ const managedStateTransactions = resolveGlobalSingleton(
   Symbol.for("openclaw.managedStateTransactions"),
   () => new WeakSet<EngineConnection>(),
 );
+
 /** Only the synchronous transaction owner may lend its uncommitted authority rows. */
 export function isManagedStateTransaction(database: EngineConnection): boolean {
   return database.isTransaction && managedStateTransactions.has(database);

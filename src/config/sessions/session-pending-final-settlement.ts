@@ -1,7 +1,5 @@
-import { isDeepStrictEqual } from "node:util";
-import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { mergeRestartRecoveryTerminalDeliveryEvidence } from "./restart-recovery-state.js";
-import type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
+import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -23,11 +21,14 @@ export type PendingFinalDeliverySettlementInput = {
   };
 };
 
-/** Harness claims are host-validated; ordinary sources belong to the persisted final intent. */
+/** Harness evidence reaches this reducer only after the host validates its live claim. */
 export function projectPendingFinalDeliverySettlement(
   entry: InternalSessionEntry,
   input: PendingFinalDeliverySettlementInput,
-  evidence?: SessionActorDeliveryEvidence,
+  evidence?: {
+    claim: HarnessCompletionRecovery;
+    result?: { channel: string; target?: { id: string }; platformMessageId?: string };
+  },
 ): {
   patch: Partial<InternalSessionEntry> | null;
   state: PendingFinalDeliveryState | "stale";
@@ -95,63 +96,34 @@ function projectPendingFinalDeliveryState(
           },
         }
       : undefined;
+  const updatedDeliveries = deliveries.with(index, { id: input.deliveryId, state: settled });
   const result = evidence?.result;
-  const platformMessageId = result?.platformMessageId?.trim();
+  const platformMessageId = result?.platformMessageId;
   const context = pending.context;
-  const sourceRunId = pending.sourceRunId ?? evidence?.claim?.sourceRunId;
-  const validResult =
+  // The exact claim receipt commits with delivery completion before queue acknowledgment.
+  const terminalEvidence =
+    evidence &&
     result &&
     platformMessageId &&
-    (result.resultCount === undefined ||
-      (Number.isSafeInteger(result.resultCount) && result.resultCount > 0)) &&
     result.channel === context?.channel &&
     context?.to &&
     (!result.target || result.target.id === context.to) &&
-    (!result.verifiedContext ||
-      isDeepStrictEqual(
-        normalizeDeliveryContext(result.verifiedContext),
-        normalizeDeliveryContext(context),
-      ));
-  const receipt = terminal
-    ? deliveries[index]!.receipt
-    : settled === "delivered" && sourceRunId && validResult
-      ? { platformMessageId, resultCount: result.resultCount ?? 1 }
-      : undefined;
-  const updatedDeliveries = deliveries.with(index, {
-    id: input.deliveryId,
-    state: settled,
-    ...(receipt ? { receipt } : {}),
-  });
-  const finalReceipt = updatedDeliveries[index]!.receipt;
-  // Commit the original source receipt before queue ACK, even if run cleanup
-  // already retired its active claim. Never borrow the current requester source.
-  const terminalEvidence =
-    sourceRunId &&
-    (!evidence?.claim || evidence.claim.sourceRunId === sourceRunId) &&
-    finalReceipt &&
-    context &&
     settled === "delivered" &&
-    updatedDeliveries.every((delivery) => delivery.state === "delivered" && delivery.receipt)
+    updatedDeliveries.every((delivery) => delivery.state === "delivered")
       ? mergeRestartRecoveryTerminalDeliveryEvidence(
           entry.restartRecoveryTerminalDeliveryEvidence,
           [
             {
-              runId: sourceRunId,
-              ...(evidence?.claim ? { harnessCompletion: evidence.claim } : {}),
+              runId: evidence.claim.sourceRunId,
+              harnessCompletion: evidence.claim,
               deliveryContext: context,
               captured: true,
               payloads: [{ visible: true }],
-              deliveryStatus: {
-                status: "sent",
-                resultCount: updatedDeliveries.reduce(
-                  (count, delivery) => count + (delivery.receipt?.resultCount ?? 0),
-                  0,
-                ),
-              },
+              deliveryStatus: { status: "sent", resultCount: 1 },
               durableFinalReceipt: {
                 intentId: input.intentId,
                 deliveryId: input.deliveryId,
-                platformMessageId: finalReceipt.platformMessageId,
+                platformMessageId,
               },
             },
           ],

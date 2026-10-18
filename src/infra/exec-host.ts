@@ -1,12 +1,8 @@
 // Sends HMAC-protected exec host requests over the local socket.
 import crypto from "node:crypto";
-import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { NodePermissionDetails } from "../../packages/gateway-protocol/src/node-permissions.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approvals.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
-
-// Allow the companion's 15 s approval prompt before execution, then 5 s for its reply.
-const EXEC_HOST_RESPONSE_GRACE_MS = 20_000;
 
 // Exec host requests cross the local JSONL socket boundary into a privileged
 // runner, so payloads stay explicit and HMAC-protected.
@@ -56,13 +52,7 @@ export async function requestExecHostViaSocket(params: {
   if (!socketPath || !token) {
     return null;
   }
-  // Zero disables both command and response deadlines.
-  const timeoutMs =
-    params.timeoutMs ??
-    (request.timeoutMs === 0
-      ? 0
-      : addTimerTimeoutGraceMs(request.timeoutMs, EXEC_HOST_RESPONSE_GRACE_MS)) ??
-    20_000;
+  const timeoutMs = params.timeoutMs ?? 20_000;
   const requestJson = JSON.stringify(request);
   const nonce = crypto.randomBytes(16).toString("hex");
   const ts = Date.now();
@@ -81,7 +71,7 @@ export async function requestExecHostViaSocket(params: {
     requestJson,
   });
 
-  return await requestJsonlSocket<ExecHostResponse>({
+  return await requestJsonlSocket({
     socketPath,
     requestLine: payload,
     timeoutMs,
@@ -97,23 +87,7 @@ export async function requestExecHostViaSocket(params: {
       if (msg.ok === false && msg.error) {
         return { ok: false, error: msg.error as ExecHostError };
       }
-      return undefined;
+      return null;
     },
-    onTimeout: () => ({
-      ok: false,
-      error: {
-        code: "TIMEOUT",
-        reason: "timeout",
-        message: "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
-      },
-    }),
-    onResponseLost: () => ({
-      ok: false,
-      error: {
-        code: "UNKNOWN",
-        reason: "response-lost",
-        message: "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
-      },
-    }),
   });
 }

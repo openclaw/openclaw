@@ -1,5 +1,4 @@
 import { getGatewayControlUiIngressHost } from "../gateway/remote-control-ui-ingress-host.js";
-import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import {
   GatewayControlUiIngressError,
@@ -58,7 +57,6 @@ export function createPluginServiceControlUiIngress(options: {
   };
   const stop = async () => {
     lifetime.abort(new GatewayControlUiIngressError("closed", "Plugin Control UI ingress stopped"));
-    materializeErrorStack(lifetime.signal.reason);
   };
   lease.retain(() => void stop());
   const hostFactory = async () => {

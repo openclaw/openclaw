@@ -13,10 +13,7 @@ import {
   retainLoadedPluginSourceCapture,
   retainPluginSourceCaptureInstance,
 } from "./plugin-source-capture-directory.js";
-import {
-  mkdtempPluginCaptureSync,
-  PLUGIN_SOURCE_CAPTURE_PREFIX,
-} from "./plugin-source-capture-path.js";
+import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 import { isPluginSourceEntry } from "./plugin-source-file.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
@@ -631,10 +628,9 @@ export function createPluginSourceCapture() {
   try {
     created =
       override !== undefined
-        ? mkdtempPluginCaptureSync(path.join(override.directory, PLUGIN_SOURCE_CAPTURE_PREFIX))
+        ? fs.mkdtempSync(path.join(override.directory, PLUGIN_SOURCE_CAPTURE_PREFIX))
         : instance!.createDirectory();
-    // Copies admit only targets already in native spelling (Windows 8.3 names expanded).
-    directory = fs.realpathSync.native(created);
+    directory = fs.realpathSync(created);
     fs.chmodSync(directory, 0o700);
   } catch (error) {
     const cleanupErrors: unknown[] = [];

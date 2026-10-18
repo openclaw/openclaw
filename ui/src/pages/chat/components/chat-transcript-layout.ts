@@ -1,24 +1,19 @@
-import type { JSX } from "@solidjs/web";
 import type { Virtualizer } from "@tanstack/virtual-core";
 import type { ApplicationContext } from "../../../app/context.ts";
-import type { PresentationValue } from "../../../lib/presentation.ts";
-import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
+import type { PresentationValue } from "../../../lit/presentation-binding.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
-import type { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
-
-export type TranscriptContent = GuardedTranscriptItem | JSX.Element;
 
 export type TranscriptRow<T = unknown> =
   | { kind: "item"; key: string; item: T }
-  | { kind: "content"; key: string; content: TranscriptContent };
+  | { kind: "content"; key: string; content: unknown };
 
 export type TranscriptLayoutProps = {
   applicationContext?: ApplicationContext;
   rows: readonly TranscriptRow[];
-  getContent: (index: number) => TranscriptContent;
+  getContent: (index: number) => unknown;
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
-  overlay: JSX.Element;
-  header: ChatHistoryBoundaryProps | null;
+  overlay: unknown;
+  header: unknown;
   scrollElementRef: (element?: Element) => void;
   captureInteractionResize: (event: Event) => void;
   measureRowRefFor: (key: string) => (element?: Element) => void;

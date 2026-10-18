@@ -15,18 +15,9 @@ export type DoctorDatabasePreflight = OpenClawDatabaseSchemaPreflight & {
 
 /** Prepare fleet facts through the artifact-preserving schema readers. */
 export async function prepareDoctorDatabasePreflight(
-  options: {
-    scope?: "state";
-    cfg?: OpenClawConfig;
-    /**
-     * Update Doctor compares database generations recorded at snapshot capture. A native
-     * open of an idle WAL family rebuilds its WAL index and changes that generation, so
-     * those runs read every source through private snapshots instead.
-     */
-    preserveSourceArtifacts?: true;
-  } = {},
+  options: { scope?: "state"; cfg?: OpenClawConfig } = {},
 ): Promise<DoctorDatabasePreflight> {
-  const { scope, preserveSourceArtifacts } = options;
+  const { scope } = options;
   const databasePreflight = await import("../state/openclaw-database-preflight.js");
   const [
     { createConfigIO },
@@ -54,7 +45,6 @@ export async function prepareDoctorDatabasePreflight(
     env: process.env,
     scope,
     openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-    preserveSourceArtifacts,
     ...(cfg
       ? {
           // Custom stores go through the artifact-preserving header reader; discovery

@@ -13,7 +13,6 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
@@ -36,34 +35,9 @@ class WearRealtimeChannelRegistryTest {
   private val registry = WearRealtimeChannelRegistry(scope, transport)
 
   @After
-  fun cancelScope() =
-    runBlocking {
-      cancelAndJoinFixtureScope()
-    }
-
-  private suspend fun cancelAndJoinFixtureScope() {
+  fun cancelScope() {
     scope.cancel()
-    // Cancelling a coroutine does not release the fixture's blocking InputStream.
-    transport.closeInputs()
-    scope.coroutineContext.job.join()
   }
-
-  @Test
-  fun `fixture cancellation joins an activated blocking reader`() =
-    runBlocking {
-      val channel = FakeChannel("watch-cleanup", "channel-cleanup", "attempt-cleanup")
-      try {
-        registry.accept(channel, appendAudio = { _, _ -> }, stopTalk = {})
-        transport.awaitOpened(channel)
-        checkNotNull(registry.claim("watch-cleanup", "attempt-cleanup"))
-        withTimeout(1_000L) {
-          while (!transport.hasStartedReading(channel)) yield()
-        }
-        withTimeout(1_000L) { cancelAndJoinFixtureScope() }
-      } finally {
-        transport.finishInput(channel)
-      }
-    }
 
   @Test
   fun `replacement stops displaced owner once before its finalizer`() =
@@ -979,10 +953,6 @@ private class FakeChannelTransport : WearRealtimeChannelTransport {
   fun wasOpened(channel: ChannelClient.Channel): Boolean = openedResources.containsKey(channel)
 
   fun hasStartedReading(channel: ChannelClient.Channel): Boolean = (openedResources[channel]?.input as? ClosingInputStream)?.hasStartedReading() == true
-
-  fun closeInputs() {
-    openedResources.values.forEach { it.input.close() }
-  }
 }
 
 private class ClosingInputStream : InputStream() {

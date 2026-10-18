@@ -25,11 +25,13 @@ import {
   readSystemInfo,
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import {
   CONNECTION_PING_SAMPLE_LIMIT,
   summarizeConnectionPing,
   type ConnectionPingSummary,
 } from "./latency.ts";
+import { isUnknownSystemInfoMethodError } from "./system-info.ts";
 import { ConnectionView } from "./view.tsx";
 
 const CONNECTION_DOCS_URL = "https://docs.openclaw.ai/gateway/remote";
@@ -55,12 +57,12 @@ class ConnectionDraft {
 
   constructor(
     readonly context: ApplicationContext,
+    readonly host: HTMLElement,
     readonly changed: () => void,
   ) {}
 
-  private get isActive() {
-    // Lazy routes can bind before DOM insertion; the binding owns their lifetime.
-    return this.gateway.gateway === this.context.gateway;
+  private get isConnected() {
+    return this.host.isConnected;
   }
 
   dispose() {
@@ -126,7 +128,7 @@ class ConnectionDraft {
   syncDiagnosticsPolling() {
     const snapshot = this.context.gateway.snapshot;
     if (
-      !this.isActive ||
+      !this.isConnected ||
       document.visibilityState === "hidden" ||
       snapshot.phase !== "connected" ||
       !snapshot.client
@@ -164,7 +166,7 @@ class ConnectionDraft {
     this.changed();
     const isCurrent = () =>
       this[requestKey] === request &&
-      this.isActive &&
+      this.isConnected &&
       document.visibilityState !== "hidden" &&
       this.context.gateway === gatewaySource &&
       this.gateway.isCurrent(scope);
@@ -219,7 +221,7 @@ class ConnectionDraft {
         this.pingFailed = true;
       } else {
         this.statusFailed = true;
-        if (isMissingOperatorReadScopeError(error)) {
+        if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
           this.systemInfo = null;
           this.systemInfoUnavailable = true;
         }
@@ -266,7 +268,7 @@ class ConnectionDraft {
     // A confirmation for one Gateway must never reset a newly selected Gateway.
     if (
       confirmed &&
-      this.isActive &&
+      this.isConnected &&
       this.context.gateway === gateway &&
       gateway.connection.gatewayUrl === gatewayUrl
     ) {
@@ -361,11 +363,11 @@ class ConnectionDraft {
   }
 }
 
-export function ConnectionPage() {
+function ConnectionContent(_props: object, host: HTMLElement) {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const changed = () => setRevision((value) => value + 1);
-  const draft = new ConnectionDraft(context, changed);
+  const draft = new ConnectionDraft(context, host, changed);
   draft.polling = useVisiblePoll(SYSTEM_INFO_POLL_INTERVAL_MS, () => draft.refreshDiagnostics());
   draft.gateway = useGatewayPage({
     getGateway: () => context.gateway,
@@ -377,12 +379,12 @@ export function ConnectionPage() {
     onPageActivation: () => draft.syncDiagnosticsPolling(),
   });
   onCleanup(() => draft.dispose());
-  const viewProps = () => {
+  const props = () => {
     revision();
     return draft.viewProps();
   };
   return (
-    <openclaw-connection-page>
+    <>
       <SettingsPageHeader
         title={titleForRoute("connection", t)}
         subtitle={
@@ -392,8 +394,12 @@ export function ConnectionPage() {
         }
       />
       <SettingsWorkspace>
-        <ConnectionView {...viewProps()} />
+        <ConnectionView {...props()} />
       </SettingsWorkspace>
-    </openclaw-connection-page>
+    </>
   );
 }
+
+export const ConnectionPage = defineSolidBridge("openclaw-connection-page", ConnectionContent, {
+  properties: {},
+});

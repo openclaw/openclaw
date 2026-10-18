@@ -44,7 +44,7 @@ export function isFireworksCatalogModelId(modelId: string): boolean {
 }
 
 export function buildFireworksCatalogModels(): ModelDefinitionConfig[] {
-  return FIREWORKS_MANIFEST_PROVIDER.models;
+  return FIREWORKS_MANIFEST_PROVIDER.models.map((model) => structuredClone(model));
 }
 
 export function buildFireworksProvider(): ModelProviderConfig {

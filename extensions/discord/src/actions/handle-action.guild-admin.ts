@@ -101,7 +101,12 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     runtimeAction: string,
     values: Record<string, unknown>,
     options?: DiscordMessagingActionOptions,
-  ) => handleDiscordAction({ action: runtimeAction, accountId, ...values }, cfg, options);
+  ) =>
+    handleDiscordAction(
+      { action: runtimeAction, accountId: accountId ?? undefined, ...values },
+      cfg,
+      options,
+    );
 
   const metadataRead = guildMetadataReads[action];
   if (metadataRead) {
@@ -265,8 +270,8 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       {
         channelId,
         content,
-        mediaUrl,
-        replyTo,
+        mediaUrl: mediaUrl ?? undefined,
+        replyTo: replyTo ?? undefined,
         ...(readBooleanParam(actionParams, "silent") === true ? { silent: true } : {}),
       },
       actionOptions,

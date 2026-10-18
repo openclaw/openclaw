@@ -211,8 +211,7 @@ describe("windowInitialMessages", () => {
     });
   });
 
-  it("reserves two context slots for the complete current prompt", () => {
-    const promptMessages = 2;
+  it.each([1, 2])("reserves %i context slots for the complete current prompt", (promptMessages) => {
     const history = Array.from({ length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES }, (_value, index) =>
       userMessage(`history-${index}`, index + 1),
     );
@@ -230,8 +229,7 @@ describe("windowInitialMessages", () => {
     });
   });
 
-  it("rejects replay that cannot leave two current-prompt slots", () => {
-    const promptMessages = 2;
+  it.each([1, 2])("rejects replay that cannot leave %i current-prompt slots", (promptMessages) => {
     const history = [assistantMessage(1, true)];
     history.push(
       ...Array.from(
@@ -289,68 +287,71 @@ describe("fitLaunchDescriptor", () => {
     }
   });
 
-  it("fits the actual near-ceiling launch transport with nested escaping", async () => {
-    const operationalRunInstance = createTestAdmittedRunContext("run").operationalRunInstance;
-    const projected = windowInitialMessages([
-      assistantMessage(1, true),
-      toolResultMessage({ payload: "" }, 2),
-    ]);
-    if (projected.kind !== "complete") {
-      throw new Error("expected complete projection");
-    }
-    const messages = projected.messages;
-    const result = messages[1];
-    if (result?.role !== "toolResult") {
-      throw new Error("expected tool result");
-    }
-    const build = (identityToken: string, initialMessages: typeof messages) =>
-      buildDescriptor(initialMessages, identityToken, operationalRunInstance);
-    const emptyBytes = Buffer.byteLength(
-      JSON.stringify(build(runtimeIdentityToken.value, messages)),
-    );
-    const payloadBytes = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES - 4_608 - emptyBytes;
-    const escaped = '"\\\0\n'.repeat(500_000);
-    result.details = {
-      payload: escaped + "x".repeat(payloadBytes - (JSON.stringify(escaped).length - 2)),
-    };
-    const candidate = parseWorkerLaunchPlan(build(runtimeIdentityToken.value, messages));
-    const input = {
-      environmentSession: 1,
-      launchId: candidate.assignment.turnId,
-      gatewayNamespace: "fixture-gateway",
-      expectedBundleHash: candidate.admission.handshake.bundleHash,
-      placementGeneration: 1,
-      descriptor: candidate,
-    };
-    const paramsJSON = JSON.stringify(input);
-    parseNodeWorkerLaunchInput(paramsJSON);
-    const suffix = "/__openclaw__/worker";
-    const prefix = "wss://worker.invalid/";
-    const descriptor = parseWorkerLaunchDescriptor({
-      ...candidate,
-      connectionEndpoint: {
-        kind: "websocket",
-        url: prefix + "x".repeat(4_096 - prefix.length - suffix.length) + suffix,
-        tlsFingerprint: "a".repeat(64),
-        cloudflareAccess: { clientId: "i".repeat(4_096), clientSecret: "s".repeat(4_096) },
-      },
-    });
-    const line = JSON.stringify({
-      type: "turn",
-      turnId: candidate.assignment.turnId,
-      descriptor,
-    });
-    parseWorkerProcessRequest(JSON.parse(line));
+  it.each(["nested escaping", "maximal endpoint"])(
+    "fits the actual near-ceiling launch transport: %s",
+    async (scenario) => {
+      const operationalRunInstance = createTestAdmittedRunContext("run").operationalRunInstance;
+      const projected = windowInitialMessages([
+        assistantMessage(1, true),
+        toolResultMessage({ payload: "" }, 2),
+      ]);
+      if (projected.kind !== "complete") {
+        throw new Error("expected complete projection");
+      }
+      const messages = projected.messages;
+      const result = messages[1];
+      if (result?.role !== "toolResult") {
+        throw new Error("expected tool result");
+      }
+      const build = (identityToken: string, initialMessages: typeof messages) =>
+        buildDescriptor(initialMessages, identityToken, operationalRunInstance);
+      const emptyBytes = Buffer.byteLength(
+        JSON.stringify(build(runtimeIdentityToken.value, messages)),
+      );
+      const payloadBytes = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES - 4_608 - emptyBytes;
+      const escaped = scenario === "nested escaping" ? '"\\\0\n'.repeat(500_000) : "";
+      result.details = {
+        payload: escaped + "x".repeat(payloadBytes - (JSON.stringify(escaped).length - 2)),
+      };
+      const candidate = parseWorkerLaunchPlan(build(runtimeIdentityToken.value, messages));
+      const input = {
+        environmentSession: 1,
+        launchId: candidate.assignment.turnId,
+        gatewayNamespace: "fixture-gateway",
+        expectedBundleHash: candidate.admission.handshake.bundleHash,
+        placementGeneration: 1,
+        descriptor: candidate,
+      };
+      const paramsJSON = JSON.stringify(input);
+      parseNodeWorkerLaunchInput(paramsJSON);
+      const suffix = "/__openclaw__/worker";
+      const prefix = "wss://worker.invalid/";
+      const descriptor = parseWorkerLaunchDescriptor({
+        ...candidate,
+        connectionEndpoint: {
+          kind: "websocket",
+          url: prefix + "x".repeat(4_096 - prefix.length - suffix.length) + suffix,
+          tlsFingerprint: "a".repeat(64),
+          cloudflareAccess: { clientId: "i".repeat(4_096), clientSecret: "s".repeat(4_096) },
+        },
+      });
+      const line = JSON.stringify({
+        type: "turn",
+        turnId: candidate.assignment.turnId,
+        descriptor,
+      });
+      parseWorkerProcessRequest(JSON.parse(line));
 
-    const fitted = await fitLaunchDescriptorWithRuntimeIdentity({
-      measure: measureLaunch,
-      build,
-      messages,
-      runtimeIdentity: { agentId: "main", sessionKey: "worker:session", operationalRunInstance },
-    });
-    expect(fitted.kind).toBe("provider-replay-unavailable");
-    expect(runtimeIdentityToken.mint).not.toHaveBeenCalled();
-  });
+      const fitted = await fitLaunchDescriptorWithRuntimeIdentity({
+        measure: measureLaunch,
+        build,
+        messages,
+        runtimeIdentity: { agentId: "main", sessionKey: "worker:session", operationalRunInstance },
+      });
+      expect(fitted.kind).toBe("provider-replay-unavailable");
+      expect(runtimeIdentityToken.mint).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains history when pruning one processed image fits the exact node transport bound", async () => {
     const messages = createWorkerImageHistory().slice(0, 5);

@@ -3,25 +3,27 @@ import { formatUiError } from "../../lib/format-error.ts";
 /** Type-only, so the dialog itself stays behind its lazy boundary. */
 type InputDialogOpener = (typeof import("../../components/input-dialog.ts"))["showInputDialog"];
 
-export function createSessionsDialog(onError: (message: string) => void) {
+export class SessionsPageDialog {
   /** Only one dialog is open at a time; disconnect closes whichever it is. */
-  let currentLifetime: AbortController | null = null;
+  private lifecycle: AbortController | null = null;
 
-  function abort() {
-    currentLifetime?.abort();
+  constructor(private readonly onError: (message: string) => void) {}
+
+  abort() {
+    this.lifecycle?.abort();
   }
 
-  async function open(options: () => Parameters<InputDialogOpener>[0]): Promise<string | null> {
+  async open(options: () => Parameters<InputDialogOpener>[0]): Promise<string | null> {
     // Reentrant opens share the live controller but must not retire it on completion.
-    const active = currentLifetime;
+    const active = this.lifecycle;
     const lifecycle = active ?? new AbortController();
-    currentLifetime = lifecycle;
+    this.lifecycle = lifecycle;
     try {
       let showInputDialog: InputDialogOpener;
       try {
         ({ showInputDialog } = await import("../../components/input-dialog.ts"));
       } catch (error) {
-        onError(formatUiError(error));
+        this.onError(formatUiError(error));
         return null;
       }
       const resolved = options();
@@ -34,10 +36,9 @@ export function createSessionsDialog(onError: (message: string) => void) {
         })) ?? null
       );
     } finally {
-      if (!active && currentLifetime === lifecycle) {
-        currentLifetime = null;
+      if (!active && this.lifecycle === lifecycle) {
+        this.lifecycle = null;
       }
     }
   }
-  return { abort, open };
 }

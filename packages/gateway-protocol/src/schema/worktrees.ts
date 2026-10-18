@@ -129,17 +129,6 @@ export const WorktreesGcResultSchema = closedObject({
   removed: Type.Array(NonEmptyString),
   orphansDeleted: Type.Integer({ minimum: 0 }),
   snapshotsPruned: Type.Integer({ minimum: 0 }),
-  gitMaintenance: Type.Optional(
-    closedObject({
-      repoRoot: NonEmptyString,
-      stage: Type.String({
-        enum: ["packs", "objects", "maintenance", "completed", "suspended", "throttled"],
-      }),
-      packsBefore: Type.Optional(Type.Integer({ minimum: 0 })),
-      packsAfter: Type.Optional(Type.Integer({ minimum: 0 })),
-    }),
-  ),
-  packsRemoved: Type.Optional(Type.Integer({ minimum: 0 })),
   orphansRetired: Type.Optional(Type.Integer({ minimum: 0 })),
   retiredCheckoutPaths: Type.Optional(Type.Array(NonEmptyString)),
   outcome: Type.Optional(Type.String({ enum: ["completed", "deferred", "partial"] })),
@@ -148,7 +137,7 @@ export const WorktreesGcResultSchema = closedObject({
       closedObject({
         id: Type.Optional(NonEmptyString),
         stage: Type.String({
-          enum: ["idle", "templates", "limits", "size", "orphans", "snapshots", "git-maintenance"],
+          enum: ["idle", "templates", "limits", "size", "orphans", "snapshots"],
         }),
         outcome: Type.String({ enum: ["failed", "deferred", "retired"] }),
         reason: Type.String(),

@@ -75,18 +75,12 @@ describe("command-registry", () => {
     }
   };
 
-  it("includes both agent and agents in core CLI command names", () => {
-    const names = getCoreCliCommandNamesCore();
-    expect(names).toContain("setup");
-    expect(names).toContain("crestodian"); // hidden alias
-    expect(names).toContain("mcp");
-    expect(names).toContain("agent");
-    expect(names).toContain("agents");
-    expect(names).not.toContain("tasks");
-  });
-
-  it("exposes Claws without a process opt-in", () => {
+  it("only exposes Claws after an explicit process opt-in", () => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
+    expect(getCoreCliCommandNamesCore()).not.toContain("claws");
+    expect(getCoreCliCommandsWithSubcommands()).not.toContain("claws");
+
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
     expect(getCoreCliCommandNamesCore()).toContain("claws");
     expect(getCoreCliCommandsWithSubcommands()).toContain("claws");
 

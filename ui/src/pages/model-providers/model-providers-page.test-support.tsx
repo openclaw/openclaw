@@ -1,5 +1,5 @@
 import { setImmediate } from "node:timers/promises";
-import { createSignal } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import { afterEach, expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type {
@@ -31,8 +31,9 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
-import { createModelProviders, type ModelProvidersOwner } from "./model-providers-controller.ts";
+import { ModelProvidersController } from "./model-providers-controller.ts";
 import { ModelProvidersContent } from "./model-providers-page.tsx";
+import type { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 
 type MountedPage = {
@@ -54,15 +55,12 @@ afterEach(() => {
 });
 
 export type ModelProvidersPageTestElement = Pick<
-  HTMLElement,
-  "querySelector" | "querySelectorAll" | "isConnected"
+  ModelProvidersController,
+  keyof ModelProvidersController
 > & {
-  readonly view: ReturnType<ModelProvidersOwner["viewProps"]>;
-  context: ApplicationContext;
-  renderRoot: HTMLElement;
-  routeData: ModelProvidersRouteData | undefined;
-  loaderPending: boolean;
-  updateComplete: Promise<boolean>;
+  profileActions: Pick<ModelProviderProfileActionsController, "logout" | "setOrder" | "probe">;
+  refresh: (reason: "forced") => Promise<void>;
+  saveDefaults: () => Promise<void>;
 };
 
 const modelPickerLabels = {
@@ -77,7 +75,7 @@ export function modelPicker(
   role: keyof typeof modelPickerLabels,
 ): SelectPicker {
   const picker = page.querySelector<SelectPicker>(
-    `.model-providers__defaults openclaw-select-picker:has(.picker-select__trigger[aria-label^="${modelPickerLabels[role]}"])`,
+    `.model-providers__defaults openclaw-select-picker:has([role="listbox"][aria-label="${modelPickerLabels[role]}"])`,
   );
   expect(picker, `${role} model picker`).not.toBeNull();
   return picker!;
@@ -105,7 +103,7 @@ export async function drainPageUpdates(page: ModelProvidersPageTestElement): Pro
 export function displayedCatalog(page: ModelProvidersPageTestElement) {
   return peekModelCatalog(
     page.context.gateway.snapshot.client!,
-    { agentId: page.context.settingsAgentSelection.state.selectedId ?? "" },
+    { agentId: page.state.selectedAgentId },
     { allowStale: true },
   );
 }
@@ -158,7 +156,6 @@ export function createAuthStatus(
 export function createApiKeyProviderData(): ModelProvidersData {
   return {
     ...EMPTY_MODEL_PROVIDERS_DATA,
-    updatedAt: 1,
     authStatus: {
       ...createAuthStatus([
         {
@@ -173,24 +170,11 @@ export function createApiKeyProviderData(): ModelProvidersData {
 }
 
 export async function saveKey(page: ModelProvidersPageTestElement, value: string) {
-  publishRouteData(page, createApiKeyProviderData());
-  page.view.props.onOpenKeyEditor("openai");
-  page.view.props.onKeyDraftChange(value);
+  page.setState("data", createApiKeyProviderData());
+  page.setState("keyEditorProvider", "openai");
+  page.setState("keyDraft", value);
   await page.updateComplete;
   page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!.click();
-}
-
-export async function openApiKeyProvider(page: ModelProvidersPageTestElement, provider: string) {
-  await page.view.scope.onConnect();
-  await page.updateComplete;
-  const choice = page.querySelector<HTMLButtonElement>(
-    `[data-models-login-provider="${provider}"]`,
-  );
-  expect(choice).not.toBeNull();
-  choice!.click();
-  await page.updateComplete;
-  page.querySelector<HTMLButtonElement>("[data-models-login-api-key]")!.click();
-  await page.updateComplete;
 }
 
 export function createHarness(initialScopeId: string) {
@@ -285,7 +269,7 @@ export function createHarness(initialScopeId: string) {
     previousSnapshot = { ...next };
     metadata.synchronize(previous, next);
   });
-  const selectionListeners = new Set<() => void>();
+  let selectionListener: (() => void) | undefined;
   const settingsAgentSelection = {
     intentRevision: 0,
     state: {
@@ -295,8 +279,10 @@ export function createHarness(initialScopeId: string) {
     set: vi.fn(),
     setScope: vi.fn(),
     subscribe(listener: () => void) {
-      selectionListeners.add(listener);
-      return () => selectionListeners.delete(listener);
+      selectionListener = listener;
+      return () => {
+        selectionListener = undefined;
+      };
     },
   };
   const runtimeConfigListeners = new Set<(state: RuntimeConfigState) => void>();
@@ -370,7 +356,7 @@ export function createHarness(initialScopeId: string) {
     context,
     gatewaySource,
     deferNextAuthStatus,
-    notifySelection: () => selectionListeners.forEach((listener) => listener()),
+    notifySelection: () => selectionListener?.(),
     notifyRuntimeConfig: () => {
       for (const listener of runtimeConfigListeners) {
         listener(runtimeConfig.state);
@@ -416,7 +402,7 @@ export async function waitForProviders(
 ): Promise<void> {
   await page.context.runtimeConfig.ensureLoaded();
   await waitForSolid(() => {
-    expect(page.view.props.updatedAt).toEqual(expect.any(Number));
+    expect(page.state.data?.updatedAt).toEqual(expect.any(Number));
     expect(page.context.runtimeConfig.state.configLoading).toBe(false);
     if (expectedConfig) {
       expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(expectedConfig);
@@ -449,92 +435,56 @@ export function createEmptyModelProvidersRouteData(
   };
 }
 
-export function publishRouteData(page: ModelProvidersPageTestElement, data: ModelProvidersData) {
-  const { gateway, settingsAgentSelection } = page.context;
-  page.routeData = {
-    ...page.routeData,
-    gateway,
-    gatewaySnapshot: gateway.snapshot,
-    client: gateway.snapshot.client,
-    agentId: settingsAgentSelection.state.selectedId,
-    selectionIntentRevision: settingsAgentSelection.intentRevision,
-    data,
-  };
-  flush();
-}
-
 export function createPage(context: ApplicationContext): ModelProvidersPageTestElement {
   const root = document.createElement("div");
-  let owner!: ModelProvidersOwner;
-  let routeData: ModelProvidersRouteData | undefined;
-  let loaderPending = false;
-  let publishInputs: (() => void) | undefined;
+  const [revision, setRevision] = createSignal(0);
+  let mounted = false;
+  let queued = false;
   let view: ReturnType<typeof mountSolid> | undefined;
-  const page: ModelProvidersPageTestElement = {
-    context,
-    renderRoot: root,
-    querySelector: root.querySelector.bind(root),
-    querySelectorAll: root.querySelectorAll.bind(root),
-    get isConnected() {
-      return root.isConnected;
-    },
-    get view() {
-      return owner.viewProps();
-    },
-    get routeData() {
-      return routeData;
-    },
-    set routeData(value) {
-      routeData = value;
-      publishInputs?.();
-    },
-    get loaderPending() {
-      return loaderPending;
-    },
-    set loaderPending(value) {
-      loaderPending = value;
-      publishInputs?.();
-    },
-    get updateComplete() {
-      return Promise.resolve().then(() => {
-        flush();
-        return true;
-      });
-    },
-  };
-  pages.set(page, {
+  const page = new ModelProvidersController(root, context, () => {
+    if (!mounted || queued) {
+      return;
+    }
+    queued = true;
+    queueMicrotask(() => {
+      queued = false;
+      if (!mounted) {
+        return;
+      }
+      page.beforeUpdate();
+      setRevision((value) => value + 1);
+      flush();
+      page.afterUpdate();
+    });
+  });
+  // SAFETY: Tests inspect the existing private action owners without adding a production facade.
+  const testPage = page as unknown as ModelProvidersPageTestElement;
+  pages.set(testPage, {
     mount: () => {
-      if (view) {
+      if (mounted) {
         return;
       }
       document.body.append(root);
+      mounted = true;
       view = mountSolid(
         () => {
-          const [revision, setRevision] = createSignal(0);
-          publishInputs = () => setRevision((value) => value + 1);
-          owner = createModelProviders(page.context, {
-            get routeData() {
-              revision();
-              return routeData;
-            },
-            get loaderPending() {
-              revision();
-              return loaderPending;
-            },
+          onCleanup(() => {
+            mounted = false;
+            page.disconnect();
           });
-          return <ModelProvidersContent controller={owner} />;
+          return <ModelProvidersContent controller={page} revision={revision} />;
         },
         { container: root },
       );
+      page.connect();
     },
     unmount: () => {
       view?.unmount();
       view = undefined;
-      publishInputs = undefined;
       root.remove();
     },
   });
-  return page;
+  return testPage;
 }
 
 export function mountPage(page: ModelProvidersPageTestElement): void {
@@ -556,16 +506,20 @@ export function appendPage(context: ApplicationContext) {
   return page;
 }
 
-export function clickLoginChoice(page: ModelProvidersPageTestElement, label: string) {
+export function clickLoginChoice(page: ModelProvidersPageTestElement, choice: string) {
+  const option = page.state.data?.authStatus?.providerCapabilities
+    ?.flatMap((provider) => provider.loginOptions ?? [])
+    .find((candidate) => candidate.id === choice);
+  expect(option).toBeDefined();
   const button = [
     ...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button"),
-  ].find((candidate) => candidate.querySelector("strong")?.textContent === label);
+  ].find((candidate) => candidate.querySelector("strong")?.textContent === option!.label);
   expect(button).toBeDefined();
   button!.click();
 }
 
-export async function startSelectedLogin(page: ModelProvidersPageTestElement, label: string) {
-  clickLoginChoice(page, label);
+export async function startSelectedLogin(page: ModelProvidersPageTestElement, choice: string) {
+  clickLoginChoice(page, choice);
   await waitForSolid(() =>
     expect(page.querySelector<HTMLInputElement>('input[name="wizard-text"]')?.disabled).toBe(false),
   );

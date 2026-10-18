@@ -153,14 +153,16 @@ function buildDiscoveredModelDefinition(value: unknown): ModelDefinitionConfig |
     fallback?.maxTokens ??
     VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS;
   const normalizedCost = normalizeCost(model.pricing);
-  const tags = Array.isArray(model.tags) ? model.tags : undefined;
 
   return {
     id,
     name: (typeof model.name === "string" ? model.name.trim() : "") || fallback?.name || id,
-    reasoning: tags?.includes("reasoning") ? true : (fallback?.reasoning ?? false),
-    input: tags
-      ? tags.includes("vision")
+    reasoning:
+      Array.isArray(model.tags) && model.tags.includes("reasoning")
+        ? true
+        : (fallback?.reasoning ?? false),
+    input: Array.isArray(model.tags)
+      ? model.tags.includes("vision")
         ? ["text", "image"]
         : ["text"]
       : (fallback?.input ?? ["text"]),

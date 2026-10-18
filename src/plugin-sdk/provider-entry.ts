@@ -9,7 +9,7 @@ import type {
   PluginManifestSetupProvider,
 } from "../plugins/manifest-types.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
-import { readProviderCatalogResultEntries } from "../plugins/provider-catalog-result.js";
+import { copyProviderCatalogResultEntries } from "../plugins/provider-catalog-result.js";
 import {
   buildManifestModelProviderConfig,
   buildSingleProviderApiKeyCatalog,
@@ -24,6 +24,11 @@ import type {
   UnifiedModelCatalogProviderContext,
   ProviderPluginWizardSetup,
 } from "../plugins/types.js";
+import {
+  copyArrayEntries,
+  isRecordWithoutThrowing,
+  readRecordValue,
+} from "../shared/safe-record.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "./lazy-runtime.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
@@ -342,12 +347,12 @@ function resolveWizardSetup(params: {
 }
 
 function resolveEnvVars(params: {
-  envVars?: string[];
+  envVars?: unknown;
   auth?: SingleProviderPluginApiKeyAuthOptions[];
 }): string[] | undefined {
   const combined = normalizeStringEntries([
-    ...(params.envVars ?? []),
-    ...(params.auth ?? []).map((entry) => entry.envVar),
+    ...copyArrayEntries(params.envVars),
+    ...(params.auth ?? []).map((entry) => readRecordValue(entry, "envVar")).filter(Boolean),
   ]);
   return combined.length > 0 ? uniqueStrings(combined) : undefined;
 }
@@ -360,7 +365,8 @@ async function runUnifiedTextCatalog(params: {
 }): Promise<UnifiedModelCatalogEntry[]> {
   const result = await params.catalog.run(params.ctx);
   const rows: UnifiedModelCatalogEntry[] = [];
-  for (const [providerId, providerConfig] of readProviderCatalogResultEntries({
+  // Consume the copier's validated records without copying the catalog again.
+  for (const [providerId, providerConfig] of copyProviderCatalogResultEntries({
     providerId: params.providerId,
     result,
   })) {
@@ -400,33 +406,47 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
         ) {
           throw new Error(`Missing modelCatalog.providers.${providerId}`);
         }
-        const providerAuth =
+        const providerAuth = copyArrayEntries(
           provider.auth ??
-          resolveManifestProviderAuth({
-            manifest: options.manifest,
-            providerId,
-            providerLabel: provider.label,
-            overrides: provider.manifestAuth,
-          });
-        const auth = providerAuth.map((entry) => {
-          const { wizard: _wizard, ...authParams } = entry;
-          const wizard = resolveWizardSetup({
-            providerId,
-            providerLabel: provider.label,
-            auth: entry,
-          });
-          return createProviderApiKeyAuthMethod({
-            ...authParams,
-            providerId,
-            expectedProviders: entry.expectedProviders ?? [providerId],
-            ...(wizard ? { wizard } : {}),
-          });
+            resolveManifestProviderAuth({
+              manifest: options.manifest,
+              providerId,
+              providerLabel: provider.label,
+              overrides: provider.manifestAuth,
+            }),
+        ).filter(isRecordWithoutThrowing) as SingleProviderPluginApiKeyAuthOptions[];
+        const acceptedProviderAuth: SingleProviderPluginApiKeyAuthOptions[] = [];
+        const auth = providerAuth.flatMap((entry) => {
+          try {
+            const { wizard: _wizard, ...authParams } = entry;
+            const wizard = resolveWizardSetup({
+              providerId,
+              providerLabel: provider.label,
+              auth: entry,
+            });
+            const method = createProviderApiKeyAuthMethod({
+              ...authParams,
+              providerId,
+              expectedProviders: entry.expectedProviders ?? [providerId],
+              ...(wizard ? { wizard } : {}),
+            });
+            acceptedProviderAuth.push(entry);
+            return [method];
+          } catch {
+            // Fuzzed or partially unreadable auth rows should not prevent the
+            // provider from registering its remaining healthy auth methods.
+            return [];
+          }
         });
         const envVars = resolveEnvVars({
           envVars: provider.envVars,
-          auth: providerAuth,
+          auth: acceptedProviderAuth,
         });
-        auth.push(...(provider.extraAuth ?? []));
+        auth.push(
+          ...(copyArrayEntries(provider.extraAuth).filter(
+            isRecordWithoutThrowing,
+          ) as ProviderAuthMethod[]),
+        );
         const buildManifestProvider = () =>
           buildManifestModelProviderConfig({
             providerId,

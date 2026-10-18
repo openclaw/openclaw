@@ -1,5 +1,5 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
+import type { CodexServerNotification, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 export const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
@@ -34,16 +34,12 @@ type CodexNativeSubagentNotificationCompletion = CodexNativeSubagentCompletionDe
   agentPath: string;
 };
 
-export type CodexNativeSubagentNotification = {
-  threadId?: string;
-  completions: CodexNativeSubagentNotificationCompletion[];
-  receipts: Array<{ id: string; agentPath: string; result?: string }>;
-};
-
 function extractCodexNativeSubagentCompletions(
-  item: JsonObject,
+  notification: CodexServerNotification,
 ): CodexNativeSubagentNotificationCompletion[] {
-  if (item.role !== "user") {
+  const params = isJsonObject(notification.params) ? notification.params : undefined;
+  const item = isJsonObject(params?.item) ? params.item : undefined;
+  if (!item || notification.method !== "rawResponseItem/completed" || item.role !== "user") {
     return [];
   }
   const content = item.content;
@@ -93,24 +89,15 @@ function extractCodexNativeSubagentCompletions(
   });
 }
 
-/** Parse external native completion and receipt evidence once for all monitor owners. */
-export function readCodexNativeSubagentNotification(
-  notification: CodexServerNotification,
-): CodexNativeSubagentNotification {
+export const codexNativeSubagentNotifications = {
+  fromNotification: extractCodexNativeSubagentCompletions,
+  deliveredAgentPaths: readDeliveredNativeCompletionPaths,
+};
+
+/** Reads native delivery receipts, leaving status and result ownership with the child lifecycle. */
+function readDeliveredNativeCompletionPaths(notification: CodexServerNotification): string[] {
   const params = isJsonObject(notification.params) ? notification.params : undefined;
   const item = isJsonObject(params?.item) ? params.item : undefined;
-  const completions =
-    item && notification.method === "rawResponseItem/completed"
-      ? extractCodexNativeSubagentCompletions(item)
-      : [];
-  const receipts: CodexNativeSubagentNotification["receipts"] = [];
-  const addReceipt = (agentPath: string, result?: string) => {
-    receipts.push({
-      id: `${notification.method}:${readString(item, "id") ?? JSON.stringify(item)}:${agentPath}`,
-      agentPath,
-      result,
-    });
-  };
   // V1 wait returns these exact terminal states to the foreground parent.
   // The wait tool finishing alone says nothing about a still-running child.
   if (
@@ -123,41 +110,40 @@ export function readCodexNativeSubagentNotification(
     isJsonObject(item.agentsStates)
   ) {
     const receivers = new Set(item.receiverThreadIds);
-    for (const [threadId, state] of Object.entries(item.agentsStates)) {
-      if (
-        receivers.has(threadId) &&
-        isJsonObject(state) &&
-        ["completed", "errored", "shutdown", "notFound"].includes(readString(state, "status") ?? "")
-      ) {
-        addReceipt(threadId, readString(state, "message"));
-      }
-    }
-  } else if (
-    notification.method === "rawResponseItem/completed" &&
-    item?.type === "agent_message"
-  ) {
-    const author = readString(item, "author");
-    const recipient = readString(item, "recipient");
-    const content = item.content;
-    if (author && recipient && Array.isArray(content) && content.length === 1) {
-      const part = content[0];
-      const text =
-        isJsonObject(part) && part.type === "input_text" ? readString(part, "text") : undefined;
-      // Native endpoints classify the envelope; quoted user text is not a receipt.
-      if (
-        text?.startsWith(
-          `Message Type: FINAL_ANSWER\nTask name: ${recipient}\nSender: ${author}\nPayload:\n`,
-        )
-      ) {
-        addReceipt(author, text.split("\nPayload:\n").slice(1).join("\nPayload:\n"));
-      }
-    }
-  } else {
-    for (const completion of completions) {
-      addReceipt(completion.agentPath, completion.result);
-    }
+    return Object.entries(item.agentsStates).flatMap(([threadId, state]) =>
+      receivers.has(threadId) &&
+      isJsonObject(state) &&
+      ["completed", "errored", "shutdown", "notFound"].includes(readString(state, "status") ?? "")
+        ? [threadId]
+        : [],
+    );
   }
-  return { threadId: readString(params, "threadId")?.trim(), completions, receipts };
+  if (notification.method !== "rawResponseItem/completed") {
+    return [];
+  }
+  if (!item || readString(item, "type") !== "agent_message") {
+    return extractCodexNativeSubagentCompletions(notification).map(
+      (completion) => completion.agentPath,
+    );
+  }
+  const author = readString(item, "author");
+  const recipient = readString(item, "recipient");
+  const content = item.content;
+  if (!author || !recipient || !Array.isArray(content) || content.length !== 1) {
+    return [];
+  }
+  const part = content[0];
+  if (!isJsonObject(part) || readString(part, "type") !== "input_text") {
+    return [];
+  }
+  const text = readString(part, "text");
+  // Codex's native completion envelope identifies both endpoints outside the
+  // payload. Ordinary messages and quoted completion text are not receipts.
+  return text?.startsWith(
+    `Message Type: FINAL_ANSWER\nTask name: ${recipient}\nSender: ${author}\nPayload:\n`,
+  )
+    ? [author]
+    : [];
 }
 
 function readCompletionStatus(

@@ -426,8 +426,6 @@ describe.skipIf(process.platform === "win32")("survivor rollback ordering", () =
         prelude,
         `install_fixture_phases() {
   trap - DEBUG
-  start_formerly_bundled_doctor() { phase formerly-bundled-doctor :; }
-  join_formerly_bundled_doctor() { printf 'formerly-bundled-doctor-joined\\n' >>"$HOME/events"; }
   phase() {
     CURRENT_PHASE="$1"
     printf '%s\\n' "$CURRENT_PHASE" >>"$HOME/events"
@@ -478,12 +476,6 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
         phases.indexOf("verify-backup-rollback"),
       );
       expect(phases.indexOf("legacy-operator-doctor-clean")).toBeLessThan(
-        phases.indexOf("verify-backup-rollback"),
-      );
-      expect(phases.indexOf("formerly-bundled-doctor-joined")).toBeGreaterThan(
-        phases.indexOf("legacy-operator-doctor-clean"),
-      );
-      expect(phases.indexOf("formerly-bundled-doctor-joined")).toBeLessThan(
         phases.indexOf("verify-backup-rollback"),
       );
       if (fail) {

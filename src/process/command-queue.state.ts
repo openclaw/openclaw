@@ -54,7 +54,7 @@ type LaneQueue = {
 export type LaneState = {
   lane: string;
   queue: LaneQueue;
-  activeTasks: Map<number, CommandQueueEnqueueOptions["sessionTarget"]>;
+  activeTaskIds: Set<number>;
   maxConcurrent: number;
   draining: boolean;
   generation: number;

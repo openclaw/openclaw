@@ -2,7 +2,6 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const TALK_VOICE_CHANGE_TIMEOUT_MS = 60_000;
 
@@ -30,7 +29,7 @@ export const TalkVoiceSetResultSchema = closedObject({
 export const TalkVoiceCompleteParamsSchema = closedObject({
   changeId: NonEmptyString,
   voiceSessionId: Type.Optional(NonEmptyString),
-  outcome: stringLiteralUnion(["ready", "failed"]),
+  outcome: Type.Union([Type.Literal("ready"), Type.Literal("failed")]),
   error: Type.Optional(Type.String({ maxLength: 1000 })),
 });
 export const TalkVoiceChangeEventSchema = closedObject({
@@ -38,7 +37,7 @@ export const TalkVoiceChangeEventSchema = closedObject({
   voiceSessionId: NonEmptyString,
   sessionKey: NonEmptyString,
   voice: NonEmptyString,
-  phase: stringLiteralUnion(["requested", "cancelled"]),
+  phase: Type.Union([Type.Literal("requested"), Type.Literal("cancelled")]),
 });
 
 export type TalkVoiceGetParams = Static<typeof TalkVoiceGetParamsSchema>;

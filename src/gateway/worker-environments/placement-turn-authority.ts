@@ -87,9 +87,9 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
   applyPlacementReadPublication(owner, change, sequence);
   if (change.kind !== "tools" && (change.kind !== "claim" || !change.localOnly)) {
     owner.preservation = undefined;
-    owner.recoveryCandidatesEmpty = undefined;
   }
   if (change.kind !== "tools") {
+    owner.recoveryCandidatesEmpty = undefined;
     owner.projections.delete(change.sessionId);
     if (change.kind === "claim" && change.projection && !change.indeterminate) {
       retainProjection(owner, change.sessionId, change.projection);
@@ -413,7 +413,10 @@ export function capturePlacementReplicaRead(identity: DatabasePathIdentity) {
     const byId = new Map(Array.from(records, (record) => [record.sessionId, record]));
     for (const sessionId of requestedIds ?? byId.keys()) {
       if ((owner.placements.get(sessionId)?.sequence ?? -1) <= sequence) {
-        owner.placements.set(sessionId, { placement: byId.get(sessionId), sequence });
+        owner.placements.set(sessionId, {
+          placement: freezeJsonSnapshot(byId.get(sessionId)),
+          sequence,
+        });
       }
     }
   };

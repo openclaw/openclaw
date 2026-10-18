@@ -17,6 +17,28 @@ export function captureGatewaySessionStoreScope(sessionKey: string, explicitAgen
   return { agentId, storePath, sessionKey: canonicalKey };
 }
 
+function resolveGatewaySessionDatabase(
+  sessionKey: string,
+  explicitAgentId?: string,
+): {
+  agentId: string;
+  path?: string;
+  sessionKey: string;
+} {
+  const {
+    agentId,
+    storePath,
+    sessionKey: canonicalKey,
+  } = captureGatewaySessionStoreScope(sessionKey, explicitAgentId);
+  const databaseTarget = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
+  // Shared stores keep logical session keys under their persisted database owner.
+  return {
+    agentId: databaseTarget.agentId ?? agentId,
+    path: databaseTarget.path,
+    sessionKey: canonicalKey,
+  };
+}
+
 export const boardStore = new SqliteBoardStore({
   resolveSession: ({ sessionKey, agentId }) => {
     const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
@@ -34,12 +56,11 @@ export const boardStore = new SqliteBoardStore({
       assertCurrent,
       authorize: assertCurrent,
     });
-    const database = memory ?? resolveSqliteTargetFromSessionStorePath(scope.storePath, scope);
+    const database = memory
+      ? { agentId: memory.agentId, path: memory.path, sessionKey: scope.sessionKey }
+      : resolveGatewaySessionDatabase(sessionKey, agentId);
     return {
-      // Shared stores keep logical session keys under their persisted database owner.
-      agentId: database.agentId ?? scope.agentId,
-      path: database.path,
-      sessionKey: scope.sessionKey,
+      ...database,
       assertCurrent,
     };
   },

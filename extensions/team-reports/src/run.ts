@@ -147,21 +147,31 @@ export async function generateReportPeriods(params: {
       rejectedDays.push(period);
       continue;
     }
-    // Publish deterministic text before making the optional model call.
-    for (const options of [
-      { enabled: false },
-      ...(config.summaries.enabled ? [config.summaries] : []),
-    ]) {
+    // Commit collected evidence before the model call, including deterministic text for readers.
+    const fallback = await generateSummaries({
+      report,
+      options: { enabled: false },
+      llm: params.llm,
+      signal: runtime.signal,
+    });
+    runtime.signal.throwIfAborted();
+    const boundedFallback = boundReportDocument(fallback.report);
+    await store.upsertPeriod({
+      report: boundedFallback,
+      summary: fallback.summary,
+      markdown: renderMarkdown(boundedFallback, fallback.summary),
+    });
+    runtime.signal.throwIfAborted();
+    if (config.summaries.enabled) {
       const summarized = await untilAborted(
         generateSummaries({
           report,
-          options,
+          options: config.summaries,
           llm: params.llm,
           logger: runtime.logger,
-          previous:
-            options.enabled && previous?.summary
-              ? { report: previous.report, summary: previous.summary }
-              : undefined,
+          previous: previous?.summary
+            ? { report: previous.report, summary: previous.summary }
+            : undefined,
           signal: runtime.signal,
         }),
         runtime.signal,

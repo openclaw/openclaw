@@ -1,5 +1,5 @@
 // Session RPC permissions, hook isolation, and negotiated wire compatibility.
-import { assert, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -10,6 +10,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import {
   agentDiscoveryMock,
@@ -129,14 +130,16 @@ test("session:patch hook mutations cannot change the response path", async () =>
   });
 
   sessionHookMocks.triggerInternalHook.mockImplementationOnce(async (event) => {
-    assert(isInternalHookEvent(event));
-    expect(event).toMatchObject({ type: "session", action: "patch" });
-    assert(event.context.cfg && typeof event.context.cfg === "object");
-    Object.assign(event.context.cfg, {
-      agents: {
-        defaults: { model: "zai/glm-4.6" },
+    if (!isInternalHookEvent(event) || !isSessionPatchEvent(event)) {
+      return;
+    }
+    event.context.cfg.agents = {
+      ...event.context.cfg.agents,
+      defaults: {
+        ...event.context.cfg.agents?.defaults,
+        model: "zai/glm-4.6",
       },
-    });
+    };
   });
 
   const { ws } = await openClient();

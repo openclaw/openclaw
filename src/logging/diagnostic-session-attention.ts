@@ -31,9 +31,8 @@ export function isRepeatedModelRequestStalled(
   const now = Date.now();
   return (
     activity.hasActiveEmbeddedRun === true &&
-    (activity.repeatedRequestNoProgressAgeMs ?? 0) >= abortThresholdMs &&
-    (activity.activeModelCallRecoveryDeadlineAtMs === undefined ||
-      now >= activity.activeModelCallRecoveryDeadlineAtMs) &&
+    (activity.repeatedRequestNoProgressAgeMs ?? 0) >=
+      Math.max(abortThresholdMs, activity.activeModelCallRequestTimeoutMs ?? 0) &&
     (activity.activeRetryWaitDeadlineAtMs === undefined ||
       now >= activity.activeRetryWaitDeadlineAtMs) &&
     (activity.activeToolRecoveryDeadlineAtMs === undefined ||

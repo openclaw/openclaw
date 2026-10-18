@@ -7,12 +7,6 @@ import type { OpenClawConfig } from "../../config/types.js";
 import type { DirectoryConfigParams } from "./directory-types.js";
 import type { ChannelDirectoryEntry } from "./types.public.js";
 
-type AccountDirectorySources<Account> = DirectoryConfigParams & {
-  kind: "user" | "group";
-  resolveSources: (account: Account) => Iterable<unknown>[];
-  normalizeId: (entry: string) => string | null | undefined;
-};
-
 export function applyDirectoryQueryAndLimit(
   ids: string[],
   params: { query?: string | null; limit?: number | null },
@@ -80,11 +74,14 @@ export function listDirectoryEntriesFromSources(params: {
 }
 
 export function listInspectedDirectoryEntriesFromSources<InspectedAccount>(
-  params: AccountDirectorySources<InspectedAccount> & {
+  params: DirectoryConfigParams & {
+    kind: "user" | "group";
     inspectAccount: (
       cfg: OpenClawConfig,
       accountId?: string | null,
     ) => InspectedAccount | null | undefined;
+    resolveSources: (account: InspectedAccount) => Iterable<unknown>[];
+    normalizeId: (entry: string) => string | null | undefined;
   },
 ): ChannelDirectoryEntry[] {
   const account = params.inspectAccount(params.cfg, params.accountId);
@@ -94,8 +91,11 @@ export function listInspectedDirectoryEntriesFromSources<InspectedAccount>(
     return [];
   }
   return listDirectoryEntriesFromSources({
-    ...params,
+    kind: params.kind,
     sources: params.resolveSources(account),
+    query: params.query,
+    limit: params.limit,
+    normalizeId: params.normalizeId,
   });
 }
 
@@ -113,14 +113,20 @@ export function createInspectedDirectoryEntriesLister<InspectedAccount>(
 }
 
 export function listResolvedDirectoryEntriesFromSources<ResolvedAccount>(
-  params: AccountDirectorySources<ResolvedAccount> & {
+  params: DirectoryConfigParams & {
+    kind: "user" | "group";
     resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
+    resolveSources: (account: ResolvedAccount) => Iterable<unknown>[];
+    normalizeId: (entry: string) => string | null | undefined;
   },
 ): ChannelDirectoryEntry[] {
   const account = params.resolveAccount(params.cfg, params.accountId);
   return listDirectoryEntriesFromSources({
-    ...params,
+    kind: params.kind,
     sources: params.resolveSources(account),
+    query: params.query,
+    limit: params.limit,
+    normalizeId: params.normalizeId,
   });
 }
 
@@ -198,8 +204,10 @@ export function listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedAccount>(
 ): ChannelDirectoryEntry[] {
   const account = params.resolveAccount(params.cfg, params.accountId);
   return listDirectoryUserEntriesFromAllowFrom({
-    ...params,
     allowFrom: params.resolveAllowFrom(account),
+    query: params.query,
+    limit: params.limit,
+    normalizeId: params.normalizeId,
   });
 }
 
@@ -212,7 +220,9 @@ export function listResolvedDirectoryGroupEntriesFromMapKeys<ResolvedAccount>(
 ): ChannelDirectoryEntry[] {
   const account = params.resolveAccount(params.cfg, params.accountId);
   return listDirectoryGroupEntriesFromMapKeys({
-    ...params,
     groups: params.resolveGroups(account),
+    query: params.query,
+    limit: params.limit,
+    normalizeId: params.normalizeId,
   });
 }

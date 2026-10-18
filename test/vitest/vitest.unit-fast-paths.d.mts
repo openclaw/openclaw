@@ -10,6 +10,7 @@ export type UnitFastAnalysisOptions = {
 };
 
 export const forcedUnitFastTestFiles: string[];
+export function classifyUnitFastTestFileContent(source: string): string[];
 export function collectUnitFastTestCandidates(cwd?: string): string[];
 export function collectBroadUnitFastTestCandidates(cwd?: string): string[];
 export function collectUnitFastTestFileAnalysis(

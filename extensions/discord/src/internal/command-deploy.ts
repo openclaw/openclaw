@@ -93,7 +93,10 @@ export class DiscordCommandDeployer {
     }
     this.hashLoaded = true;
     try {
-      this.hash = await this.params.hashStore?.lookup(this.cacheKey);
+      const hash = await this.params.hashStore?.lookup(this.cacheKey);
+      if (typeof hash === "string" && hash.trim()) {
+        this.hash = hash;
+      }
     } catch {
       // Cache lookup failure is a miss. Reconcile repairs the canonical row after success.
     }

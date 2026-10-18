@@ -156,29 +156,12 @@ export const worktreeTemplateOperations = {
   ),
   "worktrees.templates.ready": worktreeTemplateMutation(
     "worktrees.templates.ready",
-    (
-      db,
-      {
-        id,
-        now,
-        content,
-      }: {
-        id: string;
-        now: number;
-        content?: Pick<WorktreeTemplateRecord, "sourceCommit" | "contentKey">;
-      },
-    ) =>
+    (db, { id, now }: { id: string; now: number }) =>
       executeSqliteQuerySync(
         db,
         kyselyFor(db)
           .updateTable("worktree_templates")
-          .set({
-            status: "ready",
-            last_used_at: now,
-            ...(content
-              ? { source_commit: content.sourceCommit, content_key: content.contentKey }
-              : {}),
-          })
+          .set({ status: "ready", last_used_at: now })
           .where("id", "=", id)
           .where("status", "=", "preparing"),
       ).numAffectedRows === 1n,

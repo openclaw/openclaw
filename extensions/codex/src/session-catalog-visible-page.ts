@@ -28,6 +28,7 @@ export class CodexCatalogVisiblePage {
   private backwardsCursor: string | undefined;
   private readonly seenCursors = new Set<string>();
   private pages = 0;
+  private complete = false;
   private readonly request = new CodexCatalogListRequest();
 
   constructor(private readonly params: VisiblePageParams) {
@@ -52,12 +53,16 @@ export class CodexCatalogVisiblePage {
   }
 
   close(): void {
+    this.complete = true;
     this.request.close();
   }
 
   private async nextPage(): Promise<
     { done: false } | { done: true; page: CodexSessionCatalogPage }
   > {
+    if (this.complete) {
+      throw new Error("Codex catalog page is already complete");
+    }
     const params = this.params;
     params.signal?.throwIfAborted();
     const finishTiming = startCodexCatalogListTiming("controlWaitSumMs", "controlPageCalls");
@@ -81,7 +86,6 @@ export class CodexCatalogVisiblePage {
     let excludedFromPage = false;
     for (const managed of rawPage.managedThreads ?? []) {
       excludedFromPage = true;
-      this.request.assertActive();
       params.signal?.throwIfAborted();
       await params.onExcludedThread?.(managed);
     }
@@ -91,29 +95,30 @@ export class CodexCatalogVisiblePage {
         continue;
       }
       excludedFromPage = true;
-      this.request.assertActive();
       params.signal?.throwIfAborted();
       await params.onExcludedThread?.({ threadId: session.threadId });
     }
     const nextCursor = page.nextCursor;
-    if (nextCursor && this.sessions.length < params.limit && excludedFromPage) {
+    if (!nextCursor || this.sessions.length >= params.limit || !excludedFromPage) {
+      this.complete = true;
+    } else {
       if (this.seenCursors.has(nextCursor)) {
         throw new Error("Codex session catalog returned a repeated exclusion cursor");
       }
       this.seenCursors.add(nextCursor);
       this.cursor = nextCursor;
-      if (this.pages < MAX_TITLE_SEARCH_CATALOG_PAGES && this.request.hasPages) {
-        return { done: false };
-      }
+      this.complete = this.pages >= MAX_TITLE_SEARCH_CATALOG_PAGES || !this.request.hasPages;
     }
-    return {
-      done: true,
-      page: {
-        sessions: this.sessions.slice(0, params.limit),
-        ...(nextCursor ? { nextCursor } : {}),
-        ...(this.backwardsCursor ? { backwardsCursor: this.backwardsCursor } : {}),
-      },
-    };
+    return this.complete
+      ? {
+          done: true,
+          page: {
+            sessions: this.sessions.slice(0, params.limit),
+            ...(nextCursor ? { nextCursor } : {}),
+            ...(this.backwardsCursor ? { backwardsCursor: this.backwardsCursor } : {}),
+          },
+        }
+      : { done: false };
   }
 }
 

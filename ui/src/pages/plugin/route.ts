@@ -1,11 +1,10 @@
 import { definePage } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
+import { html } from "lit";
 import {
   INTERNAL_PLUGIN_PATH_PARAM,
   pluginTabSlugFromPath,
   routePageSpec,
 } from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 
 type PluginTabRef = {
@@ -48,21 +47,18 @@ export const page = definePage({
     params: pluginPageParams(options.location.search),
   }),
   component: () =>
-    import("./plugin-page.tsx").then((module) => ({
+    import("./plugin-page.tsx").then(() => ({
       header: true,
-      renderSolid: (
-        props: SolidRouteProps<PluginTabRef & { params: Readonly<Record<string, string>> }>,
-      ) =>
-        createComponent(module.PluginPage, {
-          get pluginId() {
-            return props.data?.pluginId ?? "";
-          },
-          get tabId() {
-            return props.data?.id ?? "";
-          },
-          get params() {
-            return props.data?.params ?? {};
-          },
-        }),
+      render: (data: unknown) => {
+        const ref = (data ?? { pluginId: "", id: "", params: {} }) as PluginTabRef & {
+          params: Readonly<Record<string, string>>;
+        };
+        return html`<openclaw-plugin-page
+          .pluginId=${ref.pluginId}
+          .tabId=${ref.id}
+          .params=${ref.params}
+        >
+        </openclaw-plugin-page>`;
+      },
     })),
 });

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { INGRESS_CLAIM_LEASE_MS } from "../../channels/message/ingress-claim-owner.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
+import * as deliveryQueue from "../../infra/delivery-queue-sqlite.js";
 import { seedDeliveryQueueEntry } from "../../infra/delivery-queue-sqlite.test-support.js";
-import * as deliveryQueueWorker from "../../infra/delivery-queue-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
@@ -18,16 +18,13 @@ describe("delivery queue health write receipts", () => {
       { layout: "state-only", prefix: "openclaw-health-dead-letters-" },
       async ({ stateDir }) => {
         openOpenClawStateDatabase();
-        const outboundReads = vi.spyOn(deliveryQueueWorker, "executeDeliveryQueueOperation");
-        const outboundReadCount = () =>
-          outboundReads.mock.calls.filter((args) => args[2].type === "deliveryQueue.countFailed")
-            .length;
+        const outboundReads = vi.spyOn(deliveryQueue, "countFailedDeliveryQueueEntries");
         const ingressReads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
         const readCount = (type: string) =>
           ingressReads.mock.calls.filter(([, command]) => command.type === type).length;
         expect(await buildDeliveryQueueHealthSummary()).toBeUndefined();
         expect(await buildDeliveryQueueHealthSummary()).toBeUndefined();
-        expect(outboundReadCount()).toBe(1);
+        expect(outboundReads).toHaveBeenCalledTimes(1);
         expect(readCount("channelIngress.failedHealth")).toBe(1);
         expect(readCount("channelIngress.pressureHealth")).toBe(1);
 
@@ -40,7 +37,7 @@ describe("delivery queue health write receipts", () => {
         expect(await buildDeliveryQueueHealthSummary()).toEqual({
           failed: [{ queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) }],
         });
-        expect(outboundReadCount()).toBe(2);
+        expect(outboundReads).toHaveBeenCalledTimes(2);
         expect(readCount("channelIngress.failedHealth")).toBe(1);
         expect(readCount("channelIngress.pressureHealth")).toBe(1);
 
@@ -59,7 +56,7 @@ describe("delivery queue health write receipts", () => {
           ],
         });
         expect(await buildDeliveryQueueHealthSummary()).toEqual(updated);
-        expect(outboundReadCount()).toBe(2);
+        expect(outboundReads).toHaveBeenCalledTimes(3);
         expect(readCount("channelIngress.failedHealth")).toBe(2);
         expect(readCount("channelIngress.pressureHealth")).toBe(2);
       },

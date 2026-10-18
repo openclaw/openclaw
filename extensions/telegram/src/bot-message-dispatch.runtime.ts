@@ -1,3 +1,4 @@
+export { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 export {
   generateConversationLabel as generateTopicLabel,

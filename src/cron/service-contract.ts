@@ -1,9 +1,4 @@
 /** Public cron service interface shared by callers and implementations. */
-import type {
-  CronEventRunOptions,
-  CronEventRunResult,
-  CronEventSourceSnapshot,
-} from "./event-source.js";
 import type { CronListPageOptions, CronListPageResult } from "./service/list-page-types.js";
 import type {
   CronAddInput,
@@ -12,7 +7,6 @@ import type {
   CronCommitGuardOptions,
   CronListResult,
   CronRemoveResult,
-  CronRemoveOptions,
   CronRunMode,
   CronRunResult,
   CronStatusSummary,
@@ -45,8 +39,6 @@ export type CronServiceRunOptions = {
 
 /** Public cron service facade used by gateway, plugin SDK, and tests. */
 export interface CronServiceContract {
-  readEventSources(source: string): Promise<CronEventSourceSnapshot[]>;
-  runEvent(id: string, opts: CronEventRunOptions): Promise<CronEventRunResult>;
   start(): Promise<void>;
   stop(): void;
   status(): Promise<CronStatusSummary>;
@@ -64,7 +56,10 @@ export interface CronServiceContract {
     precondition: CronUpdatePrecondition,
     opts?: CronUpdateOptions,
   ): Promise<CronUpdateResult>;
-  remove(id: string, opts?: CronRemoveOptions): Promise<CronRemoveResult>;
+  remove(
+    id: string,
+    opts?: { systemOwned?: boolean } & CronCommitGuardOptions,
+  ): Promise<CronRemoveResult>;
   run(id: string, mode?: CronRunMode, opts?: CronServiceRunOptions): Promise<CronServiceRunResult>;
   enqueueRun(
     id: string,

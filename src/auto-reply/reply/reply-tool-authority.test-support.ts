@@ -1,6 +1,8 @@
 import type { ReplyToolAuthorityRoute } from "./reply-run-registry.contracts.js";
-import { prepareFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
-import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
+import {
+  prepareFollowupRunToolAuthorityFingerprint,
+  type ReplyToolAuthorityInput,
+} from "./reply-tool-authority.js";
 
 export async function resolveFollowupRunToolAuthorityFingerprintAsync(
   snapshot: ReplyToolAuthorityInput,

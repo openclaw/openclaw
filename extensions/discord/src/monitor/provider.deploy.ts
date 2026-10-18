@@ -109,11 +109,12 @@ function installDeployRestLogging(params: {
     delete: params.rest.delete.bind(params.rest),
   };
   for (const method of Object.keys(original) as RestMethodName[]) {
+    const timeout = (params.rest as { options?: { timeout?: unknown } }).options?.timeout;
     params.rest[method] = wrapDeployRestMethod({
       ...params,
       method,
       original,
-      timeoutMs: params.rest.options.timeout,
+      timeoutMs: typeof timeout === "number" ? timeout : undefined,
     }) as RequestClient[typeof method];
   }
   return () => {

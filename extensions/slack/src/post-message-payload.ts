@@ -51,13 +51,13 @@ export function buildSlackPostMessagePayload(params: {
     text: params.text,
     ...(params.blocks?.length ? { blocks: params.blocks } : {}),
     ...(params.metadata ? { metadata: params.metadata } : {}),
-    ...(params.mrkdwn !== undefined ? { mrkdwn: params.mrkdwn } : {}),
+    ...(typeof params.mrkdwn === "boolean" ? { mrkdwn: params.mrkdwn } : {}),
     ...threadPayload,
     // Default unfurl_links to false so bot messages don't expand inline
     // link previews (Slack message links, URLs, etc.) unless the operator
     // explicitly opts in via `channels.slack.unfurlLinks: true`.
     unfurl_links: params.unfurl?.unfurlLinks ?? false,
-    ...(params.unfurl?.unfurlMedia !== undefined
+    ...(typeof params.unfurl?.unfurlMedia === "boolean"
       ? { unfurl_media: params.unfurl.unfurlMedia }
       : {}),
   };

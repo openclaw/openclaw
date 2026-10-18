@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { renderChatView, requireElement } from "./chat-view.test-helpers.ts";
 import {
@@ -106,9 +105,6 @@ describe("inline approval card", () => {
       expiresAtMs: 61_000,
     } satisfies ExecApprovalRequest;
 
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    onTestFinished(() => nowSpy.mockRestore());
-
     const container = renderChatView({
       inlineApproval,
       approvalCanGrant: false,
@@ -116,16 +112,18 @@ describe("inline approval card", () => {
       onApprovalDecision,
     });
 
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    onTestFinished(() => nowSpy.mockRestore());
     await connectApprovalCard(container);
     const card = container.querySelector(".chat-inline-approval .exec-approval-card");
     const inlineSurface = requireElement(container, ".chat-inline-approval", "inline approval");
     expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
     expectFooterContext(container, inlineSurface);
     const countdown = expectDefined(
-      container.querySelector<HTMLElement>(".exec-approval-countdown"),
+      container.querySelector<SolidBridgeElement<object>>(".exec-approval-countdown"),
       "inline approval countdown",
     );
-    flush();
+    await countdown.updateComplete;
     expect(countdown.textContent?.trim()).toBe("expires in 01:00");
     expect(container.querySelector(".exec-approval-command-span")?.textContent).toBe("rm -r");
     expect(container.querySelector(".exec-approval-error")?.textContent).toBe(

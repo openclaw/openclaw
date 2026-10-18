@@ -1,13 +1,11 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
-import {
-  getCliProcessTestTimeout,
-  runCliProcessChild,
-} from "../cli/cli-process-child.test-helpers.js";
+import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
 import { writeExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -15,7 +13,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { registerLegacyDriverTests } from "./doctor-config-preflight.legacy-driver.test-support.js";
 import {
   createBuiltRuntime,
@@ -28,7 +25,7 @@ afterAll(() => tempDirs.cleanup());
 const DOCTOR_CHILD_TIMEOUT_MS = 60_000;
 
 describe("Doctor CLI migration refusal", () => {
-  it("refuses missing deferral metadata with the 2026.9.2 row only in WAL", async () => {
+  it("refuses missing deferral metadata with the 2026.9.2 row only in WAL", () => {
     const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-update-wal-"));
     const stateDir = path.join(root, "state");
     const configPath = path.join(root, "openclaw.json");
@@ -74,19 +71,13 @@ describe("Doctor CLI migration refusal", () => {
       const before = files.map((file) => fs.readFileSync(file));
 
       // 2026.9.2 invokes the installed index directly and keeps its ledger open.
-      const result = await tempDirs.track(
-        runCliProcessChild({
-          nodeExecutable: resolveTestNodeExecPath(),
-          nodeArgs: [
-            path.join(runtimeRoot, "dist", "index.js"),
-            "doctor",
-            "--non-interactive",
-            "--fix",
-          ],
-          nodeArgsPolicy: "caller",
+      const result = spawnSync(
+        process.execPath,
+        [path.join(runtimeRoot, "dist", "index.js"), "doctor", "--non-interactive", "--fix"],
+        {
           cwd: runtimeRoot,
-          timeoutMs: DOCTOR_CHILD_TIMEOUT_MS,
-          maxBuffer: 1024 * 1024,
+          encoding: "utf8",
+          timeout: 60_000,
           env: {
             PATH: process.env.PATH,
             HOME: root,
@@ -98,11 +89,11 @@ describe("Doctor CLI migration refusal", () => {
             NO_COLOR: "1",
             CI: "1",
           },
-        }),
+        },
       );
       const output = `${result.stdout}\n${result.stderr}`;
-      expect(result.signal, output).toBeNull();
-      expect(result.code, output).toBe(1);
+      expect(result.error, output).toBeUndefined();
+      expect(result.status, output).toBe(1);
       expect(output).toContain(
         "Doctor refused update-time schema repair driven by OpenClaw 2026.9.2",
       );

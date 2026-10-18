@@ -10,11 +10,11 @@ export type GitHubTarget =
   | GitHubItemTarget
   | { kind: "commit"; owner: string; repo: string; sha: string };
 
-export function isValidOwner(value: string): boolean {
+function isValidOwner(value: string): boolean {
   return /^(?=.{1,39}$)[a-z\d](?:[a-z\d-]*[a-z\d])?$/iu.test(value);
 }
 
-export function isValidRepo(value: string): boolean {
+function isValidRepo(value: string): boolean {
   if (value.length < 1 || value.length > 100) {
     return false;
   }

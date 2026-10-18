@@ -60,7 +60,11 @@ import {
   rememberUnifiedTalkSession,
   requireUnifiedTalkSessionConn,
 } from "../session-registry.js";
-import { prepareTalkSessionTarget, requirePreparedTalkSessionTarget } from "../session-target.js";
+import {
+  assertTalkSessionStorageTarget,
+  prepareTalkSessionTarget,
+  requirePreparedTalkSessionTarget,
+} from "../session-target.js";
 import {
   createTalkTranscriptionRelaySession,
   sendTalkTranscriptionRelayAudio,
@@ -403,7 +407,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         const assertCurrent = () => {
           requester.assertCurrent();
           if (target) {
-            target.assertCurrent(context.getRuntimeConfig());
+            assertTalkSessionStorageTarget(context.getRuntimeConfig(), target);
           }
         };
         const transcriptionConfig = await buildTalkTranscriptionConfig(

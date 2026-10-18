@@ -47,7 +47,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       assignModelCallPromptStatsAttrs(spanAttrs, evt);
       return runtime
-        .trackInternalOrTrustedSpan(
+        .trackTrustedSpan(
           evt,
           metadata,
           runtime.spanWithDuration(modelCallSpanName(evt), spanAttrs, undefined, {

@@ -70,7 +70,6 @@ it.each(["plugin-to-global", "configured-stable", "configured-to-global"] as con
         ]
       : undefined;
     const cfg: OpenClawConfig = {
-      session: { store: state.path("sessions.json") },
       agents: {
         ownership: "explicit",
         entries: {
@@ -163,6 +162,7 @@ it.each(["plugin-to-global", "configured-stable", "configured-to-global"] as con
       cfg,
       runtime,
       isDirectMessage: false,
+      resolveStorePath: () => state.path("sessions.json"),
       resolveAgentRoute: () => ({
         agentId: "main",
         channel: "matrix",

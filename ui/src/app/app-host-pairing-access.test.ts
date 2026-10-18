@@ -35,7 +35,7 @@ import {
   refreshShellView,
 } from "./app-host-solid.test-support.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
-import { createLazyRenderer } from "./lazy-renderer.ts";
+import { LazyRenderer } from "./lazy-renderer.ts";
 import { ShellLayoutBoundary } from "./shell-layout-traits-solid.tsx";
 
 type PairingSidebar = AppSidebarElement;
@@ -490,21 +490,15 @@ describe("application shell pairing access", () => {
       auth: { role: "operator", scopes: ["operator.admin"] },
       setupCode: "pair-mobile-secret",
     });
-    type Renderer = NonNullable<ReturnType<typeof shell.devicePairSetup.renderer>>;
-    const loading = createDeferred<Renderer>();
-    const retrying = createDeferred<Renderer>();
-    const loadRenderer = vi
-      .fn(() => retrying.promise)
-      .mockImplementationOnce(() => loading.promise);
-    const loader = createLazyRenderer(loadRenderer);
-    Object.defineProperty(shell, "devicePairSetup", { value: loader });
-    await renderSidebar();
+    const loadRenderer = vi.fn();
     if (failed) {
-      loading.reject(new Error("Pairing chunk unavailable"));
-      await waitForSolid(() =>
-        expect(container.textContent).toContain("Could not load the pairing dialog"),
-      );
+      await renderSidebar();
+    } else {
+      shell.devicePairSetup.load = loadRenderer;
     }
+    shell.devicePairSetup.renderer = null;
+    shell.devicePairSetup.failed = failed;
+    await renderSidebar();
     const dialog = container.querySelector<HTMLElement>(".device-pair-setup");
     if (failed) {
       expect(dialog?.textContent).toContain("Could not load the pairing dialog");
@@ -513,7 +507,7 @@ describe("application shell pairing access", () => {
       ];
       expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
       actions[0]?.click();
-      await waitForSolid(() => expect(dialog?.getAttribute("aria-busy")).toBe("true"));
+      expect(shell.devicePairSetup.failed).toBe(false);
     } else {
       expect(dialog?.getAttribute("aria-busy")).toBe("true");
       expect(dialog?.textContent).toContain("Loading…");
@@ -523,25 +517,16 @@ describe("application shell pairing access", () => {
 
   it.each([false, true])("keeps lazy settings navigation visible (failed: %s)", async (failed) => {
     const { shell, container, refresh } = createPairingShell({ auth: { role: "operator" } });
-    type Renderer = NonNullable<ReturnType<typeof shell.settingsSidebar.renderer>>;
-    const loading = createDeferred<Renderer>();
-    const retrying = createDeferred<Renderer>();
-    const importRenderer = vi
-      .fn(() => retrying.promise)
-      .mockImplementationOnce(() => loading.promise);
-    const settingsSidebar = createLazyRenderer(importRenderer);
+    const loading = createDeferred<NonNullable<typeof shell.settingsSidebar.renderer>>();
+    const importRenderer = vi.fn(() => loading.promise);
+    const settingsSidebar = new LazyRenderer(shell, importRenderer);
+    settingsSidebar.failed = failed;
     Object.defineProperty(shell, "settingsSidebar", { value: settingsSidebar });
     shell.routeState = {
       routeId: "profile",
       location: { pathname: "/settings/profile", search: "", hash: "" },
     };
     await refresh();
-    if (failed) {
-      loading.reject(new Error("Settings chunk unavailable"));
-      await waitForSolid(() =>
-        expect(container.textContent).toContain("Settings navigation could not load."),
-      );
-    }
     const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
     if (failed) {
       expect(sidebar?.getAttribute("aria-busy")).toBeNull();
@@ -550,7 +535,6 @@ describe("application shell pairing access", () => {
         (button) => button.textContent?.trim() === "Retry",
       );
       retry?.click();
-      await waitForSolid(() => expect(sidebar?.getAttribute("aria-busy")).toBe("true"));
     } else {
       expect(sidebar?.getAttribute("aria-busy")).toBe("true");
       const skeleton = sidebar?.querySelector<HTMLElement>(
@@ -570,10 +554,7 @@ describe("application shell pairing access", () => {
         ),
       ).toHaveLength(expectedItems);
     }
-    expect(importRenderer).toHaveBeenCalledTimes(failed ? 2 : 1);
-    (failed ? retrying : loading).resolve(() => document.createTextNode("Settings ready"));
-    await waitForSolid(() => expect(container.textContent).toContain("Settings ready"));
-    expect(container.querySelector(".settings-sidebar__loading")).toBeNull();
+    expect(importRenderer).toHaveBeenCalledOnce();
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {
@@ -596,9 +577,7 @@ describe("application shell pairing access", () => {
     });
     document.body.append(container);
     const pairing = await renderPairingDialog();
-    const button = pairing.querySelector<HTMLButtonElement>(
-      ".device-pair-setup__actions button:has([data-copy-label])",
-    );
+    const button = pairing.querySelector<HTMLButtonElement>(".device-pair-setup__actions button");
 
     button?.click();
     expect(writeText).toHaveBeenCalledWith("pair-mobile-secret");

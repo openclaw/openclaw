@@ -6,10 +6,10 @@ import type {
 } from "../../../src/shared/mcp-app-extensions.js";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { createMcpAppCatalog } from "../lib/mcp-app-catalog.ts";
 import { mcpAppRouteSearch } from "../lib/mcp-app-route.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { useMcpAppCatalog } from "../lib/reactive/mcp-app-catalog.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
@@ -61,7 +61,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
     sessionKey: props.sessionKey || context.gateway.snapshot.sessionKey || "",
     agentId: props.agentId || context.agentSelection.state.selectedId || undefined,
   });
-  const catalog = createMcpAppCatalog(context, target, () => props.surface === "global");
+  const catalog = useMcpAppCatalog(context, target, () => props.surface === "global");
   const entries = (server: McpAppDiscoveredServer) =>
     server.entrypoints.filter(({ entrypoint }) =>
       props.surface === "file"
@@ -191,51 +191,40 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
                 <Show when={!catalog().loading && !catalog().error && !rows().length}>
                   <p>{t("mcpApp.empty")}</p>
                 </Show>
-                <For
-                  each={rows()}
-                  keyed={(row) => JSON.stringify([row.server.serverName, row.entry.toolName])}
-                >
-                  {(row) => {
-                    const quickAction = createMemo(() => {
-                      const entrypoint = row().entry.entrypoint;
-                      return entrypoint.type === "global" && entrypoint.quickAction;
-                    });
-                    return (
-                      <div class="mcp-app-catalog__entry">
-                        <button
-                          class="btn"
-                          type="button"
-                          onClick={() => open(row().server, row().entry)}
-                        >
-                          <CatalogIcon server={row().server} entry={row().entry} />
-                          <span>
-                            <strong>{row().entry.title}</strong>
-                            <small>{row().server.label}</small>
-                          </span>
-                        </button>
-                        <Show when={quickAction()}>
-                          {(action) => (
-                            <button
-                              class="btn btn--sm"
-                              type="button"
-                              onClick={() => open(row().server, row().entry, false, true)}
-                            >
-                              {action().title}
-                            </button>
-                          )}
-                        </Show>
-                        <Show when={row().server.settings}>
+                <For each={rows()}>
+                  {({ server, entry }) => (
+                    <div class="mcp-app-catalog__entry">
+                      <button class="btn" type="button" onClick={() => open(server, entry)}>
+                        <CatalogIcon server={server} entry={entry} />
+                        <span>
+                          <strong>{entry.title}</strong>
+                          <small>{server.label}</small>
+                        </span>
+                      </button>
+                      <Show
+                        when={entry.entrypoint.type === "global" && entry.entrypoint.quickAction}
+                      >
+                        {(quickAction) => (
                           <button
-                            type="button"
                             class="btn btn--sm"
-                            onClick={() => open(row().server, row().entry, true)}
+                            type="button"
+                            onClick={() => open(server, entry, false, true)}
                           >
-                            {t("mcpApp.settings")}
+                            {quickAction().title}
                           </button>
-                        </Show>
-                      </div>
-                    );
-                  }}
+                        )}
+                      </Show>
+                      <Show when={server.settings}>
+                        <button
+                          type="button"
+                          class="btn btn--sm"
+                          onClick={() => open(server, entry, true)}
+                        >
+                          {t("mcpApp.settings")}
+                        </button>
+                      </Show>
+                    </div>
+                  )}
                 </For>
                 <Show when={props.surface !== "file"}>
                   <For
@@ -290,21 +279,18 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
           </section>
         }
       >
-        <For
-          each={rows()}
-          keyed={(row) => JSON.stringify([row.server.serverName, row.entry.toolName])}
-        >
-          {(row) => (
+        <For each={rows()}>
+          {({ server, entry }) => (
             <button
               type="button"
               class="nav-item"
-              onClick={() => open(row().server, row().entry)}
-              title={row().server.label}
+              onClick={() => open(server, entry)}
+              title={server.label}
             >
               <span class="nav-item__icon">
-                <CatalogIcon server={row().server} entry={row().entry} />
+                <CatalogIcon server={server} entry={entry} />
               </span>
-              <span class="nav-item__text">{row().entry.title}</span>
+              <span class="nav-item__text">{entry.title}</span>
             </button>
           )}
         </For>

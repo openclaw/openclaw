@@ -28,6 +28,7 @@ export function ChatSidebarEditorMenu(props: {
             id: editor,
             label: EDITOR_LABELS[editor],
             class: "sidebar-file-view__editor-item",
+            attributes: { value: editor },
           }))}
           onSelect={(item) => {
             const editor = EDITOR_IDS.find((candidate) => candidate === item.id);

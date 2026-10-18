@@ -1,16 +1,21 @@
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ModelSetupWizard } from "../model-setup/wizard-view-solid.tsx";
-import type { ModelProviderLogin } from "./login-controller.ts";
+import type { ModelProviderLoginController } from "./login-controller.ts";
 import { renderProviderAccountSummary } from "./profiles-view.tsx";
 
-export function ModelProviderLoginView(props: { controller: ModelProviderLogin }) {
+export function ModelProviderLoginView(props: {
+  controller: ModelProviderLoginController;
+  revision?: () => unknown;
+}) {
   const picker = createMemo(() => {
+    props.revision?.();
     return props.controller.pickerView();
   });
   const wizard = createMemo(() => {
+    props.revision?.();
     return props.controller.wizardViewProps;
   });
   return (
@@ -117,15 +122,15 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
                       >
                         {(unavailable) => <p role="status">{unavailable().message}</p>}
                       </Show>
-                      <section class="model-provider-login__methods">
+                      <section
+                        class="model-provider-login__methods"
+                        ref={(element) => props.controller.setMethodChoices(element)}
+                      >
                         <h3>{t("modelProviders.login.connectAccount")}</h3>
                         <div data-models-login-choice>
                           <For each={provider().choices} keyed={(choice) => choice.id}>
-                            {(selected, index) => (
+                            {(selected) => (
                               <LoginOption
-                                focusTarget={
-                                  index() === 0 ? props.controller.setMethodChoice : undefined
-                                }
                                 label={selected().label}
                                 hint={selected().hint || undefined}
                                 disabled={current().disabled}
@@ -136,11 +141,6 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
                         </div>
                         <Show when={provider().apiKeyProvider}>
                           <LoginOption
-                            focusTarget={
-                              provider().choices.length === 0
-                                ? props.controller.setMethodChoice
-                                : undefined
-                            }
                             label={t("modelProviders.status.apiKey")}
                             hint={t("modelProviders.login.apiKeyHint")}
                             apiKey
@@ -162,7 +162,7 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
                 </Show>
               </Show>
             </div>
-            <openclaw-modal-actions class="model-setup-wizard__footer">
+            <div class="model-setup-wizard__footer">
               <Show
                 when={current().provider}
                 fallback={
@@ -189,7 +189,7 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
               <button class="btn" onClick={() => current().onClose()}>
                 {t("common.cancel")}
               </button>
-            </openclaw-modal-actions>
+            </div>
           </div>
         </openclaw-modal-dialog>
       )}
@@ -204,16 +204,9 @@ function LoginOption(props: {
   apiKey?: boolean;
   disabled: boolean;
   onClick: () => void;
-  focusTarget?: (element: HTMLButtonElement) => void;
 }) {
-  let button!: HTMLButtonElement;
-  createEffect(
-    () => props.focusTarget,
-    (target) => target?.(button),
-  );
   return (
     <button
-      ref={(element) => (button = element)}
       type="button"
       class="btn model-provider-login__option"
       data-models-login-provider={props.provider}
@@ -234,8 +227,12 @@ function LoginOption(props: {
   );
 }
 
-export function ModelProviderAccountRecovery(props: { controller: ModelProviderLogin }) {
+export function ModelProviderAccountRecovery(props: {
+  controller: ModelProviderLoginController;
+  revision?: () => unknown;
+}) {
   const recovery = createMemo(() => {
+    props.revision?.();
     return props.controller.recoveryView();
   });
   return (

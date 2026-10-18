@@ -1,12 +1,11 @@
-import type { JSX } from "@solidjs/web";
 import type { ChatMessageGetResult } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { SessionFileDownload } from "../../../api/session-file-download.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { MarkdownGitHubContext } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import type { LegacyTemplateResult } from "../../../lit/solid-content.tsx";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type {
@@ -32,11 +31,6 @@ type MarkdownSidebarContent = {
   content: string;
   rawText?: string | null;
   fileLinkSessionKey?: string;
-  fileDownload?: {
-    path: string;
-    name: string;
-    download: (signal: AbortSignal) => Promise<SessionFileDownload | null>;
-  };
 };
 
 type CanvasSidebarContent = {
@@ -94,7 +88,7 @@ type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   sourceIdentity?: string;
   voiceNote?: boolean;
   plainText?: boolean;
-  renderActions?: () => JSX.Element;
+  renderActions?: () => LegacyTemplateResult;
   /** Authorize and read fresh bytes for each explicit download. */
   download?: (signal: AbortSignal) => Promise<Blob | null>;
   resolveSource?: (
@@ -134,7 +128,6 @@ export type FileSidebarContent = {
   path: string;
   name: string;
   content: string;
-  download?: (signal: AbortSignal) => Promise<SessionFileDownload | null>;
   sessionFileSource?: SessionFileSource;
   /** Stable per-session identity used to retain an unsaved in-memory draft. */
   draftKey?: string;

@@ -99,6 +99,7 @@ export function collectReclamationChangedSessionKeys(
         (index) =>
           expectDefined(plan.entries[index], "Missing committed maintenance entry").sessionKey,
       );
+    case "maintenance-preservation-required":
     case "maintenance-plan-stale":
     case "maintenance-statistics":
     case "maintenance-age":

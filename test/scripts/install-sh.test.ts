@@ -22,7 +22,6 @@ import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
-  createInstallGitWorktreeFixtureScript,
   createInstallGitBranchFallbackFixtureScript,
   createInstallGitCloneFixtureScript,
   createInstallGitUpdateFixtureScript,
@@ -427,22 +426,6 @@ NODE
     expect(result.stdout).toContain("/repo/dist/entry.js --version");
   });
 
-  it.each([
-    "valid",
-    "missing-head",
-    "broken-gitfile",
-    "subdirectory",
-    "main",
-    "main-no-update",
-    "latest",
-    "named-branch",
-  ])("preserves linked checkout boundaries: %s", (scenario) => {
-    const result = runInstallShell(createInstallGitWorktreeFixtureScript(SCRIPT_PATH, scenario), {
-      FIXTURE_NODE: nodeExecutable,
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-  });
-
   it("rejects a git checkout without a commit without modifying it", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -466,7 +449,7 @@ NODE
       ui_error() { :; }
 
       set +e
-      validate_git_checkout "$repo"
+      validate_git_checkout_head "$repo"
       status="$?"
       set -e
       [[ "$status" -eq 1 ]]

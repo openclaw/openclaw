@@ -134,7 +134,6 @@ export async function finishSandboxRegistryRemoval(
     cleanupContext,
     assertOwned,
     identity,
-    context.maintenanceScope,
   );
   if (!store) {
     throw new Error("Sandbox removal lost its original shared database");

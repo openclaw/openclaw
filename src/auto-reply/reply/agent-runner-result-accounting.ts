@@ -16,7 +16,7 @@ import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
-import { resolveFallbackOriginModel } from "./agent-runner-core.js";
+import { refreshSessionEntryFromStore, resolveFallbackOriginModel } from "./agent-runner-core.js";
 import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
@@ -25,6 +25,7 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
@@ -189,7 +190,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     fallbackExhausted,
     winnerProvider,
     winnerModel,
-    reasoningEffort: followupRun.run.thinkLevel,
+    reasoningEffort:
+      typeof followupRun.run.thinkLevel === "string" ? followupRun.run.thinkLevel : undefined,
     fastMode: resolveFastModeState({
       cfg,
       provider: providerUsed ?? "",
@@ -200,13 +202,13 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     fallbackUsed: runResult.meta?.executionTrace?.fallbackUsed === true,
     agentId: followupRun.run.agentId,
     sessionId: followupRun.run.sessionId,
-    chatType: sessionCtx.ChatType,
-    authMode: runResult.meta?.requestShaping?.authMode,
-    overrideSource: activeSessionEntry?.modelOverrideSource,
+    chatType: typeof sessionCtx.ChatType === "string" ? sessionCtx.ChatType : undefined,
+    authMode: runResult.meta?.requestShaping?.authMode ?? undefined,
+    overrideSource: activeSessionEntry?.modelOverrideSource ?? undefined,
     requestedProvider: followupRun.run.provider,
     requestedModel: followupRun.run.model,
     durationMs: Date.now() - runStartedAt,
-    compactionCount: compactions,
+    compactionCount: typeof compactions === "number" ? compactions : undefined,
     contextTokenBudget: ctxTokens,
     contextUsedTokens: promptTokens,
     promptTokens,
@@ -294,7 +296,14 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
         toModel: fallbackTransition.selectedModelRef,
         assertCurrent() {
           operation?.abortSignal.throwIfAborted();
-          completion.assertCurrent();
+          const current = completion.assertCurrent();
+          if (
+            !current ||
+            !selectionUnchanged(current) ||
+            current.fallbackNotice?.activeModel !== fromModel
+          ) {
+            throw new Error("Model restoration source changed before commit");
+          }
         },
       });
       if (!recorded) {
@@ -320,7 +329,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     ]);
   }
   const runtimeContextTokens =
-    ctxTokens !== undefined && Number.isFinite(ctxTokens) && ctxTokens > 0
+    typeof ctxTokens === "number" && Number.isFinite(ctxTokens) && ctxTokens > 0
       ? Math.floor(ctxTokens)
       : undefined;
   const resolvedContextTokens =
@@ -382,6 +391,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
   } satisfies Parameters<typeof prepareSessionUsageUpdate>[0];
   if (completion) {
+    const updatedAt = Date.now();
     completion.patch((entry) => {
       try {
         const prepared = prepareSessionUsageUpdate(usageParams);
@@ -389,7 +399,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
           ? {
               kind: "usage",
               update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(entry) },
-              updatedAt: entry.updatedAt,
+              updatedAt,
             }
           : undefined;
       } catch (error) {
@@ -417,8 +427,9 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     }
   }
 
-  if (!completion && compactionCount !== undefined && sessionKey) {
-    activeSessionEntry = activeSessionStore?.[sessionKey] ?? activeSessionEntry;
+  if (compactionCount !== undefined && sessionKey) {
+    activeSessionEntry =
+      completion?.current() ?? activeSessionStore?.[sessionKey] ?? activeSessionEntry;
   }
   activeSessionEntry = completion?.current() ?? activeSessionEntry;
 
@@ -535,9 +546,20 @@ export async function accountFollowupTurn(params: {
       });
     }
     if (accounting.verboseEnabled) {
-      const suffix = count !== undefined ? ` (count ${count})` : "";
+      const suffix = typeof count === "number" ? ` (count ${count})` : "";
       compactionNotice = { text: `🧹 Auto-compaction complete${suffix}.` };
     }
+  }
+  if (turn.queued.run.verboseLevelOverride !== "off" || turn.queued.run.traceAuthorized === true) {
+    accounting.activeSessionEntry = completion
+      ? await completion.refresh()
+      : await refreshSessionEntryFromStore({
+          storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+          sessionKey,
+          fallbackEntry: turn.session.current(),
+          expectedGeneration: accounting.expectedSession,
+          reader: getReplyOperationSessionReader(turn.operation),
+        });
   }
   const diagnosticsPayload = await buildReplyDiagnosticsPayload({
     activeSessionEntry: accounting.activeSessionEntry,

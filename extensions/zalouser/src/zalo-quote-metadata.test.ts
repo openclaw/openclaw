@@ -282,26 +282,38 @@ describe("Zalo group context cache", () => {
     return createMockApi({ getGroupInfo } as Partial<API>);
   }
 
-  it("reuses group context until its five-minute TTL expires", async () => {
+  it("refetches group context when the current clock is invalid", async () => {
     const getGroupInfo = vi.fn(async () => ({
-      gridInfoMap: { "group-ttl": { groupId: "group-ttl", name: "Group" } },
+      gridInfoMap: { "group-invalid-clock": { groupId: "group-invalid-clock", name: "Group" } },
     }));
     const api = createGroupApi(getGroupInfo);
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
 
     await withStoredSession({
-      profile: "cache-ttl",
+      profile: "cache-invalid-clock",
       api,
       run: async () => {
-        await expect(resolveZaloGroupContext("cache-ttl", "group-ttl")).resolves.toMatchObject({
-          groupId: "group-ttl",
-          name: "Group",
-        });
-        now.mockReturnValue(1_700_000_299_999);
-        await resolveZaloGroupContext("cache-ttl", "group-ttl");
-        expect(getGroupInfo).toHaveBeenCalledOnce();
-        now.mockReturnValue(1_700_000_300_000);
-        await resolveZaloGroupContext("cache-ttl", "group-ttl");
+        await resolveZaloGroupContext("cache-invalid-clock", "group-invalid-clock");
+        vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+        await resolveZaloGroupContext("cache-invalid-clock", "group-invalid-clock");
+      },
+    });
+
+    expect(getGroupInfo).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache group context when ttl expiry exceeds the Date range", async () => {
+    const getGroupInfo = vi.fn(async () => ({
+      gridInfoMap: { "group-overflow": { groupId: "group-overflow", name: "Overflow" } },
+    }));
+    const api = createGroupApi(getGroupInfo);
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+
+    await withStoredSession({
+      profile: "cache-overflow",
+      api,
+      run: async () => {
+        await resolveZaloGroupContext("cache-overflow", "group-overflow");
+        await resolveZaloGroupContext("cache-overflow", "group-overflow");
       },
     });
 

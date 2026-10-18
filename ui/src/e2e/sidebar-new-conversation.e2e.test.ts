@@ -105,16 +105,7 @@ suite.define(() => {
         await capture("collapsed");
         await page.setViewportSize({ width: 390, height: 844 });
         await capture("mobile", true);
-        // The closed drawer stays mounted for its slide animation.
-        const nav = page.locator(".shell-nav");
-        await expect.poll(() => nav.getAttribute("aria-hidden")).toBe("true");
-        expect(await nav.getAttribute("inert")).not.toBeNull();
-        expect(await nav.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe(
-          "none",
-        );
-        await expect
-          .poll(() => nav.evaluate((element) => element.getBoundingClientRect().right))
-          .toBeLessThanOrEqual(0);
+        expect(await create.isVisible()).toBe(false);
         await page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first()

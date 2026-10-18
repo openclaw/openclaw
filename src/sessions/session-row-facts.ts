@@ -44,10 +44,7 @@ export function sessionChangeAffectsStoredRow(
     ignoreStoreTopology?: boolean;
   },
 ): boolean {
-  if (
-    !sessionChangeScopeAffectsStoredRows(change) ||
-    ("sessionKey" in change && !target.sessionKeys.includes(change.sessionKey))
-  ) {
+  if (!sessionChangeScopeAffectsStoredRows(change)) {
     return false;
   }
   const source = readPreparedSessionEntryPublicationSource(change);
@@ -69,5 +66,9 @@ export function sessionChangeAffectsStoredRow(
   }
   // Entry/member writers name their physical store. Agent IDs alone can describe
   // a logical owner, so a physical publication must also reach cross-owner aliases.
-  return change.storePath !== undefined && matchesStore(change.storePath);
+  return (
+    change.storePath !== undefined &&
+    matchesStore(change.storePath) &&
+    target.sessionKeys.includes(change.sessionKey)
+  );
 }

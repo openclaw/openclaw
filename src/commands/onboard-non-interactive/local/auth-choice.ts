@@ -176,7 +176,6 @@ export async function applyNonInteractiveAuthChoice(params: {
         modelId: opts.customModelId,
         compatibility: opts.customCompatibility,
         apiKey: opts.customApiKey,
-        noAuth: opts.customNoAuth,
         providerId: opts.customProviderId,
         supportsImageInput: opts.customImageInput,
       });
@@ -185,19 +184,14 @@ export async function applyNonInteractiveAuthChoice(params: {
         baseUrl: customAuth.baseUrl,
         providerId: customAuth.providerId,
       });
-      // No-auth selection must not resolve ambient credentials: keeping the
-      // env/flag key alive would serialize it next to auth: "none" and crash
-      // the replacement branch (which expects a staged profile).
-      const resolvedCustomApiKey = customAuth.noAuth
-        ? undefined
-        : await resolveApiKey({
-            provider: resolvedProviderId.providerId,
-            flagValue: customAuth.apiKey,
-            flagName: "--custom-api-key",
-            envVar: "CUSTOM_API_KEY",
-            envVarName: "CUSTOM_API_KEY",
-            required: false,
-          });
+      const resolvedCustomApiKey = await resolveApiKey({
+        provider: resolvedProviderId.providerId,
+        flagValue: customAuth.apiKey,
+        flagName: "--custom-api-key",
+        envVar: "CUSTOM_API_KEY",
+        envVarName: "CUSTOM_API_KEY",
+        required: false,
+      });
       let customApiKeyInput: SecretInput | undefined;
       if (
         resolvedCustomApiKey &&
@@ -221,7 +215,6 @@ export async function applyNonInteractiveAuthChoice(params: {
         modelId: customAuth.modelId,
         compatibility: customAuth.compatibility,
         apiKey: customApiKeyInput,
-        ...(customAuth.noAuth ? { noAuth: true } : {}),
         providerId: customAuth.providerId,
         supportsImageInput: customAuth.supportsImageInput,
         target: params.target,

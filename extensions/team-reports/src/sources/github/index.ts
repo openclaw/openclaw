@@ -142,7 +142,11 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       const status = newStatus();
       const client = new GithubClient(cfg, runtime, status);
       checkAbort(runtime.signal, ABORT_LABEL);
-      if (window.untilMs <= window.sinceMs) {
+      if (
+        !Number.isFinite(window.sinceMs) ||
+        !Number.isFinite(window.untilMs) ||
+        window.untilMs <= window.sinceMs
+      ) {
         throw new Error("Invalid GitHub activity window");
       }
       const repos = await listRepos(client, cfg);

@@ -70,7 +70,7 @@ export async function transcribeOpenAiCompatibleAudio(
       requestHeaders: headers,
     });
     const text = requireTranscriptionText(
-      payload.text,
+      typeof payload.text === "string" ? payload.text : undefined,
       "Audio transcription response missing text",
     );
     return { text, model };

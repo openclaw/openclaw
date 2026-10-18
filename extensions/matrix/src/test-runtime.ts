@@ -16,7 +16,6 @@ import {
   createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,
   createPluginStateKeyedStoreForTests,
-  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -102,9 +101,6 @@ function createMatrixRuntimeMediaMock(
       path: "/tmp/test-media.jpg",
       contentType: "image/jpeg",
     }) as NonNullable<PluginRuntime["channel"]>["media"]["saveMediaBuffer"],
-    deleteMediaBuffer: vi
-      .fn<NonNullable<PluginRuntime["channel"]>["media"]["deleteMediaBuffer"]>()
-      .mockResolvedValue(),
     ...overrides,
   };
 }
@@ -158,12 +154,13 @@ export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {})
       openKeyedStoreV2: <T>(
         storeOptions: OpenAsyncKeyedStoreOptions,
         authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
-      ) =>
-        createPluginStateKeyedStoreV2ForTests<T>(
-          "matrix",
-          { ...storeOptions, env: resolvePluginStateEnv(storeOptions) },
-          authority ?? { assertCurrent() {} },
-        ),
+      ) => {
+        const store = createPluginStateKeyedStoreForTests<T>("matrix", {
+          ...storeOptions,
+          env: resolvePluginStateEnv(storeOptions),
+        });
+        return authority ? store.withCurrent(authority) : store;
+      },
       openSyncKeyedStore: (<T>(storeOptions: OpenKeyedStoreOptions) =>
         createPluginStateSyncKeyedStoreForTests<T>("matrix", {
           ...storeOptions,

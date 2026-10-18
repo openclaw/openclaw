@@ -68,7 +68,6 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
 };
 
 const loadQaLabCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
-const loadQaLabReportRuntime = createLazyRuntimeModule(() => import("./cli-report.runtime.js"));
 
 function tcpPort(flag: string) {
   return (value: string) => {
@@ -347,7 +346,7 @@ export function registerQaLabCli(program: Command) {
     .option("--baseline-label <label>", "Baseline display label", QA_FRONTIER_PARITY_BASELINE_LABEL)
     .option("--output-dir <path>", "Artifact directory for the parity report")
     .action(
-      qaCliAction(async (opts) => (await loadQaLabReportRuntime()).runQaParityReportCommand(opts)),
+      qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaParityReportCommand(opts)),
     );
 
   qa.command("coverage")
@@ -364,9 +363,7 @@ export function registerQaLabCli(program: Command) {
       [],
     )
     .action(
-      qaCliAction(async (opts) =>
-        (await loadQaLabReportRuntime()).runQaCoverageReportCommand(opts),
-      ),
+      qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaCoverageReportCommand(opts)),
     );
 
   qa.command("confidence-report")

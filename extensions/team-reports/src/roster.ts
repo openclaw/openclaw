@@ -9,7 +9,7 @@ export function primaryLogin(person: Person): string {
   if (!login) {
     throw new Error("A report identity requires at least one GitHub login");
   }
-  return login;
+  return login.toLowerCase();
 }
 
 export function buildRoster(people: Person[], githubPeople: Person[] = []): Roster {
@@ -41,6 +41,8 @@ export function buildRoster(people: Person[], githubPeople: Person[] = []): Rost
       const person: Person = {
         ...entry,
         github,
+        ...(entry.access ? { access: [...entry.access] } : {}),
+        ...(entry.areas ? { areas: [...entry.areas] } : {}),
       };
       all.push(person);
       for (const login of github) {

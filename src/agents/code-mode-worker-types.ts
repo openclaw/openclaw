@@ -75,11 +75,7 @@ export type CodeModeNodeInput = (
       "catalog" | "namespaces" | "apiFiles" | "swarmEnabled"
     > & { initialization: SharedArrayBuffer })
   | Omit<Extract<CodeModeWorkerPayload<never>, { kind: "resume" }>, "continuation">
-) & {
-  progress: SharedArrayBuffer;
-  inlineHost: boolean;
-  gcAttribution?: { workerId: string; runId?: string; sessionKeyHash?: string };
-};
+) & { progress: SharedArrayBuffer; inlineHost: boolean };
 
 export type CodeModeSettlementMode =
   | { kind: "awaiting" }
@@ -131,7 +127,7 @@ type CodeModeWorkerOutcome<Output, Value, State> = { networkContentObserved?: tr
         | "timeout"
         | "snapshot_limit_exceeded"
         | "internal_error";
-      failurePhase: CodeModeFailurePhase;
+      failurePhase: Extract<CodeModeFailurePhase, "input" | "guest" | "bridge">;
       bridgeDispatchStarted: false;
       output: Output;
     }

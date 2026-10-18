@@ -106,7 +106,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       if (state.timer) {
         clearTimeoutFn(state.timer);
       }
-      state.activeController?.abort();
+      modelSlots.invalidateRequest(state);
     },
   });
   const { states, dormantRuns, revisionFloors, supersededRuns, disabledRuns } = lifecycle;
@@ -129,7 +129,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       audienceLifecycle.unsubscribe();
       for (const state of states.values()) {
         clearTimeoutFn(state.timer);
-        state.activeController?.abort();
+        modelSlots.invalidateRequest(state);
       }
     },
     finishClose: () => {
@@ -239,7 +239,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       clearTimeoutFn(state.timer);
       state.timer = undefined;
     }
-    state.activeController?.abort();
+    modelSlots.invalidateRequest(state);
     state.preparedPromise = undefined;
     state.utilityModelRef = undefined;
     state.consecutiveFailures = 0;
@@ -352,8 +352,11 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       // Run rollover replaces state; inFlight keeps its note retirement monotonic.
       state.lastDigestNoteSequence = Math.max(state.lastDigestNoteSequence, lastSelectedSequence);
     };
+    const requestGeneration = modelSlots.beginRequest(state);
     const digestIsStale = () =>
-      !modelStateIsCurrent(state) || (!final && state.terminalHealth !== undefined);
+      !modelStateIsCurrent(state) ||
+      !modelSlots.requestIsCurrent(state, requestGeneration) ||
+      (!final && state.terminalHealth !== undefined);
     const acceptDigestPublication = (session: ReturnType<typeof readSession>) => {
       if (digestIsStale()) {
         retireSelectedNotes();
@@ -666,7 +669,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         ? undefined
         : modelSlots.claim(state.agentId, state);
     if (state.utilityModelRef !== utilityModelRef) {
-      state.activeController?.abort();
+      modelSlots.invalidateRequest(state);
       state.preparedPromise = undefined;
       state.utilityModelRef = utilityModelRef;
       state.consecutiveFailures = 0;
@@ -683,7 +686,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     if (terminal) {
       if (!state.terminalHealth) {
-        state.activeController?.abort();
+        modelSlots.invalidateRequest(state);
       }
       const flush = preamblePublisher.flush(state);
       if (flush) {

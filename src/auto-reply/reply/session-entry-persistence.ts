@@ -42,7 +42,9 @@ export async function persistReplySessionEntry(
   params: PersistReplySessionEntryParams,
 ): Promise<PersistReplySessionEntryResult> {
   const workspaceReadiness = captureAgentWorkspaceReadiness(params.sessionKey);
-  let blocked: PersistReplySessionEntryResult | undefined;
+  let lifecycleError: string | undefined;
+  let lifecycleEntry: SessionEntry | undefined;
+  let lockedEntry: SessionEntry | undefined;
   let commitEntry = params.initialEntry;
   let persisted: SessionEntry | null;
   const commitGuard = composeSessionSourceAssertion([params.commitGuard], (assertSource) => {
@@ -66,26 +68,22 @@ export async function persistReplySessionEntry(
         if (!existingEntry && params.allowCreate === true) {
           return params.entry;
         }
-        const lifecycleError = resolveSessionWorkStartError(params.sessionKey, existingEntry, {
+        lifecycleError = resolveSessionWorkStartError(params.sessionKey, existingEntry, {
           expectedSessionId: params.initialEntry.sessionId,
           allowPendingWorkspace: workspaceReadiness ? true : undefined,
         });
-        if (lifecycleError) {
-          blocked = {
-            status: "lifecycle-invalidated",
-            error: lifecycleError,
-            ...(existingEntry ? { entry: existingEntry } : {}),
-          };
+        if (!existingEntry) {
           return null;
         }
-        if (!existingEntry) {
+        if (lifecycleError) {
+          lifecycleEntry = existingEntry;
           return null;
         }
         if (
           params.requireModelSelectionUnlocked === true &&
           existingEntry.modelSelectionLocked === true
         ) {
-          blocked = { status: "model-selection-locked", entry: existingEntry };
+          lockedEntry = existingEntry;
           return null;
         }
         const changes = {
@@ -117,8 +115,15 @@ export async function persistReplySessionEntry(
     }
     throw error;
   }
-  if (blocked) {
-    return blocked;
+  if (lifecycleError) {
+    return {
+      status: "lifecycle-invalidated",
+      error: lifecycleError,
+      ...(lifecycleEntry ? { entry: lifecycleEntry } : {}),
+    };
+  }
+  if (lockedEntry) {
+    return { status: "model-selection-locked", entry: lockedEntry };
   }
   if (!persisted) {
     return {

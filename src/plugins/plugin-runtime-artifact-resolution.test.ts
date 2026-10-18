@@ -125,6 +125,7 @@ describe("resolvePluginRuntimeArtifact", () => {
 
   it.each([
     { layout: "source default", preferBuiltPluginArtifacts: undefined },
+    { layout: "source", preferBuiltPluginArtifacts: false },
     { layout: "package-local", preferBuiltPluginArtifacts: true },
     { layout: "root-bundled", preferBuiltPluginArtifacts: true },
   ])(
@@ -279,17 +280,33 @@ describe("resolvePluginRuntimeArtifact", () => {
     ).toBe(fixture.source);
   });
 
-  it("pins the first built path so one plugin instance registers once", () => {
-    const fixture = createBundledPluginFixture();
-    const first = resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true });
-    const second = resolveFixture({ ...fixture, preferBuiltPluginArtifacts: false });
+  it.each([
+    { firstPreference: false, firstArtifact: "source" },
+    { firstPreference: true, firstArtifact: "built" },
+  ])(
+    "pins the first $firstArtifact path so one plugin instance registers once",
+    ({ firstPreference }) => {
+      const fixture = createBundledPluginFixture();
+      const first = resolveFixture({
+        ...fixture,
+        preferBuiltPluginArtifacts: firstPreference,
+      });
+      const second = resolveFixture({
+        ...fixture,
+        preferBuiltPluginArtifacts: !firstPreference,
+      });
 
-    expect(first.source).toBe(fixture.builtSource);
-    expect(second).toEqual(first);
-    expect(
-      resolveFixture({ ...fixture, source: fixture.source, preferBuiltPluginArtifacts: false }),
-    ).toEqual(first);
-  });
+      expect(first.source).toBe(firstPreference ? fixture.builtSource : fixture.source);
+      expect(second).toEqual(first);
+      expect(
+        resolveFixture({
+          ...fixture,
+          source: firstPreference ? fixture.source : fixture.builtSource,
+          preferBuiltPluginArtifacts: !firstPreference,
+        }),
+      ).toEqual(first);
+    },
+  );
 
   it.each([
     { entryKind: "runtime" as const, sourceName: "index.ts", artifactName: "index.js" },
@@ -380,13 +397,22 @@ describe("resolvePluginRuntimeArtifact", () => {
     },
   );
 
-  it("re-resolves after the registry load cache is cleared", () => {
+  it.each([
+    ["active registry memo", clearPluginRuntimeArtifactResolutionMemo],
+    ["registry load cache", clearPluginRegistryLoadCache],
+  ] as const)("re-resolves after the %s is cleared", (_name, clear) => {
     const fixture = createBundledPluginFixture();
-    const sourceResolution = resolveFixture({ ...fixture, preferBuiltPluginArtifacts: false });
+    const sourceResolution = resolveFixture({
+      ...fixture,
+      preferBuiltPluginArtifacts: false,
+    });
 
-    clearPluginRegistryLoadCache();
+    clear();
 
-    const builtResolution = resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true });
+    const builtResolution = resolveFixture({
+      ...fixture,
+      preferBuiltPluginArtifacts: true,
+    });
     expect(sourceResolution.source).toBe(fixture.source);
     expect(builtResolution.source).toBe(fixture.builtSource);
   });

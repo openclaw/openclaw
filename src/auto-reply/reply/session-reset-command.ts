@@ -218,7 +218,7 @@ export function resolveSessionResetCommand(
   if (
     !params.resetAuthorized ||
     softResetMatched ||
-    (params.ctx.Transcript !== undefined &&
+    (typeof params.ctx.Transcript === "string" &&
       params.commandText === params.ctx.Transcript.replace(/\\n/g, " ").trim())
   ) {
     return result;

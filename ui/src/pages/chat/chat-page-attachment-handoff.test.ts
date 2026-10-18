@@ -14,10 +14,12 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 }));
 
 import type { ApplicationContext } from "../../app/context.ts";
-import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { ChatPageState } from "./chat-page-state.ts";
 import { settleChatPage, createChatPageSessions } from "./chat-page.test-support.ts";
 import { ChatPage } from "./chat-page.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
+import { insertPane } from "./split-layout.ts";
 
 type RenderedPane = HTMLElement & {
   paneId: string;
@@ -26,6 +28,15 @@ type RenderedPane = HTMLElement & {
   discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
 };
+
+function splitLayout(sessionKey: string): ChatSplitLayout {
+  const layout: ChatSplitLayout = {
+    columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
+    columnWeights: [1],
+    activePaneId: "p1",
+  };
+  return insertPane(layout, "p1", sessionKey, "right");
+}
 
 function configure(page: ChatPage) {
   const context = {
@@ -80,12 +91,9 @@ describe("chat page staged attachment rebound", () => {
     configure(page);
     document.body.append(page);
     await settleChatPage(page);
-    window.dispatchEvent(
-      new CustomEvent(UI_COMMAND_EVENT, {
-        cancelable: true,
-        detail: { command: { kind: "split", direction: "right", sessionKey: "main" } },
-      }),
-    );
+    (ChatPageState.forHost(page) as unknown as { layout: ChatSplitLayout }).layout =
+      splitLayout("main");
+    page.requestUpdate();
     await settleChatPage(page);
 
     const closingPane = page.querySelectorAll<RenderedPane>("openclaw-chat-pane")[1]!;
@@ -105,12 +113,9 @@ describe("chat page staged attachment rebound", () => {
     expect(discard).toHaveBeenCalledOnce();
     expect(closingPane.isConnected).toBe(true);
 
-    window.dispatchEvent(
-      new CustomEvent(UI_COMMAND_EVENT, {
-        cancelable: true,
-        detail: { command: { kind: "split", direction: "right", sessionKey: "main" } },
-      }),
-    );
+    (ChatPageState.forHost(page) as unknown as { layout: ChatSplitLayout }).layout =
+      splitLayout("main");
+    page.requestUpdate();
     await settleChatPage(page);
     expect(resume).toHaveBeenCalled();
 

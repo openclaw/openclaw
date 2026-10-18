@@ -18,7 +18,6 @@ import {
   normalizeOptionalStringifiedId,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
@@ -67,17 +66,12 @@ export function listThreadBindingsForAccount(accountId?: string): ThreadBindingR
   return getThreadBindingManager(accountId)?.listBindings() ?? [];
 }
 
-/** @deprecated Use listThreadBindingsBySessionKeyAsync; compatible through 2026-12-31, removed in the first January 2027 stable. */
+/** @deprecated Use listThreadBindingsBySessionKeyAsync; removed in the next Plugin SDK major. */
 export function listThreadBindingsBySessionKey(params: {
   targetSessionKey: string;
   accountId?: string;
   targetKind?: ThreadBindingTargetKind;
 }): ThreadBindingRecord[] {
-  warnPluginSdkDeprecation({
-    family: "conversation-bindings",
-    method: "listThreadBindingsBySessionKey",
-    replacement: "listThreadBindingsBySessionKeyAsync",
-  });
   ensureBindingsLoaded();
   return listLoadedThreadBindingsBySessionKey(params);
 }
@@ -173,7 +167,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
   });
 }
 
-/** @deprecated Use unbindThreadBindingsBySessionKeyAsync; compatible through 2026-12-31, removed in the first January 2027 stable. */
+/** @deprecated Use unbindThreadBindingsBySessionKeyAsync; removed in the next Plugin SDK major. */
 export function unbindThreadBindingsBySessionKey(params: {
   targetSessionKey: string;
   accountId?: string;
@@ -182,11 +176,6 @@ export function unbindThreadBindingsBySessionKey(params: {
   sendFarewell?: boolean;
   farewellText?: string;
 }): ThreadBindingRecord[] {
-  warnPluginSdkDeprecation({
-    family: "conversation-bindings",
-    method: "unbindThreadBindingsBySessionKey",
-    replacement: "unbindThreadBindingsBySessionKeyAsync",
-  });
   ensureBindingsLoaded();
   const ids = resolveBindingIdsForTargetSession(params);
   const removed: ThreadBindingRecord[] = [];

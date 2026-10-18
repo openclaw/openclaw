@@ -1,7 +1,4 @@
-import {
-  createWizardLogin,
-  type WizardLoginState,
-} from "../../components/wizard-login-controller.tsx";
+import { WizardLoginController } from "../../components/wizard-login-controller.tsx";
 import { t } from "../../i18n/index.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -11,9 +8,10 @@ import type { PluginsPageDetail } from "./plugins-page-model.ts";
 /** Binds the shared OAuth dialog to the selected plugin and live Gateway. */
 export class PluginMcpLoginController {
   private selection: { pluginId: string; scope: GatewayConnectionScope } | null = null;
-  readonly dialog: WizardLoginState;
+  readonly dialog: WizardLoginController;
 
   constructor(
+    host: { requestUpdate: () => void },
     private readonly gateway: GatewayPageBinding,
     private readonly options: {
       getDetail: () => PluginsPageDetail | null;
@@ -22,7 +20,7 @@ export class PluginMcpLoginController {
       refresh: (pluginId: string) => Promise<void>;
     },
   ) {
-    this.dialog = createWizardLogin({
+    this.dialog = new WizardLoginController(host, {
       getClient: () => gateway.client,
       getAgentId: () => null,
       requestFailedMessage: () => t("pluginsPage.auth.requestFailed"),
@@ -47,7 +45,7 @@ export class PluginMcpLoginController {
   }
 
   get busy() {
-    return this.dialog.state().phase !== "idle";
+    return this.dialog.runner.state.phase !== "idle";
   }
 
   select(pluginId: string | null) {

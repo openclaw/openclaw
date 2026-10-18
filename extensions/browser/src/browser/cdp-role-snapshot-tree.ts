@@ -1,3 +1,4 @@
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { axValue, type RawAXNode } from "./cdp-ax.js";
 import type { RoleRefMap, RoleSnapshotOptions } from "./pw-role-snapshot.js";
 import { ROLE_SNAPSHOT_MAX_DEPTH } from "./snapshot-depth-limit.js";
@@ -27,6 +28,7 @@ export type RoleTreeNode = {
   backendDOMNodeId?: number;
   children: number[];
   parent?: number;
+  depth: number;
   ref?: string;
   nth?: number;
   url?: string;
@@ -61,6 +63,7 @@ export function buildRoleTree(
           ? Math.floor(raw.backendDOMNodeId)
           : undefined,
       children: [],
+      depth: 0,
       ...(rootBackendNodeId !== undefined
         ? {
             transparent:
@@ -79,7 +82,7 @@ export function buildRoleTree(
         continue;
       }
       node.children.push(childIndex);
-      tree[childIndex]!.parent = index;
+      expectDefined(tree[childIndex], "CDP child node index").parent = index;
     }
   }
 
@@ -95,6 +98,19 @@ export function buildRoleTree(
       if (node.parent === undefined) {
         roots.push(index);
       }
+    }
+  }
+  const stack = roots.map((index) => ({ index, depth: 0 }));
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current) {
+      break;
+    }
+    const node = expectDefined(tree[current.index], "CDP traversal node index");
+    node.depth = current.depth;
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      const child = expectDefined(node.children[i], "CDP traversal child index");
+      stack.push({ index: child, depth: current.depth + (node.transparent ? 0 : 1) });
     }
   }
   return { tree, roots: roots.length ? roots : tree.length ? [0] : [] };
@@ -154,18 +170,23 @@ export function renderRoleTree(
   output: string[],
   options: RoleSnapshotOptions,
   state: { truncated: boolean; recordIframePositions?: boolean; flattenInteractive?: boolean },
-  depth = 0,
 ): void {
-  const node = tree[index]!;
-  if (options.maxDepth !== undefined && depth > options.maxDepth) {
+  const node = tree[index];
+  if (!node) {
     return;
   }
-  if (depth > ROLE_SNAPSHOT_MAX_DEPTH) {
+  if (options.maxDepth !== undefined && node.depth > options.maxDepth) {
+    return;
+  }
+  const effectiveDepth = Math.max(0, node.depth);
+  if (effectiveDepth > ROLE_SNAPSHOT_MAX_DEPTH) {
     state.truncated = true;
     return;
   }
   if (shouldIncludeRoleNode(node, options)) {
-    const indent = "  ".repeat(state.flattenInteractive && options.interactive ? 0 : depth);
+    const indent = "  ".repeat(
+      state.flattenInteractive && options.interactive ? 0 : effectiveDepth,
+    );
     const name = node.name ? ` ${JSON.stringify(node.name)}` : "";
     const ref = node.ref ? ` [ref=${node.ref}]` : "";
     const nth = node.nth !== undefined && node.nth > 0 ? ` [nth=${node.nth}]` : "";
@@ -180,6 +201,6 @@ export function renderRoleTree(
     );
   }
   for (const child of node.children) {
-    renderRoleTree(tree, child, output, options, state, depth + (node.transparent ? 0 : 1));
+    renderRoleTree(tree, child, output, options, state);
   }
 }

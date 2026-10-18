@@ -48,15 +48,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       if (!metadata.trusted && !isInternalDiagnosticEventMetadata(metadata)) {
         return;
       }
-      runtime.gcDurationHistogram.record(
-        evt.durationMs,
-        {
-          "openclaw.gc.kind": evt.kind ?? "unknown",
-          "openclaw.gc.thread": evt.thread ?? "main",
-          ...(evt.workerSlot === undefined ? {} : { "openclaw.gc.worker_slot": evt.workerSlot }),
-        },
-        ROOT_CONTEXT,
-      );
+      runtime.gcDurationHistogram.record(evt.durationMs, undefined, ROOT_CONTEXT);
     },
     recordGatewayEventLoopSample(
       evt: Extract<DiagnosticEventPayload, { type: "gateway.event_loop.sample" }>,
@@ -115,7 +107,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       };
       assignOtelToolIdentityAttributes(spanAttrs, evt);
       return runtime
-        .trackInternalOrTrustedSpan(
+        .trackTrustedSpan(
           evt,
           metadata,
           runtime.spanWithDuration("openclaw.tool.execution", spanAttrs, undefined, {

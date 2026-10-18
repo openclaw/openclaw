@@ -10,19 +10,13 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { PageLayout } from "../page-layout.tsx";
 import { LobsterdexView, type LobsterdexCopyFeedback } from "./view.tsx";
 import "../../styles/settings.css";
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-lobsterdex-page": HTMLAttributes<HTMLElement>;
-    }
-  }
-}
-
-export function LobsterdexPage() {
-  let host!: HTMLElement;
+function LobsterdexPageContent(props: { host: HTMLElement }) {
+  const host = untrack(() => props.host);
   const context = useApplication();
   const branding = projectSource(
     untrack(() => context.theme),
@@ -96,7 +90,7 @@ export function LobsterdexPage() {
   }
 
   return (
-    <openclaw-lobsterdex-page ref={(element) => (host = element)}>
+    <>
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <h1 class="page-title">{t("tabs.lobsterdex")}</h1>
@@ -127,6 +121,16 @@ export function LobsterdexPage() {
           </section>
         )}
       </SettingsWorkspace>
-    </openclaw-lobsterdex-page>
+    </>
   );
 }
+
+export const LobsterdexPage = defineSolidBridge(
+  "openclaw-lobsterdex-page",
+  (_props, host) => (
+    <PageLayout host={host}>
+      <LobsterdexPageContent host={host} />
+    </PageLayout>
+  ),
+  { properties: {} },
+);

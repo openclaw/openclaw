@@ -47,15 +47,11 @@ describe("prepared model runtime reload auth adoption", () => {
     const unregister = registerPreparedModelRuntimePublicationListener((event) =>
       events.push(event.phase),
     );
-    // Observe worker settlement even after the foreground catalog deadline.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const load = snapshot.loadFullModelCatalog({ refresh: true, wait: true });
+    const load = snapshot.loadFullModelCatalog({ refresh: true });
     const rejected = expect(load).rejects.toBe(failure);
-    void rejected.catch(() => undefined);
     let replacement: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
     try {
       await started.promise;
-      await vi.advanceTimersByTimeAsync(5_000);
       replacement = refreshPreparedModelRuntimeSnapshots(
         { logging: { level: "debug" } },
         { gatewayLifecycle: true, catalogMode: "static" },
@@ -70,7 +66,6 @@ describe("prepared model runtime reload auth adoption", () => {
       result.reject(failure);
       await Promise.allSettled([load, replacement]);
       unregister();
-      vi.useRealTimers();
     }
   });
 

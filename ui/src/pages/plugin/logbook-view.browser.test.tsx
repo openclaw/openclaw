@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import "../../styles/base.css";
+import { getLogbookState } from "./logbook-controller.ts";
 import { Logbook } from "./logbook-view.tsx";
 
 let container: HTMLDivElement;
@@ -32,8 +32,10 @@ it.each([
   async ({ locale, width, expected }) => {
     await page.viewport(width, 700);
     vi.spyOn(i18n, "getLocale").mockReturnValue(locale);
-    const day = "2026-01-01";
-    const status = {
+    const host = {};
+    const state = getLogbookState(host);
+    state.day = "2026-01-01";
+    state.status = {
       captureEnabled: true,
       capturePaused: false,
       captureIntervalSeconds: 30,
@@ -42,16 +44,16 @@ it.each([
       pendingFrames: 0,
       analysisRunning: false,
       visionModelSource: "missing",
-      today: day,
+      today: state.day,
       todayCards: 1,
       timeZone: "UTC",
     };
-    const timeline = {
-      day,
+    state.timeline = {
+      day: state.day,
       cards: [
         {
           id: 1,
-          day,
+          day: state.day,
           startMs: Date.UTC(2026, 0, 1, 0, 0),
           endMs: Date.UTC(2026, 0, 1, 0, 10),
           title: "Reviewing the synthetic example project and its implementation notes ".repeat(4),
@@ -63,17 +65,9 @@ it.each([
       ],
       stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
     };
-    const request = vi.fn(async (method: string) =>
-      method === "logbook.status" ? status : method === "logbook.days" ? { days: [] } : timeline,
-    );
-    // SAFETY: This view fixture only invokes request on the browser client.
-    const client = { request } as unknown as GatewayBrowserClient;
-    dispose = mountSolid(() => <Logbook client={client} connected={true} />, {
+    dispose = mountSolid(() => <Logbook host={host} client={null} connected={false} />, {
       container,
     }).unmount;
-    await waitForSolid(() =>
-      expect(container.querySelector(".logbook-card__header")).not.toBeNull(),
-    );
     flush();
 
     const header = container.querySelector<HTMLElement>(".logbook-card__header")!;

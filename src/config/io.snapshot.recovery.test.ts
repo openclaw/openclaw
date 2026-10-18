@@ -351,6 +351,14 @@ describe("prepared config recovery", () => {
     }
   });
 
+  it("keeps an unobserved best-effort config read free of source sidecars", async () => {
+    const { root, databasePath, io } = fixture();
+    expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
+    const before = manifest(root);
+    await io.readBestEffortConfig();
+    expect(manifest(root)).toEqual(before);
+  });
+
   it.each(["full", "core-only"] as const)(
     "previews %s recovery without writes, then restores the admitted bytes",
     async (pluginValidation) => {

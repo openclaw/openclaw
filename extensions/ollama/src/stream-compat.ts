@@ -222,7 +222,10 @@ export function createConfiguredOllamaCompatStreamWrapper(
   const isNativeOllamaTransport = model?.api === "ollama";
 
   if (model) {
-    const providerId = model.provider.trim() ? model.provider : ctx.provider;
+    const providerId =
+      typeof model.provider === "string" && model.provider.trim().length > 0
+        ? model.provider
+        : ctx.provider;
     if (
       shouldInjectOllamaCompatNumCtx({
         model,

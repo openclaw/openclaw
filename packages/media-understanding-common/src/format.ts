@@ -46,9 +46,12 @@ export function formatMediaUnderstandingBody(params: {
 
 /** Formats one or more audio transcript outputs for legacy transcript-only callers. */
 export function formatAudioTranscripts(outputs: MediaUnderstandingOutput[]): string {
-  return outputs
-    .map((output, index) =>
-      outputs.length === 1 ? output.text : `Audio ${index + 1}:\n${output.text}`,
-    )
-    .join("\n\n");
+  if (outputs.length === 1) {
+    const [output] = outputs;
+    if (output) {
+      return output.text;
+    }
+    throw new Error("expected single audio transcript to be defined");
+  }
+  return outputs.map((output, index) => `Audio ${index + 1}:\n${output.text}`).join("\n\n");
 }

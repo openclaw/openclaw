@@ -2,7 +2,6 @@
 import {
   extractErrorCode,
   formatErrorMessage as formatSharedErrorMessage,
-  formatErrorStackWithMessage,
 } from "@openclaw/normalization-core/error-coercion";
 import { redactSensitiveText } from "../logging/redact.js";
 export {
@@ -36,7 +35,8 @@ export function formatUncaughtError(err: unknown): string {
     return formatErrorMessage(err);
   }
   if (err instanceof Error) {
-    return redactSensitiveText(formatErrorStackWithMessage(err));
+    const stack = err.stack ?? err.message ?? err.name;
+    return redactSensitiveText(stack);
   }
   return formatErrorMessage(err);
 }

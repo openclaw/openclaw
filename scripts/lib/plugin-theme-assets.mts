@@ -15,7 +15,6 @@ export function collectPluginThemeAssetPaths(manifest: Record<string, unknown>):
     for (const source of [
       ...Object.values(theme.icons ?? {}),
       ...Object.values(theme.hats ?? {}),
-      ...Object.values(theme.backgrounds ?? {}),
     ]) {
       paths.add(source);
     }

@@ -57,32 +57,6 @@ export function assertCronCreatorAuthorityResolutionAvailable(params: {
   }
 }
 
-function readCronScheduleWithoutTimezone(
-  patch: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  const schedule = patch.schedule;
-  return isRecord(schedule) && schedule.kind === "cron" && schedule.tz === undefined
-    ? schedule
-    : undefined;
-}
-
-function inheritCronScheduleTimezone(
-  patch: Record<string, unknown>,
-  currentJob: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-  const schedule = readCronScheduleWithoutTimezone(patch);
-  const currentSchedule = currentJob?.schedule;
-  if (
-    !schedule ||
-    !isRecord(currentSchedule) ||
-    currentSchedule.kind !== "cron" ||
-    typeof currentSchedule.tz !== "string"
-  ) {
-    return patch;
-  }
-  return { ...patch, schedule: { ...schedule, tz: currentSchedule.tz } };
-}
-
 async function prepareCronJobUpdateForGateway(
   params: Parameters<typeof updateCronJobFromAgentTool>[0] & {
     creatorAuthorityComplete: boolean;
@@ -98,7 +72,7 @@ async function prepareCronJobUpdateForGateway(
     creatorToolAllowlist: params.creatorToolAllowlist,
     creatorAuthorityComplete: params.creatorAuthorityComplete,
   });
-  if (initialPlan.kind === "ready" && !readCronScheduleWithoutTimezone(initialPlan.patch)) {
+  if (initialPlan.kind === "ready") {
     return { patch: initialPlan.patch };
   }
 
@@ -143,11 +117,7 @@ async function prepareCronJobUpdateForGateway(
   if (finalPlan.kind !== "ready") {
     throw new Error("cron update patch planning did not use the loaded job");
   }
-  return {
-    patch: inheritCronScheduleTimezone(finalPlan.patch, existingRecord),
-    expectedConfigRevision,
-    resolvedAuthority,
-  };
+  return { patch: finalPlan.patch, expectedConfigRevision, resolvedAuthority };
 }
 
 function isCronJobConfigRevisionConflict(error: unknown): boolean {

@@ -8,6 +8,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-b
 type ChatRunFailureNoticeProps = {
   summary: string;
   onRetry?: () => void;
+  onChangeModel?: () => void;
 };
 
 /** One terminal notice, separate from assistant prose and preserved partial output. */
@@ -25,13 +26,9 @@ defineSolidBridge<ChatRunFailureNoticeProps>(
           <Icon name="circleX" />
         </span>
         <div class="chat-run-failure__content">
-          <div class="chat-run-failure__header">
-            <div class="chat-run-failure__heading">
-              <strong class="chat-run-failure__title">{t("chat.recovery.failedTitle")}</strong>
-              <span class="chat-run-failure__copy">
-                <CopyButton text={props.summary} idleLabel={t("chat.copyError")} bare />
-              </span>
-            </div>
+          <strong class="chat-run-failure__title">{t("chat.recovery.failedTitle")}</strong>
+          <p class="chat-run-failure__summary">{concise()}</p>
+          <div class="chat-run-failure__actions">
             <Show when={props.onRetry}>
               <button
                 type="button"
@@ -42,17 +39,24 @@ defineSolidBridge<ChatRunFailureNoticeProps>(
                 {t("chat.recovery.tryAgain")}
               </button>
             </Show>
+            <Show when={props.onChangeModel}>
+              <button
+                type="button"
+                class="btn btn--sm btn--ghost"
+                onClick={() => props.onChangeModel?.()}
+              >
+                {t("chat.recovery.changeModel")}
+              </button>
+            </Show>
           </div>
-          <p class="chat-run-failure__summary">{concise()}</p>
-          <Show when={detail() !== concise()}>
-            <details class="chat-run-failure__details">
-              <summary>{t("chat.details")}</summary>
-              <p>{t("chat.recovery.failedHelp")}</p>
-              <pre tabindex="0" aria-label={t("chat.errorDetails")}>
-                {detail()}
-              </pre>
-            </details>
-          </Show>
+          <details class="chat-run-failure__details">
+            <summary>{t("chat.details")}</summary>
+            <p>{t("chat.recovery.failedHelp")}</p>
+            <pre tabindex="0" aria-label={t("chat.errorDetails")}>
+              {detail()}
+            </pre>
+            <CopyButton text={props.summary} idleLabel={t("chat.copyError")} />
+          </details>
         </div>
       </div>
     );
@@ -61,6 +65,7 @@ defineSolidBridge<ChatRunFailureNoticeProps>(
     properties: {
       summary: { default: "" },
       onRetry: { default: undefined, attribute: false },
+      onChangeModel: { default: undefined, attribute: false },
     },
     connected: (host) => (host.style.display = "contents"),
   },

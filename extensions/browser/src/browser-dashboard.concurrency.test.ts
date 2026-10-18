@@ -267,11 +267,7 @@ describe("Browser dashboard operation ordering", () => {
         });
         const retained = await getBrowserSessionTabStore().entries();
         finish.resolve();
-        if (changed === "runtime") {
-          await expect(cleanup).rejects.toThrow("Browser session tab store owner changed");
-        } else {
-          await expect(cleanup).resolves.toBe(0);
-        }
+        await expect(cleanup).resolves.toBe(0);
         expect(await getBrowserSessionTabStore().entries()).toEqual(retained);
         expect(closeTab).not.toHaveBeenCalled();
         expect(browser.closeOwned).not.toHaveBeenCalled();
@@ -283,7 +279,7 @@ describe("Browser dashboard operation ordering", () => {
       } finally {
         finish.resolve();
         storeRead?.mockRestore();
-        await Promise.allSettled([cleanup]);
+        await cleanup;
       }
     },
   );

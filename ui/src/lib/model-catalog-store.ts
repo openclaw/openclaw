@@ -179,9 +179,7 @@ export async function loadModelCatalog(
   const params = modelCatalogParams(requestOptions);
   if (!params.refresh) {
     const result = peekModelCatalog(client, params);
-    // A connect snapshot can precede native discovery. Explicit catalog reads
-    // must still admit demand; prepared-only projections stay passive.
-    if (result && (params.preparedOnly || !result.pendingProviders?.length)) {
+    if (result) {
       return result;
     }
   }
@@ -256,7 +254,7 @@ export function subscribeModelCatalogChanges(
   scope?: ModelCatalogReadScope,
 ): () => void {
   return gateway.subscribeEvents((event) => {
-    const invalidation = modelCatalogEventInvalidation(event, scope);
+    const invalidation = modelCatalogEventInvalidation(event);
     if (invalidation) {
       listener(invalidation);
     } else if (event.event === "models.snapshot" && scope) {

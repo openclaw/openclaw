@@ -47,25 +47,13 @@ export function captureDurableSessionActor(params: {
       },
     }),
     transport: {
-      run: (operation, authorize, concurrentBoardReads) => {
-        const prepared = concurrentBoardReads
-          ? execution.capturePreparedGenerationClaim()
-          : undefined;
-        const assertCurrent = () => {
-          lifetime.assertCurrent();
-          prepared?.assertCurrent();
-        };
-        return withSessionEntryWorker(
+      run: (operation, authorize) =>
+        withSessionEntryWorker(
           database,
           execution.fileIdentity?.physicalIdentity,
-          assertCurrent,
+          lifetime.assertCurrent,
           async (_execution, source) => {
-            // Cold preparation retains exclusive admission; a qualified append cannot reopen.
-            if (prepared) {
-              prepared.assertCurrent();
-            } else {
-              await execution.prepare(source);
-            }
+            await execution.prepare(source);
             return operation({
               async execute(command) {
                 const result = await execution.runExisting(source, (worker) =>
@@ -87,12 +75,7 @@ export function captureDurableSessionActor(params: {
             authorize(request, { admission, retained }, grant);
             return true;
           },
-          undefined,
-          "write",
-          undefined,
-          prepared ? concurrentBoardReads : undefined,
-        );
-      },
+        ),
       release: () => execution.release(),
     },
   });

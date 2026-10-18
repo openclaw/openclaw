@@ -250,7 +250,7 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(sockets).toHaveLength(2);
   });
 
-  it.each(["auto", "websocket"] as const)(
+  it.each(["auto", "websocket", "websocket-cached"] as const)(
     "leaves mid-stream connection expiry to transcript recovery over %s",
     async (transport) => {
       const { sockets, send, close } = installWebSocket((socket) => {

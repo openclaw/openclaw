@@ -10,15 +10,9 @@ export function registerTimedOutGatewayStopTests({
   createSignaledLoopHarness,
   waitForGatewayActiveWork,
   gatewayLog,
-  abortEmbeddedAgentRun,
-  abortActiveCronTaskRuns,
 }: Pick<
   UpdateRespawnFixtures,
-  | "createSignaledLoopHarness"
-  | "waitForGatewayActiveWork"
-  | "gatewayLog"
-  | "abortEmbeddedAgentRun"
-  | "abortActiveCronTaskRuns"
+  "createSignaledLoopHarness" | "waitForGatewayActiveWork" | "gatewayLog"
 >) {
   it.each([
     { drained: true, ownsProcessLifecycle: true },
@@ -55,10 +49,7 @@ export function registerTimedOutGatewayStopTests({
           expect(options).toMatchObject({ reason: "gateway stopping", restartExpectedMs: null });
           expect(options).not.toHaveProperty("onProcessExitReady");
           expect(options).not.toHaveProperty("exitAfterClose");
-          // Server close must record recovery before canceling unfinished turns.
-          expect(abortEmbeddedAgentRun).not.toHaveBeenCalled();
           if (!drained) {
-            expect(abortActiveCronTaskRuns).toHaveBeenCalledExactlyOnceWith(undefined);
             expect(gatewayLog.warn).toHaveBeenCalledWith(
               "gateway active-work drain timeout reached; proceeding with shutdown: pendingReplies=5 rootRequests=165 sessionAdmissions=23",
             );

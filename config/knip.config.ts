@@ -18,8 +18,6 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
-  // The prepublish registry executes this shared build-and-pack lifetime by path.
-  "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
   // Immutable activation and release deployment launch this packaged entry by path.
@@ -54,8 +52,6 @@ const repositoryScriptEntries = [
   ".github/workflows/plugin-prerelease.yml!",
   // Labeler steps import their shared helper through workspace file URLs.
   ".github/workflows/labeler.yml!",
-  // Prepared publication imports its verifier from the frozen release harness.
-  ".github/workflows/openclaw-release-publish.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
@@ -71,12 +67,7 @@ const repositoryScriptEntries = [
   // The team-shaped fixture README invokes these measurement CLIs by path.
   "scripts/perf/team-shape-measure.ts",
   "scripts/perf/transcript-broadcast-measure.ts",
-  "scripts/perf/post-restart-burst-measure.ts",
   "scripts/bundle-a2ui.mts!",
-  // The standalone build guide invokes this builder by path.
-  "scripts/build-bun-standalone.mjs!",
-  // Maintainers invoke the isolated macOS standalone Doctor proof by path.
-  "scripts/verify-standalone-doctor.mjs!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
   "scripts/build-plugin-control-ui.mts!",
@@ -238,8 +229,6 @@ const repositoryScriptEntries = [
   "scripts/mantis/observe-request-web-ui.mts!",
   "scripts/mantis/telegram-proof-bridge.mjs!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
-  // The MCP Events live driver and fixture README launch this developer CLI by path.
-  "scripts/mcp-events-test-server.mjs",
   // Immutable systemd installations invoke the packaged launcher by path.
   "scripts/openclaw-immutable-launcher.mjs!",
   // Existing explicit Linux proof driver imports the inactive capsule adapter.
@@ -341,17 +330,6 @@ function listScriptShimEntries(dir = "scripts"): string[] {
 }
 
 function compileWorkflowConsumers(source: string, filePath: string): string {
-  if (path.resolve(filePath) === path.resolve(".github/workflows/openclaw-release-publish.yml")) {
-    return [
-      ...source.matchAll(
-        /\bimport\s*\{([^}]+)\}\s*from\s*["']\.\/\.release-harness\/(scripts\/[^"'\r\n]+)["']/gu,
-      ),
-    ]
-      .map(
-        ([, names, specifier]) => `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
-      )
-      .join("\n");
-  }
   if (path.resolve(filePath) === path.resolve(".github/workflows/labeler.yml")) {
     return [
       ...new Set(
@@ -450,9 +428,6 @@ const rootEntries = [
   "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.js!",
   "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.ts!",
   "{openclaw,docker-entrypoint}.mjs!",
-  // Desktop service integration consumes this API in the staged builder/app cutover (#172569).
-  // Remove this audit root after those in-tree callers land.
-  "cli-invocation.mjs!",
   // update-command-node-runtime-resolution loads this package-root module by absolute URL.
   "node-runtime-recovery.mjs!",
   "src/index.ts!",
@@ -687,22 +662,15 @@ function workspacePackage(packageDir: string, extraEntries: readonly string[] = 
   } as const;
 }
 
-function compileDynamicMjsConsumers(source: string, filePath: string): string {
-  if (path.resolve(filePath) === path.resolve("scripts/ci-build-manifest.mjs")) {
-    // The trusted manifest resolves this planner from the target checkout by file URL.
-    return source.replace(
-      /(const changedNodeTestPlan = await )importTargetPlan\([\s\S]*?\n\);/u,
-      '$1import("./lib/ci-changed-node-test-plan.mts");',
-    );
+function compileNativeProtocolConsumer(source: string, filePath: string): string {
+  if (path.resolve(filePath) !== path.resolve("scripts/prepare-native-protocol.mjs")) {
+    return source;
   }
-  if (path.resolve(filePath) === path.resolve("scripts/prepare-native-protocol.mjs")) {
-    // The temporary esbuild bundle exports this source module's unchanged API.
-    return source.replace(
-      "import(pathToFileURL(bundlePath).href)",
-      'import("../packages/gateway-protocol/scripts/native-codegen.ts")',
-    );
-  }
-  return source;
+  // The temporary esbuild bundle exports this source module's unchanged API.
+  return source.replace(
+    "import(pathToFileURL(bundlePath).href)",
+    'import("../packages/gateway-protocol/scripts/native-codegen.ts")',
+  );
 }
 
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
@@ -774,7 +742,7 @@ const config = {
   compilers: {
     yml: compileWorkflowConsumers,
     sh: compileShellConsumers,
-    mjs: compileDynamicMjsConsumers,
+    mjs: compileNativeProtocolConsumer,
   },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree
@@ -841,6 +809,7 @@ const config = {
     // The Lit/Solid presentation fixture and focused UI tests consume these seams;
     // the full-tree companion scan continues to audit their actual consumers.
     "ui/src/components/provider-icon.ts": ["exports"],
+    "ui/src/components/settings-ui.ts": ["exports"],
     "ui/src/components/terminal/terminal-panel.ts": ["types"],
     "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],

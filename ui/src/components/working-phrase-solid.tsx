@@ -3,7 +3,7 @@ import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lit/solid-bridge.ts";
 
 const PHRASE_KEYS = [
   "shelling",
@@ -44,13 +44,11 @@ function displayedPhraseIndex(seed: string, bucket: number, length: number): num
   return (offset + bucket * stride) % length;
 }
 
-type WorkingPhraseProps = {
+defineSolidBridge<{
   startMs: number | null;
   seed: string;
   phrases: readonly string[] | undefined;
-};
-
-defineSolidBridge<WorkingPhraseProps>(
+}>(
   "openclaw-working-phrase",
   (props, host) => {
     host.style.display = "contents";
@@ -94,20 +92,3 @@ defineSolidBridge<WorkingPhraseProps>(
     },
   },
 );
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-working-phrase": SolidBridgeElement<WorkingPhraseProps>;
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-working-phrase": HTMLAttributes<HTMLElementTagNameMap["openclaw-working-phrase"]> &
-        Properties<HTMLElementTagNameMap["openclaw-working-phrase"]> & {
-          "prop:phrases"?: WorkingPhraseProps["phrases"];
-        };
-    }
-  }
-}

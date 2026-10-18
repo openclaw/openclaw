@@ -1,5 +1,4 @@
 import type { TalkConfigResult, TalkVoiceChangeEvent } from "@openclaw/gateway-protocol";
-import type { RealtimeVoiceCloseOptions } from "../../../../src/talk/provider-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
@@ -74,7 +73,7 @@ export function createInitialChatRealtimeState(): Pick<
 
 export function stopChatRealtimeTalk(
   state: ChatRealtimeState,
-  options: RealtimeVoiceCloseOptions & { preserveConversation?: boolean } = {},
+  options: { preserveConversation?: boolean } = {},
 ) {
   const session = state.realtimeTalkSession;
   state.realtimeTalkVoiceController?.dispose();
@@ -96,7 +95,7 @@ export function stopChatRealtimeTalk(
   state.realtimeTalkConversationState = options.preserveConversation
     ? continueRealtimeTalkConversation(state.realtimeTalkConversationState)
     : createRealtimeTalkConversationState();
-  void session?.stop({ disposition: options.disposition ?? "detach" });
+  void session?.stop();
 }
 
 export function dismissRealtimeTalkError(state: ChatRealtimeState) {
@@ -472,7 +471,7 @@ export function attachChatRealtimeActions(
   };
   state.toggleRealtimeTalk = async () => {
     if (state.realtimeTalkSession || state.realtimeTalkActive) {
-      stopChatRealtimeTalk(state, { disposition: "abort" });
+      stopChatRealtimeTalk(state);
       state.requestUpdate();
       return;
     }

@@ -116,6 +116,11 @@ export type ChromeMcpSessionLease = {
   release: () => Promise<void>;
 };
 
+export type ChromeMcpSessionFactory = (
+  profileName: string,
+  options?: NormalizedChromeMcpProfileOptions,
+) => Promise<ChromeMcpSession>;
+
 /** One OS snapshot row: ancestry and immutable birth identity from the same read. */
 export type ChromeMcpProcessSnapshot = {
   pid: number;

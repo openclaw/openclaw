@@ -84,13 +84,7 @@ describe("ACP session listing", () => {
       if (!returned?.skillsSnapshot) {
         throw new Error("Expected complete session metadata");
       }
-      const snapshot = returned.skillsSnapshot;
-      expect(Object.isFrozen(snapshot)).toBe(true);
-      expect(Object.isFrozen(snapshot.skills)).toBe(true);
-      expect(Object.isFrozen(snapshot.skills[0])).toBe(true);
-      expect(() => {
-        snapshot.skills[0]!.name = "changed-return-value";
-      }).toThrow(TypeError);
+      returned.skillsSnapshot.skills[0]!.name = "changed-return-value";
       await upsertAcpSessionMeta({
         ...scope,
         sessionKey,

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { assertNoSymlinkParents, readFileHandleBounded } from "@openclaw/fs-safe/advanced";
+import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
@@ -38,16 +38,6 @@ type ResolvedClawSource = Omit<ClawSourceIdentity, "integrity" | "integrityKind"
 const CLAW_MARKDOWN_FILENAME = "CLAW.md";
 const MAX_CLAW_PACKAGE_JSON_BYTES = 256 * 1024;
 
-async function readBoundedFile(path: string, maxBytes: number): Promise<Buffer> {
-  const fileRoot = await fsSafeRoot(dirname(path));
-  const read = await fileRoot.read(basename(path), {
-    hardlinks: "reject",
-    maxBytes,
-    symlinks: "reject",
-  });
-  return read.buffer;
-}
-
 function fileDiagnostic(code: string, message: string, path = "$"): ClawDiagnostic {
   return { level: "error", code, phase: "parse", path, message };
 }
@@ -59,15 +49,6 @@ function fileFailure(code: string, message: string, path = "$") {
 function isContained(root: string, candidate: string): boolean {
   const child = relative(root, candidate);
   return child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
-}
-
-function updateSnapshotHash(
-  hash: ReturnType<typeof createHash>,
-  label: string,
-  bytes: Buffer,
-): void {
-  hash.update(`${Buffer.byteLength(label, "utf8")}:${label}:${bytes.byteLength}:`, "utf8");
-  hash.update(bytes);
 }
 
 function workspaceSourceDiagnostic(error: unknown, sourcePath: string): ClawDiagnostic {
@@ -95,7 +76,8 @@ async function buildDevelopmentSnapshot(params: {
   const hash = createHash("sha256");
   let byteLength = 0;
   const add = (label: string, bytes: Buffer) => {
-    updateSnapshotHash(hash, label, bytes);
+    hash.update(`${Buffer.byteLength(label, "utf8")}:${label}:${bytes.byteLength}:`, "utf8");
+    hash.update(bytes);
     byteLength += bytes.byteLength;
   };
   const snapshotFile = (bytes: Buffer) => ({
@@ -207,14 +189,17 @@ async function buildDevelopmentSnapshot(params: {
 
     let readWorkspaceByteLength = 0;
     for (const { sourcePath, opened } of openedSources) {
-      let bytes: Buffer;
-      try {
-        bytes = await readFileHandleBounded(opened.handle, MAX_MANAGED_FILE_BYTES);
-      } catch (error) {
-        if (error instanceof FsSafeError && error.code === "too-large") {
-          return { ok: false, diagnostics: [workspaceSourceDiagnostic(error, sourcePath)] };
-        }
-        throw error;
+      const bytes = await opened.handle.readFile();
+      if (bytes.byteLength > MAX_MANAGED_FILE_BYTES) {
+        return {
+          ok: false,
+          diagnostics: [
+            workspaceSourceDiagnostic(
+              new FsSafeError("too-large", "workspace source grew while reading"),
+              sourcePath,
+            ),
+          ],
+        };
       }
       readWorkspaceByteLength += bytes.byteLength;
       if (readWorkspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
@@ -325,7 +310,13 @@ async function readClawDocument(
 > {
   let raw: Buffer;
   try {
-    raw = await readBoundedFile(path, maxBytes);
+    const fileRoot = await fsSafeRoot(dirname(path));
+    const read = await fileRoot.read(basename(path), {
+      hardlinks: "reject",
+      maxBytes,
+      symlinks: "reject",
+    });
+    raw = read.buffer;
   } catch (error) {
     const tooLarge =
       error instanceof RangeError || (error instanceof FsSafeError && error.code === "too-large");
@@ -433,13 +424,6 @@ export async function readClawManifestFile(
   path: string,
   options: {
     allowLegacyDynamicToolProfile?: boolean;
-    authorizeLegacyLocalUpdateHostSettings?: (params: {
-      manifest: ClawManifest;
-      source: Pick<
-        ClawSourceIdentity,
-        "kind" | "name" | "version" | "packageRoot" | "manifestPath"
-      >;
-    }) => boolean | Promise<boolean>;
     authorizeLegacyDynamicToolProfile?: (params: {
       manifest: ClawManifest;
       source: Pick<
@@ -475,29 +459,26 @@ export async function readClawManifestFile(
       "$.workspace",
     );
   }
-  const legacyAuthorizationContext = {
-    manifest: parsed.manifest,
-    source: {
-      kind: sourceResult.source.kind,
-      name: sourceResult.source.name,
-      version: sourceResult.source.version,
-      packageRoot: sourceResult.source.packageRoot,
-      manifestPath: sourceResult.source.manifestPath,
-    },
+  const resolvedSource = sourceResult.source;
+  const sourceIdentity = {
+    kind: resolvedSource.kind,
+    name: resolvedSource.name,
+    version: resolvedSource.version,
+    packageRoot: resolvedSource.packageRoot,
+    manifestPath: resolvedSource.manifestPath,
   };
   const allowLegacyDynamicToolProfile =
     options.allowLegacyDynamicToolProfile === true ||
     (options.authorizeLegacyDynamicToolProfile
-      ? await options.authorizeLegacyDynamicToolProfile(legacyAuthorizationContext)
+      ? await options.authorizeLegacyDynamicToolProfile({
+          manifest: parsed.manifest,
+          source: { ...sourceIdentity },
+        })
       : false);
-  const allowLegacyLocalUpdateHostSettings = options.authorizeLegacyLocalUpdateHostSettings
-    ? await options.authorizeLegacyLocalUpdateHostSettings(legacyAuthorizationContext)
-    : false;
   const profile = await readClawOpenClawProfile({
     packageRoot: sourceResult.source.packageRoot,
     metadata: parsed.manifest.metadata,
     ...(allowLegacyDynamicToolProfile ? { allowLegacyDynamicToolProfile: true } : {}),
-    ...(allowLegacyLocalUpdateHostSettings ? { allowLegacyLocalUpdateHostSettings: true } : {}),
   });
   if (!profile.ok) {
     return profile;
@@ -513,13 +494,8 @@ export async function readClawManifestFile(
   if (!snapshot.ok) {
     return snapshot;
   }
-  const resolvedSource = sourceResult.source;
   const source: ClawSourceIdentity = {
-    kind: resolvedSource.kind,
-    name: resolvedSource.name,
-    version: resolvedSource.version,
-    packageRoot: resolvedSource.packageRoot,
-    manifestPath: resolvedSource.manifestPath,
+    ...sourceIdentity,
     integrityKind: "development-snapshot",
     integrity: snapshot.integrity,
     byteLength: snapshot.byteLength,

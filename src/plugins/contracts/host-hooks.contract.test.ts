@@ -85,6 +85,16 @@ async function waitForPluginEventHandlers(): Promise<void> {
   });
 }
 
+function joinContextFragments(...fragments: Array<string | undefined>): string {
+  const present: string[] = [];
+  for (const fragment of fragments) {
+    if (fragment) {
+      present.push(fragment);
+    }
+  }
+  return present.join("\n\n");
+}
+
 function createHostHookFixtureRegistry() {
   return createPluginRegistryFixture({
     plugins: {
@@ -267,6 +277,34 @@ describe("host-hook fixture plugin contract", () => {
     expect(diagnostics[1]?.message).toContain("only bundled plugins can claim reserved command");
   });
 
+  it("rejects declared external trusted policy registration without explicit opt-in", () => {
+    const { registry } = registerFixture(
+      {
+        id: "external-policy",
+        name: "External Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["deny"] },
+        explicitlyEnabled: false,
+        activationSource: "default",
+      },
+      (api) => {
+        api.registerTrustedToolPolicy({
+          id: "deny",
+          description: "Declared external policy",
+          evaluate: () => ({ block: true, blockReason: "blocked by external policy" }),
+        });
+      },
+    );
+
+    expect(registry.registry.trustedToolPolicies).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "external-policy",
+        message: "plugin must be explicitly enabled to register trusted tool policy: deny",
+      },
+    ]);
+  });
+
   it("rejects declared external tool-result middleware registration without explicit opt-in", () => {
     const { registry } = registerFixture(
       {
@@ -339,13 +377,49 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it("initializes a repeatedly registered Codex extension factory only once", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const handler = vi.fn(() => undefined);
+    const factory = vi.fn<CodexAppServerExtensionFactory>((runtime) => {
+      runtime.on("tool_result", handler);
+    });
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "deduplicated-factory",
+        origin: "bundled",
+        contracts: { embeddedExtensionFactories: ["codex-app-server"] },
+      }),
+      register(api) {
+        api.registerCodexAppServerExtensionFactory(factory);
+        api.registerCodexAppServerExtensionFactory(factory);
+      },
+    });
+    try {
+      const runner = createCodexAppServerToolResultExtensionRunner(
+        {},
+        registry.registry.codexAppServerExtensionFactories.map((entry) => entry.factory),
+      );
+      await runner.applyToolResultExtensions({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        toolCallId: "call-1",
+        toolName: "read",
+        args: {},
+        result: { content: [{ type: "text", text: "ok" }], details: {} },
+      });
+      expect(factory).toHaveBeenCalledOnce();
+      expect(handler).toHaveBeenCalledOnce();
+    } finally {
+      await disposePluginRegistryInstances(registry.registry);
+    }
+  });
+
   it("fences handlers from a retired managed Codex factory without claiming caller-owned factories", async () => {
     const { config, registry } = createPluginRegistryFixture();
     const managedHandler = vi.fn(() => undefined);
     const callerHandler = vi.fn(() => undefined);
-    const factory = vi.fn<CodexAppServerExtensionFactory>((runtime) => {
-      runtime.on("tool_result", managedHandler);
-    });
     registerTestPlugin({
       registry,
       config,
@@ -355,8 +429,9 @@ describe("host-hook fixture plugin contract", () => {
         contracts: { embeddedExtensionFactories: ["codex-app-server"] },
       }),
       register(api) {
-        api.registerCodexAppServerExtensionFactory(factory);
-        api.registerCodexAppServerExtensionFactory(factory);
+        api.registerCodexAppServerExtensionFactory((runtime) => {
+          runtime.on("tool_result", managedHandler);
+        });
       },
     });
     const runner = createCodexAppServerToolResultExtensionRunner({}, [
@@ -373,7 +448,6 @@ describe("host-hook fixture plugin contract", () => {
     };
     try {
       await expect(runner.applyToolResultExtensions(event)).resolves.toEqual(event.result);
-      expect(factory).toHaveBeenCalledOnce();
       expect(managedHandler).toHaveBeenCalledOnce();
       expect(callerHandler).toHaveBeenCalledOnce();
       await disposePluginRegistryInstances(registry.registry);
@@ -385,75 +459,61 @@ describe("host-hook fixture plugin contract", () => {
     }
   });
 
-  it.each([
-    {
-      scenario: "malformed registrations",
-      record: { id: "malformed-policy", name: "Malformed Policy", origin: "workspace" as const },
-      policies: [null, undefined],
-      accepted: 0,
-      messages: [
-        "trusted tool policy registration requires id, description, and evaluate()",
-        "trusted tool policy registration requires id, description, and evaluate()",
-      ],
-    },
-    {
-      scenario: "duplicate ids",
-      record: {
+  it("diagnoses malformed trusted policy registrations", () => {
+    const { registry } = registerFixture(
+      {
+        id: "malformed-policy",
+        name: "Malformed Policy",
+        origin: "workspace",
+      },
+      (api) => {
+        Reflect.apply(api.registerTrustedToolPolicy, api, [null]);
+        Reflect.apply(api.registerTrustedToolPolicy, api, [undefined]);
+      },
+    );
+
+    expect(registry.registry.trustedToolPolicies).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "malformed-policy",
+        message: "trusted tool policy registration requires id, description, and evaluate()",
+      },
+      {
+        pluginId: "malformed-policy",
+        message: "trusted tool policy registration requires id, description, and evaluate()",
+      },
+    ]);
+  });
+
+  it("rejects duplicate trusted policy ids from the same plugin", () => {
+    const { registry } = registerFixture(
+      {
         id: "duplicate-policy",
         name: "Duplicate Policy",
-        origin: "workspace" as const,
+        origin: "workspace",
         contracts: { trustedToolPolicies: ["workflow-budget"] },
       },
-      policies: [
-        {
+      (api) => {
+        api.registerTrustedToolPolicy({
           id: "workflow-budget",
           description: "First workflow budget policy",
           evaluate: () => undefined,
-        },
-        {
+        });
+        api.registerTrustedToolPolicy({
           id: "workflow-budget",
           description: "Duplicate workflow budget policy",
           evaluate: () => undefined,
-        },
-      ],
-      accepted: 1,
-      messages: ["trusted tool policy already registered: workflow-budget (duplicate-policy)"],
-    },
-    {
-      scenario: "missing explicit opt-in",
-      record: {
-        id: "external-policy",
-        name: "External Policy",
-        origin: "workspace" as const,
-        contracts: { trustedToolPolicies: ["deny"] },
-        explicitlyEnabled: false,
-        activationSource: "default" as const,
+        });
       },
-      policies: [
-        {
-          id: "deny",
-          description: "Declared external policy",
-          evaluate: () => ({ block: true, blockReason: "blocked by external policy" }),
-        },
-      ],
-      accepted: 0,
-      messages: ["plugin must be explicitly enabled to register trusted tool policy: deny"],
-    },
-  ])("diagnoses trusted policy $scenario", ({ record, policies, accepted, messages }) => {
-    const { registry } = registerFixture(record, (api) => {
-      for (const policy of policies) {
-        if (policy == null) {
-          Reflect.apply(api.registerTrustedToolPolicy, api, [policy]);
-        } else {
-          api.registerTrustedToolPolicy(policy);
-        }
-      }
-    });
-
-    expect(registry.registry.trustedToolPolicies).toHaveLength(accepted);
-    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual(
-      messages.map((message) => ({ pluginId: record.id, message })),
     );
+
+    expect(registry.registry.trustedToolPolicies).toHaveLength(1);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "duplicate-policy",
+        message: "trusted tool policy already registered: workflow-budget (duplicate-policy)",
+      },
+    ]);
   });
 
   it("keeps same-id bundled and installed trusted policies owner-scoped", async () => {
@@ -631,64 +691,146 @@ describe("host-hook fixture plugin contract", () => {
     expect(evaluate).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { failure: "matcher", reason: "policy matcher is unreadable" },
-    { failure: "evaluation", reason: "policy evaluation failed" },
-    { failure: "policy", reason: "policy is unreadable" },
-    { failure: "pluginId", reason: "policy owner is unreadable" },
-    { failure: "decision", reason: "policy decision is unreadable" },
-  ])("fails closed for a trusted policy $failure failure", async ({ failure, reason }) => {
-    const evaluate = vi.fn(() => {
-      if (failure === "evaluation") {
-        throw new Error("fuzzplugin trusted policy failed");
-      }
-      if (failure === "decision") {
-        return Object.defineProperty({}, "allow", {
-          enumerable: true,
-          get() {
-            throw new Error("fuzzplugin trusted policy allow is unreadable");
-          },
-        });
-      }
-      return undefined;
-    });
+  it("fails closed before evaluating an unreadable trusted policy matcher", async () => {
+    const matcher = "exec";
+    const evaluate = vi.fn();
     const registry = createEmptyPluginRegistry();
-    const registration = {
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        source: "test",
+        policy: {
+          id: "fuzzpolicy",
+          description: "synthetic trusted policy",
+          matcher: matcher as never,
+          evaluate,
+        },
+      },
+    ];
+
+    expect(getTrustedToolPolicyMatcherScope(registry)).toEqual({
+      matchAll: true,
+      toolNames: [],
+    });
+    await expect(
+      runTrustedToolPolicies(
+        { toolName: "web_search", params: {} },
+        { toolName: "web_search" },
+        { registry },
+      ),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzpolicy: policy matcher is unreadable",
+    });
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a trusted policy throws during evaluation", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        pluginName: "Fuzz Plugin",
+        source: "test",
+        policy: {
+          id: "fuzzpolicy",
+          description: "synthetic trusted policy",
+          evaluate: () => {
+            throw new Error("fuzzplugin trusted policy failed");
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzpolicy: policy evaluation failed",
+    });
+  });
+
+  it("fails closed when a trusted policy registration is unreadable", async () => {
+    const registry = createEmptyPluginRegistry();
+    const unreadableRegistration = {
       pluginId: "fuzzplugin",
+      pluginName: "Fuzz Plugin",
+      source: "test",
+    };
+    Object.defineProperty(unreadableRegistration, "policy", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trusted policy is unreadable");
+      },
+    });
+    registry.trustedToolPolicies = [unreadableRegistration as never];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzplugin: policy is unreadable",
+    });
+  });
+
+  it("fails closed when a trusted policy owner id is unreadable", async () => {
+    const registry = createEmptyPluginRegistry();
+    const unreadableOwnerRegistration = {
       pluginName: "Fuzz Plugin",
       source: "test",
       policy: {
         id: "fuzzpolicy",
         description: "synthetic trusted policy",
-        ...(failure === "matcher" ? { matcher: "exec" as never } : {}),
-        evaluate,
+        evaluate: () => undefined,
       },
     };
-    if (failure === "policy" || failure === "pluginId") {
-      Object.defineProperty(registration, failure, {
-        enumerable: true,
-        get() {
-          throw new Error(`fuzzplugin trusted policy ${failure} is unreadable`);
-        },
-      });
-    }
-    registry.trustedToolPolicies = [registration];
-    setActivePluginRegistry(registry);
-    if (failure === "matcher") {
-      expect(getTrustedToolPolicyMatcherScope(registry)).toEqual({
-        matchAll: true,
-        toolNames: [],
-      });
-    }
-
-    const toolName = failure === "matcher" ? "web_search" : "exec";
-    await expect(runTrustedToolPolicies({ toolName, params: {} }, { toolName })).resolves.toEqual({
-      block: true,
-      blockReason: `blocked by ${failure === "policy" ? "fuzzplugin" : "fuzzpolicy"}: ${reason}`,
+    Object.defineProperty(unreadableOwnerRegistration, "pluginId", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trusted policy owner is unreadable");
+      },
     });
-    expect(evaluate).toHaveBeenCalledTimes(
-      failure === "evaluation" || failure === "decision" ? 1 : 0,
-    );
+    registry.trustedToolPolicies = [unreadableOwnerRegistration as never];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzpolicy: policy owner is unreadable",
+    });
+  });
+
+  it("fails closed when a trusted policy decision is unreadable", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        pluginName: "Fuzz Plugin",
+        source: "test",
+        policy: {
+          id: "fuzzpolicy",
+          description: "synthetic trusted policy",
+          evaluate: () =>
+            Object.defineProperty({}, "allow", {
+              enumerable: true,
+              get() {
+                throw new Error("fuzzplugin trusted policy allow is unreadable");
+              },
+            }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzpolicy: policy decision is unreadable",
+    });
   });
 
   it("preserves cancellation while deriving a trusted policy rewrite", async () => {
@@ -765,56 +907,71 @@ describe("host-hook fixture plugin contract", () => {
     expect(seenDerivedPaths).toEqual([["old.ts"]]);
   });
 
-  it.each([
-    {
-      scenario: "clears stale paths after targets disappear",
-      originalParams: { patch: "*** Update File: old.ts" },
-      input: "not a patch",
-      deriveEvent: (params: Record<string, unknown>) =>
-        typeof params.patch === "string" ? { derivedPaths: ["old.ts"] } : {},
-      expectedPaths: undefined,
-    },
-    {
-      scenario: "ignores attempts to override core event fields",
-      originalParams: { input: "*** Update File: old.ts" },
-      input: "*** Update File: new.ts",
-      deriveEvent: () => ({ params: { input: "malicious override" }, derivedPaths: ["new.ts"] }),
-      expectedPaths: ["new.ts"],
-    },
-  ])(
-    "derives trusted policy rewrites: $scenario",
-    async ({ originalParams, input, deriveEvent, expectedPaths }) => {
-      const seenEvents: Array<{ params: unknown; derivedPaths: unknown }> = [];
-      const registry = policyRegistry(
-        () => ({ params: { input } }),
-        (event) => {
-          seenEvents.push({ params: event.params, derivedPaths: event.derivedPaths });
-          return undefined;
-        },
-      );
-      setActivePluginRegistry(registry);
+  it("clears stale derived paths when trusted policy rewrites remove targets", async () => {
+    const seenDerivedPaths: unknown[] = [];
+    const registry = policyRegistry(
+      () => ({ params: { input: "not a patch" } }),
+      (event) => {
+        seenDerivedPaths.push(event.derivedPaths);
+        return undefined;
+      },
+    );
+    setActivePluginRegistry(registry);
 
-      await expect(
-        runTrustedToolPolicies(
-          {
-            toolName: "apply_patch",
-            params: originalParams,
-            derivedPaths: ["old.ts"],
-          },
-          { toolName: "apply_patch" },
-          {
-            deriveEvent,
-          },
-        ),
-      ).resolves.toEqual({ params: { input } });
-      expect(seenEvents).toEqual([
+    await expect(
+      runTrustedToolPolicies(
         {
-          params: { input },
-          derivedPaths: expectedPaths,
+          toolName: "apply_patch",
+          params: { patch: "*** Update File: old.ts" },
+          derivedPaths: ["old.ts"],
         },
-      ]);
-    },
-  );
+        { toolName: "apply_patch" },
+        {
+          deriveEvent(params) {
+            return typeof params.patch === "string" ? { derivedPaths: ["old.ts"] } : {};
+          },
+        },
+      ),
+    ).resolves.toEqual({ params: { input: "not a patch" } });
+    expect(seenDerivedPaths).toEqual([undefined]);
+  });
+
+  it("does not let derived param callbacks override core trusted policy event fields", async () => {
+    const seenEvents: Array<{ params: unknown; derivedPaths: unknown }> = [];
+    const registry = policyRegistry(
+      () => ({ params: { input: "*** Update File: new.ts" } }),
+      (event) => {
+        seenEvents.push({ params: event.params, derivedPaths: event.derivedPaths });
+        return undefined;
+      },
+    );
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        {
+          toolName: "apply_patch",
+          params: { input: "*** Update File: old.ts" },
+          derivedPaths: ["old.ts"],
+        },
+        { toolName: "apply_patch" },
+        {
+          deriveEvent() {
+            return {
+              params: { input: "malicious override" },
+              derivedPaths: ["new.ts"],
+            } as never;
+          },
+        },
+      ),
+    ).resolves.toEqual({ params: { input: "*** Update File: new.ts" } });
+    expect(seenEvents).toEqual([
+      {
+        params: { input: "*** Update File: new.ts" },
+        derivedPaths: ["new.ts"],
+      },
+    ]);
+  });
 
   it("validates plugin-owned JSON values as plain JSON-compatible data", () => {
     expect(
@@ -856,6 +1013,45 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it("projects registered session extensions into gateway session rows", () => {
+    const { config, registry } = createHostHookFixtureRegistry();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "host-hook-fixture",
+        name: "Host Hook Fixture",
+      }),
+      register: registerHostHookFixture,
+    });
+    setActivePluginRegistry(registry.registry);
+
+    const row = buildGatewaySessionRow({
+      cfg: config,
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        pluginExtensions: {
+          "host-hook-fixture": {
+            workflow: { state: "waiting" },
+          },
+        },
+      },
+    });
+
+    expect(row.pluginExtensions).toEqual([
+      {
+        pluginId: "host-hook-fixture",
+        namespace: "workflow",
+        value: { state: "waiting" },
+      },
+    ]);
+  });
+
   it("projects only successful synchronous session values without exposing raw state", () => {
     const { config, registry } = createPluginRegistryFixture();
     for (const [id, project] of [
@@ -887,10 +1083,6 @@ describe("host-hook fixture plugin contract", () => {
       }),
       register(api) {
         api.registerSessionExtension({
-          namespace: "raw",
-          description: "State without a custom projector",
-        });
-        api.registerSessionExtension({
           namespace: "workflow",
           description: "Projected workflow state",
           project: ({ state }) => {
@@ -912,17 +1104,11 @@ describe("host-hook fixture plugin contract", () => {
         throwing: { workflow: "hidden" },
         promise: { workflow: "hidden" },
         "projector-fixture": {
-          raw: { state: "waiting" },
           workflow: { state: "waiting", privateToken: "secret" },
         },
       },
     };
     expect(projectPluginSessionExtensionsSync({ sessionKey: "agent:main:main", entry })).toEqual([
-      {
-        pluginId: "projector-fixture",
-        namespace: "raw",
-        value: { state: "waiting" },
-      },
       {
         pluginId: "projector-fixture",
         namespace: "workflow",
@@ -939,11 +1125,6 @@ describe("host-hook fixture plugin contract", () => {
       entry,
     });
     expect(row.pluginExtensions).toEqual([
-      {
-        pluginId: "projector-fixture",
-        namespace: "raw",
-        value: { state: "waiting" },
-      },
       {
         pluginId: "projector-fixture",
         namespace: "workflow",
@@ -1073,20 +1254,31 @@ describe("host-hook fixture plugin contract", () => {
     },
   );
 
-  it.each([
-    {
-      callbacks: { project: (async () => ({ state: "late" })) as unknown as () => undefined },
-      message: "session extension projector must be synchronous",
-    },
-    {
-      callbacks: { project: "not-a-function" as never },
-      message: "session extension projector must be a function",
-    },
-    {
-      callbacks: { cleanup: "not-a-function" as never },
-      message: "session extension cleanup must be a function",
-    },
-  ])("rejects invalid session callbacks: $message", ({ callbacks, message }) => {
+  it("rejects async session extension projectors because gateway rows are synchronous", () => {
+    const { registry } = registerFixture(
+      {
+        id: "async-projector-fixture",
+        name: "Async Projector Fixture",
+      },
+      (api) => {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "Async workflow state",
+          project: (async () => ({ state: "late" })) as unknown as () => undefined,
+        });
+      },
+    );
+
+    expect(registry.registry.sessionExtensions).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "async-projector-fixture",
+        message: "session extension projector must be synchronous",
+      },
+    ]);
+  });
+
+  it("reports specific diagnostics for malformed session extension callbacks", () => {
     const { registry } = registerFixture(
       {
         id: "bad-session-extension-fixture",
@@ -1094,9 +1286,14 @@ describe("host-hook fixture plugin contract", () => {
       },
       (api) => {
         api.registerSessionExtension({
-          namespace: "workflow",
-          description: "Invalid workflow callbacks",
-          ...callbacks,
+          namespace: "projector",
+          description: "Bad projector",
+          project: "not-a-function" as never,
+        });
+        api.registerSessionExtension({
+          namespace: "cleanup",
+          description: "Bad cleanup",
+          cleanup: "not-a-function" as never,
         });
       },
     );
@@ -1105,7 +1302,11 @@ describe("host-hook fixture plugin contract", () => {
     expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
       {
         pluginId: "bad-session-extension-fixture",
-        message,
+        message: "session extension projector must be a function",
+      },
+      {
+        pluginId: "bad-session-extension-fixture",
+        message: "session extension cleanup must be a function",
       },
     ]);
   });
@@ -1182,35 +1383,46 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
-  it.each([
-    {
-      options: { phases: "start" as never },
-      field: "phases",
-      requirement: "an array of non-empty strings",
-    },
-    { options: { phases: [" "] }, field: "phases", requirement: "an array of non-empty strings" },
-    {
-      options: { phases: [1] as never },
-      field: "phases",
-      requirement: "an array of non-empty strings",
-    },
-    { options: { payload: "summary" as never }, field: "payload", requirement: "full or metadata" },
-  ])("rejects malformed agent event $field: $options", ({ options, field, requirement }) => {
-    const { registry } = registerFixture({ id: "bad-event" }, (api) => {
+  it.each(
+    ["start", { length: 1, 0: "start" }, [""], [" "], [1], [undefined]].map((phases) => ({
+      phases,
+    })),
+  )("rejects malformed agent event phases $phases", ({ phases }) => {
+    const { registry } = registerFixture({ id: "bad-phases" }, (api) => {
       api.agent.events.registerAgentEventSubscription({
         id: "events",
-        ...options,
+        phases: phases as never,
         handle: () => undefined,
       });
     });
     expect(registry.registry.agentEventSubscriptions).toHaveLength(0);
     expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
       {
-        pluginId: "bad-event",
-        message: `agent event subscription ${field} must be ${requirement}: events`,
+        pluginId: "bad-phases",
+        message: "agent event subscription phases must be an array of non-empty strings: events",
       },
     ]);
   });
+
+  it.each(["", "summary", " metadata ", null, 1, true, {}, []])(
+    "rejects malformed agent event payload mode %j",
+    (payload) => {
+      const { registry } = registerFixture({ id: "bad-payload" }, (api) => {
+        api.agent.events.registerAgentEventSubscription({
+          id: "events",
+          payload: payload as never,
+          handle: () => undefined,
+        });
+      });
+      expect(registry.registry.agentEventSubscriptions).toHaveLength(0);
+      expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+        {
+          pluginId: "bad-payload",
+          message: "agent event subscription payload must be full or metadata: events",
+        },
+      ]);
+    },
+  );
 
   it("requires explicit unset to remove plugin session extension state", async () => {
     const { registry } = registerFixture(
@@ -1382,6 +1594,55 @@ describe("host-hook fixture plugin contract", () => {
         session: { store: path.join(path.dirname(storePath), "{agentId}", "sessions.json") },
       }),
     );
+  });
+
+  it("models queued next-turn injections and agent_turn_prepare as one prompt context", async () => {
+    const { config, registry } = createHostHookFixtureRegistry();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "host-hook-fixture",
+        name: "Host Hook Fixture",
+      }),
+      register: registerHostHookFixture,
+    });
+    const runner = createHookRunner(registry.registry);
+    const queuedContext = buildPluginAgentTurnPrepareContext({
+      queuedInjections: [
+        {
+          id: "approval",
+          pluginId: "approval-plugin",
+          text: "approval workflow resumed",
+          placement: "prepend_context",
+          createdAt: 1,
+        },
+        {
+          id: "budget",
+          pluginId: "budget-plugin",
+          text: "budget policy summary",
+          placement: "append_context",
+          createdAt: 1,
+        },
+      ],
+    });
+    const hookContext = await runner.runAgentTurnPrepare(
+      {
+        prompt: "continue",
+        messages: [],
+        queuedInjections: [],
+      },
+      { sessionKey: "agent:main:main" },
+    );
+
+    expect(
+      joinContextFragments(
+        queuedContext.prependContext,
+        queuedContext.appendContext,
+        hookContext?.prependContext,
+      ),
+    ).toContain("approval workflow resumed");
+    expect(hookContext?.prependContext).toBe("fixture turn context");
   });
 
   it("skips malformed persisted next-turn injection records during prompt assembly", () => {
@@ -1835,10 +2096,7 @@ describe("host-hook fixture plugin contract", () => {
     registerTestPlugin({
       registry,
       config,
-      record: createPluginRecord({
-        id: "host-hook-fixture",
-        contracts: { tools: ["approval_fixture_tool"] },
-      }),
+      record: createPluginRecord({ id: "host-hook-fixture" }),
       register: registerHostHookFixture,
     });
     setActivePluginRegistry(registry.registry);

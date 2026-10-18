@@ -1,12 +1,8 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isIntermediateAssistantTranscriptMessage } from "../agents/embedded-agent-runner/message-visibility.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { SessionTranscriptEventMatch } from "../config/sessions/session-history-read.types.js";
-import {
-  isSilentAssistantTranscriptMessage,
-  readTerminalSourceReplyDeliveryMirror,
-} from "../shared/chat-message-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   readSessionTranscriptRunId,
@@ -25,15 +21,14 @@ export function isVisibleTranscriptRecord(value: unknown): value is Record<strin
   );
 }
 
-export function isAssistantResultEventForRun(event: unknown, runId: string): boolean {
+export function isVisibleAssistantResultEventForRun(event: unknown, runId: string): boolean {
   if (
     !isRecord(event) ||
     !isRecord(event.message) ||
     readSessionTranscriptRunId(event.message) !== runId ||
     resolveTerminalAssistantTranscriptRunId(event.message, runId) === undefined ||
     // An interim stop asked the provider to continue, so it is progress, not the answer.
-    event.message.endTurn === false ||
-    isIntermediateAssistantTranscriptMessage(event.message)
+    event.message.endTurn === false
   ) {
     return false;
   }
@@ -41,41 +36,9 @@ export function isAssistantResultEventForRun(event: unknown, runId: string): boo
   if (isRecord(mirror) && mirror.kind === "message-tool-source-reply" && mirror.final !== true) {
     return false;
   }
-  return true;
-}
-
-export function isVisibleAssistantResultEventForRun(event: unknown, runId: string): boolean {
-  if (!isAssistantResultEventForRun(event, runId) || !isRecord(event)) {
-    return false;
-  }
+  // A final source reply remains visible when the run ends with NO_REPLY.
   const text = extractStoredAssistantText(event.message);
-  return Boolean(text?.trim()) && !isSilentAssistantTranscriptMessage(event.message);
-}
-
-/** Matches newest-first without resurrecting unsent output after an explicit silent final. */
-export function createVisibleAssistantResultEventMatcher(
-  runId: string,
-): (event: unknown) => boolean {
-  let silentFinalSeen = false;
-  return (event) => {
-    if (!isAssistantResultEventForRun(event, runId) || !isRecord(event)) {
-      return false;
-    }
-    if (
-      (isRecord(event.message) && event.message.display === true) ||
-      readTerminalSourceReplyDeliveryMirror(event.message)
-    ) {
-      return isVisibleAssistantResultEventForRun(event, runId);
-    }
-    if (silentFinalSeen) {
-      return false;
-    }
-    if (isSilentAssistantTranscriptMessage(event.message)) {
-      silentFinalSeen = true;
-      return false;
-    }
-    return isVisibleAssistantResultEventForRun(event, runId);
-  };
+  return Boolean(text?.trim()) && !isSilentReplyText(text, SILENT_REPLY_TOKEN);
 }
 
 export type { SessionTranscriptEventMatch } from "../config/sessions/session-history-read.types.js";

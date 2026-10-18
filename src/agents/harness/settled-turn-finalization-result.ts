@@ -1,15 +1,7 @@
-import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
-import { resolveRawAssistantAnswerText } from "../../shared/assistant-answer-text.js";
+import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
-import {
-  prepareAgentRunTerminalReply,
-  sanitizeAgentRunTerminalReply,
-} from "../agent-run-terminal-reply.js";
-import { extractAssistantVisibleText } from "../embedded-agent-utils.js";
-import {
-  EmptySettledTurnFinalizationError,
-  type PreparedSettledTurnFinalizationResult,
-} from "./settled-turn-finalization-outcome.js";
+import { resolveFinalAssistantVisibleText } from "../embedded-agent-runner/run/helpers.js";
+import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import type {
   AgentHarnessAttemptResult,
   AgentHarnessSettledTurnFinalizationResult,
@@ -17,7 +9,6 @@ import type {
 
 const ALLOWED_SETTLED_FINALIZATION_RESULT_KEYS = new Set([
   "assistant",
-  "preparedTerminalReply",
   "usage",
   "assistantTranscriptOwned",
   "assistantTranscriptIdempotencyKey",
@@ -39,7 +30,7 @@ function assistantContainsToolCall(
  */
 export function assertSettledTurnFinalizationResult(
   result: AgentHarnessSettledTurnFinalizationResult,
-): PreparedSettledTurnFinalizationResult {
+): AgentHarnessSettledTurnFinalizationResult {
   const unknownKey = Object.keys(result).find(
     (key) => !ALLOWED_SETTLED_FINALIZATION_RESULT_KEYS.has(key),
   );
@@ -63,26 +54,18 @@ export function assertSettledTurnFinalizationResult(
   ) {
     throw new Error("Settled-turn finalization returned an invalid assistant message index");
   }
-  const preparedTerminalReply =
-    result.preparedTerminalReply ??
-    prepareAgentRunTerminalReply({
-      rawText: resolveRawAssistantAnswerText(result.assistant),
-    });
-  if (
-    !result.preparedTerminalReply &&
-    preparedTerminalReply.terminalReply.disposition !== "silent"
-  ) {
-    const rawText = preparedTerminalReply.text;
-    preparedTerminalReply.text = parseReplyDirectives(
-      extractAssistantVisibleText(result.assistant, (_text, final) => (final ? rawText : "")),
-    ).text;
-    preparedTerminalReply.terminalReply = sanitizeAgentRunTerminalReply(preparedTerminalReply.text);
+  resolveSettledTurnFinalizationText(result);
+  return result;
+}
+
+export function resolveSettledTurnFinalizationText(
+  result: AgentHarnessSettledTurnFinalizationResult,
+): string {
+  const text = resolveFinalAssistantVisibleText(result.assistant);
+  if (!text || isSilentReplyText(text)) {
+    throw new EmptySettledTurnFinalizationError(result);
   }
-  const preparedResult = { ...result, preparedTerminalReply };
-  if (preparedTerminalReply.terminalReply.disposition !== "visible") {
-    throw new EmptySettledTurnFinalizationError(preparedResult);
-  }
-  return preparedResult;
+  return text;
 }
 
 /**
@@ -141,7 +124,6 @@ export function projectSettledTurnFinalizationAttemptResult(
   }
   return assertSettledTurnFinalizationResult({
     assistant,
-    preparedTerminalReply: result.preparedTerminalReply,
     ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
     ...(result.assistantTranscriptOwned
       ? {

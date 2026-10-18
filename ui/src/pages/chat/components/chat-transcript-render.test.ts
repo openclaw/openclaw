@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { render } from "lit";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
@@ -18,8 +19,7 @@ import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
-import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
-import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -28,12 +28,10 @@ import {
   threadProps,
 } from "./chat-transcript.test-support.ts";
 
-async function mountThread(props: ChatThreadProps) {
-  const container = document.body.appendChild(document.createElement("div"));
+async function mountThread(props: Parameters<typeof renderChatThread>[0]) {
   const transcript = createTestTranscript();
-  const thread = createChatThreadHarness(container, transcript);
-  onTestFinished(() => thread.unmount());
-  thread.render(props);
+  const container = document.body.appendChild(document.createElement("div"));
+  render(renderChatThread(props, transcript), container);
   transcript.hostConnected();
   transcript.hostUpdated();
   await flushDeferredRowPrune();
@@ -97,10 +95,8 @@ describe("chat transcript rendering", () => {
       props.runActive = true;
       const container = document.body.appendChild(document.createElement("div"));
       const transcript = createTestTranscript();
-      const thread = createChatThreadHarness(container, transcript);
-      onTestFinished(() => thread.unmount());
       try {
-        thread.render(props);
+        render(renderChatThread(props, transcript), container);
         transcript.hostConnected();
         transcript.hostUpdated();
         await flushDeferredRowPrune();
@@ -129,7 +125,7 @@ describe("chat transcript rendering", () => {
         }
         if (emojiSource === "props") {
           props.assistantAvatar = "🦊";
-          thread.render(props);
+          render(renderChatThread(props, transcript), container);
           transcript.hostUpdated();
           await flushDeferredRowPrune();
           expect(
@@ -174,11 +170,9 @@ describe("chat transcript rendering", () => {
     props.branding = branding;
     const container = document.body.appendChild(document.createElement("div"));
     const transcript = createTestTranscript();
-    const thread = createChatThreadHarness(container, transcript);
-    onTestFinished(() => thread.unmount());
     const draw = async () => {
       setCurrentThemeBranding(props.branding!);
-      thread.render(props);
+      render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
       await vi.dynamicImportSettled();
       flush();
@@ -222,10 +216,8 @@ describe("chat transcript rendering", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const transcript = createTestTranscript();
-    const thread = createChatThreadHarness(container, transcript);
-    onTestFinished(() => thread.unmount());
     const rerender = () => {
-      thread.render(props);
+      render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
     };
     try {
@@ -313,10 +305,8 @@ describe("chat transcript rendering", () => {
     };
     const container = document.body.appendChild(document.createElement("div"));
     const transcript = createTestTranscript();
-    const thread = createChatThreadHarness(container, transcript);
-    onTestFinished(() => thread.unmount());
     const rerender = () => {
-      thread.render(props);
+      render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
     };
     try {
@@ -364,13 +354,11 @@ describe("chat transcript rendering", () => {
       runtimeMs: 1,
       outputTokens: 10,
     };
-    const container = document.body.appendChild(document.createElement("div"));
     const transcript = createTestTranscript();
-    const thread = createChatThreadHarness(container, transcript);
-    onTestFinished(() => thread.unmount());
+    const container = document.body.appendChild(document.createElement("div"));
     const rerender = () => {
       props.runUsageById = host.chatRunUsageById;
-      thread.render(props);
+      render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
     };
     handleAgentEvent(
@@ -472,11 +460,9 @@ describe("chat transcript rendering", () => {
         latestBrowserTabs: active ? latestBrowserTabCards(messages, []) : undefined,
         showToolCalls: true,
       };
-      const container = document.body.appendChild(document.createElement("div"));
       const transcript = createTestTranscript();
-      const thread = createChatThreadHarness(container, transcript);
-      onTestFinished(() => thread.unmount());
-      thread.render(props);
+      const container = document.body.appendChild(document.createElement("div"));
+      render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
       transcript.hostConnected();
       await flushDeferredRowPrune();
@@ -504,10 +490,8 @@ describe("chat transcript rendering", () => {
       defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
       sessions: [archivedSession],
     };
-    const container = document.body.appendChild(document.createElement("div"));
     const transcript = createTestTranscript();
-    const thread = createChatThreadHarness(container, transcript);
-    onTestFinished(() => thread.unmount());
+    const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-archived-notice", sessionKey, [
         { role: "user", content: "Before archive", timestamp: 1_000 },
@@ -517,7 +501,7 @@ describe("chat transcript rendering", () => {
       sessions,
     };
     const rerender = () => {
-      thread.render(props);
+      render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
     };
     rerender();

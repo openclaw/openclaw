@@ -1,4 +1,3 @@
-import { readSessionFileDownloadWindow } from "../gateway/server-methods/session-file-download.js";
 import {
   getSessionWorkspaceFile,
   listSessionWorkspaceFiles,
@@ -20,11 +19,8 @@ export async function inspectSessionWorkspace(
   const request = parseWorkspaceInspectionInput(input);
   const workspace = { root, fileRoot: root, diffCwd: root };
   assertCurrent();
-  let result: WorkspaceInspectionResult<"list" | "get" | "set" | "diff" | "download">;
+  let result: WorkspaceInspectionResult<"list" | "get" | "set" | "diff">;
   switch (request.operation) {
-    case "download":
-      result = await readSessionFileDownloadWindow({ ...workspace, ...request, assertCurrent });
-      break;
     case "list":
       result = await listSessionWorkspaceFiles({ ...workspace, ...request });
       break;

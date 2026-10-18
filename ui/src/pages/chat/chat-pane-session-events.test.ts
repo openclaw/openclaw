@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -10,11 +11,9 @@ import type {
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
-import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { TestChatPane } from "./chat-pane.test-support.ts";
@@ -22,6 +21,7 @@ import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import {
   installTranscriptDomMocks,
@@ -504,14 +504,9 @@ describe("mounted pane session event ownership", () => {
         ];
         adoptStartedChatRun(state, "current-run", 2);
         const container = document.createElement("div");
-        const view = mountSolid(
-          ChatPaneModelControl,
-          composerControls(state, "example/primary").composerControls,
-          container,
-        );
         const draw = () => {
           const controls = composerControls(state, "example/primary");
-          view.update(controls.composerControls);
+          render(controls.composerControls, container);
           return container.querySelector<HTMLElement>("[data-chat-model-select]");
         };
         const initialModel = draw();
@@ -704,13 +699,11 @@ describe("mounted pane session event ownership", () => {
       expect(descriptor.row).toMatchObject(observed);
       expect(selectedChatSessionRow(state)).toMatchObject(observed);
       const container = document.createElement("div");
-      const view = mountSolid(
-        ChatPermissionPicker,
-        composerControls(state).permissionPicker,
-        container,
-      );
       const draw = () => {
-        view.update(composerControls(state).permissionPicker);
+        render(
+          solidTemplate(ChatPermissionPicker, composerControls(state).permissionPicker),
+          container,
+        );
         return container.querySelector<HTMLButtonElement>("[data-chat-permission-select]");
       };
       expect(draw()?.dataset.chatSelectValue).toBe("workspace");

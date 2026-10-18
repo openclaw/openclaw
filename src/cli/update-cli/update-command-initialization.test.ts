@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
 import {
-  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -72,15 +71,10 @@ function runIndependentSchemaWriter(env: ReturnType<typeof freshEnvironment>, va
   ).trim();
 }
 
-let targetDatabaseBytes: Buffer | undefined;
-
-async function createTargetDatabase() {
-  if (targetDatabaseBytes) {
-    return targetDatabaseBytes;
-  }
+function createTargetDatabase() {
   const env = freshEnvironment();
   const filename = openOpenClawStateDatabase({ env }).path;
-  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
   const db = new DatabaseSync(filename);
   try {
     removePreparedWorkerOwnershipColumns(db);
@@ -90,15 +84,13 @@ async function createTargetDatabase() {
   } finally {
     db.close();
   }
-  // Schema construction is shared; each Doctor case still owns an independent file.
-  targetDatabaseBytes = fs.readFileSync(filename);
-  return targetDatabaseBytes;
+  return filename;
 }
 
-function publishTargetDatabase(source: Buffer, env: NodeJS.ProcessEnv) {
+function publishTargetDatabase(source: string, env: NodeJS.ProcessEnv) {
   const filename = resolveOpenClawStateSqlitePath(env);
   fs.mkdirSync(path.dirname(filename), { recursive: true });
-  fs.writeFileSync(filename, source);
+  fs.copyFileSync(source, filename);
   return filename;
 }
 
@@ -148,7 +140,7 @@ describe("selected-target state initialization", () => {
     "refuses target Doctor $label after staging created a compatible database",
     async ({ completion }) => {
       const env = freshEnvironment();
-      const filename = publishTargetDatabase(await createTargetDatabase(), env);
+      const filename = publishTargetDatabase(createTargetDatabase(), env);
       const before = fs.readFileSync(filename);
       mocks.doctor.mockResolvedValue({
         ...doctorSuccess,

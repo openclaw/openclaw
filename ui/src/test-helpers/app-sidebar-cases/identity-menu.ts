@@ -33,7 +33,7 @@ describe("AppSidebar footer identity menu", () => {
     });
   });
 
-  it("keeps release availability on Updates after dismissing the Inbox notice", async () => {
+  it("keeps a dismissed update as a discreet account-menu chip", async () => {
     const gatewayHarness = createGatewayHarness({
       instanceId: "self-instance",
     } as GatewayBrowserClient);
@@ -41,7 +41,10 @@ describe("AppSidebar footer identity menu", () => {
       selfUser: { id: "alice", name: "Alice" },
       hello: {
         ...gatewayHarness.gateway.snapshot.hello!,
-        server: { ...gatewayHarness.gateway.snapshot.hello!.server, bootId: "boot-a" },
+        server: {
+          ...gatewayHarness.gateway.snapshot.hello!.server,
+          bootId: "boot-a",
+        },
       },
     });
     const { sidebar, context } = await mountSidebar(
@@ -50,7 +53,11 @@ describe("AppSidebar footer identity menu", () => {
     );
     (context.overlays as unknown as { snapshot: ApplicationOverlays["snapshot"] }).snapshot = {
       ...context.overlays.snapshot,
-      updateAvailable: { currentVersion: "2026.8.1", latestVersion: "2026.8.2", channel: "stable" },
+      updateAvailable: {
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.2",
+        channel: "latest",
+      },
       updateSchedule: null,
       updateStatusBanner: null,
     };
@@ -62,21 +69,57 @@ describe("AppSidebar footer identity menu", () => {
       throw new Error("expected update dismissal fact");
     }
     dismissSidebarAttention(resolveSidebarAttentionKey(gatewayHarness.gateway), dismissal);
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+
     sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card")?.click();
     await sidebar.updateComplete;
-    const updates = () => sidebar.querySelector<HTMLElement>('[data-value="command:updates"]');
-    expect(updates()?.textContent).toContain("Available");
-    expect(updates()?.getAttribute("aria-label")).toBe("Updates. Update available");
-    expect(sidebar.querySelector(".sidebar-footer-build__update")).toBeNull();
+    const buildChip = sidebar.querySelector<HTMLElement>("openclaw-sidebar-build-chip");
+    await (buildChip as (HTMLElement & { updateComplete?: Promise<unknown> }) | null)
+      ?.updateComplete;
+
+    expect(
+      (buildChip as (HTMLElement & { updateAttentionDismissed?: boolean }) | null)
+        ?.updateAttentionDismissed,
+    ).toBe(true);
+    expect(buildChip?.querySelector(".sidebar-footer-build__update")?.textContent?.trim()).toBe(
+      "Update available",
+    );
+    expect(buildChip?.querySelector(".sidebar-footer-build")?.getAttribute("role")).toBe(
+      "menuitem",
+    );
+
+    for (const [id, dismissed] of [
+      ["bob", false],
+      ["alice", true],
+    ] as const) {
+      gatewayHarness.publish({ selfUser: { id, name: id } });
+      await sidebar.updateComplete;
+      if (!sidebar.querySelector(".sidebar-identity-menu")) {
+        sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card")?.click();
+        await sidebar.updateComplete;
+      }
+      const chip = sidebar.querySelector<
+        HTMLElement & { updateComplete: Promise<unknown>; updateAttentionDismissed: boolean }
+      >("openclaw-sidebar-build-chip");
+      await chip?.updateComplete;
+      expect(chip?.updateAttentionDismissed).toBe(dismissed);
+    }
 
     (context.overlays as unknown as { snapshot: ApplicationOverlays["snapshot"] }).snapshot = {
       ...context.overlays.snapshot,
-      updateAvailable: { currentVersion: "2026.8.2", latestVersion: "2026.8.2", channel: "stable" },
+      updateAvailable: {
+        currentVersion: "2026.8.2",
+        latestVersion: "2026.8.2",
+        channel: "latest",
+      },
     };
     sidebar.requestUpdate();
     await sidebar.updateComplete;
-    expect(updates()?.textContent).not.toContain("Available");
-    expect(updates()?.getAttribute("aria-label")).toBe("Updates");
+    expect(
+      (buildChip as HTMLElement & { updateAttentionDismissed?: boolean }).updateAttentionDismissed,
+    ).toBe(false);
+    expect(buildChip?.querySelector(".sidebar-footer-build__update")).toBeNull();
   });
 
   it("owns account utilities, restores focus, and routes Profile", async () => {
@@ -129,7 +172,6 @@ describe("AppSidebar footer identity menu", () => {
     ).toEqual([
       "command:profile",
       "command:settings",
-      "command:updates",
       "command:usage",
       "command:pair-mobile",
       "command:apps",

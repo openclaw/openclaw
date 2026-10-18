@@ -246,11 +246,7 @@ export async function listBrowserTabs(client: BrowserRequestClient) {
   const tabs = Array.isArray(result?.tabs)
     ? result.tabs.flatMap((tab) => normalizeTab(tab) ?? [])
     : [];
-  return {
-    running: result?.running === true,
-    tabs,
-    canAutoResizeViewport: result?.canAutoResizeViewport === true,
-  };
+  return { running: result?.running === true, tabs };
 }
 
 export async function startBrowser(client: BrowserRequestClient): Promise<void> {

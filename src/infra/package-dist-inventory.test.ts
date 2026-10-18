@@ -372,7 +372,7 @@ describe("package dist inventory", () => {
     },
   );
 
-  it.each(["ENOENT", "EACCES"])(
+  it.each(["ENOENT", "ENOTDIR", "EACCES"])(
     "preserves %s scan failure handling before publication",
     async (code) => {
       await withTestDir(

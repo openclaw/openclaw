@@ -1,19 +1,17 @@
 // Render contract between the transcript projection and the per-session
 // virtualizer host owned by ChatTranscriptController.
-import type { JSX } from "@solidjs/web";
 import type { Virtualizer } from "@tanstack/virtual-core";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
-import type { PresentationValue } from "../../../lib/presentation.ts";
-import type { SolidController, SolidControllerHost } from "../../../lit/solid-controller-host.ts";
+import type { PresentationValue } from "../../../lit/presentation-binding.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
-import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
-import type { TranscriptContent, TranscriptRow } from "./chat-transcript-layout.ts";
+import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
 /** A reader-position restoration that is waiting for measurable transcript geometry. */
 export type ChatTranscriptPendingScrollOffset = {
@@ -43,7 +41,7 @@ export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
 export const CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES = 60;
 
 export type TranscriptHeader = {
-  props: ChatHistoryBoundaryProps;
+  template: unknown;
   /** Fixed pixel height; becomes the virtualizer's scrollMargin so row offsets stay exact. */
   height: number;
 };
@@ -56,10 +54,10 @@ export type ChatTranscriptSession = {
   readonly scrollElementRef: (element?: Element) => void;
   render<T>(
     rows: readonly TranscriptRow<T>[],
-    renderRow: (row: TranscriptRow<T>) => TranscriptContent,
+    renderRow: (row: TranscriptRow<T>) => unknown,
     announcement: TranscriptAnnouncement | null,
     announce: boolean,
-    overlay?: JSX.Element,
+    overlay?: unknown,
     header?: TranscriptHeader | null,
     presented?: PresentationValue,
     applicationContext?: ApplicationContext,
@@ -79,10 +77,10 @@ export type ChatTranscriptSession = {
 /** Rows and lookup identities that must be promoted as one rendered projection. */
 export type TranscriptRenderSnapshot<T> = {
   rows: readonly TranscriptRow<T>[];
-  renderRow: (row: TranscriptRow<T>) => TranscriptContent;
+  renderRow: (row: TranscriptRow<T>) => unknown;
   announcement: TranscriptAnnouncement | null;
   announce: boolean;
-  overlay: JSX.Element;
+  overlay: unknown;
   header: TranscriptHeader | null;
   messageRows: ReadonlyMap<string, string>;
   renderKeyRows: ReadonlyMap<string, string>;
@@ -92,9 +90,9 @@ export type TranscriptRenderSnapshot<T> = {
 };
 
 /** Session-owned deferred measurements after width changes and smooth scrolling. */
-export class TranscriptPresentation implements SolidController {
+export class TranscriptPresentation implements ReactiveController {
   constructor(
-    private readonly host: SolidControllerHost & {
+    private readonly host: ReactiveControllerHost & {
       readonly scrollElement: HTMLDivElement | null;
     },
     private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,

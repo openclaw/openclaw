@@ -66,9 +66,10 @@ export async function createOpenAiEmbeddingProvider(
       buildRequestFields: (kind) => {
         const explicit = kind === "query" ? client.queryInputType : client.documentInputType;
         const value = explicit ?? client.inputType;
-        const inputType = value?.trim();
+        const inputType =
+          typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
         return {
-          ...(client.outputDimensionality !== undefined
+          ...(typeof client.outputDimensionality === "number"
             ? { dimensions: client.outputDimensionality }
             : {}),
           ...(inputType ? { input_type: inputType } : {}),

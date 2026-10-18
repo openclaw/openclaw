@@ -38,10 +38,22 @@ type PresenceGateway = {
   updatePresence: (payload: UpdatePresenceData) => void;
 };
 
+function clampPositiveInt(value: unknown, fallback: number, minValue: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const rounded = Math.round(value);
+  if (rounded <= 0) {
+    return fallback;
+  }
+  return Math.max(minValue, rounded);
+}
+
 function resolveAutoPresenceConfig(config?: DiscordAutoPresenceConfig) {
-  const intervalMs = Math.max(config?.intervalMs ?? DEFAULT_INTERVAL_MS, MIN_INTERVAL_MS);
-  const minUpdateIntervalMs = Math.max(
-    config?.minUpdateIntervalMs ?? DEFAULT_MIN_UPDATE_INTERVAL_MS,
+  const intervalMs = clampPositiveInt(config?.intervalMs, DEFAULT_INTERVAL_MS, MIN_INTERVAL_MS);
+  const minUpdateIntervalMs = clampPositiveInt(
+    config?.minUpdateIntervalMs,
+    DEFAULT_MIN_UPDATE_INTERVAL_MS,
     MIN_UPDATE_INTERVAL_MS,
   );
 
@@ -103,6 +115,20 @@ function resolveDiscordAutoPresenceUpdate(params: {
       });
 }
 
+function stablePresenceSignature(payload: UpdatePresenceData): string {
+  return JSON.stringify({
+    status: payload.status,
+    afk: payload.afk,
+    since: payload.since,
+    activities: payload.activities.map((activity) => ({
+      type: activity.type,
+      name: activity.name,
+      state: activity.state,
+      url: activity.url,
+    })),
+  });
+}
+
 type DiscordAutoPresenceController = {
   start: () => Promise<void>;
   stop: () => Promise<void>;
@@ -154,7 +180,7 @@ export function createDiscordAutoPresenceController(params: {
 
     const forceApply = options?.force === true;
     const ts = now();
-    const signature = JSON.stringify(presence);
+    const signature = stablePresenceSignature(presence);
     if (!forceApply && signature === lastAppliedSignature) {
       return;
     }

@@ -29,11 +29,7 @@ export function createHostedGatewayTools(
       senderIsOwner: options?.senderIsOwner,
       requesterSenderId: options?.requesterSenderId,
     }),
-    createPluginsTool({
-      sessionId: options?.sessionId,
-      runId: options?.runId,
-      onYield: options?.onYield,
-    }),
+    createPluginsTool(),
     ...(preparedDelegateTools ?? createOpenClawDelegateToolsForRun({ ...options, sessionAgentId })),
     ...(personalInstructionsEnabled ? [createPersonalInstructionsTool(sessionAgentId)] : []),
   ];

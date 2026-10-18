@@ -41,7 +41,6 @@ import {
 } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
-import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import { registerWorkerTurnInferenceTests } from "./worker-turn-execution.inference.suite.js";
 import {
@@ -312,17 +311,7 @@ describe("worker turn execution", () => {
         ...(declared ? { launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES] } : {}),
       });
       const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
-      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async (request) => {
-        const runtime = getWorkerTurnToolSurface({
-          sessionId: SESSION_ID,
-          runId: request.plan.assignment.runId,
-          environmentId: request.plan.admission.environmentId,
-          ownerEpoch: request.plan.admission.ownerEpoch,
-          turnClaim: request.turnClaim,
-        });
-        expect(runtime?.getInheritedPublicationToolName()).toBe(
-          declared ? undefined : "github_publish",
-        );
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
         throw new WorkerRunnerCapacityError();
       });
       const tunnel = createWorkerTurnTunnel({
@@ -360,9 +349,6 @@ describe("worker turn execution", () => {
             { ...sessionTarget, runId: input.runId },
             {
               ...input,
-              toolsAllow: declared
-                ? [...CORE_WORKER_LAUNCH_TOOL_NAMES, "sessions_list", "github_identity_status"]
-                : undefined,
               config: {
                 ...input.config,
                 agents: {

@@ -95,8 +95,18 @@ openclaw-chat-camera-capture {
     color: var(--text);
     font: inherit;
   }
-  .camera__actions {
+  footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
     padding: 20px;
+  }
+  .actions {
+    display: flex;
+    gap: 8px;
+    margin-inline-start: auto;
   }
   button {
     display: inline-flex;
@@ -150,7 +160,7 @@ openclaw-chat-camera-capture {
   }
   @media (max-width: 560px) {
     header,
-    .camera__actions {
+    footer {
       padding: 16px;
     }
     .preview,

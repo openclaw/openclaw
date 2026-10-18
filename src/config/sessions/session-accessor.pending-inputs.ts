@@ -14,7 +14,6 @@ import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contrac
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import type { SessionInputLifecycleAdmission } from "./restart-resume.js";
 import {
   preparePendingInputRequest,
   resolveCommittedPendingInputRequestHash,
@@ -200,7 +199,6 @@ export function bindSessionPendingInputSources(
 }
 
 type PendingInputStageOptions = PendingInputRequest & {
-  lifecycleAdmission?: SessionInputLifecycleAdmission;
   onCommitted?: (receipt: SessionPendingInputReceipt) => void;
   authority?: SessionPendingInputAuthority;
   trackCompletion?: boolean;
@@ -251,7 +249,6 @@ export function stageSessionPendingInput(
       const store = await preparePendingInputStore(
         captured,
         options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
-        options.lifecycleAdmission,
       );
       const accept = () =>
         stagePreparedPendingInput(captured, options, preparedRequest, lifecycleGeneration, store);
@@ -485,11 +482,7 @@ async function stagePreparedPendingInput(
         if (!committedHash) {
           return undefined;
         }
-        // A retained receipt owns the raw request hash, even when JSON storage
-        // normalized its message. Reconstruct identity only after receipt retirement.
-        if (!previous && !existing) {
-          requestHash = committedHash;
-        }
+        requestHash = committedHash;
         await assertCurrent();
       }
       retained = true;

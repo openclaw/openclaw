@@ -278,13 +278,8 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
             let renewal: Promise<void> | undefined;
             let renewalPaused = 0;
             let installing = true;
-            // `skillUploads.renew` resolves false when the lease was expired or
-            // re-owned: the install no longer owns the work it is doing. That
-            // confirmed loss must not be folded into a successful install, while
-            // a rejected renewal stays retryable on the next heartbeat.
-            let leaseLost = false;
             const heartbeat = setInterval(() => {
-              if (!installing || renewalPaused || renewal || leaseLost) {
+              if (!installing || renewalPaused || renewal) {
                 return;
               }
               renewal = scope
@@ -297,9 +292,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
                   },
                 })
                 .then(
-                  (renewed) => {
-                    leaseLost ||= renewed === false;
-                  },
+                  () => undefined,
                   () => undefined,
                 )
                 .finally(() => {
@@ -307,54 +300,45 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
                 });
             }, installLeaseHeartbeatMs);
             heartbeat.unref();
-            const settleInstall = async (): Promise<T> => {
-              try {
-                return await withTempWorkspace(
-                  {
-                    rootDir: tempRootDir ?? resolvePreferredOpenClawTmpDir(),
-                    prefix: "openclaw-skill-upload-",
-                  },
-                  async (tmp) => {
-                    const archivePath = path.join(tmp.dir, "archive.zip");
-                    await fs.writeFile(archivePath, row.archive_blob, { mode: 0o600 });
-                    context.admission.assertCurrent();
-                    return action(toSkillUploadRecord(row, archivePath), {
-                      remove: async () => {
-                        renewalPaused += 1;
-                        try {
-                          await renewal;
-                          const result = await scope.execute({
-                            type: "skillUploads.consume",
-                            input: {
-                              uploadId,
-                              owner,
-                            },
-                          });
-                          if (result === "not-owner") {
-                            throw new SkillUploadRequestError(
-                              "upload install lease is no longer active",
-                            );
-                          }
-                        } finally {
-                          renewalPaused -= 1;
+            try {
+              return await withTempWorkspace(
+                {
+                  rootDir: tempRootDir ?? resolvePreferredOpenClawTmpDir(),
+                  prefix: "openclaw-skill-upload-",
+                },
+                async (tmp) => {
+                  const archivePath = path.join(tmp.dir, "archive.zip");
+                  await fs.writeFile(archivePath, row.archive_blob, { mode: 0o600 });
+                  context.admission.assertCurrent();
+                  return action(toSkillUploadRecord(row, archivePath), {
+                    remove: async () => {
+                      renewalPaused += 1;
+                      try {
+                        await renewal;
+                        const result = await scope.execute({
+                          type: "skillUploads.consume",
+                          input: {
+                            uploadId,
+                            owner,
+                          },
+                        });
+                        if (result === "not-owner") {
+                          throw new SkillUploadRequestError(
+                            "upload install lease is no longer active",
+                          );
                         }
-                      },
-                    });
-                  },
-                );
-              } finally {
-                installing = false;
-                clearInterval(heartbeat);
-                await renewal;
-              }
-            };
-            const settled = await settleInstall();
-            // The accepted renewal is joined above, so this decision sees every
-            // heartbeat that ran during the install.
-            if (leaseLost) {
-              throw new SkillUploadRequestError("upload install lease is no longer active");
+                      } finally {
+                        renewalPaused -= 1;
+                      }
+                    },
+                  });
+                },
+              );
+            } finally {
+              installing = false;
+              clearInterval(heartbeat);
+              await renewal;
             }
-            return settled;
           }),
         );
       });

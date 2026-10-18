@@ -1,11 +1,12 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
-import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
 import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
-import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
-import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
+import {
+  respondChatSendAdmissionError,
+  runChatSendPreAdmission,
+} from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import {
   prepareChatSendNativeRuntimeRestriction,
@@ -38,7 +39,6 @@ export async function prepareAndAdmitChatSend(
     trustedSystemInput?: boolean;
     isDirectExternalUser?: boolean;
     goalResume?: SessionGoalOperation & { action: "resume" };
-    restartResume?: SessionRestartResume;
     providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   },
   diagnostics?: ChatSendDiagnostics,
@@ -62,7 +62,6 @@ export async function prepareAndAdmitChatSend(
     client,
     ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
     ...(options?.goalResume ? { goalResume: options.goalResume } : {}),
-    ...(options?.restartResume ? { restartResume: options.restartResume } : {}),
     ...(options?.providerReviewAcknowledgment
       ? { providerReviewAcknowledgment: options.providerReviewAcknowledgment }
       : {}),
@@ -80,7 +79,7 @@ export async function prepareAndAdmitChatSend(
     );
     return undefined;
   }
-  if (normalization instanceof Promise || normalizedRequest.value.goalOperation) {
+  if (normalizedRequest.value.goalOperation) {
     try {
       assertCurrent?.();
     } catch (error) {

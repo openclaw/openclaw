@@ -12,7 +12,7 @@ vi.mock("./shared/guarded-json-api.js", async (importOriginal) => ({
   guardedJsonApiRequest: guardedJsonApiRequestMock,
 }));
 
-import { normalizeVoiceCallConfig } from "../config.js";
+import { VoiceCallConfigSchema } from "../config.js";
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 import { TwilioApiError } from "./twilio/api.js";
@@ -178,7 +178,7 @@ describe("TwilioProvider", () => {
         from: "+14155550100",
         to: "+14155550123",
         webhookUrl: "https://example.ngrok.app/voice/webhook",
-        voicemail: normalizeVoiceCallConfig({
+        voicemail: VoiceCallConfigSchema.parse({
           voicemail: {
             detection: "twilio",
             onMachine,

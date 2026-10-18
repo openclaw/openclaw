@@ -47,7 +47,7 @@ export async function hasSessionRelatedCronJobs(sessionKey: string | undefined):
 export function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPayload[] {
   let appended = false;
   return payloads.map((payload) => {
-    if (appended || payload.isError || payload.text === undefined) {
+    if (appended || payload.isError || typeof payload.text !== "string") {
       return payload;
     }
     if (!hasUnbackedReminderCommitment(payload.text)) {

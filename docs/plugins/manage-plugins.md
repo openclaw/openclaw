@@ -427,9 +427,11 @@ managed install directory is removed once unless you pass `--keep-files`. With a
 running Gateway, ordinary uninstall waits for the package's runtime owners to
 stop before removing files and returns after the new inventory is applied.
 
-Claw Add installs plugins as shared dependencies. Deleting an agent created by
-Add does not uninstall its plugins. Before uninstalling a plugin, check which
-agents use it; uninstall may break those agents.
+If an installed Claw references the plugin, preview and uninstall print the
+affected Claw package names. Ordinary plugin uninstall can still proceed and
+may break those Claws; use `openclaw claws status` to review ownership first.
+Removing a Claw releases its plugin reference but retains the process-wide
+plugin by default.
 
 In Nix mode (`OPENCLAW_NIX_MODE=1`), plugin install, update, uninstall,
 enable, and disable are all disabled; manage those choices in the Nix source

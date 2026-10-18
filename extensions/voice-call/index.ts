@@ -25,7 +25,7 @@ import {
   VoiceCallCommandInputError,
 } from "./src/command-service.js";
 import {
-  normalizeVoiceCallConfig,
+  VoiceCallConfigSchema,
   resolveVoiceCallConfig,
   validateProviderConfig,
   type VoiceCallConfig,
@@ -41,7 +41,7 @@ const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
     const config = asOptionalRecord(value) ?? {};
     const enabled = typeof config.enabled === "boolean" ? config.enabled : true;
-    return normalizeVoiceCallConfig({
+    return VoiceCallConfigSchema.parse({
       ...config,
       enabled,
       provider: config.provider ?? (enabled ? "mock" : undefined),

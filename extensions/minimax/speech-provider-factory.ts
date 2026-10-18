@@ -2,12 +2,14 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
+  SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
 import {
-  createSpeechDirectiveParser,
+  parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
@@ -136,41 +138,56 @@ function readMinimaxOverrides(
   return normalized;
 }
 
-const parseDirectiveToken = createSpeechDirectiveParser({
-  voiceId: ["allowVoice", ["voice", "voiceid", "voice_id", "minimax_voice", "minimaxvoice"]],
-  model: ["allowModelId", ["model", "minimax_model", "minimaxmodel"]],
-  speed: [
-    "allowVoiceSettings",
-    ["speed"],
-    {
-      number: {
+function parseDirectiveToken(
+  ctx: SpeechDirectiveTokenParseContext,
+): SpeechDirectiveTokenParseResult {
+  switch (ctx.key) {
+    case "voice":
+    case "voiceid":
+    case "voice_id":
+    case "minimax_voice":
+    case "minimaxvoice":
+      if (!ctx.policy.allowVoice) {
+        return { handled: true };
+      }
+      return { handled: true, overrides: { voiceId: ctx.value } };
+    case "model":
+    case "minimax_model":
+    case "minimaxmodel":
+      if (!ctx.policy.allowModelId) {
+        return { handled: true };
+      }
+      return { handled: true, overrides: { model: ctx.value } };
+    case "speed": {
+      return parseSpeechDirectiveNumberOverride({
+        ctx,
+        overrideKey: "speed",
         range: { min: 0.5, max: 2 },
         warning: (value) => `invalid MiniMax speed "${value}" (0.5-2.0)`,
-      },
-    },
-  ],
-  vol: [
-    "allowVoiceSettings",
-    ["vol", "volume"],
-    {
-      number: {
+      });
+    }
+    case "vol":
+    case "volume": {
+      return parseSpeechDirectiveNumberOverride({
+        ctx,
+        overrideKey: "vol",
         range: { min: 0, minExclusive: true, max: 10 },
         warning: (value) =>
           `invalid MiniMax volume "${value}" (must be greater than 0 and at most 10)`,
-      },
-    },
-  ],
-  pitch: [
-    "allowVoiceSettings",
-    ["pitch"],
-    {
-      number: {
+      });
+    }
+    case "pitch": {
+      return parseSpeechDirectiveNumberOverride({
+        ctx,
+        overrideKey: "pitch",
         range: { min: -12, max: 12 },
         warning: (value) => `invalid MiniMax pitch "${value}" (-12 to 12)`,
-      },
-    },
-  ],
-});
+      });
+    }
+    default:
+      return { handled: false };
+  }
+}
 
 export function buildMinimaxSpeechProvider({
   isProviderAuthProfileConfigured,
@@ -209,7 +226,6 @@ export function buildMinimaxSpeechProvider({
     resolveTalkOverrides: ({ params }) =>
       readMinimaxOverrides({ ...params, model: params.modelId }),
     listVoices: async () => MINIMAX_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
-    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(
         resolveMinimaxDirectTtsApiKey(readMinimaxProviderConfig(providerConfig, cfg).apiKey) ||

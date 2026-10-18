@@ -3,7 +3,6 @@ import { classifySessionMessageOrigin } from "../../../../packages/memory-host-s
 import type { MemoryOriginClass } from "../../../../packages/memory-host-sdk/src/host/types.js";
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
-import { prepareAssistantTranscriptText } from "../../../shared/chat-message-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 
 const SESSION_MEMORY_TOOL_DIRECTIVE_PREFIX = String.raw`(?:(?:\|DSML\|)|(?:\uFF5CDSML\uFF5C))?`;
@@ -15,6 +14,7 @@ const SESSION_MEMORY_DROP_BLOCK_RE = new RegExp(
 );
 const SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE = /<(system|assistant|user)\b[^>]*>[\s\S]*?<\/\1>/gi;
 const SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE = /<\/?(?:system|assistant|user)\b[^>]*>/gi;
+const SESSION_MEMORY_TRAILING_NO_REPLY_RE = /(?:^|\n)\s*NO_REPLY\s*$/i;
 const SESSION_MEMORY_JSON_LINE_SEPARATOR_RE = /[\u0085\u2028\u2029]/gu;
 
 function quoteSessionMemoryText(text: string): string {
@@ -26,11 +26,20 @@ function quoteSessionMemoryText(text: string): string {
   );
 }
 
+function isNoReplyMarker(text: string): boolean {
+  const trimmed = text.trim();
+  return /^NO_REPLY$/i.test(trimmed) || /^\{\s*"action"\s*:\s*"NO_REPLY"\s*\}$/i.test(trimmed);
+}
+
 function sanitizeSessionMemoryTranscriptText(text: string): string | null {
+  if (isNoReplyMarker(text)) {
+    return null;
+  }
   const withoutArtifacts = sanitizeModelSpecialTokens(text)
     .replace(SESSION_MEMORY_DROP_BLOCK_RE, "")
     .replace(SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE, "")
     .replace(SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE, "")
+    .replace(SESSION_MEMORY_TRAILING_NO_REPLY_RE, "")
     .trim();
 
   return withoutArtifacts || null;
@@ -43,14 +52,16 @@ function extractTextMessageContent(content: unknown): string | undefined {
   if (!Array.isArray(content)) {
     return undefined;
   }
-  const texts = content.flatMap((block) => {
+  for (const block of content) {
     if (!block || typeof block !== "object") {
-      return [];
+      continue;
     }
     const candidate = block as { type?: unknown; text?: unknown };
-    return candidate.type === "text" && typeof candidate.text === "string" ? [candidate.text] : [];
-  });
-  return texts.length > 0 ? texts.join("\n") : undefined;
+    if (candidate.type === "text" && typeof candidate.text === "string") {
+      return candidate.text;
+    }
+  }
+  return undefined;
 }
 
 type SessionMemoryRecord = {
@@ -88,13 +99,7 @@ function renderSessionMemoryRecords(events: readonly unknown[]): SessionMemoryRe
     if (role === "user" && hasInterSessionUserProvenance(record.message)) {
       continue;
     }
-    if (record.message.display === false) {
-      continue;
-    }
-    const text = prepareAssistantTranscriptText(
-      record.message,
-      extractTextMessageContent(record.message.content),
-    );
+    const text = extractTextMessageContent(record.message.content);
     const sanitized = text ? sanitizeSessionMemoryTranscriptText(text) : null;
     if (!sanitized) {
       continue;

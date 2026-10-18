@@ -24,7 +24,6 @@ import {
 } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Snapshot } from "quickjs-wasi";
-import type { QuickJsWorkerPayload } from "./worker-types.js";
 
 const getQuickJsModules = createLazyRuntimeModule(async () => {
   const resolve = createRequire(import.meta.url).resolve;
@@ -46,6 +45,8 @@ const getQuickJsModules = createLazyRuntimeModule(async () => {
   };
 });
 
+type QuickJsWorkerPayload = CodeModeWorkerPayload<Snapshot> &
+  Awaited<ReturnType<typeof getQuickJsModules>>;
 type QuickJsWorkerPool = WorkerTaskPool<QuickJsWorkerPayload, CodeModeWorkerThreadResult<Snapshot>>;
 
 let sharedPool: { url: string; pool: QuickJsWorkerPool } | undefined;
@@ -148,11 +149,7 @@ async function runQuickJsWorker(
               } else if (value.status === "failure") {
                 inlineHost?.onFailure?.(
                   value.error,
-                  value.failurePhase === "bridge" ||
-                    value.failurePhase === "guest" ||
-                    value.failurePhase === "input"
-                    ? value.failurePhase
-                    : "host",
+                  value.failurePhase === "bridge" ? "bridge" : "guest",
                   workerId,
                 );
               }
@@ -202,6 +199,9 @@ async function runQuickJsWorker(
         },
       },
     );
+    if (!isRecord(message)) {
+      return failedResult("invalid code mode worker response", "internal_error");
+    }
     if (message.networkContentObserved === true) {
       inlineHost?.onNetworkContent?.();
     }

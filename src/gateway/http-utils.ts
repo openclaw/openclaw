@@ -110,7 +110,7 @@ function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
   }
 }
 
-function resolveAgentIdFromModel(
+export function resolveAgentIdFromModel(
   model: string | undefined,
   cfg = getRuntimeConfig(),
 ): string | undefined {

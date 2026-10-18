@@ -1,19 +1,22 @@
 /* @vitest-environment jsdom */
 
+import { html, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import { handleChatGatewayEvent } from "../chat-gateway.ts";
 import type { ChatState } from "../chat-state-contract.ts";
-import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
 
 const container = document.createElement("div");
-const view = createMessageGroupHarness(container);
-afterEach(() => view.unmount());
+afterEach(() => render(html``, container));
 
 function renderReply(message: unknown, isStreaming = false) {
-  view.render(createMessageGroup(message, "assistant", { isStreaming }), {
-    showReasoning: false,
-  });
+  render(
+    renderMessageGroup(createMessageGroup(message, "assistant", { isStreaming }), {
+      showReasoning: false,
+    }),
+    container,
+  );
 }
 
 describe("interrupted assistant replies", () => {

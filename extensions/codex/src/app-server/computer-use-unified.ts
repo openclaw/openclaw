@@ -7,7 +7,7 @@ import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-ru
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 import type { MacOSDesktopCodexAppPathCandidate } from "./desktop-app-paths.js";
-import { readMacOSDesktopGenerationFingerprint } from "./desktop-generation-fingerprint.js";
+import { readCodexDesktopArtifactTreeFingerprint } from "./desktop-generation-fingerprint.js";
 
 export const UNIFIED_COMPUTER_USE_PLUGIN = "unified-computer-use";
 const UNIFIED_SERVER = "cua_repl";
@@ -26,7 +26,6 @@ export async function resolveCodexUnifiedComputerUseRuntime(
   codexHome: string,
   requestedPluginName?: string,
   requestedServerName?: string,
-  desktopFingerprint?: string,
 ): Promise<CodexUnifiedComputerUseRuntime | undefined> {
   const pluginName = requestedPluginName ?? "computer-use";
   const serverName = requestedServerName ?? pluginName;
@@ -97,8 +96,7 @@ export async function resolveCodexUnifiedComputerUseRuntime(
   }
   return {
     pluginRoot,
-    sourceFingerprint:
-      desktopFingerprint ?? (await readMacOSDesktopGenerationFingerprint([candidate])),
+    sourceFingerprint: await readCodexDesktopArtifactTreeFingerprint(pluginRoot),
     manifest,
     mcp: {
       ...template,

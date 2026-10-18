@@ -110,11 +110,6 @@ export function createCodexLifecycleHarness(options: {
         (response.status === "unsubscribed" || response.status === "notSubscribed")
       ) {
         current.subscribed = false;
-        current.loaded = false;
-        harness.send({
-          method: "thread/status/changed",
-          params: { threadId, status: { type: "notLoaded" } },
-        });
       }
       return response;
     }
@@ -122,7 +117,8 @@ export function createCodexLifecycleHarness(options: {
       if (!current) {
         throw new Error(`Unseeded synthetic native resume: ${threadId}`);
       }
-      // External native servers may retain unsubscribed idle threads until resume.
+      // Stock 0.151.0 retains an unsubscribed loaded cache entry. Full resume overrides
+      // trigger teardown only when no subscriber can still observe that session.
       if (
         current.loaded &&
         !current.subscribed &&

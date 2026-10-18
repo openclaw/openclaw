@@ -2,7 +2,6 @@ import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
-import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
 import { encodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import type {
   UsageCostWorkerDatabase,
@@ -20,7 +19,6 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { getPendingOpenClawAgentDatabasePreparation } from "../../state/openclaw-agent-execution.js";
 import { runOutsideOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import type {
@@ -46,10 +44,7 @@ import {
   type createSessionTranscriptHistoryPool,
   type SessionDatabaseWorkerLane,
 } from "./session-transcript-read-pools.js";
-import type {
-  SessionHistoryWorkerInput,
-  SessionTranscriptWorkerValues,
-} from "./session-transcript-worker.types.js";
+import type { SessionHistoryWorkerInput } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
@@ -417,7 +412,6 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     ) => Promise<CombinedSessionStoreTopologyResult>;
   }) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
-  signal?: AbortSignal,
 ): Promise<T> {
   const capturedCandidates = candidates.map(({ path: requestedPath, physicalPath, scope }) => ({
     path: requestedPath,
@@ -441,7 +435,6 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     let revoked = false;
     let dispatched = false;
     const assertCurrent = () => {
-      signal?.throwIfAborted();
       if (revoked) {
         throw new WorkerTaskError("Session target discovery was revoked", "unavailable");
       }
@@ -534,22 +527,13 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           );
         }
       }
-      const runRead = async <
-        Input extends Extract<
+      const runRead = async (
+        input: Extract<
           SessionHistoryWorkerInput,
           { kind: "session-store-target" | "session-target-inventory" | "combined-store-topology" }
         >,
-      >(
-        input: Input,
         inputBytes: number,
-      ): Promise<SessionTranscriptWorkerValues[Input["kind"]]> => {
-        // An admitted empty catalog can still belong to the agent's first schema birth.
-        for (const physicalPath of admissionPaths) {
-          const preparation = getPendingOpenClawAgentDatabasePreparation(physicalPath);
-          if (preparation) {
-            await racePromiseWithAbortSignal(preparation, signal, (aborted) => aborted.reason);
-          }
-        }
+      ) => {
         const reply = await runWithSqliteDatabaseAdmissionTurn(
           admissionPaths,
           () =>
@@ -560,14 +544,11 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
                 lane.nativeSequence++;
                 return input;
               },
-              { inputBytes, timeoutMs: 60_000, signal },
+              { inputBytes, timeoutMs: 60_000 },
             ),
           admissionFamilies,
-          signal,
         );
-        const result = unwrapSessionTranscriptWorkerReply(reply);
-        // SAFETY: The pool pairs this reply with the exact request dispatched above.
-        return result as SessionTranscriptWorkerValues[Input["kind"]];
+        return unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
       };
       const readStoreTargetResult = async (
         request: Omit<SessionStoreTargetReadRequest, "candidates">,
@@ -581,6 +562,14 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           { kind: "session-store-target", request: preparedRequest },
           JSON.stringify(preparedRequest).length * 2,
         );
+        if (
+          typeof result === "boolean" ||
+          Array.isArray(result) ||
+          (result.kind !== "session-store-target" &&
+            result.kind !== "session-target-registry-required")
+        ) {
+          throw new Error("Session history worker returned another result instead of store target");
+        }
         return "readError" in result
           ? err(decodeSessionTranscriptWorkerReadError(result.readError))
           : ok(result);
@@ -599,10 +588,18 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             },
             candidates: capturedCandidates,
           };
-          return await runRead(
+          const result = await runRead(
             { kind: "combined-store-topology", request: preparedRequest },
             JSON.stringify(preparedRequest).length * 2,
           );
+          if (
+            typeof result === "boolean" ||
+            Array.isArray(result) ||
+            result.kind !== "combined-store-topology"
+          ) {
+            throw new Error("Session history worker returned another result instead of topology");
+          }
+          return result;
         },
         readStoreTargetResult,
         readStoreTarget: async (request) => {
@@ -622,6 +619,16 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             { kind: "session-target-inventory", request: preparedRequest },
             measureSessionStoreTargetInventoryInputBytes(preparedRequest),
           );
+          if (
+            typeof result === "boolean" ||
+            Array.isArray(result) ||
+            (result.kind !== "session-target-inventory" &&
+              result.kind !== "session-target-registry-required")
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of target inventory",
+            );
+          }
           if (result.kind === "session-target-registry-required") {
             // Release native readers before registry work without discarding a healthy worker.
             await settleCandidates();

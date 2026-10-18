@@ -1,6 +1,5 @@
 import { projectSessionEntryRecord } from "../../../packages/memory-host-sdk/src/host/session-entry-projection.js";
 import { resolveSessionResetRecallCutoff } from "../../../packages/memory-host-sdk/src/host/session-reset-recall.js";
-import { prepareAssistantTranscriptText } from "../../shared/chat-message-content.js";
 import type {
   SessionActorMemoryCorpusQuery,
   SessionActorMemoryCorpusReads,
@@ -36,9 +35,7 @@ export function readSessionActorMemoryCorpus(
       sessionKey,
       stats: readSessionActorMemoryTranscriptStats(window),
       events: window.events.map(({ event }) =>
-        query.input.includeMessages
-          ? event
-          : projectSessionEntryRecord(event, prepareAssistantTranscriptText),
+        query.input.includeMessages ? event : projectSessionEntryRecord(event),
       ),
     };
   }

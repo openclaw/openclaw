@@ -654,10 +654,8 @@ function assertStateDatabaseReadAtOwnerPath(
     !hasPhysicalOwnership(owner) ||
     (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
   ) {
-    // A recorded loss already names the lock and the restart step; rethrow it unwrapped.
-    owner.lost.signal.throwIfAborted();
     throw new Error(
-      `OpenClaw state ownership at ${databasePath} was lost: owner lock was removed or replaced; restart the Gateway.`,
+      `OpenClaw state ownership at ${databasePath} was lost: ${owner.lost.signal.reason ?? "owner lock was removed or replaced"}; restart the Gateway.`,
     );
   }
   readOwnerPaths.set(key, owner);
@@ -668,7 +666,7 @@ export function assertStateDatabaseAccessAllowed(
   databasePath: string,
   captured?: {
     maintenanceScope?: OpenClawDatabaseMaintenanceScope;
-    schemaLease?: Pick<StateDatabaseSchemaLease, "assertDatabaseAccess">;
+    schemaLease?: StateDatabaseSchemaLease;
   },
 ): void {
   assertStateDatabaseAccessAtOwnerPath(

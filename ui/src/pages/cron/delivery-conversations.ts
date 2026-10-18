@@ -1,5 +1,4 @@
 import type { ConversationListItem, ConversationListResult } from "@openclaw/gateway-protocol";
-import { createStore } from "solid-js";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
@@ -50,121 +49,133 @@ function sameDirectoryRoute(read: DirectoryRoute | null, next: DirectoryRoute): 
   );
 }
 
-type DeliveryConversationsDependencies = {
+export type DeliveryConversationsHost = {
   /** The page state that currently owns the editor. */
   currentCronState: () => CronState;
   /** Admin access is revalidated per request because it can drop mid-flight. */
   canManage: () => boolean;
   captureConnection: () => GatewayConnectionScope | null;
   isCurrentConnection: (scope: GatewayConnectionScope) => boolean;
+  /** Re-render the page for the state that published the change. */
+  notify: (cronState: CronState) => void;
 };
 
 // The editor owns this bounded target directory; account and topic routing stay
 // operator-authored. Deferred completions must prove the editor still owns it.
-export function createDeliveryConversations(deps: DeliveryConversationsDependencies) {
-  const [state, setState] = createStore<{
-    conversations: ConversationListItem[];
-    error: string | null;
-  }>({ conversations: [], error: null });
-  let requestId = 0;
+export class DeliveryConversationsController {
+  conversations: ConversationListItem[] = [];
+  error: string | null = null;
+  private requestId = 0;
   // Page, connection, and admin scope can survive an editor swap.
-  let editorGeneration = 0;
-  let readRoute: DirectoryRoute | null = null;
+  private editorGeneration = 0;
+  // Compare the published route with the current form after a save.
+  private readRoute: DirectoryRoute | null = null;
 
-  function clear() {
-    requestId += 1;
-    setState((draft) => {
-      draft.conversations = [];
-      draft.error = null;
-    });
-    readRoute = null;
+  constructor(private readonly host: DeliveryConversationsHost) {}
+
+  clear(cronState: CronState = this.host.currentCronState()) {
+    this.requestId += 1;
+    this.conversations = [];
+    this.error = null;
+    this.readRoute = null;
+    this.host.notify(cronState);
   }
 
-  function retireEditor() {
-    editorGeneration += 1;
-    clear();
+  get generation(): number {
+    return this.editorGeneration;
   }
 
-  function openEditor() {
-    editorGeneration += 1;
-    void load();
+  retireEditor(cronState: CronState = this.host.currentCronState()) {
+    this.editorGeneration += 1;
+    this.clear(cronState);
   }
 
-  function retireExitedEditor(
+  openEditor() {
+    this.editorGeneration += 1;
+    void this.load();
+  }
+
+  retireExitedEditor(
     cronState: CronState,
     connectionScope: GatewayConnectionScope | null,
-    generation: number,
+    editorGeneration: number,
   ) {
-    if (ownedBy(cronState, connectionScope, generation)) {
-      retireEditor();
+    if (this.ownedBy(cronState, connectionScope, editorGeneration)) {
+      this.retireEditor(cronState);
     }
   }
 
   // Saving an edit reloads its directory; creating a job returns to overview.
-  function afterSave(
+  afterSave(
     cronState: CronState,
     connectionScope: GatewayConnectionScope | null,
-    generation: number,
+    editorGeneration: number,
     stillEditing: boolean,
   ) {
-    if (!ownedBy(cronState, connectionScope, generation)) {
+    if (!this.ownedBy(cronState, connectionScope, editorGeneration)) {
       return;
     }
-    clear();
+    this.clear(cronState);
     if (stillEditing) {
-      void load(cronState);
+      void this.load(cronState);
     } else {
-      editorGeneration += 1;
+      this.editorGeneration += 1;
     }
   }
 
   // Revision-conflict recovery may replace the route despite `saved: false`.
   // Retire its stale suggestions and pending read, but keep unchanged routes quiet.
-  function reconcileRoute(
+  reconcileRoute(
     cronState: CronState,
     connectionScope: GatewayConnectionScope | null,
-    generation: number,
+    editorGeneration: number,
   ) {
-    if (sameDirectoryRoute(readRoute, readDirectoryRoute(cronState))) {
+    if (sameDirectoryRoute(this.readRoute, readDirectoryRoute(cronState))) {
       return;
     }
-    afterSave(cronState, connectionScope, generation, Boolean(cronState.cronEditingJob));
+    this.afterSave(cronState, connectionScope, editorGeneration, Boolean(cronState.cronEditingJob));
   }
 
-  function ownedBy(
+  ownedBy(
     cronState: CronState,
     connectionScope: GatewayConnectionScope | null,
-    generation?: number,
+    editorGeneration?: number,
   ): boolean {
     return (
-      deps.currentCronState() === cronState &&
+      this.host.currentCronState() === cronState &&
       connectionScope !== null &&
-      deps.isCurrentConnection(connectionScope) &&
-      deps.canManage() &&
-      (generation === undefined || editorGeneration === generation)
+      this.host.isCurrentConnection(connectionScope) &&
+      this.host.canManage() &&
+      (editorGeneration === undefined || this.editorGeneration === editorGeneration)
     );
   }
 
-  async function load(cronState: CronState = deps.currentCronState()) {
-    const request = ++requestId;
-    setState((draft) => {
-      draft.conversations = [];
-      draft.error = null;
-    });
+  async load(cronState: CronState = this.host.currentCronState()) {
+    const requestId = ++this.requestId;
+    this.conversations = [];
+    this.error = null;
+    this.host.notify(cronState);
     const client = cronState.client;
     // Recorded before the guards so a route that reads nothing is still the
     // route the (empty) cache answers for, and retrying its save stays quiet.
     const route = readDirectoryRoute(cronState);
-    readRoute = route;
+    this.readRoute = route;
     const { mode, channel, agentId } = route;
-    if (!deps.canManage() || !client || mode !== "announce" || !agentId || channel === "last") {
+    if (
+      !this.host.canManage() ||
+      !client ||
+      mode !== "announce" ||
+      !agentId ||
+      channel === "last"
+    ) {
       return;
     }
-    const connectionScope = deps.captureConnection();
+    const connectionScope = this.host.captureConnection();
     if (!connectionScope) {
       return;
     }
-    const isCurrent = () => request === requestId && ownedBy(cronState, connectionScope);
+    const isCurrent = () =>
+      requestId === this.requestId && this.ownedBy(cronState, connectionScope);
     try {
       const result = await client.request<ConversationListResult>("conversations.list", {
         agentId,
@@ -174,36 +185,16 @@ export function createDeliveryConversations(deps: DeliveryConversationsDependenc
       if (isCurrent()) {
         // The directory is bounded, so it is authoritative only as a source of
         // target suggestions. Never infer hidden account or topic routing from it.
-        setState((draft) => {
-          draft.conversations = result.conversations;
-          draft.error = null;
-        });
+        this.conversations = result.conversations;
+        this.error = null;
+        this.host.notify(cronState);
       }
     } catch (error) {
       if (isCurrent()) {
-        setState((draft) => {
-          draft.conversations = [];
-          draft.error = `Could not load recipient suggestions: ${formatUiError(error)}`;
-        });
+        this.conversations = [];
+        this.error = `Could not load recipient suggestions: ${formatUiError(error)}`;
+        this.host.notify(cronState);
       }
     }
   }
-  return {
-    get conversations() {
-      return state.conversations;
-    },
-    get error() {
-      return state.error;
-    },
-    get generation() {
-      return editorGeneration;
-    },
-    clear,
-    retireEditor,
-    openEditor,
-    retireExitedEditor,
-    afterSave,
-    reconcileRoute,
-    load,
-  };
 }

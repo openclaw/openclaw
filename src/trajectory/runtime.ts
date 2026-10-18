@@ -3,7 +3,6 @@ import { hash } from "node:crypto";
 import { isProxy } from "node:util/types";
 import { projectDiagnosticValue, type DiagnosticProjectionPolicy } from "@openclaw/ai/diagnostics";
 import { createDiagnosticRecord } from "@openclaw/ai/internal/shared";
-import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -276,28 +275,22 @@ function isTrajectoryJsonData(value: unknown, depth = 0): boolean {
 }
 
 function projectTrajectoryToolParameters(parameters: unknown): unknown {
-  const published = getPublishedRuntimeToolInputSchema(parameters);
-  // Publication owns immutable JSON; mutable or opaque inputs still need current bounds.
-  const bounded = published ? undefined : limitTrajectoryPayloadValue(parameters);
-  if (!published && !isTrajectoryJsonData(bounded)) {
+  const bounded = limitTrajectoryPayloadValue(parameters);
+  // Custom array operations can return opaque objects; preserve their diagnostic projection.
+  if (!isTrajectoryJsonData(bounded)) {
     return projectDiagnosticValue(bounded, TRAJECTORY_PAYLOAD_PROJECTION);
   }
-  const content = published?.json ?? JSON.stringify(bounded);
-  const project = () =>
-    projectDiagnosticValue(
-      published ? limitTrajectoryPayloadValue(parameters) : bounded,
-      TRAJECTORY_PAYLOAD_PROJECTION,
-    );
-  if (!published && content.length > TRAJECTORY_TOOL_CACHE_MAX_CHARS) {
-    return project();
+  const content = JSON.stringify(bounded);
+  if (content.length > TRAJECTORY_TOOL_CACHE_MAX_CHARS) {
+    return projectDiagnosticValue(bounded, TRAJECTORY_PAYLOAD_PROJECTION);
   }
-  // Raw and already-bounded JSON can differ at truncation boundaries.
-  const key = published ? `published:${published.fingerprint}` : hash("sha256", content);
+  // Content owns invalidation: tools can be rebuilt or edited in place between requests.
+  const key = hash("sha256", content);
   const cached = toolParameterProjections.get(key);
   if (cached !== undefined) {
     return JSON.parse(cached);
   }
-  const projected = project();
+  const projected = projectDiagnosticValue(bounded, TRAJECTORY_PAYLOAD_PROJECTION);
   const serialized = JSON.stringify(projected);
   if (serialized.length <= TRAJECTORY_TOOL_CACHE_MAX_CHARS) {
     if (toolParameterProjections.size >= TRAJECTORY_TOOL_CACHE_MAX_ENTRIES) {

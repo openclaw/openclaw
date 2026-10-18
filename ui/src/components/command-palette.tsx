@@ -1,13 +1,12 @@
-import { onCleanup, Show } from "solid-js";
+import { createEffect, onCleanup } from "solid-js";
 import { useApplication } from "../lib/reactive/context.ts";
-import { listen } from "../lib/reactive/listener.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { useSolidControllerHost } from "../lit/solid-controller-host.ts";
 import type {
   CommandPaletteOpenInput,
   CommandPaletteInputHandoff,
 } from "./command-palette-contract.ts";
-import { CommandPaletteState, type CommandPaletteProperties } from "./command-palette-state.ts";
+import { PaletteController, type CommandPaletteProperties } from "./command-palette-controller.ts";
 import { CommandPaletteView } from "./command-palette-view.tsx";
 
 type CommandPaletteMethods = {
@@ -18,7 +17,7 @@ export type CommandPalette = SolidBridgeElement<CommandPaletteProperties, Comman
   readonly isOpen: boolean;
 };
 
-const states = new WeakMap<HTMLElement, CommandPaletteState>();
+const controllers = new WeakMap<HTMLElement, PaletteController>();
 // A retained Lit caller can reopen immediately after reconnecting, before Solid mounts.
 const pendingOpen = new WeakMap<
   HTMLElement,
@@ -29,52 +28,54 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
   "openclaw-command-palette",
   (props, host) => {
     const context = useApplication();
-    let draftStops: Array<() => void> = [];
-    const state = new CommandPaletteState(
+    const lifecycle = useSolidControllerHost(() => [
+      props.onNavigate,
+      props.onSelectSession,
+      props.desktopAvailable,
+      props.custodianAvailable,
+    ]);
+    const legacyHost = {
+      ...lifecycle.host,
+      get updateComplete() {
+        return lifecycle.host.updateComplete;
+      },
+      get isConnected() {
+        return host.isConnected;
+      },
+      get ownerDocument() {
+        return host.ownerDocument;
+      },
+      querySelector: host.querySelector.bind(host),
+      querySelectorAll: host.querySelectorAll.bind(host),
+    };
+    const controller = new PaletteController(
       host,
       props,
-      context,
-      () => host.updateComplete,
-      () => {
-        if (!draftStops.length) {
-          // Closed palettes still own pending submissions and preference acknowledgments.
-          draftStops = [
-            context.agents,
-            context.agentIdentity,
-            context.sessions,
-            context.config,
-          ].map((source) => source.subscribe(state.changed));
-        }
-      },
+      () => context,
+      legacyHost,
+      () => lifecycle.host.requestUpdate(),
     );
-    const projection = projectOwner(state, (owner) => owner);
-    states.set(host, state);
-    Object.defineProperty(host, "isOpen", { configurable: true, get: () => state.open });
+    controllers.set(host, controller);
+    Object.defineProperty(host, "isOpen", { configurable: true, get: () => controller.isOpen });
     host.style.display = "contents";
-    const stops = [
-      context.gateway.subscribeEvents(state.handleGatewayEvent),
-      context.agentSelection.subscribe(state.handleAgentSelection),
-      listen(host.ownerDocument, "keydown", state.handleGlobalKeydown),
-    ];
-    state.connect();
+    controller.connect();
     const pending = pendingOpen.get(host);
     if (pending) {
       pendingOpen.delete(host);
-      state.openPalette(pending.input);
+      controller.openPalette(pending.input);
     }
-    // Event handlers read owner changes immediately, before Solid settles.
-    const readProps = () => projection.read().readProps();
+    createEffect(lifecycle.revision, () => controller.updated());
     onCleanup(() => {
-      state.disconnect();
-      for (const stop of [...stops, ...draftStops]) {
-        stop();
-      }
-      states.delete(host);
+      controller.disconnect();
+      controllers.delete(host);
     });
     return (
-      <Show when={readProps().open}>
-        <CommandPaletteView readProps={readProps} />
-      </Show>
+      <CommandPaletteView
+        readProps={() => {
+          lifecycle.revision();
+          return controller.readProps();
+        }}
+      />
     );
   },
   {
@@ -87,17 +88,17 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
     },
     methods: {
       openPalette: (host, input) => {
-        const state = states.get(host);
-        if (state) {
-          state.openPalette(input);
+        const controller = controllers.get(host);
+        if (controller) {
+          controller.openPalette(input);
         } else {
           pendingOpen.set(host, { input });
         }
       },
       togglePalette: (host) => {
-        const state = states.get(host);
-        if (state) {
-          state.togglePalette();
+        const controller = controllers.get(host);
+        if (controller) {
+          controller.togglePalette();
         } else if (pendingOpen.has(host)) {
           pendingOpen.delete(host);
         } else {
@@ -105,7 +106,7 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
         }
       },
     },
-    connected: (host) => states.get(host)?.connect(),
-    disconnected: (host) => states.get(host)?.disconnect(),
+    connected: (host) => controllers.get(host)?.connect(),
+    disconnected: (host) => controllers.get(host)?.disconnect(),
   },
 );

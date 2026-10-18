@@ -22,7 +22,6 @@ export interface OverlayAnchorBinding {
 }
 
 type SurfaceAnchor = {
-  readonly sameRoot: boolean;
   update(binding: Binding): void;
   remove(binding: Binding): void;
   show(): void;
@@ -75,7 +74,7 @@ function removeAnchorName(anchor: AnchorElement, name: string) {
   }
 }
 
-function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAnchor {
+function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
   const bindings: Binding[] = [];
   const original = surface.style.getPropertyValue("position-anchor");
   const priority = surface.style.getPropertyPriority("position-anchor");
@@ -127,12 +126,6 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
     }
   };
   const schedule = () => {
-    const binding = current();
-    // CSS follows same-root anchors; only a cross-root proxy needs frame sampling.
-    if (!presented || !binding?.anchor || !crossRoot(binding)) {
-      stop();
-      return;
-    }
     if (!win || frame !== undefined) {
       return;
     }
@@ -146,7 +139,6 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
     });
   };
   const state: SurfaceAnchor = {
-    sameRoot,
     update(binding) {
       const index = bindings.indexOf(binding);
       if (index !== -1) {
@@ -154,7 +146,9 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
       }
       bindings.push(binding);
       apply();
-      schedule();
+      if (presented) {
+        schedule();
+      }
     },
     remove(binding) {
       const index = bindings.indexOf(binding);
@@ -163,7 +157,6 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
       }
       if (bindings.length) {
         apply();
-        schedule();
         return;
       }
       stop();
@@ -187,11 +180,6 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
       // Solid template nodes can be adopted into the live document after binding.
       const doc = surface.ownerDocument;
       win = doc.defaultView;
-      if (sameRoot) {
-        presented = true;
-        apply();
-        return;
-      }
       if (!source) {
         source = doc.createElement("span");
         source.setAttribute("aria-hidden", "true");
@@ -229,12 +217,9 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
   return state;
 }
 
-/** The first binding fixes whether a surface can cross DOM roots during its lifetime. */
-export function createOverlayAnchor(
-  surface: HTMLElement,
-  { sameRoot = false }: { sameRoot?: boolean } = {},
-): OverlayAnchorBinding {
-  const state = surfaces.get(surface) ?? createSurfaceAnchor(surface, sameRoot);
+/** A stable spatial anchor preserves live reanchoring across document/shadow roots. */
+export function createOverlayAnchor(surface: HTMLElement): OverlayAnchorBinding {
+  const state = surfaces.get(surface) ?? createSurfaceAnchor(surface);
   const binding: Binding = { name: `--oc-overlay-${++nextAnchor}`, placement: "bottom-start" };
   state.update(binding);
   let disposed = false;
@@ -245,9 +230,6 @@ export function createOverlayAnchor(
       }
       if (anchor.ownerDocument !== surface.ownerDocument) {
         throw new Error("Overlay anchor belongs to another document");
-      }
-      if (state.sameRoot && anchor.getRootNode() !== surface.getRootNode()) {
-        throw new Error("Overlay anchor must share the surface's root");
       }
       if (binding.anchor !== anchor) {
         if (binding.anchor) {

@@ -363,12 +363,18 @@ function copyRowsToState(params: MigrationSnapshot): AuthRows {
           }),
         );
       }
+      const canonicalRows = readTargetRows(database);
+      assertRowsMatch(
+        {
+          store: target.store ?? params.sourceRows.store,
+          state: target.state ?? params.sourceRows.state,
+        },
+        canonicalRows,
+        "copy",
+      );
       rewriteAuthJsonMigrationReceipts(database, params.sourcePath, targetDatabasePath);
       recordMigrationLedger({ ...params, database, stage: "copied" });
-      return {
-        store: target.store ?? params.sourceRows.store,
-        state: target.state ?? params.sourceRows.state,
-      };
+      return canonicalRows;
     },
     { env: params.env },
     { operationLabel: "state-migration.shared-auth-copy" },

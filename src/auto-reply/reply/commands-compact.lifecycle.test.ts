@@ -55,24 +55,49 @@ describe("handleCompactCommand lifecycle authority", () => {
     expect(result?.reply?.text).toContain("Compaction skipped");
   });
 
-  it.each([true])("propagates adoption failure before effects, active run=%s", async (active) => {
-    const error = new Error("ingress adoption lost");
-    const onAdopted = vi.fn().mockRejectedValue(error);
-    vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(active);
-    if (active) {
-      vi.mocked(waitForEmbeddedAgentRunEnd).mockResolvedValueOnce(false);
-    }
+  it.each([false, true])(
+    "propagates adoption failure before effects, active run=%s",
+    async (active) => {
+      const error = new Error("ingress adoption lost");
+      const onAdopted = vi.fn().mockRejectedValue(error);
+      vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(active);
+      if (active) {
+        vi.mocked(waitForEmbeddedAgentRunEnd).mockResolvedValueOnce(false);
+      }
 
-    await expect(
-      handleCompactCommand(
-        buildLifecycleParams({ opts: { turnAdoptionLifecycle: { onAdopted } } }),
-        true,
-      ),
-    ).rejects.toBe(error);
+      await expect(
+        handleCompactCommand(
+          buildLifecycleParams({ opts: { turnAdoptionLifecycle: { onAdopted } } }),
+          true,
+        ),
+      ).rejects.toBe(error);
 
-    expect(waitForEmbeddedAgentRunEnd).toHaveBeenCalledTimes(active ? 1 : 0);
-    expect(abortEmbeddedAgentRun).not.toHaveBeenCalled();
-    expect(compactEmbeddedAgentSession).not.toHaveBeenCalled();
+      expect(waitForEmbeddedAgentRunEnd).toHaveBeenCalledTimes(active ? 1 : 0);
+      expect(abortEmbeddedAgentRun).not.toHaveBeenCalled();
+      expect(compactEmbeddedAgentSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it("adopts only once before interrupting an active run and compacting", async () => {
+    const onAdopted = vi.fn(async () => {});
+    vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
+    vi.mocked(waitForEmbeddedAgentRunEnd).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    vi.mocked(abortEmbeddedAgentRun).mockImplementationOnce(() => {
+      expect(onAdopted).toHaveBeenCalledOnce();
+      return true;
+    });
+    vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async () => {
+      expect(onAdopted).toHaveBeenCalledOnce();
+      return { ok: true, compacted: false };
+    });
+
+    await handleCompactCommand(
+      buildLifecycleParams({ opts: { turnAdoptionLifecycle: { onAdopted } } }),
+      true,
+    );
+
+    expect(abortEmbeddedAgentRun).toHaveBeenCalledOnce();
+    expect(compactEmbeddedAgentSession).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(
@@ -144,7 +169,7 @@ describe("handleCompactCommand lifecycle authority", () => {
     },
   );
 
-  it.each(["missing-session", "aborted"] as const)(
+  it.each(["unauthorized", "missing-session", "aborted"] as const)(
     "does not adopt ingress for a %s command",
     async (refusal) => {
       const onAdopted = vi.fn();
@@ -154,7 +179,9 @@ describe("handleCompactCommand lifecycle authority", () => {
           abortSignal: refusal === "aborted" ? AbortSignal.abort() : undefined,
         },
       });
-      if (refusal === "missing-session") {
+      if (refusal === "unauthorized") {
+        params.command.isAuthorizedSender = false;
+      } else if (refusal === "missing-session") {
         params.sessionEntry = undefined;
       }
 
@@ -248,6 +275,23 @@ describe("handleCompactCommand lifecycle authority", () => {
     });
     expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
     expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("reports interruption only when abort succeeds (%s)", async (aborted) => {
+    vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
+    vi.mocked(waitForEmbeddedAgentRunEnd).mockResolvedValueOnce(false);
+    vi.mocked(abortEmbeddedAgentRun).mockReturnValueOnce(aborted);
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+
+    const result = await handleCompactCommand(buildLifecycleParams(), true);
+
+    expect(vi.mocked(abortEmbeddedAgentRun)).toHaveBeenCalledWith("session-1");
+    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenCalledWith("session-1", 15_000);
+    expect(vi.mocked(compactEmbeddedAgentSession)).toHaveBeenCalledOnce();
+    expect(result?.reply?.text?.includes("please resend it")).toBe(aborted);
   });
 
   it("marks manual compaction as maintenance until the command finishes", async () => {

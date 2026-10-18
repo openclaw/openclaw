@@ -18,7 +18,7 @@ import {
   type GatewayRequestHandler,
 } from "../test-helpers/gateway-client.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import type { CommandPalette } from "./command-palette.tsx";
+import type { CommandPalette } from "./command-palette.ts";
 
 type GatewayHarness = {
   gateway: ApplicationGateway;

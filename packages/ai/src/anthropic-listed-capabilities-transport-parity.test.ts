@@ -39,25 +39,21 @@ describe("Anthropic listed capabilities transport parity", () => {
     }
   });
 
-  it.each(["claude-sonnet-4-6", "claude-sonnet-5"])(
-    "uses budget thinking when the listing withholds adaptive support for %s",
-    async (id) => {
-      const model = listedModel(id, {
-        adaptiveThinking: false,
-        xhighEffort: false,
-        maxEffort: false,
+  it("uses budget thinking when the listing withholds adaptive support", async () => {
+    const model = listedModel("claude-sonnet-4-6", {
+      adaptiveThinking: false,
+      xhighEffort: false,
+      maxEffort: false,
+    });
+    for (const implementation of ["provider", "transport"] as const) {
+      const { payload } = await captureAnthropicRequest(implementation, {
+        model,
+        reasoning: "high",
       });
-      for (const implementation of ["provider", "transport"] as const) {
-        const { payload } = await captureAnthropicRequest(implementation, {
-          model,
-          reasoning: "high",
-        });
-        expect(payload.thinking).toMatchObject({ type: "enabled" });
-        expect(payload.thinking).toHaveProperty("budget_tokens", 3_072);
-        expect(payload).not.toHaveProperty("output_config");
-      }
-    },
-  );
+      expect(payload.thinking).toMatchObject({ type: "enabled" });
+      expect(payload).not.toHaveProperty("output_config");
+    }
+  });
 
   it("keeps thinking on when the listing rejects disabled thinking", async () => {
     const model = listedModel("claude-zephyr-1", {

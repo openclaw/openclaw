@@ -467,7 +467,7 @@ it.each([
     .toEqual(scenario.expectedMedia);
 });
 
-it.each(["literal", "voice", "token"] as const)(
+it.each(["literal", "voice", "silent"] as const)(
   "preserves terminal voice semantics for %s",
   async (kind) => {
     const { delivered, blocks, emit, flush } = createDeliveryHarness({
@@ -477,7 +477,7 @@ it.each(["literal", "voice", "token"] as const)(
     const parts =
       kind === "literal"
         ? ["Use `" + "x".repeat(60), ` ${marker}\` literally.`]
-        : [marker + (kind === "token" ? "NO_REPLY" : "")];
+        : [marker + (kind === "silent" ? "NO_REPLY" : "")];
     emit({ type: "message_start", message: createAssistantOutput(googleModel) });
     emit({ type: "message_end", message: textMessage(parts) });
     await flush();
@@ -498,7 +498,7 @@ it.each(["literal", "voice", "token"] as const)(
           silentReply: getReplyPayloadMetadata(payload)?.silentReply,
         })),
       ).toEqual([
-        { text: kind === "token" ? "NO_REPLY" : "", audioAsVoice: true, silentReply: undefined },
+        { text: "", audioAsVoice: true, silentReply: kind === "silent" ? true : undefined },
       ]);
     }
   },
@@ -586,7 +586,7 @@ it("appends visible text across long blank runs without stalling the media scan"
       previousCleaned: "",
       visibleDelta: delta,
       appendDelta: delta,
-      parsedStreamDirectives: { text: delta, replyToTag: false },
+      parsedStreamDirectives: { text: delta, replyToTag: false, isSilent: false },
       previousAudioDirectiveCount: 0,
     }),
   ).toEqual({
@@ -594,7 +594,7 @@ it("appends visible text across long blank runs without stalling the media scan"
     delta,
     replace: false,
     hasText: true,
-    replyDirectives: { text: delta, replyToTag: false },
+    replyDirectives: { text: delta, replyToTag: false, isSilent: false },
     audioDirectiveCount: 0,
   });
   expect(performance.now() - started).toBeLessThan(1_000);

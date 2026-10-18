@@ -1,9 +1,27 @@
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
-import { SCHEMA_MAP_KEYS, SCHEMA_NESTED_KEYS } from "./schema-walk.js";
 import { inheritToolSchemaTruncation, truncateToolSchemaDepth } from "./tool-schema-depth.js";
+import { SCHEMA_MAP_KEYS } from "./tool-schema-refs.js";
 
 /** llama.cpp rejects grammar repetitions whose expanded rule count reaches 2000. */
 export const LLAMACPP_GBNF_MAX_REPETITION_THRESHOLD = 2000;
+
+const SCHEMA_CHILD_KEYS = new Set([
+  "additionalItems",
+  "additionalProperties",
+  "allOf",
+  "anyOf",
+  "contains",
+  "else",
+  "if",
+  "items",
+  "not",
+  "oneOf",
+  "prefixItems",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
 
 /** Removes JSON Schema constraints that llama.cpp cannot compile into GBNF. */
 export function cleanSchemaForLlamacppGbnf(schema: unknown, toolName?: string): unknown {
@@ -54,7 +72,7 @@ function cleanSchema(schema: unknown): unknown {
       if (!mapChanged) {
         next = value;
       }
-    } else if (key !== "contentSchema" && SCHEMA_NESTED_KEYS.has(key)) {
+    } else if (SCHEMA_CHILD_KEYS.has(key)) {
       next = cleanSchema(value);
     }
     cleaned[key] = next;
@@ -87,7 +105,7 @@ function collectSchemaViolations(node: unknown, path: string, violations: string
       for (const [childKey, childValue] of Object.entries(value)) {
         collectSchemaViolations(childValue, `${path}.${key}.${childKey}`, violations);
       }
-    } else if (key !== "contentSchema" && SCHEMA_NESTED_KEYS.has(key)) {
+    } else if (SCHEMA_CHILD_KEYS.has(key)) {
       collectSchemaViolations(value, `${path}.${key}`, violations);
     }
   }

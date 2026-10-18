@@ -84,15 +84,15 @@ function configureQuarantineWriter(database: DatabaseSync, storePath: string): v
     return;
   }
   if (userVersion === 1) {
-    runSqliteImmediateTransactionSync(database, () =>
-      database.exec(`
+    database.exec(`
+      BEGIN IMMEDIATE;
       ALTER TABLE quarantined_databases ADD COLUMN verified_generation TEXT;
       PRAGMA user_version = ${OPENCLAW_QUARANTINE_SCHEMA_VERSION};
-    `),
-    );
+      COMMIT;
+    `);
   } else if (userVersion !== OPENCLAW_QUARANTINE_SCHEMA_VERSION) {
-    runSqliteImmediateTransactionSync(database, () =>
-      database.exec(`
+    database.exec(`
+    BEGIN IMMEDIATE;
     CREATE TABLE IF NOT EXISTS quarantined_databases (
       path TEXT NOT NULL PRIMARY KEY,
       kind TEXT NOT NULL,
@@ -102,8 +102,8 @@ function configureQuarantineWriter(database: DatabaseSync, storePath: string): v
       verified_generation TEXT
     ) STRICT;
     PRAGMA user_version = ${OPENCLAW_QUARANTINE_SCHEMA_VERSION};
-    `),
-    );
+    COMMIT;
+    `);
   }
   // Preserve the released v2 layout. Runtime receipts now live in file seals;
   // removing this inert table belongs to a future schema migration.

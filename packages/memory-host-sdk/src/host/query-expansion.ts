@@ -622,6 +622,7 @@ export function isQueryStopWordToken(token: string): boolean {
 
 function isValidKeyword(token: string): boolean {
   return (
+    token.length > 0 &&
     !(token.length < 3 && /^[a-zA-Z]+$/.test(token)) &&
     !/^\d+$/.test(token) &&
     !/^[\p{P}\p{S}]+$/u.test(token)
@@ -674,7 +675,7 @@ export function extractKeywords(
         tokens.push(segment);
       }
       // Also emit particle-stripped stems when they are useful keywords.
-      if (stem && !stemIsStopWord && isUsefulKoreanStem(stem)) {
+      if (stem && !STOP_WORDS_KO.has(stem) && isUsefulKoreanStem(stem)) {
         tokens.push(stem);
       }
     } else {

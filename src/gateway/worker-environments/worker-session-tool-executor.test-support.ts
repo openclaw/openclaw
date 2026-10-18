@@ -10,7 +10,6 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
-import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { createAvailablePortalTools } from "../../agents/tools/portal-tool.js";
 import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.js";
@@ -460,7 +459,6 @@ async function createWorkerSessionToolTestFixture(
       "prepareTools" | "skillWorkshop"
     > & {
       identity?: WorkerConnectionIdentity;
-      inheritedPublicationToolRef?: { current?: AnyAgentTool };
     } = {},
   ) {
     const workerIdentity = runtimeOptions.identity ?? identity;
@@ -485,7 +483,6 @@ async function createWorkerSessionToolTestFixture(
             identity: workerIdentity,
           })
         ).filter((tool) => placements.isWorkerTurnToolAuthorized(claim, tool.name)),
-        inheritedPublicationTool: runtimeOptions.inheritedPublicationToolRef?.current,
       }),
     });
     bindWorkerTurnCapabilities(placements, claim, { toolSurface: runtime });

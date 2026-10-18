@@ -31,7 +31,6 @@ type GatewaySessionRunFailure = {
   runId: string;
   error: unknown;
   errorKind?: "state_contention";
-  suppressErrorNotice?: boolean;
   assertCommitAllowed?: () => void;
   sessionEntryCurrent?: SessionEntryCurrentCheck;
 };
@@ -50,7 +49,7 @@ export async function recordGatewaySessionRunFailure(
         : (renderAssistantRequestFailureCopy({ storageFailure }) ??
           renderCodexAppServerFailureCopy(error) ??
           `Your request couldn't be completed: ${error}`),
-    display: params.suppressErrorNotice !== true,
+    display: true,
     excludeFromContext: true,
     details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
   };

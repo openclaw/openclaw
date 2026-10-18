@@ -72,7 +72,7 @@ export function resolveDiscordSenderIdentity(params: {
       : (senderDisplay ?? senderTag ?? params.author.id);
   return {
     id: params.author.id,
-    name: params.author.username,
+    name: params.author.username ?? undefined,
     tag: senderTag,
     label: senderLabel,
     isPluralKit: false,

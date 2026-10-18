@@ -72,9 +72,7 @@ function resolveDiscordConversationIdFromTargets(
       if (target?.normalized) {
         return target.normalized;
       }
-    } catch {
-      // A malformed fallback target must not hide a later usable conversation target.
-    }
+    } catch {}
   }
   return undefined;
 }

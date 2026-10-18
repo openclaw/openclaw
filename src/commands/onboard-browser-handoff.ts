@@ -8,7 +8,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
-import { openUrlPrivately } from "../infra/browser-handoff.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { sleep } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
@@ -23,6 +22,7 @@ import {
 import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
+  openUrl,
   resolveAdvertisedControlUiLinks,
 } from "./onboard-helpers.js";
 
@@ -270,11 +270,7 @@ export async function runBrowserHatchHandoff(params: {
   let opened = false;
   if (canOpenBrowser) {
     try {
-      // The handoff URL carries the one-time pairing credential in its
-      // fragment. Open it through a private file handoff so the credential
-      // never appears in a browser-opener process argument, where another
-      // OS user could read it from /proc on default procfs hosts.
-      opened = await openUrlPrivately(browserUrl);
+      opened = await openUrl(browserUrl);
     } catch {
       opened = false;
     }

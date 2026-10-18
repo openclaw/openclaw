@@ -10,7 +10,12 @@ import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../components/tooltip.ts";
-import { ChatAvatar, type ChatAvatarProps } from "../chat-avatar-view.tsx";
+import {
+  emptyLegacyContent as litNothing,
+  LitContent,
+  type LegacyTemplateResult,
+} from "../../../lit/solid-content.tsx";
+import { renderChatAvatar } from "../chat-avatar.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -19,17 +24,18 @@ import {
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
-import { ChatQuestionSummary } from "./chat-question-summary.tsx";
-import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
+import { renderChatQuestionSummary } from "./chat-question-card.ts";
+import {
+  renderReplyLine,
+  renderReplyLineConnector,
+  resolveGroupReplyLine,
+} from "./chat-reply-attribution.ts";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
-import { BrowserTabPreviews, syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
-import type { BrowserTabPreview } from "./chat-tool-cards.ts";
+import { syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
 import { ChatToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
-import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
+import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
 export type StreamGroupPart = Extract<
@@ -77,14 +83,14 @@ export type StreamGroupOptions = StreamMessageOptions & {
   entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
   onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
-  assistant?: ChatAvatarProps["assistant"];
+  assistant?: Parameters<typeof renderChatAvatar>[1];
   showAssistantAvatar?: boolean;
   startupLabel?: string;
   retryAt?: number;
   waitingApproval?: boolean;
   waitingSubagents?: ChatSubagentWait;
   runningSubagents?: number;
-  subagentActivity?: SubagentActivityProps;
+  subagentActivity?: LegacyTemplateResult;
   onOpenSubagents?: () => void;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
@@ -150,44 +156,32 @@ function NonstreamPart(props: {
   options: StreamGroupOptions;
   presentation: "standalone" | "continuation";
 }) {
-  const indicator = () => (props.part.kind === "reading-indicator" ? props.part : undefined);
-  const question = createMemo(() => {
+  const content = createMemo(() => {
+    if (props.part.kind === "reading-indicator") {
+      return renderChatWorkingIndicator(props.part, {
+        bubbleMode: props.options.bubbleMode,
+        mascot: props.options.branding?.mascot,
+        workingIndicator: props.options.branding?.workingIndicator,
+        workingPhrases: props.options.branding?.workingPhrases,
+        waitingApproval: props.options.waitingApproval === true,
+        waitingSubagents:
+          props.part.waitingOn === "subagents" ? props.options.waitingSubagents : undefined,
+        runningSubagents: props.options.runningSubagents,
+        subagentActivity: props.options.subagentActivity,
+        onOpenSubagents: props.options.onOpenSubagents,
+        startupLabel: props.options.startupLabel,
+        retryAt: props.options.retryAt,
+        outputTokens: props.options.runOutputTokens,
+        presentation: props.presentation,
+      });
+    }
     const prompt =
       props.part.kind === "question"
         ? props.options.questionPrompts?.get(props.part.questionId)
         : undefined;
-    return prompt;
+    return prompt ? renderChatQuestionSummary(prompt) : litNothing;
   });
-  return (
-    <Show
-      when={indicator()}
-      fallback={
-        <Show when={question()}>{(prompt) => <ChatQuestionSummary prompt={prompt()} />}</Show>
-      }
-    >
-      {(part) => (
-        <ChatWorkingIndicator
-          part={part()}
-          options={{
-            bubbleMode: props.options.bubbleMode,
-            mascot: props.options.branding?.mascot,
-            workingIndicator: props.options.branding?.workingIndicator,
-            workingPhrases: props.options.branding?.workingPhrases,
-            waitingApproval: props.options.waitingApproval === true,
-            waitingSubagents:
-              part().waitingOn === "subagents" ? props.options.waitingSubagents : undefined,
-            runningSubagents: props.options.runningSubagents,
-            subagentActivity: props.options.subagentActivity,
-            onOpenSubagents: props.options.onOpenSubagents,
-            startupLabel: props.options.startupLabel,
-            retryAt: props.options.retryAt,
-            outputTokens: props.options.runOutputTokens,
-            presentation: props.presentation,
-          }}
-        />
-      )}
-    </Show>
-  );
+  return <LitContent value={content()} />;
 }
 
 function StreamingMessage(props: {
@@ -240,7 +234,10 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
       (part) => part.kind === "reading-indicator" || (part.kind === "stream" && part.isStreaming),
     );
   const source = () => props.parts.find((part) => part.kind === "stream");
-  const hasAvatar = () => Boolean(source() && props.options.showAssistantAvatar !== false);
+  const avatar = () =>
+    source() && props.options.showAssistantAvatar !== false
+      ? renderChatAvatar("assistant", props.options.assistant)
+      : litNothing;
   const replyLine = () =>
     resolveGroupReplyLine(
       {
@@ -251,7 +248,7 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
       },
       props.options.resolveReplyPreview,
     );
-  const hasReply = () => replyLine().state !== "hidden" && hasAvatar();
+  const hasReply = () => replyLine().state !== "hidden" && avatar() !== litNothing;
   return (
     <div
       class={[
@@ -264,16 +261,12 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
       ]}
       data-chat-row-key={props.parts[0]?.key}
     >
-      <Show when={hasAvatar()}>
-        <ChatAvatar role="assistant" assistant={props.options.assistant} />
-      </Show>
+      <LitContent value={avatar()} />
       <div class="chat-group-messages">
-        <ReplyLineView line={replyLine()} actions={props.options} />
+        <LitContent value={renderReplyLine(replyLine(), props.options)} />
         <StreamGroupParts parts={props.parts} options={props.options} presentation="standalone" />
       </div>
-      <Show when={hasAvatar()}>
-        <ReplyLineConnector line={replyLine()} avatar={true} />
-      </Show>
+      <LitContent value={renderReplyLineConnector(replyLine(), avatar())} />
       <Show when={startedAt() !== null}>
         <div class="chat-group-footer" aria-hidden={active() ? "true" : undefined}>
           <Show when={!active()}>
@@ -302,7 +295,7 @@ type WorkGroupSummaryOptions = {
   expanded: boolean;
   onToggle: () => void;
   presentation?: "standalone" | "continuation";
-  browserTabPreviews?: readonly BrowserTabPreview[];
+  browserTabPreviews?: unknown;
   bubbleMode?: boolean;
 };
 
@@ -418,7 +411,7 @@ function WorkGroupSummaryBody(props: {
       </button>
       <div class="chat-work-group__separator" aria-hidden="true" />
       <Show when={!props.options.expanded && !props.options.bubbleMode}>
-        <BrowserTabPreviews previews={props.options.browserTabPreviews} />
+        <LitContent value={props.options.browserTabPreviews} />
       </Show>
     </div>
   );

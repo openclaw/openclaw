@@ -18,7 +18,7 @@ import {
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { resolveReplyCompletion, resolveReplyExpectation } from "../../agents/reply-completion.js";
+import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -46,7 +46,6 @@ import {
   resolveReplyOperationTerminationFields,
   resolveRestartLifecycleError,
 } from "./reply-operation-abort.js";
-import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { hasReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
 
 const MAX_LIVE_SWITCH_RETRIES = 2;
@@ -156,27 +155,7 @@ export async function handleAgentExecutionError(params: {
     return replyOperationAbortAction;
   }
   if (err instanceof WorkerNodeLostError) {
-    const runState = resolveReplyOperationRunState(turn.opts);
-    if (
-      err.canContinue &&
-      turn.replyOperation &&
-      runState?.continueStalledTurn?.(
-        `${err.message} Continue the interrupted request from the transcript.`,
-        turn.replyOperation,
-      )
-    ) {
-      runState.replyCompletion = resolveReplyCompletion(
-        resolveReplyExpectation(turn.followupRun.run),
-        "pending",
-      );
-      takePendingLifecycleTerminal().emit("end", undefined, {
-        yielded: true,
-        terminalReply: { disposition: "empty" },
-      });
-      return { kind: "final", payload: { text: "" } };
-    }
-    delete runState?.replyCompletion;
-    return settleFailure({ text: `${err.message} This turn will not be continued automatically.` });
+    return settleFailure({ text: err.message });
   }
   if (isChannelRunAuthorizationError(err)) {
     if (isChannelRunAuthorizationError(err, "unavailable")) {

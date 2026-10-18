@@ -52,7 +52,7 @@ import {
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-const fixture = useSubagentControlFixture({ reuseStateDir: true });
+const fixture = useSubagentControlFixture();
 const { cfgWithSessionStore, writeSessionStoreFixture: writeSessionStore } =
   useSubagentControlSessionStores();
 

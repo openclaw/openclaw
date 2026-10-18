@@ -5,4 +5,3 @@ if (!connection) {
   throw new Error("Database conformance preload requires a connection");
 }
 setEnvironmentData("openclaw.test.workboard.connection", connection);
-setEnvironmentData("openclaw.test.state.conformance.connection", connection);

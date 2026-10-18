@@ -15,6 +15,7 @@ import {
 } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "../../styles/debug-data.css";
 import { requestDebugOverlayToggle } from "./debug-overlay-contract.ts";
 import { DebugPageView } from "./view.tsx";
@@ -33,7 +34,7 @@ type DebugData = Omit<Diagnostics, "status" | "health"> & {
   health: Diagnostics["health"] | null;
 };
 
-export function DebugPage() {
+function DebugPageContent() {
   const context: ApplicationContext = useApplication();
   const gateway = projectGateway(context.gateway);
   const events = projectGatewayEventLog(context.gateway);
@@ -223,7 +224,7 @@ export function DebugPage() {
     return state[key];
   };
   return (
-    <openclaw-debug-page>
+    <>
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <div>
@@ -262,6 +263,10 @@ export function DebugPage() {
           onCall={() => void callDebugMethod()}
         />
       </SettingsWorkspace>
-    </openclaw-debug-page>
+    </>
   );
 }
+
+export const DebugPage = defineSolidBridge("openclaw-debug-page", DebugPageContent, {
+  properties: {},
+});

@@ -14,7 +14,6 @@ import {
   prepareSqliteDatabaseAdmission,
   readSqliteDatabaseAdmissions,
   retainSqliteDatabaseAdmissionLocation,
-  type SqliteDatabaseAdmissionCursor,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
 import {
@@ -41,7 +40,6 @@ import {
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
-import { recordWorkerMessage } from "./worker-message-metrics.js";
 
 export type { SqliteWorkerAdmissionRequest } from "./sqlite-worker-contract.js";
 export { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
@@ -65,7 +63,6 @@ type DatabaseAuthority = {
 
 export type SqliteWorkerOperationAdmission = SqliteWorkerNativeSettlementOwner & {
   readonly port: MessagePort;
-  readonly attachment?: { value: unknown };
   readonly failure: unknown;
   readonly failureSource: AdmissionFailureSource | undefined;
   readonly cleanupFailures: readonly unknown[];
@@ -91,18 +88,6 @@ const executionAuthorities = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWorkerExecutionAuthorities"),
   () => new WeakMap<SqliteWorkerOperationAdmission, SqliteWorkerExecutionAuthority>(),
 );
-const databaseAdmissionCursors = new WeakMap<
-  SqliteWorkerOperationAdmission,
-  { cursor: SqliteDatabaseAdmissionCursor; reset(): SqliteDatabaseAdmissionCursor }
->();
-
-export function bindSqliteWorkerDatabaseAdmissionCursor(
-  admission: SqliteWorkerOperationAdmission,
-  cursor: SqliteDatabaseAdmissionCursor,
-  reset: () => SqliteDatabaseAdmissionCursor,
-): void {
-  databaseAdmissionCursors.set(admission, { cursor, reset });
-}
 
 export function bindSqliteWorkerExecutionAuthority(
   admission: SqliteWorkerOperationAdmission,
@@ -162,9 +147,19 @@ function createOperationAdmission(
   assertRelayCurrent?: () => void,
 ): SqliteWorkerOperationAdmission {
   const { port1, port2 } = new MessageChannel();
+  if (attachment !== undefined) {
+    try {
+      // This message moves with port2; command payloads retain their v8 encoding.
+      port1.postMessage({ kind: "sqlite-operation-attachment", value: attachment }, []);
+    } catch (error) {
+      port1.close();
+      port2.close();
+      throw error;
+    }
+  }
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const decisions = new Set<Int32Array>();
-  let databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
+  const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
   const cleanupFailures: unknown[] = [];
   let closed = false;
   let started = false;
@@ -198,7 +193,7 @@ function createOperationAdmission(
     code: "outcome-unknown" | "unavailable" = "outcome-unknown",
   ) => recordFailure(new SqliteWorkerError(`SQLite worker ${kind} is invalid`, code), "protocol");
   const installCommitted = (receipt: NativeCommitReceipt): void => {
-    // Each private port delivers receipts in order; repeated receipts remain idempotent.
+    // Settlement repeats the latest receipt; each private port otherwise delivers in order.
     if (nativeReceipt && receipt.sequence <= nativeReceipt.sequence) {
       return;
     }
@@ -225,15 +220,6 @@ function createOperationAdmission(
     }
   };
   const receive = (message: unknown) => {
-    recordWorkerMessage(
-      isRecord(message) && message.kind === "sqlite-database-admissions"
-        ? "admission"
-        : "authority",
-      "from_worker",
-      isRecord(message) && typeof message.payloadBytes === "number"
-        ? message.payloadBytes
-        : undefined,
-    );
     started = true;
     if (isRecord(message) && message.kind === "sqlite-database-admissions") {
       if (
@@ -331,21 +317,10 @@ function createOperationAdmission(
         }
         const scope =
           message.location === undefined ? undefined : { location: message.location, admissions };
-        const cursor = databaseAdmissionCursors.get(admission);
-        const reply = captureSqliteDatabaseAdmissions(
-          cursor?.cursor ?? databaseAdmissionCursor,
-          scope,
-        );
+        const reply = captureSqliteDatabaseAdmissions(databaseAdmissionCursor, scope);
         message.port.postMessage(reply, []);
-        recordWorkerMessage("admission", "to_worker");
         Atomics.store(decision, 0, GRANTED);
       } catch (error) {
-        const cursor = databaseAdmissionCursors.get(admission);
-        if (cursor) {
-          cursor.cursor = cursor.reset();
-        } else {
-          databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
-        }
         if (
           error instanceof StateDatabaseAdmissionPendingError &&
           error.databasePath === coldOpenPath
@@ -405,16 +380,11 @@ function createOperationAdmission(
       return;
     }
     const decision = new Int32Array(message.decision);
-    // Bun starts process.hrtime at zero in each thread, so the worker's deadline
-    // instant cannot cross threads. The host bounds its own late work from receipt;
-    // the worker still enforces its budget through the shared decision word.
-    const deadlineNs =
-      typeof message.deadlineMs === "number" && Number.isFinite(message.deadlineMs)
-        ? readSqliteWorkerMonotonicNs() +
-          BigInt(Math.max(0, Math.ceil(message.deadlineMs))) * 1_000_000n
-        : undefined;
     const expired = () => {
-      if (deadlineNs !== undefined && readSqliteWorkerMonotonicNs() >= deadlineNs) {
+      if (
+        typeof message.deadlineNs === "bigint" &&
+        readSqliteWorkerMonotonicNs() >= message.deadlineNs
+      ) {
         if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
           Atomics.notify(decision, 0);
         }
@@ -480,6 +450,7 @@ function createOperationAdmission(
     try {
       inOwnerContext(() => {
         databaseAuthority?.assertRequest?.();
+        databaseAuthority?.assertAccess();
       });
       if (
         request.stage === "prepare" &&
@@ -555,7 +526,6 @@ function createOperationAdmission(
   };
   const admission: SqliteWorkerOperationAdmission = {
     port: port2,
-    attachment: attachment === undefined ? undefined : { value: attachment },
     observeRequests(observer) {
       if (closed || observeRequest) {
         throw new SqliteWorkerError(
@@ -728,14 +698,22 @@ export function requestSqliteWorkerSchemaMaintenance(databasePath: string): bool
   return true;
 }
 
-/** Require owner-prepared data carried by this operation's command envelope. */
+/** Require and cache owner-prepared data from this operation's private port. */
 export function takeSqliteWorkerOperationAdmissionAttachment(): unknown {
   const scope = currentAdmission.getStore();
   if (!scope?.active) {
     throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
   }
   if (!scope.owner.attachment) {
-    throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
+    const message: unknown = receiveMessageOnPort(scope.port)?.message;
+    if (
+      !isRecord(message) ||
+      message.kind !== "sqlite-operation-attachment" ||
+      message.value === undefined
+    ) {
+      throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
+    }
+    scope.owner.attachment = { value: message.value };
   }
   return scope.owner.attachment.value;
 }

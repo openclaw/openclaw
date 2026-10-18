@@ -8,24 +8,34 @@ type CodeExecutionConfig = {
   timeoutSeconds?: number;
 };
 
-export function readPluginCodeExecutionConfig(
-  cfg?: OpenClawConfig,
-): CodeExecutionConfig | undefined {
-  const config = cfg?.plugins?.entries?.xai?.config;
+export function readCodeExecutionConfigRecord(
+  config?: CodeExecutionConfig,
+): Record<string, unknown> | undefined {
+  return config && typeof config === "object" ? (config as Record<string, unknown>) : undefined;
+}
+
+export function readPluginCodeExecutionConfig(cfg?: unknown): CodeExecutionConfig | undefined {
+  if (!cfg || typeof cfg !== "object") {
+    return undefined;
+  }
+  const plugins = (cfg as OpenClawConfig).plugins;
+  const entries = plugins && typeof plugins === "object" ? plugins.entries : undefined;
+  const entry = entries && entries.xai;
+  const config = entry && typeof entry === "object" ? entry.config : undefined;
   const value = config && typeof config === "object" ? config.codeExecution : undefined;
   return value && typeof value === "object" ? (value as CodeExecutionConfig) : undefined;
 }
 
 export function resolveCodeExecutionEnabled(params: {
-  sourceConfig?: OpenClawConfig;
-  runtimeConfig?: OpenClawConfig;
+  sourceConfig?: unknown;
+  runtimeConfig?: unknown;
   config?: CodeExecutionConfig;
   auth?: XaiToolAuthContext;
 }): boolean {
   return isXaiToolEnabled({
-    enabled: params.config?.enabled,
-    runtimeConfig: params.runtimeConfig,
-    sourceConfig: params.sourceConfig,
+    enabled: readCodeExecutionConfigRecord(params.config)?.enabled as boolean | undefined,
+    runtimeConfig: params.runtimeConfig as never,
+    sourceConfig: params.sourceConfig as never,
     auth: params.auth,
   });
 }

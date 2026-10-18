@@ -40,7 +40,6 @@ import { buildSandboxFsMounts } from "./sandbox/fs-paths.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import { createLsTool, type LsOperations } from "./sessions/tools/ls.js";
 import { createReadTool } from "./sessions/tools/read.js";
-import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import { getAgentWorkspaceAccess, WorkspaceAccessUnavailableError } from "./workspace-access.js";
 
@@ -72,10 +71,10 @@ function resolveSkillReadRoots(skills?: SkillSnapshot["resolvedSkills"]): string
 
 /** Route only selected workspace Skills; their paths never name Gateway files. */
 function wrapWorkspaceSkillRead(
-  localRead: AnyAgentTool<ReadToolDetails>,
+  localRead: AnyAgentTool,
   skills: SkillSnapshot["resolvedSkills"],
   options: CoreCodingToolsOptions,
-): AnyAgentTool<ReadToolDetails> {
+): AnyAgentTool {
   const remoteSkills = skills?.filter((skill) => resolveSkillFileHost(skill) === "workspace") ?? [];
   const localSkills = skills?.filter((skill) => resolveSkillFileHost(skill) !== "workspace") ?? [];
   if (remoteSkills.length === 0) {

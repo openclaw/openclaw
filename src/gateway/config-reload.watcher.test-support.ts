@@ -19,10 +19,9 @@ export function createWatcherMock() {
     generation += 1;
   });
   const adapter = {
-    start: vi.fn(async () => {
+    start: vi.fn(() => {
       active = true;
     }),
-    whenSettled: vi.fn(async () => {}),
     observePaths: vi.fn(async (includes: readonly string[]) =>
       reconcile([...accepted, ...includes]),
     ),

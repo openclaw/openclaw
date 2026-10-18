@@ -20,6 +20,6 @@ export const page = definePage({
   component: () =>
     import("./channels-page.tsx").then((module) => ({
       header: true,
-      renderSolid: () => createComponent(module.ChannelsPage, {}),
+      renderSolid: () => createComponent(module.ChannelsPageBridge, {}),
     })),
 });

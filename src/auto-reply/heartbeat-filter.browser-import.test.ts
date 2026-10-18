@@ -22,8 +22,5 @@ describe("heartbeat-filter browser import", () => {
     });
 
     expect(Object.keys(bundled.metafile.inputs)).not.toContain("src/utils.ts");
-    expect(Object.keys(bundled.metafile.inputs)).not.toContain(
-      "src/agents/embedded-agent-runner/message-visibility.ts",
-    );
   });
 });

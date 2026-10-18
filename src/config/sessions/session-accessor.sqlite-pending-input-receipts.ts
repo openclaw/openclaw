@@ -1,10 +1,10 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { parseSqliteTableDefinition } from "../../infra/sqlite-schema-contract-assembly.js";
 import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../../infra/sqlite-schema-facts.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { hasPendingInputConsumptionColumn } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
   getSessionKysely,
@@ -37,7 +37,12 @@ export function listSessionPendingInputReceipts(
     }
     let hasReceipts = receiptSchemas.get(schema);
     if (hasReceipts === undefined) {
-      hasReceipts = hasPendingInputConsumptionColumn(database.db);
+      const table = schema.tableSql.get("session_pending_inputs");
+      hasReceipts =
+        table !== undefined &&
+        parseSqliteTableDefinition(table, "session_pending_inputs").columns.has(
+          "consumed_event_id",
+        );
       receiptSchemas.set(schema, hasReceipts);
     }
     if (!hasReceipts) {

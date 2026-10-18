@@ -2,18 +2,20 @@ import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-j
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { emptyLegacyContent, LitContent } from "../../lit/solid-content.tsx";
 import { CreationComposer } from "../new-session/creation-composer-render.tsx";
 import { NewSessionBody } from "../new-session/draft-body.solid.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
-import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
-import { ChatPaneHeader, type ChatPaneHeaderProps } from "./components/chat-pane-header.tsx";
+import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
+import { renderChatPaneHeader } from "./components/chat-pane-header.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 registerNewSessionSetupEnglish();
@@ -120,14 +122,13 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
     const noAction = () => {};
     return {
       submitting,
-      header: {
+      header: renderChatPaneHeader({
         paneId: composerId,
         presented: false,
         narrow: props.narrow,
         mergedChrome: props.mergedChrome,
         navDrawerOpen: props.navDrawerOpen,
-        title: context.chatSubmissions.readCreate()?.displayName ?? t("newSession.title"),
-        titlePending: submitting && !context.chatSubmissions.readCreate()?.displayName,
+        title: t("newSession.title"),
         session: undefined,
         incognito: isIncognitoSessionKey(props.sessionKey),
         catalog: false,
@@ -143,6 +144,7 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
         platform: null,
         canReveal: false,
         copiedAction: null,
+        sessionMenuAction: emptyLegacyContent,
         onBeginRename: noAction,
         onRenameInput: noAction,
         onCommitRename: noAction,
@@ -151,7 +153,7 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
         onMenuAction: noAction,
         onOpenParentSession: noAction,
         onBranchSelect: noAction,
-      } satisfies ChatPaneHeaderProps,
+      }),
       body: {
         inChat: true,
         error: failed
@@ -207,10 +209,10 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
     };
   });
   return (
-    <>
+    <ShellLayoutBoundary traits={{ workbench: true }}>
       <div class="sidebar-region">
         <div class="sidebar-region__header">
-          <Show when={view()?.header}>{(header) => <ChatPaneHeader {...header()} />}</Show>
+          <LitContent value={view()?.header} />
         </div>
         <section class="chat" data-region="main" aria-busy={view()?.submitting ? "true" : "false"}>
           <div class="chat-main__conversation-frame">
@@ -244,14 +246,13 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
           </div>
         </section>
       </div>
-      <ChatImageLightbox
-        item={(() => {
+      <LitContent
+        value={(() => {
           revision();
-          return image;
+          return renderChatImageLightbox(image, closeImage);
         })()}
-        onClose={closeImage}
       />
-    </>
+    </ShellLayoutBoundary>
   );
 }
 export const PendingSessionCreate = defineSolidBridge<PendingSessionCreateProps>(

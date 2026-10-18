@@ -7,6 +7,7 @@ import {
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./cli-runner/execute.test-support.js";
+import { cliBackendLog } from "./cli-runner/log.js";
 
 afterEach(() => {
   supervisorSpawnMock.mockReset();
@@ -14,8 +15,9 @@ afterEach(() => {
 });
 
 it.each([undefined, "session-activity-summary", "conversation-label"] as const)(
-  "executes purpose %s at the CLI boundary without changing the run trigger",
+  "logs purpose %s at the CLI execution boundary without changing the run trigger",
   async (purpose) => {
+    const log = vi.spyOn(cliBackendLog, "info").mockImplementation(() => {});
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({ ...createSuccessfulProcessExit(), stdout: "ok" }),
     );
@@ -29,6 +31,7 @@ it.each([undefined, "session-activity-summary", "conversation-label"] as const)(
     ).resolves.toMatchObject({
       text: "ok",
     });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(`trigger=${purpose ?? "user"}`));
     expect(context.params.trigger).toBe("user");
     expect(supervisorSpawnMock).toHaveBeenCalledOnce();
   },

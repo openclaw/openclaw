@@ -337,9 +337,9 @@ function withDefaultCodexContextMetadata(params: {
     return undefined;
   }
   const contextTokens =
-    params.model.contextTokens !== undefined
+    typeof params.model.contextTokens === "number"
       ? params.model.contextTokens
-      : params.model.contextWindow !== undefined && params.model.contextWindow > 0
+      : typeof params.model.contextWindow === "number" && params.model.contextWindow > 0
         ? Math.min(params.contextTokens, params.model.contextWindow)
         : params.contextTokens;
   const input = params.model.input?.includes("image")

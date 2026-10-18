@@ -537,7 +537,6 @@ export function createGatewayHookDispatcher(params: {
                 cfg,
                 deps,
                 job,
-                trigger: "event",
                 deliveryAttemptFence: null,
                 message: acceptedValue.message,
                 sessionKey,

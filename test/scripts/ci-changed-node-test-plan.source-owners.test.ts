@@ -681,20 +681,6 @@ describe("CI changed Node test plan", () => {
       expected: ["src/gateway/server.agents.config-readiness.test.ts"],
     })),
     {
-      changedPath: "src/gateway/config-reload.ts",
-      expected: [
-        "src/gateway/server.config-patch.test.ts",
-        "src/gateway/server.agents.config-readiness.test.ts",
-      ],
-    },
-    ...["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"].map((changedPath) => ({
-      changedPath,
-      expected: [
-        "src/gateway/server.agent-execution-shutdown.test.ts",
-        "src/gateway/server.agent-late-admission.test.ts",
-      ],
-    })),
-    {
       changedPath: "src/auto-reply/reply/abort.test.ts",
       expected: ["test/scripts/tsgo-core-test-shards.test.ts"],
     },
@@ -736,8 +722,6 @@ describe("CI changed Node test plan", () => {
         const reasons: string[] = [];
         const shards = createChangedNodeTestShards([changedPath], {
           runnerBackend: "github",
-          // Gateway owner watches must survive the default aggressive PR selection.
-          selectionMode: changedPath.startsWith("src/gateway/") ? "aggressive" : "full",
           includeReleaseOnlyRuntimeTests: false,
           includePrExemptRuntimeTests: false,
           onFallback: (reason) => reasons.push(reason),

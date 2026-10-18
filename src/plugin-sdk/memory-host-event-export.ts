@@ -1,7 +1,6 @@
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
-  readFileHandleBounded,
   sameFileIdentity,
   type ExactFileIdentity,
   type FileIdentityStat,
@@ -96,8 +95,7 @@ export async function rewriteMemoryHostEventArtifactIfUnchanged(params: {
   if (
     params.expectedIdentity
       ? !sameFileIdentity(params.expectedIdentity, observed.exactIdentity)
-      : (await readFileHandleBounded(observed.handle, Infinity)).toString("utf8") !==
-        params.expectedContent
+      : (await observed.handle.readFile({ encoding: "utf8" })) !== params.expectedContent
   ) {
     return false;
   }
@@ -129,7 +127,7 @@ export async function rewriteMemoryHostEventArtifactIfUnchanged(params: {
   await using verified = verification;
   return (
     sameFileIdentity(observed.exactIdentity, verified.exactIdentity) &&
-    (await readFileHandleBounded(verified.handle, Infinity)).toString("utf8") === params.nextContent
+    (await verified.handle.readFile({ encoding: "utf8" })) === params.nextContent
   );
 }
 
@@ -151,9 +149,7 @@ export async function isMemoryHostEventArtifactAtIdentity(params: {
   }
   return (
     params.expectedContent === undefined ||
-    (await readFileHandleBounded(opened.handle, Infinity)).equals(
-      Buffer.from(params.expectedContent, "utf8"),
-    )
+    (await opened.handle.readFile()).equals(Buffer.from(params.expectedContent, "utf8"))
   );
 }
 

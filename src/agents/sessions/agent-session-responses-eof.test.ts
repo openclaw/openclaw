@@ -1,5 +1,4 @@
 import { setImmediate } from "node:timers/promises";
-import { Stream } from "openai/core/streaming";
 import {
   createAssistantMessageEventStream,
   type Context,
@@ -36,9 +35,6 @@ function responseCall(callId: string, args = "", status = "in_progress") {
 
 it.each([
   { failure: "eof", recover: true },
-  { failure: "malformed_sse", recover: true },
-  { failure: "malformed_sse", recover: false, repeatFailure: true },
-  { failure: "malformed_sse", recover: false, retryEnabled: false },
   { failure: "max_output_tokens", recover: true },
   { failure: "max_output_tokens", responseStatus: "completed", recover: false },
   { failure: "content_filter", recover: false },
@@ -206,7 +202,7 @@ it.each([
             };
             return;
           }
-          if (failure !== "eof" && failure !== "malformed_sse") {
+          if (failure !== "eof") {
             yield {
               type: failure === "completed" ? "response.completed" : "response.incomplete",
               response: {
@@ -218,31 +214,8 @@ it.each([
             };
           }
         })();
-        // Use the real SDK parser for malformed wire data, not a fabricated error.
-        const source =
-          failure === "malformed_sse"
-            ? Stream.fromSSEResponse(
-                new Response(
-                  new ReadableStream<Uint8Array>({
-                    async start(controller) {
-                      const encoder = new TextEncoder();
-                      for await (const event of events) {
-                        controller.enqueue(
-                          encoder.encode(
-                            `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
-                          ),
-                        );
-                      }
-                      controller.enqueue(encoder.encode("data: {malformed\n\n"));
-                      controller.close();
-                    },
-                  }),
-                ),
-                new AbortController(),
-              )
-            : events;
         void processResponsesStream(
-          source,
+          events,
           output,
           {
             push: (event) => {

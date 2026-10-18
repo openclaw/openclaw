@@ -187,7 +187,7 @@ describe("normalizeSlackOutboundText", () => {
     }
   });
 
-  it.each(["#installation"])(
+  it.each(["#installation", "!channel", "@U0123ABCD"])(
     "renders control-sigil Markdown link destinations as labels: %s",
     (href) => {
       const markdown = `See [Install](${href})`;

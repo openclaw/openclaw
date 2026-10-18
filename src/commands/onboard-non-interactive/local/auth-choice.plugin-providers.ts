@@ -10,8 +10,6 @@ import {
   materializeUtilityModelSeparation,
   resolveUtilityModelSeparationError,
 } from "../../../config/utility-model-separation-migration.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
-import { runBestEffortCleanup } from "../../../infra/non-fatal-cleanup.js";
 import { enablePluginWithCapabilityConsent } from "../../../plugins/enable.js";
 import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
 import { resolveManifestProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
@@ -414,14 +412,7 @@ export async function applyNonInteractivePluginProviderChoice(
       await closeOpenClawStateDatabaseByPathAsync(
         resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stagingRoot }),
       );
-      await runBestEffortCleanup({
-        cleanup: () =>
-          fs.rm(stagingRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }),
-        onError: (error) =>
-          params.runtime.error(
-            `Warning: Could not remove setup credential staging directory ${stagingRoot}: ${formatErrorMessage(error)}. Remove it manually if it persists.`,
-          ),
-      });
+      await fs.rm(stagingRoot, { recursive: true, force: true });
     }
     if (savedProfileId) {
       return reject(

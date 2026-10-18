@@ -11,17 +11,13 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import * as sessionCostUsage from "../../infra/session-cost-usage.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
-import {
-  createSessionRowProjection,
-  type SessionRowProjection,
-} from "../session-row-projection.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import * as usageSessionSelection from "./usage-session-selection.js";
@@ -29,6 +25,7 @@ import * as usageSessionSelection from "./usage-session-selection.js";
 it.for([
   "session reset",
   "incognito transition",
+  "revocation during target read",
   "revocation after context read",
   "page backfill after revocation",
 ] as const)(
@@ -45,7 +42,6 @@ it.for([
         Awaited<ReturnType<typeof sessionCostUsage.loadSessionCostSummariesFromCache>>
       >();
     let request: Promise<unknown> | undefined;
-    let projection: SessionRowProjection | undefined;
     let restoreSummaryLoader: (() => void) | undefined;
     let restoreTargetReader: (() => void) | undefined;
     let cleanupPromise: Promise<void> | undefined;
@@ -56,7 +52,6 @@ it.for([
         releaseSummary();
         await Promise.allSettled(request ? [request] : []);
         try {
-          projection?.dispose();
           releaseProfileCatalog?.();
           await state.cleanup();
         } finally {
@@ -179,7 +174,6 @@ it.for([
         endMs: timestamp + 1,
       });
 
-      projection = await createSessionRowProjection({ cfg: config, getConfig: () => config });
       const actualLoad = sessionCostUsage.loadSessionCostSummariesFromCache;
       const summaryLoader = vi
         .spyOn(sessionCostUsage, "loadSessionCostSummariesFromCache")
@@ -209,6 +203,17 @@ it.for([
           });
         restoreTargetReader = () => reader.mockRestore();
       }
+      if (change === "revocation during target read") {
+        const actualRead = sessionEntryReads.withSessionEntryReadOnlyInWorker;
+        const reader = vi
+          .spyOn(sessionEntryReads, "withSessionEntryReadOnlyInWorker")
+          .mockImplementationOnce(async (input, assertCurrent, consume) => {
+            targetReadStarted.resolve();
+            await release.promise;
+            return actualRead(input, assertCurrent, consume);
+          });
+        restoreTargetReader = () => reader.mockRestore();
+      }
       const respond = vi.fn();
       request = Promise.resolve(
         expectDefined(
@@ -221,18 +226,18 @@ it.for([
             range: "all",
             limit: change === "page backfill after revocation" ? 1 : 2,
             includeContextWeight: true,
+            ...(change === "revocation during target read" ? { key: scope.sessionKey } : {}),
           },
           respond,
           client,
           isWebchatConnect: () => false,
-          context: bindSessionRowProjection(
-            { getRuntimeConfig: () => config } as GatewayRequestContext,
-            () => projection,
-          ),
+          context: { getRuntimeConfig: () => config } as GatewayRequestContext,
         }),
       );
       const loaded = await Promise.race([
-        change === "revocation after context read" || change === "page backfill after revocation"
+        change === "revocation during target read" ||
+        change === "revocation after context read" ||
+        change === "page backfill after revocation"
           ? targetReadStarted.promise
           : summaryLoaded.promise,
         request.then(() => {
@@ -284,6 +289,15 @@ it.for([
         sql?.restore();
       }
       expect(respond).toHaveBeenCalledOnce();
+      if (change === "revocation during target read") {
+        expect(summaryLoader).not.toHaveBeenCalled();
+        expect(respond.mock.calls[0]).toEqual([
+          false,
+          undefined,
+          { code: "INVALID_REQUEST", message: `Invalid session reference: ${scope.sessionKey}` },
+        ]);
+        return;
+      }
       const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
       expect(ok).toBe(true);
       const result = payload as SessionsUsageResult;

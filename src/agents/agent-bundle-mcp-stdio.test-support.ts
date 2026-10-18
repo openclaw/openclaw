@@ -11,7 +11,6 @@ export async function writeListToolsMcpServer(
     delayMs?: number;
     listToolsReleasePath?: string;
     initializeDelayMs?: number;
-    initializeReleaseToken?: string;
     hang?: boolean;
     ignoreShutdown?: boolean;
     hangFirstInitializeMarkerPath?: string;
@@ -39,7 +38,6 @@ export async function writeListToolsMcpServer(
     pidPath?: string;
     hangToolCallsUntilRestartMarkerPath?: string;
     notifyListChangedOnInitialized?: boolean;
-    notifyListChangedOnInitializedReleaseToken?: string;
     notifyListChangedAfterFirstList?: boolean;
     notifyListChangedReleasePath?: string;
     notifyListChangedBeforeEveryListResponse?: boolean;
@@ -74,8 +72,7 @@ const {
   toolsByList, listToolsJsonRpcErrorMessage, toolPageCursors, callToolResult,
   callToolReleasePath, notifyListChangedReleasePath, resourcePageCursors,
   resourceReadResult, promptPageCursors, utilityListReleasePath, ignoreShutdown,
-  hangFirstInitializeMarkerPath, initializeReleaseToken,
-  notifyListChangedOnInitializedReleaseToken,
+  hangFirstInitializeMarkerPath,
   delayMs = 0, initializeDelayMs = 0, hang = false, capabilities = { tools: {} },
   inputSchema = { type: "object", properties: {} },
   tools = [{ name: "slow_tool", description: "Returned after a slow catalog response.", inputSchema }],
@@ -157,9 +154,7 @@ function handle(message) {
         serverInfo: { name: "test-list-tools", version: "1.0.0" },
       },
     };
-    if (initializeReleaseToken) {
-      void awaitRelease(logPath, initializeReleaseToken).then(() => send(response));
-    } else if (initializeDelayMs > 0) {
+    if (initializeDelayMs > 0) {
       setTimeout(() => send(response), initializeDelayMs);
     } else {
       send(response);
@@ -168,13 +163,8 @@ function handle(message) {
   }
   if (message.method === "notifications/initialized") {
     if (notifyListChangedOnInitialized) {
-      void (async () => {
-        if (notifyListChangedOnInitializedReleaseToken) {
-          await awaitRelease(logPath, notifyListChangedOnInitializedReleaseToken);
-        }
-        log("notify tools/list_changed");
-        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
-      })();
+      log("notify tools/list_changed");
+      send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
     }
     return;
   }

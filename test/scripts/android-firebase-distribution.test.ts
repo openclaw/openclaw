@@ -198,6 +198,13 @@ describe("Android Firebase distribution", () => {
   it.each([
     ["token server failure", "https://oauth2.googleapis.com/token", (): Failure => 503, 500],
     ["preflight connection reset", preflightUrl, (): Failure => reset(), 500],
+    ["preflight server failure", preflightUrl, (): Failure => 503, 500],
+    [
+      "upload status failure",
+      `https://firebaseappdistribution.googleapis.com/v1/${appName}/releases/wear/operations/upload`,
+      (): Failure => 503,
+      500,
+    ],
     [
       "preflight rate limit",
       preflightUrl,
@@ -239,7 +246,11 @@ describe("Android Firebase distribution", () => {
   });
 
   it.each<[string, () => Failure, string]>([
-    ["HTTP 403", () => 403, "HTTP 403"],
+    ...[401, 403].map((status): [string, () => Failure, string] => [
+      `HTTP ${status}`,
+      () => status,
+      `HTTP ${status}`,
+    ]),
     ...["CERT_HAS_EXPIRED", "private-unrecognized-code"].map(
       (code): [string, () => Failure, string] => [
         code,

@@ -7,25 +7,23 @@ export type DiscordChannelPolicyBinding = {
   channelId: string;
 };
 
-const policyBindings = resolveGlobalMap<
-  string,
-  { channels: readonly DiscordChannelPolicyBinding[]; guilds: ReadonlyMap<string, string> }
->(Symbol.for("openclaw.discord.policy-bindings"), "close-and-restart");
+const channelPolicyBindings = resolveGlobalMap<string, readonly DiscordChannelPolicyBinding[]>(
+  Symbol.for("openclaw.discord.channel-policy-bindings"),
+  "close-and-restart",
+);
 
-export function setDiscordPolicyBindings(
+export function setDiscordChannelPolicyBindings(
   accountId: string,
   bindings: readonly DiscordChannelPolicyBinding[],
-  guilds: ReadonlyMap<string, string> = new Map(),
 ): void {
   // Each allowlist resolution replaces the account's complete snapshot, including misses.
-  policyBindings.set(normalizeAccountId(accountId), { channels: bindings, guilds });
+  channelPolicyBindings.set(normalizeAccountId(accountId), [...bindings]);
 }
 
-export function findDiscordGuildPolicyKey(
-  accountId: string | null | undefined,
-  guildId: string,
-): string | undefined {
-  return policyBindings.get(normalizeAccountId(accountId))?.guilds.get(guildId);
+function listBindings(accountId: string | null | undefined, guildKey: string) {
+  return (channelPolicyBindings.get(normalizeAccountId(accountId)) ?? []).filter(
+    (binding) => binding.guildKey === guildKey,
+  );
 }
 
 export function getDiscordChannelPolicyBinding(
@@ -33,9 +31,7 @@ export function getDiscordChannelPolicyBinding(
   guildKey: string,
   channelKey: string,
 ): string | undefined {
-  return policyBindings
-    .get(normalizeAccountId(accountId))
-    ?.channels.find((binding) => binding.guildKey === guildKey && binding.channelKey === channelKey)
+  return listBindings(accountId, guildKey).find((binding) => binding.channelKey === channelKey)
     ?.channelId;
 }
 
@@ -44,8 +40,6 @@ export function findDiscordChannelPolicyKey(
   guildKey: string,
   channelId: string,
 ): string | undefined {
-  return policyBindings
-    .get(normalizeAccountId(accountId))
-    ?.channels.find((binding) => binding.guildKey === guildKey && binding.channelId === channelId)
+  return listBindings(accountId, guildKey).find((binding) => binding.channelId === channelId)
     ?.channelKey;
 }

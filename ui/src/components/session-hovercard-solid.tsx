@@ -6,24 +6,18 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
+import { t } from "../i18n/index.ts";
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
-import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { sessionOwnerInitials } from "../lib/session-owner.ts";
-import {
-  orderSessionPullRequests,
-  sessionPullRequestStateIcons,
-} from "../lib/session-pull-request-presentation.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
-import { formatGitHubItemReference } from "./github-link-target.ts";
 import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
-import { SessionGitDiff } from "./session-git-diff.tsx";
 import {
   SessionHovercardContext,
   type SessionHovercardContextInput,
 } from "./session-hovercard-context-solid.tsx";
 import { participantLabel, formatSessionAge, sessionAttribution } from "./session-hovercard.ts";
+import { sessionOwnerInitials } from "./session-owner-chip.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import { progressCardHeadsUp } from "./session-progress-card.ts";
 import { ChannelAvatar } from "./solid/channel-avatar.tsx";
@@ -32,7 +26,7 @@ import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 import "./session-hovercard.css";
 import "./tooltip.ts";
 
-registerEnglishCatalog(registerGitHubEnglish);
+registerGitHubEnglish();
 
 const MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS = 4;
 type SessionHovercardAvatarAuth = { authTokens: readonly string[]; authReady: boolean };
@@ -43,6 +37,32 @@ export type SessionHovercardInput = SessionHovercardContextInput & {
   pullRequests?: ControlUiSessionPullRequestSnapshot;
   progressCard?: ProgressCard | null;
 };
+const PULL_REQUEST_STATE_ICONS = {
+  open: "gitPullRequest",
+  draft: "gitPullRequestDraft",
+  merged: "gitMerge",
+  closed: "gitPullRequestClosed",
+} as const;
+
+function DiffStats(props: { item: { additions?: number; deletions?: number } }) {
+  return (
+    <Show when={props.item.additions !== undefined || props.item.deletions !== undefined}>
+      <span class="session-hovercard__diff">
+        <For each={["additions", "deletions"] as const}>
+          {(kind) => (
+            <Show when={props.item[kind] !== undefined}>
+              <span class={`session-hovercard__${kind}`}>
+                {kind === "additions" ? "+" : "−"}
+                {props.item[kind]?.toLocaleString()}
+              </span>
+            </Show>
+          )}
+        </For>
+      </span>
+    </Show>
+  );
+}
+
 function ParticipantLink(props: {
   participant: SessionParticipant;
   routing?: PersonActivityRouting;
@@ -261,17 +281,18 @@ function SessionAttribution(props: SessionHovercardInput) {
 
 function Header(props: SessionHovercardInput & { row: SidebarSessionHovercardRow }) {
   const channel = () => props.row.channelPresentation;
-  const details = createMemo(() => [
-    ...new Set(
-      [channel()?.conversation, channel()?.address].filter(
-        (value) => value && value !== props.row.label,
-      ),
-    ),
-  ]);
-  const age = (suffix = false) => {
-    i18nRevision();
-    return formatSessionAge(props.row.createdAt, suffix);
-  };
+  const details = createMemo(() =>
+    channel()
+      ? [
+          ...new Set(
+            [channel()?.conversation, channel()?.address].filter(
+              (value) => value && value !== props.row.label,
+            ),
+          ),
+        ]
+      : [],
+  );
+  const age = () => formatSessionAge(props.row.createdAt, false);
   return (
     <header class="session-hovercard__header">
       <span class="session-hovercard__heading">
@@ -327,7 +348,10 @@ function Header(props: SessionHovercardInput & { row: SidebarSessionHovercardRow
         </Show>
       </span>
       <Show when={age()}>
-        <span class="session-hovercard__created-age" title={age(true)}>
+        <span
+          class="session-hovercard__created-age"
+          title={formatSessionAge(props.row.createdAt, true)}
+        >
           {age()}
         </span>
       </Show>
@@ -341,7 +365,7 @@ function PullRequestRow(props: { request: ControlUiSessionPullRequest }) {
     props.request.checks ? t(`sessionHovercard.checks.${props.request.checks.state}`) : null;
   const details = () =>
     [
-      state(),
+      props.request.title,
       checks(),
       props.request.additions === undefined ? null : `+${props.request.additions.toLocaleString()}`,
       props.request.deletions === undefined ? null : `−${props.request.deletions.toLocaleString()}`,
@@ -354,7 +378,7 @@ function PullRequestRow(props: { request: ControlUiSessionPullRequest }) {
       href={props.request.url}
       target="_blank"
       rel="noopener noreferrer"
-      aria-label={`${t("chat.pullRequests.linkLabel", { reference: formatGitHubItemReference(props.request), title: props.request.title })}, ${details().join(", ")}`}
+      aria-label={`${t("sessionHovercard.pullRequestLabel", { number: String(props.request.number), state: state() })}${details().length > 0 ? `, ${details().join(", ")}` : ""}`}
     >
       <span
         class="session-hovercard__pr-state-icon"
@@ -363,30 +387,16 @@ function PullRequestRow(props: { request: ControlUiSessionPullRequest }) {
         aria-label={stateLabel()}
         title={stateLabel()}
       >
-        <Icon name={sessionPullRequestStateIcons[props.request.state]} />
+        <Icon name={PULL_REQUEST_STATE_ICONS[props.request.state]} />
       </span>
-      <span class="session-hovercard__pr-main">
-        <span class="session-hovercard__pr-title">{props.request.title}</span>
-        <span class="session-hovercard__pr-meta">
-          <span class="session-hovercard__pr-number">
-            {formatGitHubItemReference(props.request)}
-          </span>
-          <span class="session-hovercard__pr-state">{state()}</span>
-          <SessionGitDiff classPrefix="session-hovercard" item={props.request} />
-        </span>
-        <Show when={checks()}>
-          <span class="session-hovercard__pr-checks" data-checks={props.request.checks?.state}>
-            {checks()}
-          </span>
-        </Show>
-      </span>
+      <span class="session-hovercard__pr-title">{props.request.title}</span>
+      <DiffStats item={props.request} />
     </a>
   );
 }
 
 function PullRequestDetails(props: { snapshot?: ControlUiSessionPullRequestSnapshot }) {
   const branch = () => props.snapshot?.branch;
-  const requests = createMemo(() => orderSessionPullRequests(props.snapshot?.pullRequests ?? []));
   const branchLabel = () =>
     t("chat.pullRequests.createPrLabel", { branch: branch()?.branch ?? "" });
   return (
@@ -415,19 +425,22 @@ function PullRequestDetails(props: { snapshot?: ControlUiSessionPullRequestSnaps
                 {t("chat.pullRequests.createPr")}
               </a>
             </Show>
-            <SessionGitDiff classPrefix="session-hovercard" item={branch() ?? {}} />
+            <DiffStats item={branch() ?? {}} />
           </div>
         </Show>
       }
     >
       <div class="session-hovercard__pr-list">
-        <div class="session-hovercard__pr-heading">
-          <span>{t("sessionHovercard.pullRequests")}</span>
-          <span class="session-hovercard__pr-count">{requests().length}</span>
-        </div>
-        <For each={requests()} keyed={(request) => request.url}>
+        <For each={props.snapshot?.pullRequests.slice(0, 1)} keyed={(request) => request.url}>
           {(request) => <PullRequestRow request={request()} />}
         </For>
+        <Show when={(props.snapshot?.pullRequests.length ?? 0) > 1}>
+          <span class="session-hovercard__more">
+            {t("sessionHovercard.more", {
+              count: String((props.snapshot?.pullRequests.length ?? 0) - 1),
+            })}
+          </span>
+        </Show>
       </div>
     </Show>
   );
@@ -533,9 +546,7 @@ export function SessionHovercard(props: SessionHovercardInput) {
             <span class="session-hovercard__error-icon" aria-hidden="true">
               <Icon name="alertTriangle" />
             </span>
-            <span>
-              {props.row?.attention ? sessionAttentionSubtitle(props.row.attention, t) : ""}
-            </span>
+            <span>{props.row?.attention ? sessionAttentionSubtitle(props.row.attention) : ""}</span>
           </section>
         </Show>
         <Show when={props.progressCard?.markdown?.trim()}>

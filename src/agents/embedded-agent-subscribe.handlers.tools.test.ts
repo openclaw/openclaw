@@ -605,16 +605,24 @@ describe("handleToolExecutionStart read path checks", () => {
     });
   });
 
-  it("does not include malformed read payloads in warnings", async () => {
+  it.each([
+    ["marks astral-only previews as truncated", "😀".repeat(101), `${"😀".repeat(100)}…`],
+    ["does not scan beyond the raw warning bound", `${" ".repeat(200)}hidden`, undefined],
+  ])("read warning %s", async (_name, args, expected) => {
     const { ctx, warn } = createTestContext();
-    const args = "private-read-payload";
     await startTool(ctx, { toolName: "read", toolCallId: "tool-bounded-args", args });
 
     const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warnMeta?.argsType).toBe("string");
-    expect(warnMeta).not.toHaveProperty("argsPreview");
-    expect(JSON.stringify(warn.mock.calls)).not.toContain(args);
+    if (expected === undefined) {
+      expect(warnMeta).not.toHaveProperty("argsPreview");
+    } else {
+      const argsPreview = warnMeta?.argsPreview;
+      expect(typeof argsPreview).toBe("string");
+      expect(argsPreview).toBe(expected);
+      expect(argsPreview).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
+    }
   });
 
   it("keeps tool state when phase callbacks throw and event callbacks reject", async () => {

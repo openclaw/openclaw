@@ -223,12 +223,12 @@ export async function gatherDispatchRequest(
     processingReason: "message_start",
     startedAtMs: startTime,
     trackSessionState: canTrackSession,
-    userPrompt: inboundText,
+    userPrompt: typeof inboundText === "string" ? inboundText : undefined,
   });
   const traceAttributes = {
     surface: channel,
     hasSessionKey: Boolean(sessionKey),
-    hasRunId: params.replyOptions?.runId !== undefined,
+    hasRunId: typeof params.replyOptions?.runId === "string",
   };
   const replyHotPathTiming = createReplyHotPathTimingTracker({
     profilerEnabled: isReplyProfilerEnabled({ config: cfg }),
@@ -544,7 +544,7 @@ export async function gatherDispatchRequest(
     }));
   const hookRunner = getGlobalHookRunner();
   const timestamp =
-    ctx.Timestamp !== undefined && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
+    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
   const messageIdForHook =
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const hookCtx = { ...ctx };
@@ -553,8 +553,9 @@ export async function gatherDispatchRequest(
       messageId: messageIdForHook,
     });
     const inboundClaim = toPluginInboundClaimPair(nextHookContext, {
-      commandAuthorized: ctx.CommandAuthorized,
-      wasMentioned: ctx.WasMentioned,
+      commandAuthorized:
+        typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
+      wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
     });
     return {
       hookContext: nextHookContext,

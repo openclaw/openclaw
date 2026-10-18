@@ -1,5 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-
 const ANTIGRAVITY_BARE_PRO_IDS = new Set(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"]);
 const GOOGLE_PROVIDER_PREFIX = "google/";
 const GOOGLE_MODEL_ALIASES = new Map([
@@ -11,7 +9,6 @@ const GOOGLE_MODEL_ALIASES = new Map([
   ["gemini-3.1-flash-lite-preview", "gemini-3.1-flash-lite"],
   ["gemini-3.1-flash", "gemini-3-flash-preview"],
   ["gemini-3.1-flash-preview", "gemini-3-flash-preview"],
-  ["gemini-4", "gemini-4-argon"],
   ["gemma-4-26b", "gemma-4-26b-a4b-it"],
 ]);
 
@@ -26,14 +23,6 @@ export function normalizeGooglePreviewModelId(id: string): string {
 
 export function normalizeTogetherModelId(id: string): string {
   return id === "moonshotai/Kimi-K2.5" ? "moonshotai/Kimi-K2.6" : id;
-}
-
-export function normalizeOpenRouterModelFamilyId(modelId: unknown): string | undefined {
-  if (typeof modelId !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return normalized.replace(/^openrouter\//, "").replace(/^~/, "");
 }
 
 export function normalizeAntigravityPreviewModelId(id: string): string {

@@ -4,12 +4,15 @@ import type {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
-import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS } from "./api.js";
+import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, fetchDiscord } from "./api.js";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
-import { listDiscordGuildChannels, listGuilds, searchDiscordGuildMembers } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";
 
+type DiscordGuild = { id: string; name: string };
+type DiscordUser = { id: string; username: string; global_name?: string; bot?: boolean };
+type DiscordMember = { user: DiscordUser; nick?: string | null };
+type DiscordChannel = { id: string; name?: string | null };
 type DiscordDirectoryAccess = { token: string; query: string; accountId: string };
 
 function resolveDiscordDirectoryAccess(
@@ -27,6 +30,13 @@ function resolveDiscordDirectoryAccess(
   };
 }
 
+async function listDiscordGuilds(token: string): Promise<DiscordGuild[]> {
+  const rawGuilds = await fetchDiscord<DiscordGuild[]>("/users/@me/guilds", token, fetch, {
+    timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS,
+  });
+  return rawGuilds.filter((guild) => guild.id && guild.name);
+}
+
 async function listDiscordDirectoryLive(
   params: DirectoryConfigParams,
   kind: "group" | "user",
@@ -36,17 +46,19 @@ async function listDiscordDirectoryLive(
     return [];
   }
   const { token, query, accountId } = access;
-  const guilds = await listGuilds(token, fetch, { timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS });
+  const guilds = await listDiscordGuilds(token);
   const rows: ChannelDirectoryEntry[] = [];
   const seenUserIds = new Set<string>();
   const limit =
     kind === "user" && typeof params.limit === "number" && params.limit > 0 ? params.limit : 25;
   for (const guild of guilds) {
-    if (!guild.id || !guild.name) {
-      continue;
-    }
     if (kind === "group") {
-      const channels = await listDiscordGuildChannels(token, fetch, guild.id);
+      const channels = await fetchDiscord<DiscordChannel[]>(
+        `/guilds/${guild.id}/channels`,
+        token,
+        fetch,
+        { timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS },
+      );
       for (const channel of channels) {
         const name = channel.name?.trim();
         if (!name) {
@@ -67,12 +79,15 @@ async function listDiscordDirectoryLive(
         }
       }
     } else {
-      const members = await searchDiscordGuildMembers(
+      const paramsObj = new URLSearchParams({
+        query,
+        limit: String(Math.min(limit, 100)),
+      });
+      const members = await fetchDiscord<DiscordMember[]>(
+        `/guilds/${guild.id}/members/search?${paramsObj.toString()}`,
         token,
         fetch,
-        guild.id,
-        query,
-        Math.min(limit, 100),
+        { timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS },
       );
       for (const member of members) {
         const user = member.user;

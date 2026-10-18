@@ -36,7 +36,7 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
     });
   }
 
-  it("accepts prepared literal NO_REPLY text as visible output", () => {
+  it("does not classify deliberate silent replies such as NO_REPLY", () => {
     expect(classify({ assistantTexts: ["NO_REPLY"] })).toBeUndefined();
   });
 

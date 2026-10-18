@@ -23,7 +23,6 @@ const ACTION_REFRESH_DELAY_MS = 350;
 
 type BrowserPanelSnapshotState = {
   running: boolean | null;
-  canAutoResizeViewport: boolean;
   tabs: BrowserPanelTab[];
   view: BrowserPanelView | null;
   loading: boolean;
@@ -112,7 +111,6 @@ export class BrowserPanelSnapshotController {
         )
       ) {
         controller.setState("running", snapshot.running);
-        controller.setState("canAutoResizeViewport", snapshot.canAutoResizeViewport);
         controller.setState(
           "tabs",
           controller.native.mergeRemoteTabs(

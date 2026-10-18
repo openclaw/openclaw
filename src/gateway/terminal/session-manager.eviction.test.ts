@@ -71,7 +71,7 @@ describe("TerminalSessionManager idle eviction", () => {
 
     const opening = manager.open(baseOpenRequest({ owner: agentOwner }));
     await vi.waitFor(() => expect(releaseSpawn).toBeDefined());
-    // The idle victim becomes viewer-attached while the replacement spawns.
+    // The claimed victim becomes viewer-attached while the replacement spawns.
     expect(manager.attach("viewer-1", victim.sessionId)?.sessionId).toBe(victim.sessionId);
     releaseSpawn?.();
 
@@ -87,7 +87,7 @@ describe("TerminalSessionManager idle eviction", () => {
     expect(manager.write("viewer-1", victim.sessionId, "still-alive\r")).toBe(true);
   });
 
-  it("evicts the freshly idlest session when the oldest becomes active mid-spawn", async () => {
+  it("evicts the freshly idlest session when the claimed victim becomes active mid-spawn", async () => {
     vi.useFakeTimers();
     try {
       const ptys: FakeTerminalPty[] = [];
@@ -117,7 +117,7 @@ describe("TerminalSessionManager idle eviction", () => {
       gateNextSpawn = true;
       const opening = manager.open(baseOpenRequest({ owner: agentOwner }));
       await vi.waitFor(() => expect(releaseSpawn).toBeDefined());
-      // The oldest session becomes active during the spawn, making
+      // The claimed (oldest) session becomes active during the spawn, making
       // the newer session the genuinely idlest candidate.
       await vi.advanceTimersByTimeAsync(5_000);
       expectDefined(ptys[0], "oldest pty invariant").emitData("busy\n");
@@ -153,15 +153,12 @@ describe("TerminalSessionManager idle eviction", () => {
     const seededOutcome = await seeded;
     expect(seededOutcome.ok).toBe(true);
 
-    // A reserves the free slot; B sees the reservation and an idle eviction
-    // candidate. B's spawn completes first.
+    // A reserves the free slot; B sees the reservation and claims the seeded
+    // session for eviction. B's spawn completes first.
     const openA = manager.open(baseOpenRequest({ owner: agentOwner }));
     await vi.waitFor(() => expect(gates).toHaveLength(2));
     const openB = manager.open(baseOpenRequest({ owner: agentOwner }));
     await vi.waitFor(() => expect(gates).toHaveLength(3));
-    const excess = manager.open(baseOpenRequest({ owner: agentOwner }));
-    expect(gates).toHaveLength(3);
-    await expect(excess).resolves.toMatchObject({ ok: false, code: "limit" });
     gates[2]?.(makeFakePty());
     const outcomeB = await openB;
     gates[1]?.(makeFakePty());
@@ -173,7 +170,7 @@ describe("TerminalSessionManager idle eviction", () => {
     expect(manager.size).toBeLessThanOrEqual(2);
   });
 
-  it("allows idle eviction after a cancelled open's spawn never settles", async () => {
+  it("releases the eviction claim when a cancelled open's spawn never settles", async () => {
     let hangNextSpawn = false;
     const manager = new TerminalSessionManager({
       emit: vi.fn(),
@@ -197,7 +194,7 @@ describe("TerminalSessionManager idle eviction", () => {
     await vi.waitFor(() => expect(hangNextSpawn).toBe(false));
     controller.abort(new Error("cancelled"));
 
-    // Cancellation releases capacity, so a later open can evict the victim.
+    // The cancelled open's claim is gone, so a later open can evict the victim.
     const next = await manager.open(baseOpenRequest({ owner: agentOwner }));
     expect(next.ok).toBe(true);
     expect(manager.size).toBe(1);
@@ -205,7 +202,7 @@ describe("TerminalSessionManager idle eviction", () => {
     void hung;
   });
 
-  it("keeps the idle victim alive when the replacement spawn fails", async () => {
+  it("keeps the claimed victim alive when the replacement spawn fails", async () => {
     const pty = makeFakePty();
     let failNextSpawn = false;
     const manager = new TerminalSessionManager({
@@ -229,7 +226,7 @@ describe("TerminalSessionManager idle eviction", () => {
     if (!failed.ok) {
       expect(failed.code).toBe("spawn_failed");
     }
-    // The victim survives a failed replacement and remains eligible for eviction.
+    // The victim survives a failed replacement and stays claimable later.
     expect(manager.size).toBe(1);
     expect(pty.killed).toBe(false);
     pty.emitData("still-alive\n");

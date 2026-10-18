@@ -12,10 +12,6 @@ import {
   buildSystemRunApprovalPlan,
   hardenApprovedExecutionPaths,
 } from "./invoke-system-run-plan.js";
-import {
-  canMutateNativeBinaryFixturePath,
-  resolveNativeBinaryFixturePath,
-} from "./system-run-native-binary.test-helpers.js";
 
 type PathTokenSetup = {
   expected: string;
@@ -68,6 +64,22 @@ function requirePathToken(pathToken: PathTokenSetup | null): PathTokenSetup {
 
 function sha256FileSync(filePath: string): string {
   return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function canWritePathSync(targetPath: string): boolean {
+  try {
+    fs.accessSync(targetPath, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function canMutateNativeBinaryFixturePath(binaryPath: string): boolean {
+  const realPath = fs.realpathSync(binaryPath);
+  return [binaryPath, path.dirname(binaryPath), realPath, path.dirname(realPath)].some((entry) =>
+    canWritePathSync(entry),
+  );
 }
 
 function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
@@ -160,6 +172,25 @@ function uniqueRuntimeBinNames(
       ),
     ),
   ];
+}
+
+let cachedNativeBinaryFixturePath: string | undefined;
+
+function resolveNativeBinaryFixturePath(): string {
+  if (cachedNativeBinaryFixturePath) {
+    return cachedNativeBinaryFixturePath;
+  }
+  for (const candidate of ["/bin/ls", "/usr/bin/ls", "/bin/echo", "/usr/bin/printf"]) {
+    try {
+      if (fs.statSync(candidate).isFile()) {
+        cachedNativeBinaryFixturePath = candidate;
+        return candidate;
+      }
+    } catch {
+      continue;
+    }
+  }
+  throw new Error("expected a native binary fixture path");
 }
 
 function expectShellPayloadApprovalDenied(params: {

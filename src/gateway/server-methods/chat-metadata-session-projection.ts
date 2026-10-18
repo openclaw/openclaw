@@ -11,7 +11,6 @@ import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model
 import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
-import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -129,10 +128,8 @@ export async function prepareChatMetadataModelProjection(params: {
   // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
   // models.list refresh requests so a slow provider cannot delay chat startup.
   const snapshot = params.facts.modelCatalog;
-  // Capture before creating the shared projector; models.list cannot replace its retained config.
-  const config = captureRuntimeConfig(params.facts.owner.config);
   const projectorParams: Parameters<typeof prepareModelCatalogDecisions>[0] = {
-    cfg: config,
+    cfg: params.facts.owner.config,
     agentId: params.facts.agentId,
     snapshot,
     metadataSnapshot: params.facts.owner.metadataSnapshot,
@@ -161,7 +158,7 @@ export async function prepareChatMetadataModelProjection(params: {
       params: { view: "configured", includeDefaultModels: false },
       preloadedCatalog: {
         agentId: params.facts.agentId,
-        config,
+        config: params.facts.owner.config,
         snapshot,
       },
       preloadedOnly: true,

@@ -18,7 +18,6 @@ import {
   nonBrowserTestBasenamePattern,
 } from "../vitest/vitest.include-patterns.ts";
 import { matchesVitestGlob } from "../vitest/vitest.pattern-file.ts";
-import { createUiIsolatedVitestConfig } from "../vitest/vitest.ui-isolated.config.ts";
 import {
   controlUiTestGlobs,
   controlUiE2eTestGlobs,
@@ -183,7 +182,6 @@ describe("TSX discovery", () => {
     for (const [file, expected] of [
       ["src/component.test.tsx", "unit"],
       ["src/component.node.test.tsx", "unit-node"],
-      ["src/pages/chat/chat-pane-session-controls.permissions.node.test.ts", "unit-mock-registry"],
       ["src/component.browser.test.tsx", "browser"],
       ["../extensions/example/browser/view.test.tsx", "unit"],
     ] as const) {
@@ -209,23 +207,16 @@ describe("TSX discovery", () => {
           filterFilesByPatterns([file], uiNodeConfig.test?.include ?? [], [], matchesVitestGlob),
         ).toEqual([file]);
       }
+      const root = createUiVitestConfig({}).test!;
       const repositoryFile = path.posix.normalize(`ui/${file}`);
-      const rootProjects = [createUiVitestConfig({}).test!, createUiIsolatedVitestConfig({}).test!];
       expect(
-        rootProjects
-          .filter(
-            (test) =>
-              filterFilesByPatterns(
-                [repositoryFile],
-                test.include ?? [],
-                test.exclude ?? [],
-                matchesVitestGlob,
-              ).length,
-          )
-          .map((test) => test.name),
-      ).toEqual(
-        expected === "browser" ? [] : [expected === "unit-mock-registry" ? "ui-isolated" : "ui"],
-      );
+        filterFilesByPatterns(
+          [repositoryFile],
+          root.include ?? [],
+          root.exclude ?? [],
+          matchesVitestGlob,
+        ),
+      ).toEqual(expected === "browser" ? [] : [repositoryFile]);
     }
   });
 

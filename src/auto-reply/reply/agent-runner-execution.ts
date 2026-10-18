@@ -16,6 +16,7 @@ import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/
 import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resource.js";
+import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
@@ -47,6 +48,7 @@ import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
 import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
 import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
 import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
@@ -62,10 +64,11 @@ import type {
   AgentTurnExecutionResult,
   AgentTurnInternalResult,
   AgentTurnParams,
+  InternalFollowupRun,
 } from "./agent-runner-execution.types.js";
 import {
+  buildTerminalAgentRunFailureReplyPayload,
   markAgentRunFailureReplyPayload,
-  resolveTerminalAgentRunFailurePayload,
 } from "./agent-runner-failure-reply.js";
 import { runAgentFallbackCandidates } from "./agent-runner-fallback-candidate.js";
 import type {
@@ -76,7 +79,6 @@ import type {
 import { settleAgentFallbackCycle } from "./agent-runner-fallback-settlement.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
-import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
 import {
   createAgentTurnTimingTracker,
   resolveRunStartupPhase,
@@ -192,7 +194,6 @@ async function executeAgentTurnInternalLoop(
   let currentTurnImages: CurrentTurnImages;
   let modelPatch: Awaited<ReturnType<typeof createAgentPatchedSessionModelRunGuard>>;
   try {
-    await prepareReplySubagentContinuation(params, runId, runtimeConfig, preparedRunAdmission);
     replyMediaContext =
       params.replyMediaContext ??
       agentTurnTiming.measureSync("reply_media_context", () =>
@@ -200,8 +201,9 @@ async function executeAgentTurnInternalLoop(
           buildReplyMediaContextParams(params.followupRun, params.sessionKey, runtimeConfig),
         ),
       );
+    const internalFollowupRun = params.followupRun as InternalFollowupRun;
     const hasQueuedCurrentTurnImages =
-      params.followupRun.currentTurnImagesPrepared === true ||
+      internalFollowupRun.currentTurnImagesPrepared === true ||
       Object.hasOwn(params.followupRun, "images") ||
       Object.hasOwn(params.followupRun, "imageOrder");
     // Queue admission owns current-turn materialization, including empty results.
@@ -210,7 +212,7 @@ async function executeAgentTurnInternalLoop(
       ? {
           images: params.followupRun.images,
           imageOrder: params.followupRun.imageOrder,
-          mediaImageLayout: params.followupRun.mediaImageLayout,
+          mediaImageLayout: internalFollowupRun.mediaImageLayout,
         }
       : await agentTurnTiming.measure("current_turn_images", () =>
           resolveCurrentTurnImages({
@@ -513,20 +515,22 @@ async function executeAgentTurnInternalLoop(
     ? false
     : (modelPatch.captureFallbackFailure(fallbackAttempts) ?? false);
   await modelPatch.finish(!terminalRunFailed && !patchedModelNeedsRevert);
-  const terminalFailurePayload = terminalRunFailed
-    ? await resolveTerminalAgentRunFailurePayload({
-        result: runResult,
-        run: {
-          ...params.followupRun.run,
-          trigger: resolveReplyRunTrigger(params),
-          isHeartbeat: params.isHeartbeat,
-          currentInboundEventKind: params.followupRun.currentInboundEventKind,
-        },
-        useHeartbeatFailureCopy: params.opts?.useHeartbeatFailureCopy,
-        visibleReplyDelivered: () =>
-          resolveReplyFailureVisibility(params.resolveVisibleReplyDelivery, directBlockDeliveries),
-      })
-    : undefined;
+  let terminalFailurePayload: ReplyPayload | undefined;
+  if (terminalRunFailed) {
+    const replyExpectation = resolveReplyExpectation(params.followupRun.run);
+    terminalFailurePayload = buildTerminalAgentRunFailureReplyPayload({
+      isHeartbeat: params.isHeartbeat,
+      useHeartbeatFailureCopy: params.opts?.useHeartbeatFailureCopy,
+      replyExpectation,
+      visibleReplyDelivered:
+        replyExpectation === "optional"
+          ? await resolveReplyFailureVisibility(
+              params.resolveVisibleReplyDelivery,
+              directBlockDeliveries,
+            )
+          : false,
+    });
+  }
 
   return {
     kind: "settled",
@@ -542,7 +546,7 @@ async function executeAgentTurnInternalLoop(
       directBlockDeliveries.some((delivery) => delivery.terminalDeliveryConfirmed === true) ||
       undefined,
     directBlockDeliveries,
-    ...(terminalRunFailed
+    ...(terminalFailurePayload
       ? {
           status: "failed" as const,
           terminalFailurePayload,

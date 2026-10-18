@@ -45,7 +45,7 @@ import {
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import { getWorkerTurnInference } from "./placement-turn-claim-events.js";
-import { projectWorkerInferenceError } from "./worker-error.js";
+import { formatWorkerInferenceError } from "./worker-error.js";
 
 export type { WorkerInferenceSink } from "./inference.types.js";
 
@@ -351,12 +351,10 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     } catch (caught) {
       const error = preserveInferenceAuthorityFailure(caught, entry.authorityFailure);
       failure = { error };
-      const projected = entry.abortReason ? undefined : projectWorkerInferenceError(error);
       outcome = terminalError(
         entry.abortReason ?? "provider-error",
         undefined,
-        projected?.message,
-        projected?.retryAfterMs,
+        entry.abortReason ? undefined : formatWorkerInferenceError(error),
       );
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         retainFailure(entry, error);

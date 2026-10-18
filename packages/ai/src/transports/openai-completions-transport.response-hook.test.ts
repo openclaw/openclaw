@@ -109,8 +109,10 @@ afterEach(() => {
   configureAiTransportHost(previousHost);
 });
 
-describe("OpenAI Chat response hook", () => {
-  const createStream = createManagedFixtureStream;
+describe.each([
+  { name: "package", createStream: streamOpenAICompletions },
+  { name: "managed", createStream: createManagedFixtureStream },
+])("$name OpenAI Chat response hook", ({ createStream }) => {
   it("reports a rejected response before its body is consumed without retrying", async () => {
     const response = Response.json({ error: { message: "overloaded" } }, { status: 503 });
     const readBody = vi.spyOn(response, "text");
@@ -151,7 +153,7 @@ describe("OpenAI Chat response hook", () => {
       { apiKey: "fixture-token", onResponse },
       acceptanceObserver,
     );
-    const stream = streamOpenAICompletions(model, context, options);
+    const stream = createStream(model, context, options);
     const consume = (async () => {
       for await (const event of stream) {
         order.push(event.type);
@@ -247,7 +249,7 @@ describe("OpenAI Chat response hook", () => {
     const lifecycle = installResponse();
     const onFirstEventTimeout = vi.fn();
     const onResponse = vi.fn(() => new Promise<void>(() => {}));
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = createStream(model, context, {
       apiKey: "fixture-token",
       firstEventTimeoutMs: 20,
       onFirstEventTimeout,

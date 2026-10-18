@@ -1,17 +1,18 @@
-import { render, type JSX } from "@solidjs/web";
+import { nothing, render } from "lit";
 import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
 
-type PromiseModalHost<T> = {
+type PromiseModalHost<T, Content> = {
   host: HTMLDivElement;
   finish: (value: T) => void;
-  render: (content: () => JSX.Element) => void;
+  render: (content: () => Content) => void;
   readonly settled: boolean;
 };
 
 /** Owns one imperative modal host; dismissal and reentrancy stay with its dialog. */
-export function withPromiseModalHost<T>(
+export function withPromiseModalHost<T, Content = unknown>(
   abort: { signal?: AbortSignal; value: T } | undefined,
-  initialize: (modal: PromiseModalHost<T>) => void,
+  initialize: (modal: PromiseModalHost<T, Content>) => void,
+  mountContent?: (content: () => Content, host: HTMLDivElement) => () => void,
 ): Promise<T> {
   if (abort?.signal?.aborted) {
     return Promise.resolve(abort.value);
@@ -20,25 +21,32 @@ export function withPromiseModalHost<T>(
   document.body.append(host);
   return new Promise((resolve, reject) => {
     let disposeContent: (() => void) | undefined;
-    let pendingContent: (() => JSX.Element) | undefined;
+    let pendingContent: (() => Content) | undefined;
     let ready = customElements.get("openclaw-modal-dialog") !== undefined;
     const cleanup = () => {
       abort?.signal?.removeEventListener("abort", handleAbort);
       pendingContent = undefined;
       disposeContent?.();
+      if (!mountContent) {
+        render(nothing, host);
+      }
       host.remove();
     };
     const modal = {
       host,
       settled: false,
-      render(content: () => JSX.Element) {
+      render(content: () => Content) {
         if (modal.settled) {
           return;
         }
         pendingContent = content;
         if (ready) {
-          disposeContent?.();
-          disposeContent = render(content, host);
+          if (mountContent) {
+            disposeContent?.();
+            disposeContent = mountContent(content, host);
+          } else {
+            render(content(), host);
+          }
         }
       },
       finish(value: T) {

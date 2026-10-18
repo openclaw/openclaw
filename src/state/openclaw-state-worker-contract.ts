@@ -18,12 +18,15 @@ import type {
 import type { reserveWorktreeCapacityInWorker } from "../agents/worktrees/capacity.worker.js";
 import type { recoverPendingWorktreesInWorker } from "../agents/worktrees/registry-run-end.worker.js";
 import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
-import type { ClawAddStateWorkerOperations } from "../claws/add-state-worker-contract.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
 import type { ConfigHealthEntryBasis } from "../config/io.health-state.types.js";
 import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
+import type {
+  RepositoryGitHubPublicationPendingQuery,
+  RepositoryGitHubPublicationStatusRow,
+} from "../gateway/github-repository-publication.kernel.js";
 import type {
   SessionGroupCatalogMutation,
   SessionGroupCatalogMutationResult,
@@ -42,7 +45,7 @@ import type {
 } from "../infra/update-run-interruption-contract.js";
 import type { UpdateRunWriteOperations } from "../infra/update-run-mutation.types.js";
 import type { UpdateRunReconciliationOperations } from "../infra/update-run-reconciliation.types.js";
-import type { PluginStateWriteOperations } from "../plugin-state/plugin-state-worker-contract.js";
+import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type {
@@ -83,13 +86,12 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
   WorktreeTemplateWorkerOperations &
   WorkspaceStateWorkerOperations &
   UpdateRunReconciliationOperations &
-  ClawAddStateWorkerOperations &
   UpdateRunWriteOperations &
   CaptureWorkerOperations &
   TuiLastSessionWorkerOperations &
   SessionStateWorkerOperations &
   SessionUpstreamWorkerOperations &
-  PluginStateWriteOperations &
+  PluginStateWorkerOperations &
   UserPreferenceWorkerOperations &
   CronStateWorkerOperations &
   TranscriptReadOperations &
@@ -107,6 +109,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       input: undefined;
       output: StateSchemaPublicationBlocker | undefined;
     };
+    "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
     "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };
     "workspace.replaceAttestation": {
@@ -130,6 +133,10 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
         sessionEntryCurrentSource?: SessionEntryCurrentSource;
       };
       output: void;
+    };
+    "githubRepository.personalPending": {
+      input: RepositoryGitHubPublicationPendingQuery;
+      output: RepositoryGitHubPublicationStatusRow | undefined;
     };
     "agentProvenance.readBatch": {
       input: { agentIds: readonly string[] };
@@ -229,7 +236,7 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | keyof RestartLifecycleWorkerOperations
       | Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>
       | keyof CaptureWorkerOperations
-      | keyof PluginStateWriteOperations
+      | keyof PluginStateWorkerOperations
       | keyof WorktreeTemplateWorkerOperations
       | keyof OpenClawStateLeaseLifecycleOperations;
   }

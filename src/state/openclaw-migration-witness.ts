@@ -12,16 +12,12 @@ import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-asse
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { LEGACY_CANONICAL_VALIDATION_TRIGGER_NAMES } from "./openclaw-agent-canonical-validation-migration.js";
-import {
-  MEDIA_ROWS_MIGRATION_META_KEY,
-  OPENCLAW_AGENT_SCHEMA_VERSION,
-} from "./openclaw-agent-db-contract.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   assertOpenClawAgentSchemaContains,
   getOpenClawAgentMigrationSchema,
 } from "./openclaw-agent-db-schema-helpers.js";
 import { AGENT_JSON_PREDICATE_COLUMNS } from "./openclaw-agent-json-predicate-schema.js";
-import { withoutOutboxEnqueueSequence } from "./openclaw-agent-outbox-sequence-migration.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
@@ -112,7 +108,7 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   }
   if (
     (witness.role === "agent" &&
-      (witness.agentId === null || ![24, 25, 26, 27].includes(witness.schemaVersion))) ||
+      (witness.agentId === null || ![24, 25, 26].includes(witness.schemaVersion))) ||
     (witness.role !== "agent" && witness.agentId !== null) ||
     (witness.role !== "agent" && witness.schemaSha256 !== witness.migrationSchemaSha256) ||
     (witness.role !== "global" && witness.registryMigrationBinding !== null) ||
@@ -214,11 +210,7 @@ function captureTable(
   if (columns.length === 0 || columns.length > 256) {
     throw new Error(`Unsupported migration witness columns: ${table}`);
   }
-  const outbox = role === "agent" && table === "context_engine_turn_outbox";
-  // The named sequence aliases rowid; hash it once, retaining the old witness layout.
-  const names = columns
-    .map(({ name }) => name)
-    .filter((name) => !outbox || name !== "enqueue_sequence");
+  const names = columns.map(({ name }) => name);
   if (!withoutRowid) {
     const rowid = ["rowid", "_rowid_", "oid"].find(
       (alias) => !names.some((name) => name.toLowerCase() === alias),
@@ -254,16 +246,8 @@ function captureTable(
         ];
       }),
     );
-  if (role === "agent" && table === "schema_meta") {
-    // This exact row records derived repair completion, not retained agent content.
-    query = query.where(
-      witnessIdentifier("meta_key", "witness"),
-      "!=",
-      MEDIA_ROWS_MIGRATION_META_KEY,
-    );
-  }
   const primary = columns.filter(({ pk }) => pk > 0).toSorted((a, b) => a.pk - b.pk);
-  const primaryNames = outbox ? ["advancement_key"] : primary.map(({ name }) => name);
+  const primaryNames = primary.map(({ name }) => name);
   for (const column of [...primaryNames, ...names.filter((name) => !primaryNames.includes(name))]) {
     query = query.orderBy(witnessIdentifier(column, "witness"));
   }
@@ -417,7 +401,7 @@ export function captureOpenClawMigrationWitness(
         throw new Error("Migration witness database owner does not match the backup inventory");
       }
       if (owner.role === "agent") {
-        if (![24, 25, 26, 27].includes(schemaVersion)) {
+        if (![24, 25, 26].includes(schemaVersion)) {
           throw new Error(`Unsupported agent migration witness schema: ${schemaVersion}`);
         }
         assertOpenClawAgentSchemaContains(
@@ -508,12 +492,7 @@ export function captureOpenClawMigrationWitness(
         object.type === "table" &&
         (object.name === "session_key_contract" || derivedMigrationColumns.has(object.name))
       ) {
-        const definition = parseSqliteTableDefinition(
-          object.name === "context_engine_turn_outbox" && object.sql
-            ? withoutOutboxEnqueueSequence(object.sql)
-            : object.sql,
-          object.name,
-        );
+        const definition = parseSqliteTableDefinition(object.sql, object.name);
         for (const column of definition.columns.keys()) {
           if (!migrationColumn(role, object.name, column)) {
             definition.columns.delete(column);

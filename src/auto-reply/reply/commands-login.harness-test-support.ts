@@ -5,7 +5,6 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { createProviderLoginFlowRegistry } from "../../plugin-sdk/provider-auth-login-flow-runtime.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
@@ -17,20 +16,6 @@ const runModelsAuthLoginFlowMock = vi.hoisted(() => vi.fn());
 const patchSessionEntryMock = vi.hoisted(() =>
   vi.fn<(params: SessionPatchInvocation) => ReturnType<typeof patchSessionEntryCore>>(),
 );
-const loginFlows = vi.hoisted(
-  (): { current?: ReturnType<typeof createProviderLoginFlowRegistry> } => ({}),
-);
-
-vi.mock("../../plugin-sdk/provider-auth-login-flow-runtime.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../plugin-sdk/provider-auth-login-flow-runtime.js")>();
-  return {
-    ...actual,
-    createProviderLoginFlowRegistry() {
-      return (loginFlows.current = actual.createProviderLoginFlowRegistry());
-    },
-  };
-});
 
 vi.mock("../../commands/models/auth.js", () => ({
   runModelsAuthLoginFlowCore: (opts: unknown) => runModelsAuthLoginFlowMock(opts),
@@ -45,6 +30,8 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
       patchSessionEntryMock({ ...scope, update, ...options }),
   };
 });
+
+const { testing } = await import("./commands-login.test-support.js");
 
 export function buildLoginParams(
   commandBody: string,
@@ -127,8 +114,7 @@ export function setupLoginCommandTests() {
     vi.clearAllMocks();
     runModelsAuthLoginFlowMock.mockReset();
     patchSessionEntryMock.mockReset();
-    loginFlows.current?.logins.clear();
-    loginFlows.current?.modelAccess.clear();
+    testing.clearActiveFlows();
   });
 
   afterEach(() => {

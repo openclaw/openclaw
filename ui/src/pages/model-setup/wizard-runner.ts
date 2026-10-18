@@ -32,8 +32,7 @@ export type ModelSetupWizardStartMethod =
   | "models.authLogin"
   | "openclaw.setup.auth.start"
   | "openclaw.setup.prepare.start"
-  | "openclaw.setup.activate.start"
-  | "openclaw.setup.runtime.start";
+  | "openclaw.setup.activate.start";
 
 export type ModelSetupWizardCompletion = {
   startMethod: ModelSetupWizardStartMethod;
@@ -188,7 +187,7 @@ export class ModelSetupWizardRunner {
     authChoice: string,
     startMethod: Exclude<
       ModelSetupWizardStartMethod,
-      "openclaw.setup.activate.start" | "openclaw.setup.runtime.start" | "mcp.authLogin"
+      "openclaw.setup.activate.start" | "mcp.authLogin"
     > = "openclaw.setup.auth.start",
     preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> & {
       selectModel?: true;
@@ -218,22 +217,13 @@ export class ModelSetupWizardRunner {
     return this.startSession(serverName, "mcp.authLogin", { serverName });
   }
 
-  startRuntime(
-    params: { agentId: string; runtimeId: string; configPatch: Record<string, unknown> },
-    label: string,
-  ): Promise<ModelSetupWizardCompletion | null> {
-    this.authLabel = label;
-    return this.startSession(params.runtimeId, "openclaw.setup.runtime.start", params);
-  }
-
   private async startSession(
     authChoice: string,
     startMethod: ModelSetupWizardStartMethod,
     params:
       | { authChoice: string; modelTarget?: "utility"; selectModel?: true }
       | SystemAgentSetupActivateParams
-      | { serverName: string }
-      | { agentId: string; runtimeId: string; configPatch: Record<string, unknown> },
+      | { serverName: string },
     activationTargetId?: string,
   ): Promise<ModelSetupWizardCompletion | null> {
     const client = this.options.getClient();
@@ -269,12 +259,7 @@ export class ModelSetupWizardRunner {
     this.session = session;
     this.setState({ phase: "starting", authChoice });
     try {
-      const agentId =
-        "agentId" in params
-          ? params.agentId
-          : startMethod === "mcp.authLogin"
-            ? null
-            : this.options.getAgentId();
+      const agentId = startMethod === "mcp.authLogin" ? null : this.options.getAgentId();
       const request = client
         .request<WizardStartResult>(
           startMethod,
@@ -372,11 +357,7 @@ export class ModelSetupWizardRunner {
       return undefined;
     }
     if (result?.status === "cancelled" || result?.status === "error") {
-      if (
-        session.startMethod === "models.authLogin" ||
-        session.startMethod === "mcp.authLogin" ||
-        session.startMethod === "openclaw.setup.runtime.start"
-      ) {
+      if (session.startMethod === "models.authLogin" || session.startMethod === "mcp.authLogin") {
         // Cancellation acknowledges the abort before provider teardown releases
         // admission. Status waits for that release; a purged session is settled.
         try {
@@ -680,9 +661,7 @@ export class ModelSetupWizardRunner {
     try {
       await this.sendCancellation(
         session,
-        session.startMethod === "models.authLogin" ||
-          session.startMethod === "mcp.authLogin" ||
-          session.startMethod === "openclaw.setup.runtime.start",
+        session.startMethod === "models.authLogin" || session.startMethod === "mcp.authLogin",
       );
     } catch {
       // Detached cleanup is best effort; explicit cancellation surfaces failures.

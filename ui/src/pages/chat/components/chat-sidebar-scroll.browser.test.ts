@@ -1,31 +1,36 @@
+import { html, render } from "lit";
 import { describe, expect, it } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
-import type { ChatDetailPanel } from "./chat-detail-panel.tsx";
-import type { ChatDetailPanelContent } from "./chat-sidebar-content-types.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
 import "./chat-files-panel.tsx";
 import "./chat-detail-panel.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 
+type DetailPanel = HTMLElement & {
+  content: SidebarContent;
+  updateComplete: Promise<unknown>;
+};
+
 async function mountDetailPanel(
   host: "Review" | "Files",
-  content: ChatDetailPanelContent,
+  content: SidebarContent,
 ): Promise<{
-  panel: ChatDetailPanel;
+  panel: DetailPanel;
   hideAndReselect: () => Promise<void>;
   release: () => void;
 }> {
   const container = createChatSidebarContainer();
   container.className = "side-panel__panel";
   container.style.cssText = "width:480px;height:320px;";
-  const detailPanel = document.createElement("openclaw-chat-detail-panel");
-  detailPanel.className = "chat-sidebar";
-  detailPanel.embedded = true;
-  detailPanel.content = content;
-  const renderDetail = () => detailPanel;
+  const renderDetail = (detail: SidebarContent) => html`<openclaw-chat-detail-panel
+    class="chat-sidebar"
+    .content=${detail}
+    .embedded=${true}
+  ></openclaw-chat-detail-panel>`;
   const files = host === "Files" ? document.createElement("openclaw-chat-files-panel") : null;
   if (files) {
     files.previews = [{ id: "preview", label: "Long preview", content }];
@@ -36,11 +41,11 @@ async function mountDetailPanel(
     };
     container.append(files);
   } else {
-    container.append(renderDetail());
+    render(renderDetail(content), container);
   }
   document.body.append(container);
   await files?.updateComplete;
-  const panel = container.querySelector<ChatDetailPanel>("openclaw-chat-detail-panel")!;
+  const panel = container.querySelector<DetailPanel>("openclaw-chat-detail-panel")!;
   await panel.updateComplete;
 
   return {

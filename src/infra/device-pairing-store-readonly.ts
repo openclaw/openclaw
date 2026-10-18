@@ -2,11 +2,7 @@ import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  captureOpenClawStateWorkerContext,
-  captureOpenClawStateReadContext,
-} from "../state/openclaw-state-worker-context.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { DeviceBootstrapBoundContextInput } from "./device-bootstrap.worker-types.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { captureDevicePairingPublication } from "./device-pairing-publication.js";
@@ -14,7 +10,6 @@ import type {
   DevicePairingNodeSnapshot,
   DevicePairingReadCommand,
 } from "./device-pairing-read.types.js";
-import type { PairedDevice } from "./device-pairing.types.js";
 
 async function readPairing<Command extends DevicePairingReadCommand>(
   command: Command,
@@ -107,31 +102,19 @@ export async function listDevicePairingStoreRecordsReadOnly(baseDir?: string, cu
   return reply.list;
 }
 
-export function loadPairedDevicePairingStoreRecordReadOnly(deviceId: string, baseDir?: string) {
-  return readCurrentPairedDevice(deviceId, (device) => device, baseDir);
-}
-
-/** Run authorization without yielding after reading the committed publication. */
-export async function readCurrentPairedDevice<T>(
+export async function loadPairedDevicePairingStoreRecordReadOnly(
   deviceId: string,
-  read: (device: PairedDevice | null) => T,
   baseDir?: string,
-): Promise<T> {
-  const context = captureOpenClawStateReadContext(
-    resolveOpenClawStateSqlitePath(
-      baseDir ? { ...process.env, OPENCLAW_STATE_DIR: baseDir } : process.env,
-    ),
+) {
+  const { reply } = await readPairing(
+    { type: "devicePairing.lookup", deviceId: deviceId.trim() },
+    baseDir,
+    true,
   );
-  let device = captureDevicePairingPublication(context.admission).readDevice(deviceId.trim());
-  if (device === undefined) {
-    await readPairing({ type: "devicePairing.lookup", deviceId: deviceId.trim() }, baseDir, true);
-    device = captureDevicePairingPublication(context.admission).readDevice(deviceId.trim());
-    if (device === undefined) {
-      throw new Error("Device pairing read publication was replaced");
-    }
+  if (!reply) {
+    return null;
   }
-  context.admission.assertCurrent();
-  return read(device);
+  return reply.device;
 }
 
 export async function loadPendingDevicePairingStoreRecordReadOnly(

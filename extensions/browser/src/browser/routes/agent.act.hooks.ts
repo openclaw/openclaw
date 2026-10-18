@@ -161,7 +161,7 @@ export function registerBrowserAgentActHookRoutes(
         dialogId,
         accept,
         promptText,
-        timeoutMs,
+        timeoutMs: timeoutMs ?? undefined,
         ...(assertCurrent ? { assertCurrent } : {}),
       });
       res.json({ ok: true });

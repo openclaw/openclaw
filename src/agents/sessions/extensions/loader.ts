@@ -171,7 +171,7 @@ function createExtensionAPI(
     sendUserMessage: (content, options) => {
       activeRuntime().sendUserMessage(content, options);
     },
-    // Released synchronous adapters remain supported through 2026-12-31.
+    // Retained synchronous adapters for third-party extensions until the next SDK major.
     appendEntry: (customType, data) => {
       warnSessionPersistenceDeprecation("ExtensionAPI.appendEntry", "appendEntryAsync");
       activeRuntime().appendEntry(customType, data);

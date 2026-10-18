@@ -1,7 +1,12 @@
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import type { SpeechProviderConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
+import type {
+  SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
+  SpeechProviderConfig,
+  SpeechProviderPlugin,
+} from "openclaw/plugin-sdk/speech-core";
 import {
-  createSpeechDirectiveParser,
+  parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
@@ -89,27 +94,39 @@ function readProviderConfig(config: SpeechProviderConfig) {
   });
 }
 
-const parseDirectiveToken = createSpeechDirectiveParser({
-  voice: ["allowVoice", ["voice", "volcengine_voice", "volcenginevoice"]],
-  speedRatio: [
-    "allowVoiceSettings",
-    ["speed", "speedratio", "speed_ratio"],
-    {
-      number: {
+function parseDirectiveToken(
+  ctx: SpeechDirectiveTokenParseContext,
+): SpeechDirectiveTokenParseResult {
+  switch (ctx.key) {
+    case "voice":
+    case "volcengine_voice":
+    case "volcenginevoice":
+      if (!ctx.policy.allowVoice) {
+        return { handled: true };
+      }
+      return { handled: true, overrides: { ...ctx.currentOverrides, voice: ctx.value } };
+    case "speed":
+    case "speedratio":
+    case "speed_ratio": {
+      return parseSpeechDirectiveNumberOverride({
+        ctx,
+        overrideKey: "speedRatio",
         range: { min: 0.2, max: 3 },
         warning: (value) => `invalid Volcengine speedRatio "${value}"`,
-      },
-    },
-  ],
-  emotion: ["allowVoiceSettings", ["emotion"]],
-});
+        mergeCurrentOverrides: true,
+      });
+    }
+    case "emotion":
+      if (!ctx.policy.allowVoiceSettings) {
+        return { handled: true };
+      }
+      return { handled: true, overrides: { ...ctx.currentOverrides, emotion: ctx.value } };
+    default:
+      return { handled: false };
+  }
+}
 
 export function buildVolcengineSpeechProvider(): SpeechProviderPlugin {
-  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) => {
-    const cfg = readProviderConfig(providerConfig);
-    const legacy = resolveLegacyVolcengineCredentials(cfg);
-    return Boolean(resolveSeedSpeechApiKey(cfg.apiKey) || (legacy.appId && legacy.token));
-  };
   return {
     id: "volcengine",
     label: "Volcengine",
@@ -127,9 +144,12 @@ export function buildVolcengineSpeechProvider(): SpeechProviderPlugin {
         gender: v.includes("_female_") ? "female" : "male",
       })),
 
-    // Retained for synchronous SDK consumers through 2026-12-31.
-    isConfigured,
-    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    isConfigured: ({ providerConfig }) => {
+      const cfg = readProviderConfig(providerConfig);
+      const legacy = resolveLegacyVolcengineCredentials(cfg);
+      return Boolean(resolveSeedSpeechApiKey(cfg.apiKey) || (legacy.appId && legacy.token));
+    },
+
     synthesize: async (req) => {
       const cfg = readProviderConfig(req.providerConfig);
       const overrides = req.providerOverrides;

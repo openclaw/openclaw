@@ -1,12 +1,9 @@
-import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
-import { AgentsHomePage } from "../../pages/agents-home/agents-home-page.tsx";
 import { selectSidebarView } from "../app-sidebar-setup.ts";
-import { mountSolid } from "../mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../solid-application-context.tsx";
+import "../../pages/agents-home/agents-home-page.tsx";
 import {
   agentIds,
   mountRoster,
@@ -507,9 +504,12 @@ describe("AppSidebar agent roster", () => {
   });
 
   it("suspends all mounted sidebar consumers while hidden, retaining a visible Agents home", async () => {
-    const { sidebar, context, sessions } = await mountRoster();
+    const { sidebar, context, provider, sessions } = await mountRoster();
     sidebar.sidebarAgentsMode = "roster";
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
+    await vi.waitFor(() =>
+      expect(sidebar.querySelectorAll("openclaw-sidebar-new-session-menu")).toHaveLength(1),
+    );
     const store = rosterActivityStore(context);
     await vi.waitFor(() => expect(store.snapshot.loading).toBe(false));
     const listCount = () =>
@@ -522,9 +522,8 @@ describe("AppSidebar agent roster", () => {
     expect(sidebar.querySelector("openclaw-sidebar-agent-roster")?.isConnected).toBe(true);
     await store.refresh();
     expect(listCount()).toBe(initial);
-    const home = mountSolid(() => createComponent(AgentsHomePage, {}), {
-      wrapper: createSolidApplicationContextProvider(context).wrapper,
-    });
+    const home = document.createElement("openclaw-agents-home-page");
+    provider.append(home);
     await vi.waitFor(() => expect(store.snapshot.result).not.toBeNull());
     await vi.waitFor(() => expect(store.snapshot.loading).toBe(false));
     expect(listCount()).toBe(initial + 1);
@@ -532,7 +531,7 @@ describe("AppSidebar agent roster", () => {
     await sidebar.updateComplete;
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
     expect(listCount()).toBe(initial + 1);
-    home.unmount();
+    home.remove();
     expect(store.snapshot.result).not.toBeNull();
     sidebar.navigationVisible = false;
     await vi.waitFor(() => expect(store.snapshot.result).toBeNull());

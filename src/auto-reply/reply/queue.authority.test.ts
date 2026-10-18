@@ -67,40 +67,6 @@ function createOperatorAuthority() {
 }
 
 describe("followup queue authority", () => {
-  it.each(["collect", "overflow"] as const)(
-    "keeps restart-restricted input separate through a %s drain",
-    async (mode) => {
-      const q = createQueueCase({ mode: "collect", cap: mode === "overflow" ? 1 : 50 });
-      for (const restricted of [true, false]) {
-        const run = createRun({
-          prompt: restricted ? "interrupted task" : "new task",
-          originatingChannel: "webchat",
-        });
-        if (restricted) {
-          run.forceRestartSafeTools = true;
-          run.forceCodeModeTools = true;
-        }
-        q.add(run);
-      }
-      try {
-        q.start();
-        await vi.waitFor(() => expect(getExistingFollowupQueue(q.key)).toBeUndefined());
-        expect(q.calls).toHaveLength(2);
-        expect(q.calls[0]?.prompt).toContain("interrupted task");
-        expect(q.calls[0]?.prompt).not.toContain("new task");
-        expect(q.calls[0]).toMatchObject({
-          forceRestartSafeTools: true,
-          forceCodeModeTools: true,
-        });
-        expect(q.calls[1]?.prompt).toContain("new task");
-        expect(q.calls[1]?.forceRestartSafeTools).not.toBe(true);
-        expect(q.calls[1]?.forceCodeModeTools).not.toBe(true);
-      } finally {
-        clearFollowupQueueForTest(q.key);
-      }
-    },
-  );
-
   it("keeps a restricted sender's tool policy and task root through a collect drain", async () => {
     const q = createQueueCase({ mode: "collect" }, 2);
     const conversationToolPolicy = {
@@ -285,7 +251,6 @@ describe("followup queue authority", () => {
       }
       source.releaseRequest();
       scheduleFollowupDrain(key, async (run) => {
-        const abortSignal = resolveFollowupAbortSignal(run);
         const prepared = prepareChannelRunAdmission({
           cfg: {},
           runId: "collected-operator-revocation",
@@ -299,12 +264,12 @@ describe("followup queue authority", () => {
           const context = await prepared.admit("embedded");
           const assertCurrent = resolveAdmittedRunActiveAssertion(context)!;
           firstCancel.abort();
-          observations.push(abortSignal?.aborted === true);
+          observations.push(resolveFollowupAbortSignal(run)?.aborted === true);
           assertCurrent();
           effects.push("before revocation");
           await Promise.resolve();
           source.controller.abort();
-          observations.push(abortSignal?.aborted === true);
+          observations.push(resolveFollowupAbortSignal(run)?.aborted === true);
           try {
             assertCurrent();
             effects.push("after revocation");
@@ -358,8 +323,8 @@ describe("followup queue authority", () => {
     const recovery = resolveStrandedReplyRecovery({
       base: parent,
       payloads: [],
-      finalText: "The answer is ready.",
-      terminalReply: { disposition: "visible", text: "The answer is ready." },
+      finalText:
+        "This answer must reach the original conversation. It contains enough detail to require the existing one-shot delivery recovery.",
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,

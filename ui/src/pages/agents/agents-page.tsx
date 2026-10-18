@@ -1,35 +1,58 @@
-import { createEffect, createMemo, untrack } from "solid-js";
+import { createEffect, createMemo, onCleanup, untrack, useContext } from "solid-js";
+import { shellLayoutOwnerForHost } from "../../app/shell-layout-owner.ts";
+import { ShellLayoutProvider } from "../../app/shell-layout-traits-solid.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { createAgentsPageState } from "./agents-page-state.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { AgentsPageState } from "./agents-page-state.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { Agents, AgentsPageHeader } from "./view.tsx";
 
-export function AgentsPage(props: { routeData?: AgentsRouteData }) {
-  // The initial route belongs to this mount; subsequent route commits use the effect.
-  const state = createAgentsPageState(
-    useApplication(),
-    untrack(() => props.routeData),
-  );
+function AgentsPageContent(props: { routeData?: AgentsRouteData }) {
+  const state = new AgentsPageState();
+  state.context = useApplication();
+  state.routeData = untrack(() => props.routeData);
+  state.connect();
+  state.applyRoute();
   createEffect(
     () => props.routeData,
-    (routeData) => state.setRouteData(routeData),
+    (routeData) => {
+      if (state.routeData === routeData) {
+        return;
+      }
+      state.routeData = routeData;
+      state.applyRoute();
+      state.requestUpdate();
+    },
   );
-  const viewProps = createMemo(() => state.read());
+  onCleanup(() => state.disconnect());
+  const projection = projectSource(state, {
+    read: (owner) => owner,
+    subscribe: (owner, notify) => owner.subscribe(notify),
+    equality: "revision",
+  });
+  const viewProps = createMemo(() => projection.read().viewProps);
   return (
-    <openclaw-agents-page>
+    <>
       <AgentsPageHeader />
       <SettingsWorkspace>
         <Agents {...viewProps()} />
       </SettingsWorkspace>
-    </openclaw-agents-page>
+    </>
   );
 }
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-agents-page": HTMLAttributes<HTMLElement>;
-    }
-  }
-}
+export const AgentsPage = defineSolidBridge<{ routeData: AgentsRouteData | undefined }>(
+  "openclaw-agents-page",
+  (props, host) => {
+    const inherited = useContext(ShellLayoutProvider);
+    const owner = shellLayoutOwnerForHost(host);
+    return (
+      <ShellLayoutProvider value={inherited ?? (owner ? { owner, host } : null)}>
+        <AgentsPageContent {...props} />
+      </ShellLayoutProvider>
+    );
+  },
+  { properties: { routeData: { default: undefined, attribute: false } } },
+);

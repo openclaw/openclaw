@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { createComponent } from "solid-js";
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import {
@@ -10,27 +10,23 @@ import {
 } from "../../../components/markdown-file-links.ts";
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
-import type { NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
-import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 let container: HTMLDivElement;
-let view: ReturnType<typeof createMessageGroupHarness>;
 
 beforeEach(() => {
   container = document.body.appendChild(document.createElement("div"));
-  view = createMessageGroupHarness(container);
 });
 
 afterEach(async () => {
   await vi.dynamicImportSettled();
-  view.unmount();
-  cleanupSolid();
+  render(null, container);
   container.remove();
   vi.restoreAllMocks();
 });
@@ -48,9 +44,9 @@ function createGroup(
 
 function renderTestMessageGroup(
   group: MessageGroup,
-  options: Partial<NativeMessageGroupOptions> = {},
+  options: Partial<Parameters<typeof renderMessageGroup>[1]> = {},
 ) {
-  return view.render(group, {
+  return renderMessageGroup(group, {
     showReasoning: true,
     showToolCalls: true,
     assistantName: "OpenClaw",
@@ -77,7 +73,7 @@ describe("forwarded message attribution", () => {
             : {}),
         },
       );
-      renderTestMessageGroup(group, { isToolMessageExpanded: () => true });
+      render(renderTestMessageGroup(group, { isToolMessageExpanded: () => true }), container);
       const opened = vi.fn();
       container.addEventListener("click", (event) => opened(markdownFileLinkFromEvent(event)));
       container.addEventListener("keydown", (event) =>
@@ -134,30 +130,25 @@ describe("forwarded message attribution", () => {
         isToolMessageExpanded: () => true,
         isToolExpanded: () => true,
       };
-      if (frame) {
-        mountSolid(
-          () =>
-            createComponent(AgentRunFrame, {
-              frame: {
-                kind: "agent-run-frame",
-                key: "forwarded-frame",
-                runId: "forwarded-tools",
-                boundaryId: "forwarded-boundary",
-                outcome: { kind: "completed", actionOwner: null },
-                parts: [group],
-              },
-              options: {
-                streamOptions: {},
-                renderGroupOptions: () => options,
-                isWorkExpanded: () => true,
-                onToggleWork: () => {},
-              },
-            }),
-          { container },
-        );
-      } else {
-        renderTestMessageGroup(group, options);
-      }
+      const content = frame
+        ? solidContent(AgentRunFrame, {
+            frame: {
+              kind: "agent-run-frame",
+              key: "forwarded-frame",
+              runId: "forwarded-tools",
+              boundaryId: "forwarded-boundary",
+              outcome: { kind: "completed", actionOwner: null },
+              parts: [group],
+            },
+            options: {
+              streamOptions: {},
+              renderGroupOptions: () => options,
+              isWorkExpanded: () => true,
+              onToggleWork: () => {},
+            },
+          })
+        : renderTestMessageGroup(group, options);
+      render(content, container);
       await settleToolBridges(container);
       const links = container.querySelectorAll<HTMLButtonElement>(".chat-tool-row__file-link");
       expect(links).toHaveLength(2);
@@ -209,18 +200,17 @@ describe("forwarded message attribution", () => {
     if (!frame) {
       throw new Error("Expected the narrated tool to join its completed run frame");
     }
-    mountSolid(
-      () =>
-        createComponent(AgentRunFrame, {
-          frame,
-          options: {
-            streamOptions: {},
-            renderGroupOptions: () => ({ showReasoning: true }),
-            isWorkExpanded: () => true,
-            onToggleWork: () => {},
-          },
-        }),
-      { container },
+    render(
+      solidContent(AgentRunFrame, {
+        frame,
+        options: {
+          streamOptions: {},
+          renderGroupOptions: () => ({ showReasoning: true }),
+          isWorkExpanded: () => true,
+          onToggleWork: () => {},
+        },
+      }),
+      container,
     );
     const opened = vi.fn();
     container.addEventListener("click", (event) => opened(markdownFileLinkFromEvent(event)));
@@ -243,7 +233,7 @@ describe("forwarded message attribution", () => {
         senderLabel: "Forwarded from main",
         ...(forwarded ? { senderSession: { sessionKey: "agent:main:main", agentId: "main" } } : {}),
       });
-      renderTestMessageGroup(group);
+      render(renderTestMessageGroup(group), container);
       if (!forwarded) {
         expect(
           container.querySelector(".chat-group.assistant .chat-sender-name")?.textContent,
@@ -255,21 +245,14 @@ describe("forwarded message attribution", () => {
       expect(forwardedGroup).not.toBeNull();
       expect(forwardedGroup?.classList.contains("chat-group--sender-tint")).toBe(true);
       expect(forwardedGroup?.style.getPropertyValue("--chat-sender-hue")).not.toBe("");
-      const attribution = expectDefined(
-        forwardedGroup?.querySelector(".chat-group-messages > .chat-reply-attribution"),
-        "direct forwarded attribution",
-      );
+      const attribution = container.querySelector(".chat-group--forwarded .chat-reply-attribution");
       const link = attribution?.querySelector<HTMLAnchorElement>(
         'a.markdown-session-link[data-session-key="agent:main:main"]',
       );
       expect(attribution?.textContent).toContain("From");
       expect(link?.textContent).toBe("agent:main:main");
       expect(link?.tabIndex).toBe(0);
-      const bubble = expectDefined(
-        forwardedGroup?.querySelector(".chat-bubble"),
-        "forwarded message bubble",
-      );
-      expect(attribution.nextElementSibling).toBe(bubble);
+      expect(attribution?.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
       expect(container.querySelector(".chat-avatar, .chat-avatar-slot")).toBeNull();
       expect(container.querySelector(".chat-group-footer .chat-sender-name")).toBeNull();
       expect(container.querySelector(".chat-group-footer .chat-group-timestamp")).not.toBeNull();
@@ -287,12 +270,12 @@ describe("forwarded message attribution", () => {
       expect(sourceLink).toBeInstanceOf(HTMLAnchorElement);
       await titler.decorate(sourceLink, true);
       expect(sourceLink.textContent).toBe("Main session");
-      renderTestMessageGroup(group);
+      render(renderTestMessageGroup(group), container);
       const retained = container.querySelector<HTMLAnchorElement>(
         ".chat-group--forwarded .chat-reply-attribution a",
       );
       expect(retained?.textContent).toBe("Main session");
-      expect(retained?.hasAttribute("title")).toBe(false);
+      expect(retained?.title).toBe("agent:main:main");
     },
   );
 
@@ -313,7 +296,7 @@ describe("forwarded message attribution", () => {
         agents: [{ id: "main" }, { id: "research", identity: { name: "Research Agent" } }],
         senderAgentAvatars: new Map(agentId ? [[agentId, avatar]] : []),
       };
-      renderTestMessageGroup(group, options);
+      render(renderTestMessageGroup(group, options), container);
 
       const image = container.querySelector("img.chat-avatar.assistant");
       expect(image !== null).toBe(expected === "image");
@@ -361,12 +344,15 @@ describe("forwarded message attribution", () => {
     const group = createGroup({
       senderSession: { sessionKey: key, agentId: key.split(":")[1], label },
     });
-    renderTestMessageGroup(group, {
-      agentId: "main",
-      agents: [{ id: "main" }, { id: "research", identity: { name: "Research Agent" } }],
-      mainKey: "main",
-      basePath,
-    });
+    render(
+      renderTestMessageGroup(group, {
+        agentId: "main",
+        agents: [{ id: "main" }, { id: "research", identity: { name: "Research Agent" } }],
+        mainKey: "main",
+        basePath,
+      }),
+      container,
+    );
 
     const chip = expectDefined(
       container.querySelector<HTMLAnchorElement>("a.markdown-session-link"),
@@ -425,7 +411,7 @@ describe("forwarded message attribution", () => {
           provenance: { kind: "inter_session", sourceTool: "sessions_send" },
         },
       );
-      renderTestMessageGroup(group);
+      render(renderTestMessageGroup(group), container);
 
       expect(container.querySelector(".chat-session-activity")).not.toBeNull();
       const attribution = container.querySelector(".chat-session-activity .chat-reply-attribution");

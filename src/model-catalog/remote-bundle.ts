@@ -10,9 +10,6 @@ import type {
   ModelCatalogProvider,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-
-const log = createSubsystemLogger("model-catalog");
 
 export type RemoteModelCatalogWireBundle = RemoteModelCatalogBundle | RemoteModelCatalogBundleV2;
 export type RemoteModelCatalogPrice = { cost: ModelCatalogCost; explicit: boolean };
@@ -28,8 +25,8 @@ export type RemoteModelCatalogUpstreamPrice = {
 /** Configured v1 mirrors remain a public input contract; runtime uses one projection. */
 export function parseRemoteModelCatalogWireBundle(value: unknown): RemoteModelCatalogWireBundle {
   return isRecord(value) && value.schemaVersion === 2
-    ? validateAndSanitizeRemoteModelCatalogBundleV2(value, (message) => log.warn(message))
-    : validateAndSanitizeRemoteModelCatalogBundle(value, (message) => log.warn(message));
+    ? validateAndSanitizeRemoteModelCatalogBundleV2(value)
+    : validateAndSanitizeRemoteModelCatalogBundle(value);
 }
 
 export function projectRemoteModelCatalog(bundle: RemoteModelCatalogWireBundle): {

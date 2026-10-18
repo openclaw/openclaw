@@ -13,7 +13,6 @@ import {
   requireRecord,
 } from "./event-projector.test-harness.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
-import { prepareCodexServerNotification } from "./protocol-validators.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -291,7 +290,7 @@ describe("native Codex tool response fidelity", () => {
         turn.turn.id,
       );
       for (const notification of notifications) {
-        await projector.handleNotification(prepareCodexServerNotification(notification));
+        await projector.handleNotification(notification);
       }
       const results = projector
         .buildResult(buildEmptyToolTelemetry())

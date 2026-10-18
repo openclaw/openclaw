@@ -64,7 +64,23 @@ describe("resolveCodexNativeSearchActivation", () => {
     expect(result.inactiveReason).toBe("model_not_eligible");
   });
 
-  it.each([{ name: "without auth", config: baseConfig }] as const)(
+  it.each([
+    { name: "without auth", config: baseConfig },
+    {
+      name: "with auth",
+      config: {
+        ...baseConfig,
+        auth: {
+          profiles: {
+            "openai:default": {
+              provider: "openai",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+    },
+  ] as const)(
     "leaves credential admission to the model request for direct openai $name",
     ({ config }) => {
       const result = resolveCodexNativeSearchActivation({

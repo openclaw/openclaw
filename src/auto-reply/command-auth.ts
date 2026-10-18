@@ -91,7 +91,7 @@ function resolveExplicitProviderFromContext(
     return { providerId: undefined, hadResolutionError: false };
   }
   const direct =
-    normalizeAnyChannelId(explicitMessageChannel) ??
+    normalizeAnyChannelId(explicitMessageChannel ?? undefined) ??
     (explicitMessageChannel as ChannelId | undefined) ??
     normalizeAnyChannelId(ctx.Provider) ??
     normalizeAnyChannelId(ctx.Surface) ??
@@ -108,7 +108,7 @@ function resolveExplicitProviderFromContext(
       return { providerId: undefined, hadResolutionError: false };
     }
     const normalized =
-      normalizeAnyChannelId(normalizedCandidateChannel) ??
+      normalizeAnyChannelId(normalizedCandidateChannel ?? undefined) ??
       (normalizedCandidateChannel as ChannelId | undefined) ??
       normalizeAnyChannelId(candidate);
     if (normalized) {
@@ -534,7 +534,7 @@ function resolveCommandAuthorizationState(
   };
 }
 
-/** @deprecated Await resolveCommandAuthorizationAsync for worker-owned channel allowlists. Supported through 2026-12-31. */
+/** @deprecated Await resolveCommandAuthorizationAsync for worker-owned channel allowlist preparation. */
 export function resolveCommandAuthorization(
   params: CommandAuthorizationParams,
 ): CommandAuthorization {

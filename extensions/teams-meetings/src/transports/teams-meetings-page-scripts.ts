@@ -31,7 +31,7 @@ function pageIdentityFunctionSource(): string {
               ? JSON.parse(atob(coordinates))
               : undefined;
             if (decoded && typeof decoded === "object") lightMeeting = decoded;
-          } catch { /* Invalid external coordinates do not identify a meeting. */ }
+          } catch {}
         }
         const match = parsed.pathname.match(/^\\/meet\\/([^/]+)\\/?$/i) || launcherMatch ||
           (typeof lightMeeting?.meetingCode === "string"
@@ -48,7 +48,7 @@ function pageIdentityFunctionSource(): string {
           ? "teams-consumer:" + code.toLowerCase() + ":p:" + encodeURIComponent(passcode || "")
           : undefined;
       }
-    } catch { /* Invalid external URLs do not identify a meeting. */ }
+    } catch {}
     return undefined;
   };`;
 }

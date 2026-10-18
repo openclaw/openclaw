@@ -134,19 +134,10 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
     getRuntimeConfigSnapshot(),
   );
   let capturedContent: { userPrompt?: string; finalResponse?: string } | undefined;
-  const completionPrivateData = (
-    contentField: "messageContent" | "harnessContent",
-    errorMessage?: string,
-  ) => {
-    const content =
-      capturedContent && Object.keys(capturedContent).length > 0 ? capturedContent : undefined;
-    return errorMessage || content
-      ? {
-          ...(errorMessage ? { errorMessage } : {}),
-          ...(content ? { [contentField]: content } : {}),
-        }
-      : undefined;
-  };
+  // True when publication produced at least one gated, non-empty field; an empty
+  // publication (policy off, or all fields filtered) attaches no private data.
+  const hasCapturedContent = () =>
+    capturedContent !== undefined && Object.keys(capturedContent).length > 0;
   const lifecycle: ClaudeCliRunDiagnosticLifecycle = {
     setPhase: (nextPhase) => {
       phase = nextPhase;
@@ -203,6 +194,13 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
     const runOutcome = resultRunOutcome(result);
     const resultErrorMessage = result.meta.error?.message;
     const runErrorMessage = runOutcome === "error" ? resultErrorMessage : undefined;
+    const runCompletedPrivateData =
+      runErrorMessage || hasCapturedContent()
+        ? {
+            ...(runErrorMessage ? { errorMessage: runErrorMessage } : {}),
+            ...(hasCapturedContent() ? { messageContent: capturedContent } : {}),
+          }
+        : undefined;
     emitTrustedDiagnosticEventWithPrivateData(
       {
         type: "run.completed",
@@ -214,7 +212,7 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
           ? { errorCategory: result.meta.error.kind }
           : {}),
       },
-      completionPrivateData("messageContent", runErrorMessage),
+      runCompletedPrivateData,
     );
     emitTrustedDiagnosticEventWithPrivateData(
       {
@@ -229,10 +227,17 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
               : runOutcome,
         ...(typeof result.meta.yielded === "boolean" ? { yieldDetected: result.meta.yielded } : {}),
       },
-      completionPrivateData(
-        "harnessContent",
-        runOutcome === "error" || runOutcome === "blocked" ? resultErrorMessage : undefined,
-      ),
+      // The harness span is the turn's root; it carries the same gated content
+      // the run span gets, keyed as harnessContent for the harness recorder.
+      (resultErrorMessage && (runOutcome === "error" || runOutcome === "blocked")) ||
+        hasCapturedContent()
+        ? {
+            ...(resultErrorMessage && (runOutcome === "error" || runOutcome === "blocked")
+              ? { errorMessage: resultErrorMessage }
+              : {}),
+            ...(hasCapturedContent() ? { harnessContent: capturedContent } : {}),
+          }
+        : undefined,
     );
     return result.diagnosticTrace ? result : { ...result, diagnosticTrace: harnessTrace };
   } catch (error) {
@@ -249,7 +254,10 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
         outcome: harnessOutcome === "error" ? "error" : "aborted",
         ...(harnessOutcome === "error" ? { errorCategory: diagnosticErrorCategory(error) } : {}),
       },
-      completionPrivateData("messageContent", errorMessage),
+      {
+        ...(errorMessage ? { errorMessage } : {}),
+        ...(hasCapturedContent() ? { messageContent: capturedContent } : {}),
+      },
     );
     if (harnessOutcome === "error") {
       emitTrustedDiagnosticEventWithPrivateData(
@@ -260,7 +268,10 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
           phase,
           errorCategory: diagnosticErrorCategory(error),
         },
-        completionPrivateData("harnessContent", errorMessage),
+        {
+          ...(errorMessage ? { errorMessage } : {}),
+          ...(hasCapturedContent() ? { harnessContent: capturedContent } : {}),
+        },
       );
     } else {
       emitTrustedDiagnosticEventWithPrivateData(
@@ -270,7 +281,7 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
           durationMs: Date.now() - startedAt,
           outcome: harnessOutcome,
         },
-        completionPrivateData("harnessContent"),
+        hasCapturedContent() ? { harnessContent: capturedContent } : undefined,
       );
     }
     throw error;

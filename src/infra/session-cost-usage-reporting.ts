@@ -132,7 +132,6 @@ export async function discoverAllSessions(params: {
         sessionId,
         sessionFile,
         mtime: file.mtimeMs,
-        ...(file.transcriptFile ? { transcriptFile: file.transcriptFile } : {}),
       });
     }
   }

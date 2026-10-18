@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
-import { Icon } from "../../../components/solid/icon.tsx";
+import { icons } from "../../../components/icons.ts";
 import {
   SLASH_COMMANDS,
   executesInlineImmediately,
@@ -14,7 +14,6 @@ import {
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { ComposerContent } from "./chat-composer-content.tsx";
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
   beginInlineFreeformSlashArguments,
@@ -23,6 +22,7 @@ import {
   hasActiveInlineSlashArgumentPrefix,
   removeInlineSlashSelection,
 } from "./chat-composer-inline-slash.ts";
+import { LitContent } from "./chat-composer-interop.tsx";
 import {
   handleComposerMenuKeydown,
   ComposerMenu,
@@ -551,9 +551,13 @@ function renderSlashMenuContents(
                     requestUpdate();
                   },
                   icon: (
-                    <ComposerContent>
-                      <Icon name={state.slashMenuCommand?.icon ?? "terminal"} />
-                    </ComposerContent>
+                    <LitContent
+                      value={
+                        state.slashMenuCommand?.icon
+                          ? icons[state.slashMenuCommand.icon]
+                          : icons.terminal
+                      }
+                    />
                   ),
                   name: menuItem(),
                   description: (
@@ -585,9 +589,15 @@ function renderSlashMenuContents(
         requestUpdate();
       },
       icon: (
-        <ComposerContent>
-          <Icon name={cmd.source === "skill" ? "pencilSparkles" : (cmd.icon ?? "terminal")} />
-        </ComposerContent>
+        <LitContent
+          value={
+            cmd.source === "skill"
+              ? icons.pencilSparkles
+              : cmd.icon
+                ? icons[cmd.icon]
+                : icons.terminal
+          }
+        />
       ),
       name: (
         <>

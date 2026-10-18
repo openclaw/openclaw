@@ -69,9 +69,9 @@ export function registerBrowserAgentDebugRoutes(
   }));
 
   register("post", "/trace/start", "trace start", (input) => {
-    const screenshots = toBoolean(input.screenshots);
-    const snapshots = toBoolean(input.snapshots);
-    const sources = toBoolean(input.sources);
+    const screenshots = toBoolean(input.screenshots) ?? undefined;
+    const snapshots = toBoolean(input.snapshots) ?? undefined;
+    const sources = toBoolean(input.sources) ?? undefined;
     return async (pw, { cdpUrl, targetId }) => {
       await pw.traceStartViaPlaywright({ cdpUrl, targetId, screenshots, snapshots, sources });
       return {};

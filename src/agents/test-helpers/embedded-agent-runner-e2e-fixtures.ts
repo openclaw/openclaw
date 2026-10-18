@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { buildAttemptReplayMetadata } from "../embedded-agent-runner/run/attempt-terminal-evidence.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 
@@ -36,10 +37,6 @@ export async function cleanupEmbeddedAgentRunnerTestWorkspace(
   if (!workspace) {
     return;
   }
-  // Message fixtures stay runtime-free; workspace teardown still joins SQLite owners
-  // before removing their files.
-  const { closeOpenClawAgentDatabasesAsync } =
-    await import("../../state/openclaw-agent-db-lifecycle.js");
   await closeOpenClawAgentDatabasesAsync(workspace.tempRoot);
   await fs.rm(workspace.tempRoot, { recursive: true, force: true });
 }

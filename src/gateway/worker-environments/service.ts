@@ -72,7 +72,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   let reconcileInFlight: Promise<void> | undefined;
   let serviceStarted = false;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
-  const unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler(
+  let unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler(
     (claim) => {
       retainInferenceCancellation(inference.cancelClaim(claim));
     },
@@ -134,8 +134,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     run: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> => {
     const controller = new AbortController();
-    const signal = AbortSignal.any([scope.signal, controller.signal]);
-    const operation = Promise.resolve().then(() => run(signal));
+    const operation = Promise.resolve().then(() => run(controller.signal));
     try {
       return await withTimeout(
         operation,
@@ -192,7 +191,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const providerLifecycle = createWorkerProviderLifecycle({
     ...options,
-    ownerSignal: scope.signal,
     now,
     store,
     prepareInstallation,
@@ -250,7 +248,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const schedulePreparedRefill = (environmentId?: string) =>
     void trackOperation(preparedPool.maintain(environmentId));
 
-  const { clear: clearTurnRpc, ...turnRpc } = createWorkerTurnRpc({
+  const turnRpc = createWorkerTurnRpc({
     ...options,
     store,
     prepareInstallation,
@@ -432,10 +430,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     void reconcileOnce().catch(() => warn("Worker environment startup reconcile failed"));
   };
 
-  const beginClose = () => {
-    if (stopping) {
-      return;
-    }
+  const stop = async () => {
+    const failures: unknown[] = [];
     stopping = true;
     providerLifecycle.clearDedicatedNodeLeases();
     sessionAttachments.cancelSessionAttachmentCreations();
@@ -443,12 +439,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     scope.beginClose();
     options.stopNodeEnrollmentWaits?.();
     unsubscribeSessionIdentityMutation?.();
+    unsubscribeSessionIdentityMutation = undefined;
     unsubscribeTurnClaimClosed?.();
-  };
-
-  const stop = async () => {
-    const failures: unknown[] = [];
-    beginClose();
+    unsubscribeTurnClaimClosed = undefined;
     await scope.stop();
     // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
     // inference or tunnel teardown can invalidate its closure-bound placement authority.
@@ -494,7 +487,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       inferenceCancellations.clear();
       credentialBroker.clear();
-      clearTurnRpc();
+      turnRpc.clear();
       options.liveEvents?.clear();
       try {
         await options.closeNodeBootstrapArtifacts?.();
@@ -690,15 +683,24 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     observeDesktop: environmentAccess.observeDesktop,
     launchDesktopApp: environmentAccess.launchDesktopApp,
     reconcileDesktopPolicy: environmentAccess.reconcileDesktopPolicy,
-    ...turnRpc,
+    admitWorker: turnRpc.admitWorker,
     fenceWorkerTurnForRecovery: (claim: WorkerSessionTurnClaim) => {
       if (!options.placementStore) {
         throw serviceError("invalid_state", "Worker recovery requires its placement gate");
       }
       options.placementStore.fenceWorkerTurnForRecovery(claim);
     },
+    validateWorkerConnection: turnRpc.validateWorkerConnection,
+    commitTranscript: turnRpc.commitTranscript,
+    pushLiveEvent: turnRpc.pushLiveEvent,
+    getToolSurface: turnRpc.getToolSurface,
+    invokeGatewayTool: turnRpc.invokeGatewayTool,
+    cancelGatewayTool: turnRpc.cancelGatewayTool,
     createGatewayTools: options.createGatewayTools,
+    executeComputer: turnRpc.executeComputer,
     prepareComputer: options.prepareComputer,
+    startInference: turnRpc.startInference,
+    cancelInference: turnRpc.cancelInference,
     resolveSshIdentity: environmentAccess.resolveSshIdentity,
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,
@@ -719,7 +721,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         options.closeWorkerPortals?.(environmentId, ownerEpoch),
       ]);
     },
-    beginClose,
+    stopNodeEnrollmentWaits: options.stopNodeEnrollmentWaits,
     installReconcileEnvironmentGuard,
     reconcileEnvironment,
     reconcileOnce,

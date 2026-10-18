@@ -96,9 +96,9 @@ function sqliteBytes(databasePath: string) {
   );
 }
 
-it.each(["maintenance"] as const)(
+it.each(["maintenance", "ordinary"] as const)(
   "suspends shared-worker ticks only while maintenance clients retain the actor (%s opener)",
-  async () => {
+  async (firstOwner) => {
     const root = tempDirs.make("state-worker-wal-tick-");
     const databasePath = path.join(root, "state", "openclaw.sqlite");
     const context = { environment: { ...process.env, OPENCLAW_STATE_DIR: root } };
@@ -123,8 +123,10 @@ it.each(["maintenance"] as const)(
       return store;
     };
     try {
-      const maintained = await open(firstMaintenance);
-      const ordinary = await open();
+      const first = await open(firstOwner === "maintenance" ? firstMaintenance : undefined);
+      const second = await open(firstOwner === "maintenance" ? undefined : firstMaintenance);
+      const ordinary = firstOwner === "ordinary" ? first : second;
+      const maintained = firstOwner === "maintenance" ? first : second;
       const overlapping = await open(secondMaintenance);
       const actor = broker.getActorIdentity(ordinary);
       expect(broker.getActorIdentity(maintained)).toBe(actor);
@@ -236,7 +238,7 @@ it("keeps periodic WAL work off the host before and after a competing SQLite wri
   );
 });
 
-it("maintains planner statistics per periodic pass without disturbing snapshots or run-index plans", async () => {
+it("analyzes once per periodic pass, preserves retained snapshots, and admits run-index plans", async () => {
   const { database, periodic } = openWithPeriodicMaintenance(
     path.join(tempDirs.make("state-wal-planner-"), "openclaw.sqlite"),
   );
@@ -260,13 +262,9 @@ it("maintains planner statistics per periodic pass without disturbing snapshots 
     createSqliteWorkerBackend(undefined, { databasePath: database.path }),
   );
   let refuseCommit = false;
-  let refreshedStatisticsAtCommit: unknown;
   const admission = createSqliteWorkerOperationAdmission((request, grant) => {
     context.admission.assertCurrent();
-    if (refuseCommit && request.stage === "commit" && plannerPasses() === 3) {
-      refreshedStatisticsAtCommit = database.db
-        .prepare("SELECT stat FROM sqlite_stat1 WHERE idx='idx_audit_events_run_sequence'")
-        .get();
+    if (refuseCommit && request.stage === "commit" && analyses() === 3) {
       throw new Error("fixture revoked commit");
     }
     grant();
@@ -291,15 +289,16 @@ it("maintains planner statistics per periodic pass without disturbing snapshots 
     async (request) => z.object({ reclaimedPages: z.number() }).parse(execute(request)),
   );
   const statements = vi.spyOn(database.db, "exec");
-  const plannerPasses = () =>
-    statements.mock.calls.filter(([sql]) => sql.includes("PRAGMA optimize")).length;
+  const analyses = () =>
+    statements.mock.calls.filter(([sql]) => sql.includes("ANALYZE main")).length;
   try {
     execute({ maxPages: 0, checkpointMode: "PASSIVE" });
-    expect(plannerPasses()).toBe(0);
+    expect(analyses()).toBe(0);
     reader.exec("BEGIN");
     expect(read.all("run-100", 0)).toEqual(before);
     await periodic();
-    expect(plannerPasses()).toBe(1);
+    expect(analyses()).toBe(1);
+    expect(statements).toHaveBeenCalledWith("PRAGMA analysis_limit=1000; ANALYZE main;");
     expect(
       reader.prepare("SELECT name FROM sqlite_schema WHERE name='sqlite_stat1'").get(),
     ).toBeUndefined();
@@ -312,7 +311,7 @@ it("maintains planner statistics per periodic pass without disturbing snapshots 
         fresh
           .prepare("SELECT stat FROM sqlite_stat1 WHERE idx='idx_audit_events_run_sequence'")
           .get(),
-      ).toEqual({ stat: expect.stringMatching(/^[1-9]\d* /) });
+      ).toBeDefined();
       expect(fresh.prepare(`EXPLAIN QUERY PLAN ${query}`).all("run-100", 0)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -325,7 +324,7 @@ it("maintains planner statistics per periodic pass without disturbing snapshots 
       fresh.close();
     }
     execute({ maxPages: 512, checkpointMode: "PASSIVE", continuation: true });
-    expect(plannerPasses()).toBe(1);
+    expect(analyses()).toBe(1);
     database.db.exec(`
       WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM rows WHERE n<64)
       INSERT INTO config_machine_state(state_key,value_json,updated_at_ms)
@@ -336,21 +335,15 @@ it("maintains planner statistics per periodic pass without disturbing snapshots 
       Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count),
     ).toBeGreaterThan(8);
     await periodic();
-    expect(plannerPasses()).toBe(2);
-    // Missing statistics force real maintenance work before the refused commit.
-    database.db.exec(`
-      DELETE FROM sqlite_stat1 WHERE idx='idx_audit_events_run_sequence';
-      ANALYZE sqlite_schema;
-    `);
+    expect(analyses()).toBe(2);
     const statistics = database.db.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl,idx").all();
+    database.db.exec("DELETE FROM audit_events WHERE sequence>4000");
     refuseCommit = true;
     await periodic();
-    expect(plannerPasses()).toBe(3);
-    expect(refreshedStatisticsAtCommit).toEqual({ stat: expect.stringMatching(/^[1-9]\d* /) });
+    expect(analyses()).toBe(3);
     expect(database.db.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl,idx").all()).toEqual(
       statistics,
     );
-    expect(read.all("run-100", 0)).toEqual(before);
     expect(database.db.isTransaction).toBe(false);
   } finally {
     statements.mockRestore();

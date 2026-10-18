@@ -161,11 +161,6 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
-"plugin: mcp-events":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/mcp-events/**"
-          - "docs/automation/mcp-events.md"
 "plugin: mcp-relay":
   - changed-files:
       - any-glob-to-any-file:
@@ -468,18 +463,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llama-cpp/**"
-"extensions: advisor":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/advisor/**"
-"extensions: agent-guidance":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/agent-guidance/**"
-"extensions: autoreview":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/autoreview/**"
 "extensions: active-memory":
   - changed-files:
       - any-glob-to-any-file:

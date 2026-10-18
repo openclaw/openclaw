@@ -2,7 +2,6 @@
 // One Gateway client owns question outcomes across chat panes and sidebar projections.
 import type { QuestionResolveResult } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   cancelQuestionPrompt,
   createQuestionPromptState,
@@ -64,15 +63,10 @@ function connectQuestionState(
   onChange: () => void = vi.fn(),
   expiresAtMs?: number,
 ): QuestionState {
-  const state = createState(client, onChange);
-  requestQuestion(state, "question-1", expiresAtMs);
-  return state;
-}
-
-function createState(client: QuestionClient, onChange: () => void = vi.fn()): QuestionState {
   const state = createQuestionPromptState(onChange);
   states.push(state);
   setQuestionPromptClient(state, client);
+  requestQuestion(state, "question-1", expiresAtMs);
   return state;
 }
 
@@ -103,7 +97,9 @@ describe("Gateway-client question outcome ownership", () => {
     vi.useFakeTimers();
     const client: QuestionClient = { request: vi.fn(async () => ({ questions: [] })) };
     const mount = () => {
-      const state = createState(client);
+      const state = createQuestionPromptState(vi.fn());
+      states.push(state);
+      setQuestionPromptClient(state, client);
       refreshPendingQuestionsWithRetry(state, client);
       return state;
     };
@@ -155,16 +151,22 @@ describe("Gateway-client question outcome ownership", () => {
   it.each(resolutionCases)(
     "retains an authoritative $action until a same-client projection finishes hydration",
     async ({ resolve, status }) => {
-      const list = createDeferred<unknown>();
+      let finishList: ((result: unknown) => void) | undefined;
       const resolver = createQuestionClient();
       const client: QuestionClient = {
         request: vi.fn((method, params) =>
-          method === "question.list" ? list.promise : resolver.request(method, params),
+          method === "question.list"
+            ? new Promise<unknown>((complete) => {
+                finishList = complete;
+              })
+            : resolver.request(method, params),
         ),
       };
       const submitter = connectQuestionState(client);
       const stalePending = { ...submitter.prompts.get("question-1"), status: "pending" };
-      const hydrating = createState(client);
+      const hydrating = createQuestionPromptState(vi.fn());
+      states.push(hydrating);
+      setQuestionPromptClient(hydrating, client);
       refreshPendingQuestionsWithRetry(hydrating, client);
 
       await resolve(submitter);
@@ -173,7 +175,7 @@ describe("Gateway-client question outcome ownership", () => {
         id: "question-1",
         status,
       });
-      list.resolve({ questions: [stalePending] });
+      finishList?.({ questions: [stalePending] });
       await vi.waitFor(() =>
         expect(hydrating.prompts.get("question-1")).toMatchObject({
           status,
@@ -188,15 +190,19 @@ describe("Gateway-client question outcome ownership", () => {
   it.each(resolutionCases)(
     "recovers a committed $action when a peer mounts before its ordered RPC response",
     async ({ resolve, status }) => {
-      const resolution = createDeferred<QuestionResolveResult>();
-      const list = createDeferred<{ questions: unknown[] }>();
+      let finishResolution: ((result: QuestionResolveResult) => void) | undefined;
+      let finishList: ((result: { questions: unknown[] }) => void) | undefined;
       const client: QuestionClient = {
         request: vi.fn((method) => {
           if (method === "question.resolve") {
-            return resolution.promise;
+            return new Promise<QuestionResolveResult>((complete) => {
+              finishResolution = complete;
+            });
           }
           if (method === "question.list") {
-            return list.promise;
+            return new Promise<{ questions: unknown[] }>((complete) => {
+              finishList = complete;
+            });
           }
           return Promise.resolve({ question: terminalRecord });
         }),
@@ -209,17 +215,19 @@ describe("Gateway-client question outcome ownership", () => {
         ...(status === "answered" ? { answers } : {}),
       };
       const submission = resolve(submitter);
-      const hydrating = createState(client);
+      const hydrating = createQuestionPromptState(vi.fn());
+      states.push(hydrating);
+      setQuestionPromptClient(hydrating, client);
       refreshPendingQuestionsWithRetry(hydrating, client);
       expect(vi.mocked(client.request).mock.calls.map(([method]) => method)).toEqual([
         "question.resolve",
         "question.list",
       ]);
 
-      resolution.resolve(status === "answered" ? { status, answers } : { status });
+      finishResolution?.(status === "answered" ? { status, answers } : { status });
       await submission;
       expect(hydrating.unmatchedResolutions.has("question-1")).toBe(true);
-      list.resolve({ questions: [] });
+      finishList?.({ questions: [] });
 
       await vi.waitFor(() =>
         expect(hydrating.prompts.get("question-1")).toMatchObject({
@@ -252,7 +260,9 @@ describe("Gateway-client question outcome ownership", () => {
   it("does not settle an unrelated same-client session question", async () => {
     const client = createQuestionClient();
     const submitter = connectQuestionState(client);
-    const otherSession = createState(client);
+    const otherSession = createQuestionPromptState(vi.fn());
+    states.push(otherSession);
+    setQuestionPromptClient(otherSession, client);
     requestQuestion(otherSession, "other-session-question");
 
     await cancelQuestionPrompt(submitter, "question-1");
@@ -290,9 +300,14 @@ describe("Gateway-client question outcome ownership", () => {
   it.each(resolutionCases)(
     "publishes a committed $action to surviving peers after the submitting pane is disposed",
     async ({ resolve, status }) => {
-      const pending = createDeferred<QuestionResolveResult>();
+      let finishRequest: ((result: QuestionResolveResult) => void) | undefined;
       const client: QuestionClient = {
-        request: vi.fn(() => pending.promise),
+        request: vi.fn(
+          () =>
+            new Promise<QuestionResolveResult>((complete) => {
+              finishRequest = complete;
+            }),
+        ),
       };
       const onSubmitterChange = vi.fn();
       const submitter = connectQuestionState(client, onSubmitterChange);
@@ -305,7 +320,7 @@ describe("Gateway-client question outcome ownership", () => {
         status === "answered"
           ? { status, answers: { answers: { format: ["Compact"] } } }
           : { status };
-      pending.resolve(result);
+      finishRequest?.(result);
 
       await submission;
 
@@ -455,15 +470,16 @@ describe("Gateway-client question outcome ownership", () => {
   });
 
   it("rejects a stale same-client hydration result after the sidebar remounts", async () => {
-    const pendingLists: ReturnType<typeof createDeferred<unknown>>[] = [];
+    const pendingLists: Array<(value: unknown) => void> = [];
     const client: QuestionClient = {
-      request: vi.fn((method: string) => {
-        const pending = createDeferred<unknown>();
-        if (method === "question.list") {
-          pendingLists.push(pending);
-        }
-        return pending.promise;
-      }),
+      request: vi.fn(
+        (method: string) =>
+          new Promise<unknown>((resolve) => {
+            if (method === "question.list") {
+              pendingLists.push(resolve);
+            }
+          }),
+      ),
     };
     const remounted = connectQuestionState(client);
     refreshPendingQuestionsWithRetry(remounted, client);
@@ -472,7 +488,7 @@ describe("Gateway-client question outcome ownership", () => {
     refreshPendingQuestionsWithRetry(remounted, client);
     expect(pendingLists).toHaveLength(2);
 
-    pendingLists[0]?.resolve({
+    pendingLists[0]?.({
       questions: [
         {
           ...remounted.prompts.get("question-1"),
@@ -488,15 +504,20 @@ describe("Gateway-client question outcome ownership", () => {
   });
 
   it("does not publish an old request rejected when its Gateway reconnects", async () => {
-    const pending = createDeferred<QuestionResolveResult>();
+    let rejectRequest: ((error: Error) => void) | undefined;
     const client: QuestionClient = {
-      request: vi.fn(() => pending.promise),
+      request: vi.fn(
+        () =>
+          new Promise<QuestionResolveResult>((_resolve, reject) => {
+            rejectRequest = reject;
+          }),
+      ),
     };
     const submitter = connectQuestionState(client);
     const peer = connectQuestionState(client);
     const submission = cancelQuestionPrompt(submitter, "question-1");
     // The protocol rejects pending requests before its reconnect lifecycle.
-    pending.reject(new Error("gateway closed"));
+    rejectRequest?.(new Error("gateway closed"));
     for (const projection of [submitter, peer]) {
       setQuestionPromptClient(projection, null);
       setQuestionPromptClient(projection, client);

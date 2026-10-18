@@ -56,7 +56,6 @@ describe("runAgentStep", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(gatewayCalls[0]).toMatchObject({ replyExpectation: "optional" });
     const params = gatewayCalls[0]?.params as
       | {
           message?: string;

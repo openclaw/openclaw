@@ -1,23 +1,20 @@
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import type { SolidController, SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
-import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
-import { isChatRunWorking } from "./components/chat-composer-state.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import {
   clearSessionWorkspacePreviews,
@@ -36,7 +33,6 @@ import {
   notifyRenderLifecycleForTest,
   type RenderLifecycle,
 } from "./render-lifecycle.ts";
-import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
 type ChatRenderLifecycleScope = Set<() => void>;
@@ -53,7 +49,7 @@ function transcriptSources(state: ChatPageHost): readonly unknown[] {
   ];
 }
 
-export class ChatStateController<TState extends ChatPageHost> implements SolidController {
+export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {
   private attachmentReadsValue: ChatAttachmentReadLifecycle;
   readonly composerPersistence: ChatComposerPersistence;
   private stateValue: TState | undefined;
@@ -70,7 +66,7 @@ export class ChatStateController<TState extends ChatPageHost> implements SolidCo
   private backgroundRenderFrame: number | undefined;
 
   constructor(
-    private readonly host: SolidControllerHost,
+    private readonly host: ReactiveControllerHost,
     private readonly onStateChange?: () => void,
     private readonly onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
   ) {
@@ -83,23 +79,6 @@ export class ChatStateController<TState extends ChatPageHost> implements SolidCo
 
   get attachmentReads(): ChatAttachmentReadLifecycle {
     return this.attachmentReadsValue;
-  }
-
-  projectRunActivity(state: TState | undefined) {
-    return state?.connected
-      ? {
-          client: state.client,
-          agentId: resolveChatAgentId(state),
-          working: isChatRunWorking({
-            runActive: hasDirectSessionRun(state),
-            queue: state.chatQueue,
-            runStatus: state.chatRunStatus,
-            sessionKey: state.sessionKey,
-            startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
-          }),
-          completion: state.chatRunStatus,
-        }
-      : null;
   }
 
   takeAttachmentReads(): ChatAttachmentReadLifecycle {
@@ -558,15 +537,8 @@ export class ChatStateController<TState extends ChatPageHost> implements SolidCo
   }
 
   hostUpdate() {
-    // A host commit consumes both deferred producers before their next frame.
+    // An immediate input/property update also renders the latest background facts.
     this.cancelBackgroundRender();
-    const state = this.stateValue;
-    if (state?.chatStreamRenderFrame != null) {
-      cancelChatStreamRenderFrame(state);
-      this.composerPersistence.persistChangedState();
-      this.captureRenderLifecycleChanges();
-      this.onStateChange?.();
-    }
   }
 
   private stopChatEffects() {

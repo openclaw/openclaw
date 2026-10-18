@@ -8,8 +8,7 @@ import type {
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
 type PostedUsageTask = { input?: unknown; taskId?: number; responseId?: number };
 type NativeWorker = EventEmitter & {
-  posted: ReturnType<typeof vi.fn<(message: PostedUsageTask) => void>>;
-  postMessage: (message: PostedUsageTask) => void;
+  postMessage: ReturnType<typeof vi.fn<(message: PostedUsageTask) => void>>;
 };
 const nativeWorkers = vi.hoisted(() => [] as NativeWorker[]);
 const nativePosts = vi.hoisted(() => ({
@@ -52,10 +51,9 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         super();
         nativeWorkers.push(this);
       }
-      posted = vi.fn<(message: PostedUsageTask) => void>((message) =>
+      postMessage = vi.fn<(message: PostedUsageTask) => void>((message) =>
         nativePosts.observe?.(this, message),
       );
-      postMessage = this.posted;
       ref() {}
       unref() {}
       async terminate() {

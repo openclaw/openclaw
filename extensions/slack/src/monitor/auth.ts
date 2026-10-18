@@ -7,6 +7,10 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { collectSlackCursorPages } from "../cursor-pages.js";
@@ -81,11 +85,17 @@ export async function resolveSlackEffectiveAllowFrom(
   if (options?.includePairingStore !== true) {
     return base;
   }
-  const storeAllowFrom = await readChannelIngressStoreAllowFromForDmPolicy({
-    provider: "slack",
-    accountId: ctx.accountId,
-    dmPolicy: ctx.dmPolicy,
-  });
+  let storeAllowFrom: string[];
+  try {
+    const resolved = await readChannelIngressStoreAllowFromForDmPolicy({
+      provider: "slack",
+      accountId: ctx.accountId,
+      dmPolicy: ctx.dmPolicy,
+    });
+    storeAllowFrom = Array.isArray(resolved) ? resolved : [];
+  } catch {
+    storeAllowFrom = [];
+  }
   return resolveSlackUserAllowListForTeam({
     allowList: [...base, ...storeAllowFrom],
     teamId,
@@ -117,10 +127,11 @@ async function resolveSlackChannelMemberIds(
 ): Promise<Set<string>> {
   const cache = getChannelMembersCache(ctx);
   const key = `${ctx.accountId}:${eventScope ? `${eventScope.teamId}:` : ""}${channelId}`;
-  const nowMs = Date.now();
+  const rawNowMs = Date.now();
+  const nowMs = asDateTimestampMs(rawNowMs);
   const cached = cache.get(key);
   if (cached?.members) {
-    if (cached.expiresAtMs >= nowMs) {
+    if (nowMs !== undefined && cached.expiresAtMs >= nowMs) {
       return cached.members;
     }
     cache.delete(key);
@@ -130,18 +141,26 @@ async function resolveSlackChannelMemberIds(
   }
 
   const pending = fetchSlackChannelMemberIds(ctx, channelId, eventScope);
+  const pendingExpiresAtMs = resolveExpiresAtMsFromDurationMs(CHANNEL_MEMBERS_CACHE_TTL_MS, {
+    nowMs: rawNowMs,
+  });
   cache.set(key, {
-    expiresAtMs: nowMs + CHANNEL_MEMBERS_CACHE_TTL_MS,
+    expiresAtMs: pendingExpiresAtMs ?? 0,
     pending,
   });
   pruneMapToMaxSize(cache, CHANNEL_MEMBERS_CACHE_MAX);
   try {
     const members = await pending;
-    cache.set(key, {
-      expiresAtMs: Date.now() + CHANNEL_MEMBERS_CACHE_TTL_MS,
-      members,
-    });
-    pruneMapToMaxSize(cache, CHANNEL_MEMBERS_CACHE_MAX);
+    const membersExpiresAtMs = resolveExpiresAtMsFromDurationMs(CHANNEL_MEMBERS_CACHE_TTL_MS);
+    if (membersExpiresAtMs !== undefined) {
+      cache.set(key, {
+        expiresAtMs: membersExpiresAtMs,
+        members,
+      });
+      pruneMapToMaxSize(cache, CHANNEL_MEMBERS_CACHE_MAX);
+    } else {
+      cache.delete(key);
+    }
     return members;
   } finally {
     const latest = cache.get(key);
@@ -499,7 +518,8 @@ export async function authorizeSlackSystemEventSender(params: {
         allowNameMatching: params.ctx.allowNameMatching,
       })
     : null;
-  const channelUsersAllowlistConfigured = (channelConfig?.users?.length ?? 0) > 0;
+  const channelUsersAllowlistConfigured =
+    Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
   const decision = await decideSlackSystemIngress({
     ctx: params.ctx,
     teamId: params.eventScope?.teamId ?? params.ctx.teamId,

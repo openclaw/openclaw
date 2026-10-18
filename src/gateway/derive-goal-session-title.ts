@@ -4,7 +4,7 @@
  * requires a model or local runtime.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveSessionTitleSource } from "../sessions/session-title-source.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 
 const DERIVED_GOAL_TITLE_MAX_LEN = 60;
 
@@ -104,8 +104,12 @@ export function deriveGoalSessionTitle(
   if (!firstUserMessage) {
     return undefined;
   }
-  const stripped = resolveSessionTitleSource(firstUserMessage)?.replace(/\s+/g, " ").trim();
+  const stripped = stripInboundMetadata(firstUserMessage).replace(/\s+/g, " ").trim();
   if (!stripped || isHostEnvelope(stripped)) {
+    return undefined;
+  }
+  // Slash commands are not session topics.
+  if (stripped.startsWith("/")) {
     return undefined;
   }
   const goal = pickGoalSentence(stripped);

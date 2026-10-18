@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { registerChatRun } from "./server-chat.agent-events.test-helpers.js";
@@ -23,8 +22,8 @@ function controlReplyProjection() {
       emitAgentEvent({ runId, stream: "assistant", data });
       await projection.drain();
     },
-    async finish(terminalReply: AgentRunTerminalReplySnapshot) {
-      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end", terminalReply } });
+    async finish() {
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
       await projection.drain();
     },
     async dispose() {
@@ -37,50 +36,17 @@ function controlReplyProjection() {
   };
 }
 
-it.each([
-  "NO_REPLY",
-  "NO_REPLY.",
-  "NO_REPLY\nNO_REPLY",
-  '"NO_REPLY"',
-  '{"reply":"NO_REPLY"}',
-  "  NO_REPLY  \n",
-])("keeps a producer-visible literal %j in stream and final events", async (text) => {
+it("keeps repeated control-only items hidden while the next marker is incomplete", async () => {
   const projection = controlReplyProjection();
   try {
-    await projection.emit({ itemId: "visible", text });
-    await projection.finish({ disposition: "visible", text });
-    expect(projection.events.at(-1)).toMatchObject({
-      state: "final",
-      message: { content: [{ type: "text", text }] },
-    });
-    expect(projection.events[0]).toMatchObject({
-      state: "delta",
-      message: { content: [{ type: "text", text }] },
-    });
-  } finally {
-    await projection.dispose();
-  }
-});
-
-it("uses the full prepared buffer instead of the bounded terminal snapshot", async () => {
-  const projection = controlReplyProjection();
-  const text = `${"long answer ".repeat(500)}final bytes`;
-  try {
-    await projection.emit({ itemId: "visible", text });
-    await projection.finish({ disposition: "visible", text: text.slice(0, 4_096) });
-    expect(projection.events.at(-1)).toMatchObject({
-      state: "final",
-      message: { content: [{ type: "text", text }] },
-    });
-  } finally {
-    await projection.dispose();
-  }
-});
-
-it("publishes a silent terminal event without inventing final text", async () => {
-  const projection = controlReplyProjection();
-  try {
-    await projection.finish({ disposition: "silent" });
+    for (let item = 0; item < 6; item++) {
+      const fragments =
+        item === 0 ? ["REP", "REPLY_", "REPLY_SKIP"] : ["R", "RE", "REP", "REPLY_", "REPLY_SKIP"];
+      for (const text of fragments) {
+        await projection.emit({ itemId: `control-${item}`, text });
+      }
+    }
+    await projection.finish();
     expect(projection.events).toEqual([expect.objectContaining({ state: "final" })]);
     expect(
       Reflect.get(expectDefined(projection.events[0], "terminal chat event"), "message"),
@@ -90,12 +56,12 @@ it("publishes a silent terminal event without inventing final text", async () =>
   }
 });
 
-it("retracts a visible prefix when the producer sends an empty replacement", async () => {
+it("retracts a visible prefix when a replacement becomes a control-only reply", async () => {
   vi.useFakeTimers();
   const projection = controlReplyProjection();
   try {
     await projection.emit({ itemId: "replacement", text: "Preparing a reply" });
-    await projection.emit({ itemId: "replacement", text: "" });
+    await projection.emit({ itemId: "replacement", text: "REPLY_SKIP" });
     vi.advanceTimersByTime(200);
     expect(projection.events.at(-1)).toMatchObject({
       state: "delta",

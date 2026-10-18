@@ -13,20 +13,53 @@ export type PanelEmptyStateProps = {
 export type PanelEmptyStateElement = SolidBridgeElement<PanelEmptyStateProps>;
 
 export function PanelEmptyStateContent(props: PanelEmptyStateProps & { children?: JSX.Element }) {
-  let outlet!: HTMLDivElement;
+  let outlet: HTMLDivElement | undefined;
   // Keep the caller's Lit range intact; only its direct unnamed elements are decorative.
   onSettled(() => {
+    if (!outlet) {
+      return undefined;
+    }
+    const content = outlet;
+    const hidden = new Map<Element, string | null>();
+    const restore = (element: Element, value: string | null) => {
+      if (element.getAttribute("aria-hidden") === "true") {
+        if (value === null) {
+          element.removeAttribute("aria-hidden");
+        } else {
+          element.setAttribute("aria-hidden", value);
+        }
+      }
+    };
     const update = () => {
-      for (const element of outlet.children) {
+      for (const [element, value] of hidden) {
+        if (element.parentElement !== content || element.getAttribute("slot") === "action") {
+          restore(element, value);
+          hidden.delete(element);
+        }
+      }
+      for (const element of content.children) {
         if (element.getAttribute("slot") !== "action") {
+          if (!hidden.has(element)) {
+            hidden.set(element, element.getAttribute("aria-hidden"));
+          }
           element.setAttribute("aria-hidden", "true");
         }
       }
     };
     update();
     const observer = new MutationObserver(update);
-    observer.observe(outlet, { childList: true });
-    return () => observer.disconnect();
+    observer.observe(content, {
+      childList: true,
+      attributes: true,
+      attributeFilter: ["slot"],
+      subtree: true,
+    });
+    return () => {
+      observer.disconnect();
+      for (const [element, value] of hidden) {
+        restore(element, value);
+      }
+    };
   });
   return (
     <div class="empty-state" role="status">

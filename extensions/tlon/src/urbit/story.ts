@@ -341,27 +341,36 @@ function canInterruptWithListItem(item: MarkdownListItem): boolean {
 function parseListingBlock(
   lines: string[],
   startIndex: number,
-  first: MarkdownListItem | undefined,
 ): { verses: StoryVerse[]; nextIndex: number } | undefined {
-  if (!first || first.indent >= 4 || (first.markerType === "ordered" && first.orderedStart !== 1)) {
+  const first = parseMarkdownListItem(expectDefined(lines[startIndex], "list start line"));
+  if (!first) {
+    return undefined;
+  }
+  if (first.indent >= 4 || (first.markerType === "ordered" && first.orderedStart !== 1)) {
     return undefined;
   }
 
   function parseLevel(
     index: number,
     minIndent: number,
-    firstItem: MarkdownListItem,
+    markerKey: string,
   ): { type: StoryListType; items: StoryListing[]; nextIndex: number } | undefined {
+    const firstItem = parseMarkdownListItem(expectDefined(lines[index], "list level start"));
+    if (
+      !firstItem ||
+      firstItem.indent < minIndent ||
+      firstItem.indent > minIndent + 3 ||
+      (firstItem.markerType === "ordered" && firstItem.orderedStart !== 1)
+    ) {
+      return undefined;
+    }
+
     const items: StoryListing[] = [];
-    const markerKey = firstItem.markerKey;
     const markerType = firstItem.markerType;
     let allTasks = true;
     let cursor = index;
     while (cursor < lines.length) {
-      const item =
-        cursor === index
-          ? firstItem
-          : parseMarkdownListItem(expectDefined(lines[cursor], "list line index"));
+      const item = parseMarkdownListItem(expectDefined(lines[cursor], "list line index"));
       if (
         !item ||
         item.indent < minIndent ||
@@ -433,7 +442,7 @@ function parseListingBlock(
         if (child.indent < item.contentIndent || child.indent >= item.contentIndent + 4) {
           return undefined;
         }
-        const nested = parseLevel(cursor, item.contentIndent, child);
+        const nested = parseLevel(cursor, item.contentIndent, child.markerKey);
         if (!nested) {
           return undefined;
         }
@@ -482,7 +491,7 @@ function parseListingBlock(
     };
   }
 
-  const parsed = parseLevel(startIndex, 0, first);
+  const parsed = parseLevel(startIndex, 0, first.markerKey);
   if (!parsed) {
     return undefined;
   }
@@ -596,7 +605,7 @@ export function markdownToStory(markdown: string): Story {
 
     const preservesLooseList =
       preservedListMarkerKey !== undefined && lineListItem?.markerKey === preservedListMarkerKey;
-    const listing = preservesLooseList ? undefined : parseListingBlock(lines, i, lineListItem);
+    const listing = preservesLooseList ? undefined : parseListingBlock(lines, i);
     if (listing) {
       story.push(...listing.verses);
       i = listing.nextIndex;
@@ -625,7 +634,7 @@ export function markdownToStory(markdown: string): Story {
 
       if (!preserveListText && MARKDOWN_LIST_ITEM_PATTERN.test(paragraphLine)) {
         const item = parseMarkdownListItem(paragraphLine);
-        const candidate = parseListingBlock(lines, i, item);
+        const candidate = parseListingBlock(lines, i);
         if (item?.hasSourceBody === true && candidate) {
           break;
         }

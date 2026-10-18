@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import type {
   WorkboardCard,
   WorkboardDeleteResult,
@@ -9,7 +8,6 @@ import type {
 } from "@openclaw/workboard-contract";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { definedFields } from "../record-fields.js";
 import type { PersistedWorkboardCard } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import { WorkboardBoardStore } from "./store-boards.js";
@@ -21,11 +19,13 @@ import {
   isActiveDependencyTarget,
   isDependencyPromotableStatus,
   lifecycleStatusSourceUpdatedAtFromPatch,
+  removeUndefinedCardFields,
   shouldSkipPersistedLifecycleStatusUpdate,
   syncExecutionAttemptMetadata,
   updateEvent,
   appendEvent,
 } from "./store-card-helpers.js";
+import { sameWorkboardCardState, sameWorkboardWorkspace } from "./store-compensation.js";
 import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
 import type {
   WorkboardCardPatch,
@@ -41,6 +41,7 @@ import type {
 import {
   appendLinkPreservingDependencies,
   metadataIsEmpty,
+  normalizeAutomation,
   normalizeBoardId,
   normalizeBoundedString,
   normalizeExecution,
@@ -48,7 +49,6 @@ import {
   normalizeMetadata,
   normalizeNotes,
   normalizePriority,
-  normalizeRunId,
   normalizeStatus,
   normalizeStringList,
   normalizeTemplateId,
@@ -60,19 +60,52 @@ import {
 import { readCards } from "./store-read.js";
 import { normalizeCappedStringList } from "./store-string-lists.js";
 
+type WorkboardMutationJournalEntry = {
+  before?: WorkboardCard;
+  after: WorkboardCard;
+};
+
 export class WorkboardCoreStore extends WorkboardBoardStore {
   private lastNotificationSequence = 0;
+  private compensationJournal?: WorkboardMutationJournalEntry[];
+
+  protected async withCardCompensation<T>(run: () => Promise<T>): Promise<T> {
+    const journal: WorkboardMutationJournalEntry[] = [];
+    this.compensationJournal = journal;
+    try {
+      return await run();
+    } catch (operationError) {
+      const compensationErrors: unknown[] = [];
+      for (const { before, after } of journal.toReversed()) {
+        try {
+          await this.rollbackCardMutation(before, after);
+        } catch (error) {
+          compensationErrors.push(error);
+        }
+      }
+      if (compensationErrors.length > 0) {
+        const message =
+          operationError instanceof Error ? operationError.message : String(operationError);
+        throw new AggregateError([operationError, ...compensationErrors], message, {
+          cause: operationError,
+        });
+      }
+      throw operationError;
+    } finally {
+      this.compensationJournal = undefined;
+    }
+  }
+
+  private recordCardMutation(before: WorkboardCard | undefined, after: WorkboardCard): void {
+    // Undo later steps first so each saved state is restored before its predecessor.
+    this.compensationJournal?.push({ before, after });
+  }
 
   async compensateWorkspaceMutation(before: WorkboardCard, after: WorkboardCard): Promise<void> {
     await this.enqueueMutation(async () => {
       const current = await this.get(after.id);
       const currentAutomation = current?.metadata?.automation;
-      const afterAutomation = after.metadata?.automation;
-      if (
-        !current ||
-        !isDeepStrictEqual(currentAutomation?.workspace, afterAutomation?.workspace) ||
-        !isDeepStrictEqual(currentAutomation?.workspaceAccess, afterAutomation?.workspaceAccess)
-      ) {
+      if (!current || !sameWorkboardWorkspace(current, after)) {
         return;
       }
       const automation = { ...currentAutomation };
@@ -103,6 +136,28 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         current.updatedAt,
       );
     });
+  }
+
+  private async rollbackCardMutation(
+    before: WorkboardCard | undefined,
+    after: WorkboardCard,
+  ): Promise<void> {
+    const current = await this.get(after.id);
+    // A later editor owns the whole card. Leave partial work visible instead of
+    // trying to merge a failed operation's inverse into their changes.
+    if (!current || !sameWorkboardCardState(current, after)) {
+      return;
+    }
+    if (!before) {
+      await this.store.deleteIfUpdatedAt(after.id, current.updatedAt);
+      return;
+    }
+    const restored = { ...before, updatedAt: Math.max(Date.now(), current.updatedAt + 1) };
+    await this.store.registerIfUpdatedAt(
+      restored.id,
+      { version: 1, card: restored },
+      current.updatedAt,
+    );
   }
 
   protected async updateLatestCard(
@@ -197,7 +252,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
 
   async get(id: string): Promise<WorkboardCard | undefined> {
     const entry = await this.store.lookup(id.trim());
-    return entry?.card;
+    return entry?.version === 1 ? entry.card : undefined;
   }
 
   protected async requireCard(id: string): Promise<WorkboardCard> {
@@ -246,7 +301,10 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     scope?: WorkboardMutationScope,
     assertOwnerCurrent?: () => void,
   ): Promise<WorkboardCard> {
-    return await this.enqueueMutation(() => this.createDirect(input, scope), assertOwnerCurrent);
+    return await this.enqueueMutation(
+      () => this.withCardCompensation(() => this.createDirect(input, scope)),
+      assertOwnerCurrent,
+    );
   }
 
   protected async createDirect(
@@ -285,18 +343,21 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       if (!parent) {
         throw new Error(`card not found: ${parentId}`);
       }
-      assertCanMutateClaimedCard(parent, scope);
       return parent;
     });
-    const childAutomation =
-      parents.length === 1
-        ? { ...automation, createdByCardId: automation?.createdByCardId ?? parents[0] }
-        : automation;
+    const childAutomation = normalizeAutomation(
+      {
+        ...automation,
+        createdByCardId:
+          automation?.createdByCardId ?? (parents.length === 1 ? parents[0] : undefined),
+      },
+      automation,
+    );
     const normalizedPosition = resolveNonNegativeIntegerOption(input.position, Number.NaN);
     const notes = normalizeNotes(input.notes);
     const agentId = normalizeOptionalString(input.agentId);
     const sessionKey = normalizeOptionalString(input.sessionKey);
-    const runId = normalizeRunId(input.runId);
+    const runId = normalizeOptionalString(input.runId);
     const sourceUrl = normalizeOptionalString(input.sourceUrl);
     const normalizedExecution = normalizeExecution(input.execution);
     const execution =
@@ -376,6 +437,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     } else {
       await this.store.register(card.id, { version: 1, card });
     }
+    this.recordCardMutation(undefined, card);
     for (const parent of parentCards) {
       card = await this.linkCardsDirect(parent.id, card.id, now, {
         allowStatusOnlyActiveChild: true,
@@ -511,7 +573,6 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       automationLaunch: options.automationLaunch,
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
       preserveProofId: options.preserveProofId,
-      preserveNotificationId: options.preserveNotificationId,
     });
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
       // Status patches often spread existing metadata. Only a newly supplied
@@ -544,7 +605,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         options,
       );
     }
-    const next = definedFields<WorkboardCard>({
+    const next = removeUndefinedCardFields({
       ...existing,
       title:
         effectivePatch.title === undefined ? existing.title : normalizeTitle(effectivePatch.title),
@@ -562,7 +623,9 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
           : normalizeOptionalString(effectivePatch.agentId),
       sessionKey,
       runId:
-        effectivePatch.runId === undefined ? existing.runId : normalizeRunId(effectivePatch.runId),
+        effectivePatch.runId === undefined
+          ? existing.runId
+          : normalizeOptionalString(effectivePatch.runId),
       sourceUrl:
         effectivePatch.sourceUrl === undefined
           ? existing.sourceUrl
@@ -623,6 +686,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       updated = await this.store.registerIfUpdatedAt(next.id, nextEntry, expectedUpdatedAt);
     }
     if (updated) {
+      this.recordCardMutation(existing, next);
       await this.deleteDetachedAttachments(existing, next);
       return next;
     }
@@ -679,7 +743,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         return { deleted: false };
       }
       for (const entry of await this.subscriptionStore.entries()) {
-        if (entry.value.subscription.cardId === cardId) {
+        if (entry.value?.version === 1 && entry.value.subscription?.cardId === cardId) {
           await this.subscriptionStore.delete(entry.key);
         }
       }
@@ -743,7 +807,9 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(() =>
-      this.linkCardsDirect(parentId, childId, Date.now(), { scope }),
+      this.withCardCompensation(() =>
+        this.linkCardsDirect(parentId, childId, Date.now(), { scope }),
+      ),
     );
   }
 
@@ -793,13 +859,19 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     };
     const nextParentLinks = linkTo(parent, child.id, "child");
     const nextChildLinks = linkTo(child, parent.id, "parent");
-    await this.updateCard(parent, {
-      metadata: { ...parent.metadata, links: nextParentLinks },
-    });
-    const nextChild = await this.updateCard(child, {
-      metadata: { ...child.metadata, links: nextChildLinks },
-    });
-    return await this.promoteDependencyReady(nextChild);
+    await this.updateCard(
+      await this.requireCard(parent.id),
+      {
+        metadata: { ...parent.metadata, links: nextParentLinks },
+      },
+      { expectedUpdatedAt: parent.updatedAt },
+    );
+    const nextChild = await this.updateCard(
+      await this.requireCard(child.id),
+      { metadata: { ...child.metadata, links: nextChildLinks } },
+      { expectedUpdatedAt: child.updatedAt },
+    );
+    return await this.promoteDependencyReady(nextChild.id);
   }
 
   protected async parentsDone(parentIds: readonly string[]): Promise<boolean> {
@@ -875,10 +947,8 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     return result.card;
   }
 
-  protected async promoteDependencyReady(
-    card: WorkboardCard,
-    now = Date.now(),
-  ): Promise<WorkboardCard> {
+  protected async promoteDependencyReady(id: string, now = Date.now()): Promise<WorkboardCard> {
+    const card = await this.requireCard(id);
     if (card.metadata?.archivedAt) {
       return card;
     }
@@ -886,7 +956,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     if (target === card.status) {
       return card;
     }
-    return await this.updateCard(card, { status: target });
+    return await this.updateCard(await this.requireCard(card.id), { status: target });
   }
 }
 

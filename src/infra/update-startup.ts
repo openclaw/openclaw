@@ -372,22 +372,22 @@ async function runGatewayUpdateCheckOwned(
   const initialSchedule: UpdateScheduleState = priorSchedule
     ? { ...priorSchedule, autoEnabled }
     : { channel: configuredChannel, autoEnabled };
-  const { root, status, installReceipt } = installStatus;
-  const isDevGit = configuredChannel === "dev" && status.installKind === "git";
-  // Cached checks still publish the installation facts discovery already established.
-  setSchedule(
-    withUpdateInstallStatus(
-      autoDesired ? initialSchedule : withoutUpdateCampaign(initialSchedule),
-      status,
-      isDevGit,
-      installReceipt,
-      root,
-    ),
-  );
+  setSchedule(autoDesired ? initialSchedule : withoutUpdateCampaign(initialSchedule));
   if (!autoDesired) {
     updateCampaign.clear();
   }
 
+  if (configuredChannel === "extended-stable" || configuredChannel === "dev") {
+    setSchedule(
+      withUpdateInstallStatus(
+        getUpdateSchedule() ?? initialSchedule,
+        installStatus.status,
+        configuredChannel === "dev",
+        installStatus.installReceipt,
+        installStatus.root,
+      ),
+    );
+  }
   if (configuredChannel === "extended-stable") {
     if (installStatus.status.installKind !== "package") {
       updateCampaign.clear();
@@ -397,6 +397,7 @@ async function runGatewayUpdateCheckOwned(
     }
   }
 
+  const isDevGit = configuredChannel === "dev" && installStatus?.status.installKind === "git";
   const shouldRunAutoUpdate =
     autoDesired && (configuredChannel === "stable" || configuredChannel === "beta" || isDevGit);
   if (!shouldRunAutoUpdate) {
@@ -439,6 +440,17 @@ async function runGatewayUpdateCheckOwned(
   ) {
     return;
   }
+
+  const { root, status, installReceipt } = installStatus;
+  setSchedule(
+    withUpdateInstallStatus(
+      getUpdateSchedule() ?? initialSchedule,
+      status,
+      isDevGit,
+      installReceipt,
+      root,
+    ),
+  );
 
   const nextState: UpdateCheckState = {
     ...state,

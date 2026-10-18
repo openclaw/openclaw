@@ -95,14 +95,13 @@ describe("discord exec approvals", () => {
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
   });
 
-  it("accepts typed global owners without changing explicit approval targets", () => {
+  it("rejects retired global owners without changing explicit approval targets", () => {
     const cfg = {
-      ...buildConfig({ enabled: "auto" }),
+      ...buildConfig(),
       commands: { ownerAllowFrom: ["discord:user:123"] },
     } as OpenClawConfig;
 
-    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual(["123"]);
-    expect(isDiscordExecApprovalClientEnabled({ cfg })).toBe(true);
+    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual([]);
     expect(
       getDiscordExecApprovalApprovers({
         cfg,

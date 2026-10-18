@@ -32,10 +32,6 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
-import {
-  recordGatewayDatabaseBoot,
-  installGatewayDatabaseEngine,
-} from "../../gateway/server-database-engine.js";
 import { isGatewayEffectiveConfigConflictError } from "../../gateway/server-runtime-config.js";
 import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import { isChannelStartupSuppressedByEnvironment } from "../../gateway/server-sidecar-startup-mode.js";
@@ -49,6 +45,9 @@ import {
   completeGatewayBootLifecycle,
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   formatGatewayCrashLoopManualChannelStartHint,
+  GATEWAY_CRASH_LOOP_RECOVERED_REASON,
+  inspectGatewayCrashLoopBreaker,
+  recordGatewayBootStart,
   type GatewayCrashLoopBreakerDecision,
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
@@ -471,7 +470,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
 
   gatewayLog.info("loading configuration…");
-  await installGatewayDatabaseEngine();
   const { cfg, lowerPrecedenceEnv, snapshot, startupConfigSnapshotRead } =
     await readGatewayStartupConfigWithShellEnv({
       startupTrace,
@@ -830,9 +828,17 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
     // in-process restarts re-evaluate breaker state instead of reusing stale mode.
-    const boot = recordGatewayDatabaseBoot(process.env, startedAtMs);
-    crashLoopDecision = boot.decision;
-    activeBootId = boot.id;
+    crashLoopDecision = inspectGatewayCrashLoopBreaker(process.env, startedAtMs);
+    const bootStartReason = crashLoopDecision.tripped
+      ? crashLoopDecision.shouldWriteStabilityBundle
+        ? GATEWAY_CRASH_LOOP_BREAKER_REASON
+        : undefined
+      : crashLoopDecision.recovered
+        ? GATEWAY_CRASH_LOOP_RECOVERED_REASON
+        : undefined;
+    // Shared-state schema failures make this write fail open, so no lifecycle
+    // row exists for Doctor to reconcile after it repairs the schema.
+    activeBootId = recordGatewayBootStart(process.env, startedAtMs, bootStartReason);
     bootRecorded = activeBootId !== undefined;
     channelAutostartSuppression = undefined;
     tryRecoverChannelAutostartSuppression = undefined;
@@ -877,8 +883,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       completeBoot,
       onProcessResourcesSettled: hooks.onProcessResourcesSettled,
       onRestartStartupFailure: triageStartupFailure,
-      start: async (startOptions = {}) => {
-        const { requestHotReloadRecovery, ...startupOptions } = startOptions;
+      start: async ({ requestHotReloadRecovery, ...startupOptions } = {}) => {
         const snapshotPreparation = await import("../../config/io.snapshot-preparation.js");
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;

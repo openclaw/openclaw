@@ -5,7 +5,6 @@ import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
-import { isOpenClawSubagentCompletionMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import type {
@@ -24,15 +23,7 @@ export {
   partitionSessionFileEntries,
 } from "../../config/sessions/session-entry-codec.js";
 
-/** Rows that record history without consuming the open turn's keyed input. */
-export function isOutOfTurnHistoryEntry(entry: SessionEntry): boolean {
-  return (
-    isTalkRealtimeVoiceEntry(entry) ||
-    (entry.type === "message" && isOpenClawSubagentCompletionMirrorAssistantMessage(entry.message))
-  );
-}
-
-function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
+export function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
   if (
     entry.type !== "message" ||
     (entry.message.role !== "user" && entry.message.role !== "assistant")
@@ -144,18 +135,14 @@ export function cloneSessionModelContextEntries(
   header: SessionHeader | null,
   branch: readonly SessionEntry[],
 ): FileEntry[] {
-  // Project storage-only payloads before cloning, while isolating mutable manager entries.
-  const events: FileEntry[] = [...(header ? [header] : []), ...branch];
-  for (let index = 0; index < events.length; index++) {
-    const entry = events[index]!;
+  // Public manager entries are mutable; preserve durable bytes before publication.
+  const events = structuredClone([...(header ? [header] : []), ...branch]);
+  for (const entry of events) {
     if (entry.type === "message") {
-      const message = projectModelContextMessages([entry.message])[0]!;
-      if (message !== entry.message) {
-        events[index] = { ...entry, message };
-      }
+      entry.message = projectModelContextMessages([entry.message])[0]!;
     }
   }
-  return structuredClone(events);
+  return events;
 }
 
 export function buildSessionContext(

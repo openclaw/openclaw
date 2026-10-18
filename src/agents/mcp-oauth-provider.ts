@@ -89,7 +89,6 @@ export async function createMcpOAuthClientProvider(params: {
   config?: McpOAuthConfig;
   allowAuthorizationRedirect?: boolean;
   suppressStoredTokens?: boolean;
-  replaceAuthorization?: boolean;
   lease: OpenClawStateAsyncLeaseContext;
   login?: McpOAuthLoginLifecycle;
   storeContext: OpenClawStateWorkerContext;
@@ -244,12 +243,7 @@ export async function createMcpOAuthClientProvider(params: {
     },
     async saveTokens(tokens) {
       await updateStore(
-        {
-          kind: "tokens",
-          tokens,
-          tokenExpiresAt: resolveTokenExpiresAt(tokens),
-          ...(params.replaceAuthorization ? { replaceAuthorization: true } : {}),
-        },
+        { kind: "tokens", tokens, tokenExpiresAt: resolveTokenExpiresAt(tokens) },
         {
           beforeCommit: params.login?.beforeTokensSaved,
           onAcknowledged: params.login?.onTokensSaved,

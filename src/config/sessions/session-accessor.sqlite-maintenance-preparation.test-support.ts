@@ -14,6 +14,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
@@ -69,11 +70,7 @@ export function registerSessionMaintenancePreparationTests() {
                       maxEntries: 100,
                       pruneAfter: "1h",
                     }),
-                    preservation: {
-                      providerKeys: [stale.sessionKey],
-                      workIdentities: [],
-                      lifecycleIdentities: [],
-                    },
+                    preservation: null,
                     storePath,
                   },
                 };
@@ -86,6 +83,16 @@ export function registerSessionMaintenancePreparationTests() {
         });
         const completed = vi.fn();
         const diagnostics = {};
+        const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+        const actorCalls: Array<() => number> = [];
+        vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
+          (...args) => {
+            const execution = capture(...args);
+            const run = vi.spyOn(execution, "runExisting");
+            actorCalls.push(() => run.mock.calls.length);
+            return execution;
+          },
+        );
         try {
           const result = await runSqliteSessionReclamation({
             diagnostics,
@@ -93,12 +100,17 @@ export function registerSessionMaintenancePreparationTests() {
             plan,
           });
           expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
-          expect(result.kind).toBe(plan.kind);
+          expect(result.kind).toBe(
+            operation === "preservation" ? "maintenance-preservation-required" : plan.kind,
+          );
           expect(completed).toHaveBeenCalledExactlyOnceWith(
             result,
             `${originalFile.dev}:${originalFile.ino}`,
           );
           expect(published).toEqual([]);
+          if (operation === "no-op" || operation === "preservation") {
+            expect(actorCalls.reduce((count, readCount) => count + readCount(), 0)).toBe(0);
+          }
           if (operation === "preservation") {
             expect(loadSessionEntry(stale)?.archivedAt).toBeUndefined();
           }

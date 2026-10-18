@@ -7,7 +7,6 @@ import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db-contract.js";
-import { hasOpenClawStateTablesBeyondStartupCheckpoint } from "../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type {
   PluginStateOperationCommit,
@@ -20,16 +19,14 @@ import {
   observePluginStateEntry,
 } from "./plugin-state-store.comparison.worker.js";
 import {
-  isMissingPluginStateTableError,
   withPluginStateDatabaseReadOnly,
   wrapPluginStateError,
 } from "./plugin-state-store.database.js";
 import { registerPluginStateSequencedJournalEntryInDatabase } from "./plugin-state-store.journal.js";
 import {
+  countLivePluginStateNamespaceEntries,
   deletePluginStateEntry,
   lookupPluginStateEntry,
-  countLivePluginStateNamespaceEntries,
-  type PluginStateDatabase,
 } from "./plugin-state-store.kernel.js";
 import {
   clearPluginStateNamespace,
@@ -52,9 +49,7 @@ import type {
   PluginStateOperationHandler,
 } from "./plugin-state-store.types.js";
 import {
-  type PluginStateWriteOperations,
-  type PluginStateReadCommand,
-  type PluginStateReadResult,
+  type PluginStateWorkerOperations,
   pluginStateWorkerOperations,
 } from "./plugin-state-worker-contract.js";
 import { capturePluginStateWorkerFailure } from "./plugin-state-worker-errors.js";
@@ -62,75 +57,6 @@ import {
   clearRuntimeHealthEntries,
   hasRuntimeHealthEntriesToClear,
 } from "./runtime-health-store.kernel.js";
-
-export function readPluginStateCommand(
-  store: PluginStateDatabase,
-  command: PluginStateReadCommand,
-): PluginStateReadResult {
-  const description = pluginStateWorkerOperations[command.type];
-  try {
-    switch (command.type) {
-      case "pluginState.lookup":
-        return { type: command.type, result: ok(lookupPluginStateEntry(store, command.input)) };
-      case "pluginState.lookupMany":
-        return {
-          type: command.type,
-          result: ok(
-            lookupPluginStateEntries(store, command.input).map((row) =>
-              row.ok ? row : err(capturePluginStateWorkerFailure(row.error)),
-            ),
-          ),
-        };
-      case "pluginState.entries":
-        return { type: command.type, result: ok(listPluginStateEntries(store, command.input)) };
-      case "pluginState.entriesInKeyRange":
-        return {
-          type: command.type,
-          result: ok(listPluginStateEntriesInKeyRange(store, command.input)),
-        };
-      default:
-        return {
-          type: command.type,
-          result: ok(
-            countLivePluginStateNamespaceEntries(store.db, { ...command.input, now: Date.now() }),
-          ),
-        };
-    }
-  } catch (error) {
-    // Lease bootstrap precedes creation of the plugin-state table; other missing tables are damage.
-    if (
-      isMissingPluginStateTableError(error) &&
-      !hasOpenClawStateTablesBeyondStartupCheckpoint(store.db)
-    ) {
-      return {
-        type: command.type,
-        result: ok(
-          command.type === "pluginState.lookup"
-            ? undefined
-            : command.type === "pluginState.count"
-              ? 0
-              : command.type === "pluginState.lookupMany"
-                ? command.input.keys.map(() => ok(undefined))
-                : [],
-        ),
-      };
-    }
-    return {
-      type: command.type,
-      result: err(
-        capturePluginStateWorkerFailure(
-          wrapPluginStateError(
-            error,
-            description.operation,
-            description.code,
-            description.message,
-            store.path,
-          ),
-        ),
-      ),
-    };
-  }
-}
 
 const operationHandlers = new Map<
   string,
@@ -165,11 +91,11 @@ export async function preparePluginStateOperation(input: PluginStateOperationInp
 }
 
 export function executePluginStateCommand(
-  command: SqliteWorkerCommand<PluginStateWriteOperations>,
+  command: SqliteWorkerCommand<PluginStateWorkerOperations>,
   options: OpenClawStateDatabaseOptions & { path: string },
   openDatabase: () => OpenClawStateDatabase,
   hasRetainedDatabase: boolean,
-): PluginStateWriteOperations[keyof PluginStateWriteOperations]["output"] {
+): PluginStateWorkerOperations[keyof PluginStateWorkerOperations]["output"] {
   const description = pluginStateWorkerOperations[command.type];
   const admit = (stage: "transaction" | "commit") =>
     requestSessionEntriesCurrentAdmission(command.input?.sessionEntryCurrentSources, {
@@ -229,6 +155,67 @@ export function executePluginStateCommand(
           { ...options, database },
         ),
       );
+    } catch (error) {
+      return failure(error);
+    }
+  }
+  if (
+    command.type === "pluginState.lookup" ||
+    command.type === "pluginState.lookupMany" ||
+    command.type === "pluginState.entries" ||
+    command.type === "pluginState.entriesInKeyRange" ||
+    command.type === "pluginState.count"
+  ) {
+    try {
+      switch (command.type) {
+        case "pluginState.lookup":
+          return ok(
+            withPluginStateDatabaseReadOnly(
+              "lookup",
+              (store) => lookupPluginStateEntry(store, command.input),
+              options,
+            ),
+          );
+        case "pluginState.lookupMany": {
+          const rows =
+            withPluginStateDatabaseReadOnly(
+              "lookup",
+              (store) => lookupPluginStateEntries(store, command.input),
+              options,
+            ) ?? command.input.keys.map(() => ok(undefined));
+          return ok(
+            rows.map((row) => (row.ok ? row : err(capturePluginStateWorkerFailure(row.error)))),
+          );
+        }
+        case "pluginState.entriesInKeyRange":
+          return ok(
+            withPluginStateDatabaseReadOnly(
+              "entries",
+              (store) => listPluginStateEntriesInKeyRange(store, command.input),
+              options,
+            ) ?? [],
+          );
+        case "pluginState.entries":
+          return ok(
+            withPluginStateDatabaseReadOnly(
+              "entries",
+              (store) => listPluginStateEntries(store, command.input),
+              options,
+            ) ?? [],
+          );
+        case "pluginState.count":
+          return ok(
+            withPluginStateDatabaseReadOnly(
+              "count",
+              ({ db }) =>
+                countLivePluginStateNamespaceEntries(db, {
+                  ...command.input,
+                  now: Date.now(),
+                }),
+              options,
+            ) ?? 0,
+          );
+      }
     } catch (error) {
       return failure(error);
     }

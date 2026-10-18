@@ -80,7 +80,7 @@ export type OpenClawDatabasePreflightOptions = {
   onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
   scope?: "state";
   signal?: AbortSignal;
-  /** False permits isolated online readers and SQLite read marks; true preserves source bytes. */
+  /** Updates use the isolated online reader; other inspections preserve source artifacts. */
   preserveSourceArtifacts?: boolean;
   /** Omit for current-runtime checks; updates pass their complete target pair. */
   supportedVersions?: OpenClawSchemaVersions;

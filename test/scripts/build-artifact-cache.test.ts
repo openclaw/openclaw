@@ -153,7 +153,7 @@ function fixture(
 }
 
 describe("native owner content records", () => {
-  it("invalidates a linked declaration consumer when a source shadows its emitted types", () => {
+  it("retains upstream output topology when a producer snapshot is reused by a consumer", () => {
     const f = fixture(false, "packages/sdk/dist");
     f.write("packages/sdk/package.json", '{"name":"fixture-sdk","type":"module"}');
     f.write("consumer.json", '{"extends":"./base.json","files":["consumer.ts"]}');
@@ -161,8 +161,11 @@ describe("native owner content records", () => {
       "consumer.ts",
       'import { value } from "fixture-sdk/dist/nested/value.js"; const expected: 1 = value;',
     );
+    fs.mkdirSync(path.join(f.root, "node_modules"), { recursive: true });
     fs.symlinkSync("../packages/sdk", path.join(f.root, "node_modules/fixture-sdk"), "dir");
-    f.prepare();
+    const producer = f.prepare();
+    const shared = new BoundaryInputSnapshot(f.root);
+    shared.record(f.config, f.args, "packages/sdk/dist/.inputs.json", producer.files, f.outputRoot);
     const config = "consumer.json";
     const metadata = ".artifacts/consumer.inputs.json";
     const args = f.compilerArgs(config, metadata);
@@ -242,6 +245,7 @@ describe("native owner content records", () => {
 
   it("ignores tool scratch churn under installed roots", () => {
     const f = fixture(true, "dist", roots, "compiler");
+    fs.mkdirSync(path.join(f.root, "node_modules"), { recursive: true });
     const run = f.prepare();
     // Sibling config loads mint these between the before and seal walks.
     f.write("node_modules/.vite-temp/vitest.config.ts.timestamp-1-a.mjs", "export default {};");

@@ -96,10 +96,13 @@ function readModel(value: unknown): RadiusModel | undefined {
     typeof row.reasoning !== "boolean" ||
     !Array.isArray(row.input) ||
     row.input.length === 0 ||
-    !row.input.every((input): input is "text" | "image" => input === "text" || input === "image")
+    row.input.some((input) => input !== "text" && input !== "image")
   ) {
     return undefined;
   }
+  const input: RadiusModel["input"] = row.input.filter(
+    (item): item is "text" | "image" => item === "text" || item === "image",
+  );
   let thinkingLevelMap: ModelDefinitionConfig["thinkingLevelMap"];
   if (row.thinkingLevelMap !== undefined) {
     const levels = asOptionalRecord(row.thinkingLevelMap);
@@ -121,7 +124,7 @@ function readModel(value: unknown): RadiusModel | undefined {
     id,
     name,
     reasoning: row.reasoning,
-    input: row.input,
+    input,
     cost,
     contextWindow,
     maxTokens,

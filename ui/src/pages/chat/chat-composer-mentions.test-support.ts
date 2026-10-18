@@ -1,4 +1,5 @@
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
+import { nothing, render } from "lit";
 import { onTestFinished, vi } from "vitest";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -8,10 +9,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
-import {
-  createNewSessionComposerTextarea,
-  type NewSessionComposerTextarea,
-} from "../new-session/composer-controller.ts";
+import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
 import { composerContext, mountNewSessionComposer } from "../new-session/composer.test-support.ts";
 import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
@@ -19,9 +17,8 @@ import {
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
-  disposeComposer,
-  renderComposerInto,
 } from "./chat-composer.test-support.ts";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 export const people: UsersMentionableResult = {
@@ -31,7 +28,7 @@ export const people: UsersMentionableResult = {
   ],
   truncated: false,
 };
-const controllers: NewSessionComposerTextarea[] = [];
+const controllers: NewSessionComposerTextareaController[] = [];
 
 export async function resetMentionComposerFixture() {
   controllers.splice(0).forEach((controller) => controller.disconnect());
@@ -55,7 +52,7 @@ export function composerFixture(
   const client = createTestGatewayClient((method, params, options) =>
     method === "commands.list" ? { commands: [] } : request(method, params, options),
   );
-  const controller = createNewSessionComposerTextarea();
+  const controller = new NewSessionComposerTextareaController();
   controllers.push(controller);
   const context = composerContext({
     client,
@@ -73,7 +70,7 @@ export function composerFixture(
     if (native) {
       native.unmount();
     } else {
-      disposeComposer(container);
+      render(nothing, container);
     }
     container.remove();
   });
@@ -99,22 +96,25 @@ export function composerFixture(
       params: kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" },
     };
     if (kind === "chat") {
-      renderComposerInto(container, {
-        ...props,
-        submitDisabledReason,
-        draft,
-        mentions,
-        getDraft: () => draft,
-        getMentions: () => mentions,
-        mentionDirectory: unsupported ? undefined : directory,
-        mentionsUnsupported: unsupported,
-        onDraftChange: onInput,
-        onRequestUpdate: renderCurrent,
-        onSlashCommand: slashCommand,
-        canAbort: true,
-        onAbort: abort,
-        onSend: () => send({ draft, mentions }),
-      });
+      render(
+        renderChatComposer({
+          ...props,
+          submitDisabledReason,
+          draft,
+          mentions,
+          getDraft: () => draft,
+          getMentions: () => mentions,
+          mentionDirectory: unsupported ? undefined : directory,
+          mentionsUnsupported: unsupported,
+          onDraftChange: onInput,
+          onRequestUpdate: renderCurrent,
+          onSlashCommand: slashCommand,
+          canAbort: true,
+          onAbort: abort,
+          onSend: () => send({ draft, mentions }),
+        }),
+        container,
+      );
     } else {
       nativeOptions = {
         agentId: "main",

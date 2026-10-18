@@ -29,6 +29,7 @@ type PaneProperty =
   | "onFocusPane"
   | "onPaneSessionChange"
   | "onSessionDeleted"
+  | "presentationTitle"
   | "narrow"
   | "mergedChrome"
   | "navDrawerOpen"
@@ -83,6 +84,7 @@ const properties = {
   onFocusPane: { default: undefined },
   onPaneSessionChange: { default: undefined },
   onSessionDeleted: { default: undefined },
+  presentationTitle: { default: undefined },
   narrow: { default: false },
   mergedChrome: { default: false },
   navDrawerOpen: { default: false },

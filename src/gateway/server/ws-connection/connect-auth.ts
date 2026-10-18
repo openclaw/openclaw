@@ -13,7 +13,6 @@ import {
   deviceBootstrapProfilesEqual,
 } from "../../../shared/device-bootstrap-profile.js";
 import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
-import { resolveRuntimeServiceBuildId } from "../../../version.js";
 import { captureGatewayAuthPolicy } from "../../auth-policy.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
@@ -39,7 +38,6 @@ import {
   shouldClearUnboundScopesForMissingDeviceIdentity,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
-import { resolveControlUiBuildMismatch } from "./control-ui-build-admission.js";
 import {
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
@@ -463,36 +461,6 @@ async function authenticateGatewayConnectCore(
       close(4001, "gateway auth changed");
       return undefined;
     }
-  }
-  const controlUiBuildMismatch = resolveControlUiBuildMismatch({
-    clientId: connectParams.client.id,
-    clientBuildId: connectParams.client.buildId,
-    gatewayBuildId: resolveRuntimeServiceBuildId(),
-    configuredControlUiRoot: context.configSnapshot.gateway?.controlUi?.root,
-    requestHost: context.handler.requestHost,
-    requestOrigin: context.handler.requestOrigin,
-  });
-  if (controlUiBuildMismatch) {
-    // Build identity predates this rejection. Frozen clients recognize the shipped
-    // protocol-mismatch signal and surface its literal reload guidance.
-    const message = "protocol mismatch: Control UI updated; reload this page to continue";
-    markHandshakeFailure("control-ui-build-mismatch", {
-      clientBuildId: controlUiBuildMismatch.clientBuildId ?? "legacy",
-      gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
-    });
-    sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, message, {
-      retryable: false,
-      details: {
-        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
-        gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
-        reloadRequired: true,
-      },
-    });
-    logWsControl.warn(
-      `control ui build rejected conn=${connId} clientBuild=${formatForLog(controlUiBuildMismatch.clientBuildId ?? "legacy")} gatewayBuild=${formatForLog(controlUiBuildMismatch.gatewayBuildId)}; reload required`,
-    );
-    close(1008, truncateCloseReason(message));
-    return undefined;
   }
   const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
     isControlUi,

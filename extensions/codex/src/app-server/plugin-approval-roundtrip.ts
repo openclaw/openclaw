@@ -89,6 +89,20 @@ export async function requestPluginApproval(params: {
   });
 }
 
+/** Detects the gateway's explicit null-decision marker for unavailable approvals. */
+export function approvalRequestExplicitlyUnavailable(result: unknown): boolean {
+  if (result === null || result === undefined || typeof result !== "object") {
+    return false;
+  }
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(result, "decision");
+  } catch {
+    return false;
+  }
+  return descriptor !== undefined && "value" in descriptor && descriptor.value === null;
+}
+
 /** Waits for the gateway's final approval decision, respecting turn aborts. */
 export async function waitForPluginApprovalDecision(params: {
   hostCapabilities: AgentHarnessHostCapabilities;
@@ -142,10 +156,9 @@ export async function requestPluginApprovalOutcome(
     if (!approvalId) {
       return "unavailable";
     }
-    const approvalResult =
-      requestResult?.decision === null
-        ? undefined
-        : await waitForPluginApprovalDecision({ ...params, approvalId });
+    const approvalResult = approvalRequestExplicitlyUnavailable(requestResult)
+      ? undefined
+      : await waitForPluginApprovalDecision({ ...params, approvalId });
     if (params.signal?.aborted) {
       return "cancelled";
     }

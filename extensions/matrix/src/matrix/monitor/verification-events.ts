@@ -108,15 +108,19 @@ function formatVerificationSasNotice(summary: MatrixVerificationSummary): string
   if (!sas) {
     return null;
   }
-  const emojiLine = sas.emoji?.length
-    ? `SAS emoji: ${sas.emoji
-        .map(
-          ([emoji, name]) =>
-            `${normalizeNullableString(emoji) ?? "?"} ${normalizeNullableString(name) ?? "?"}`,
-        )
-        .join(" | ")}`
-    : null;
-  const decimalLine = sas.decimal ? `SAS decimal: ${sas.decimal.join(" ")}` : null;
+  const emojiLine =
+    Array.isArray(sas.emoji) && sas.emoji.length > 0
+      ? `SAS emoji: ${sas.emoji
+          .map(
+            ([emoji, name]) =>
+              `${normalizeNullableString(emoji) ?? "?"} ${normalizeNullableString(name) ?? "?"}`,
+          )
+          .join(" | ")}`
+      : null;
+  const decimalLine =
+    Array.isArray(sas.decimal) && sas.decimal.length === 3
+      ? `SAS decimal: ${sas.decimal.join(" ")}`
+      : null;
   if (!emojiLine && !decimalLine) {
     return null;
   }
@@ -148,6 +152,11 @@ function resolveVerificationFlowCandidates(params: {
   ]);
 }
 
+function resolveSummaryRecency(summary: MatrixVerificationSummary): number {
+  const ts = Date.parse(summary.updatedAt ?? "");
+  return Number.isFinite(ts) ? ts : 0;
+}
+
 function isActiveVerificationSummary(summary: MatrixVerificationSummary): boolean {
   if (summary.completed) {
     return false;
@@ -155,7 +164,7 @@ function isActiveVerificationSummary(summary: MatrixVerificationSummary): boolea
   if (summary.phaseName === "cancelled" || summary.phaseName === "done") {
     return false;
   }
-  if (summary.phase >= 4) {
+  if (typeof summary.phase === "number" && summary.phase >= 4) {
     return false;
   }
   return true;
@@ -221,10 +230,9 @@ async function resolveVerificationSummaryForSignal(
   }
 
   // Fallback for DM flows where transaction IDs do not match room event IDs consistently.
-  // The verification manager already orders summaries newest-first.
-  const activeByUser = list.filter(
-    (entry) => entry.otherUserId === params.senderId && isActiveVerificationSummary(entry),
-  );
+  const activeByUser = list
+    .filter((entry) => entry.otherUserId === params.senderId && isActiveVerificationSummary(entry))
+    .toSorted((a, b) => resolveSummaryRecency(b) - resolveSummaryRecency(a));
   return (
     activeByUser.find((entry) => normalizeNullableString(entry.roomId) === params.roomId) ??
     activeByUser[0] ??
@@ -263,7 +271,7 @@ function trackBounded(set: Set<string>, value: string): boolean {
   set.add(value);
   if (set.size > MAX_TRACKED_VERIFICATION_EVENTS) {
     const oldest = set.values().next().value;
-    if (oldest !== undefined) {
+    if (typeof oldest === "string") {
       set.delete(oldest);
     }
   }
@@ -278,7 +286,7 @@ export function createMatrixVerificationEventRouter(params: {
   readStoreAllowFrom: () => Promise<string[]>;
   logVerboseMessage: (message: string) => void;
   sasNoticeRetryDelayMs?: number;
-  runDetachedTask: (label: string, task: () => Promise<void>) => Promise<void>;
+  runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
 }) {
   const routerStartedAtMs = Date.now();
   const routedVerificationEvents = new Set<string>();
@@ -504,10 +512,16 @@ export function createMatrixVerificationEventRouter(params: {
         await sendVerificationNotice(roomId, body);
       }
     };
-    void params.runDetachedTask(
-      `verification event handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-      routeTask,
-    );
+    if (params.runDetachedTask) {
+      void params.runDetachedTask(
+        `verification event handler room=${roomId} id=${event.event_id ?? "unknown"}`,
+        routeTask,
+      );
+    } else {
+      void routeTask().catch((err: unknown) => {
+        params.logVerboseMessage(`matrix: failed routing verification event: ${String(err)}`);
+      });
+    }
 
     return true;
   }

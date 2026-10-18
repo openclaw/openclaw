@@ -156,15 +156,13 @@ export function createGatewayStartupTrace(
     totalMs: number,
     eventLoopSample: ReturnType<typeof takeEventLoopSample>,
     extras: ReadonlyArray<readonly [string, number | string]> = [],
-    serviceOutcome?: "success" | "failure",
   ) => {
     const metrics = [
       ["eventLoopMax", `${(eventLoopSample?.maxMs ?? 0).toFixed(1)}ms`] as const,
       ...extras,
-      ...(serviceOutcome ? [["outcome", serviceOutcome] as const] : []),
     ];
     recordGatewayRestartTraceSpan(`restart.ready.${name}`, durationMs, totalMs, metrics);
-    if (logEnabled || (serviceOutcome && durationMs >= 250)) {
+    if (logEnabled) {
       log.info(
         `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
       );
@@ -255,7 +253,6 @@ export function createGatewayStartupTrace(
         attributes: name === mappedName ? undefined : { traceName: name },
       };
       emitDiagnosticsTimelineEvent({ ...span, type: "span.start" }, timelineOptions());
-      let outcome: "success" | "failure" = "success";
       try {
         const result = await withDiagnosticPhase(mappedName, run, { traceName: name });
         reportProgress(name);
@@ -270,7 +267,6 @@ export function createGatewayStartupTrace(
         );
         return result;
       } catch (error) {
-        outcome = "failure";
         const now = performance.now();
         emitDiagnosticsTimelineEvent(
           {
@@ -288,14 +284,7 @@ export function createGatewayStartupTrace(
       } finally {
         const now = performance.now();
         const eventLoopSample = takeEventLoopSample();
-        emit(
-          name,
-          now - before,
-          now - started,
-          eventLoopSample,
-          [],
-          /^sidecars\.plugin-services\.[^.]+\.[^.]+$/u.test(name) ? outcome : undefined,
-        );
+        emit(name, now - before, now - started, eventLoopSample);
         emitEventLoopTimelineSample(name, eventLoopSample);
         last = now;
       }

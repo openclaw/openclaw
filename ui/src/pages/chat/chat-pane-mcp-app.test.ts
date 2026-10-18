@@ -1,4 +1,3 @@
-import { createRoot } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -20,7 +19,7 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
-import { createChatPaneMcpApps, type ChatPaneMcpAppOwner } from "./chat-pane-mcp-app.ts";
+import { ChatPaneMcpAppController, type ChatPaneMcpAppOwner } from "./chat-pane-mcp-app.ts";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -61,17 +60,9 @@ function fixture() {
     openFile: vi.fn(),
   };
   let current: ChatPaneMcpAppOwner | null = owner;
-  let syncLaunch!: () => void;
-  function mount() {
-    const dispose = createRoot((stop) => {
-      syncLaunch = createChatPaneMcpApps({ element, current: () => current });
-      return stop;
-    });
-    cleanups.push(dispose);
-    return dispose;
-  }
-  const cleanup = mount();
-  cleanups.push(() => releaseChatAttachmentPayloads(state.chatAttachments));
+  const controller = new ChatPaneMcpAppController({ element, current: () => current });
+  const cleanup = controller.subscribe();
+  cleanups.push(cleanup, () => releaseChatAttachmentPayloads(state.chatAttachments));
   const launch: McpAppOpenDetail = {
     sessionKey: state.sessionKey,
     owner: client,
@@ -99,8 +90,7 @@ function fixture() {
     context,
     state,
     owner,
-    syncLaunch: () => syncLaunch(),
-    mount,
+    controller,
     cleanup,
     launch,
     dispatch,
@@ -126,7 +116,7 @@ function message(sessionKey: string, target: "active" | "new" = "active") {
   return { detail, receipt, respond };
 }
 
-describe("MCP app pane actions", () => {
+describe("MCP app pane controller", () => {
   it("claims only the presented matching owner and retains per-launch synchronization", () => {
     const f = fixture();
     f.owner.presented = false;
@@ -150,14 +140,14 @@ describe("MCP app pane actions", () => {
       }),
     );
     f.owner.launch = f.launch;
-    f.syncLaunch();
-    f.syncLaunch();
+    f.controller.syncLaunch();
+    f.controller.syncLaunch();
     expect(f.state.handleOpenSidebar).toHaveBeenCalledTimes(2);
     expect(f.state.handleOpenSidebar).toHaveBeenLastCalledWith(
       expect.objectContaining({ fileTab: { id: "mcp-app:parts/tray:app", label: "Parts tray" } }),
     );
     f.owner.launch = { ...f.launch, deepLink: "/second" };
-    f.syncLaunch();
+    f.controller.syncLaunch();
     expect(f.state.handleOpenSidebar).toHaveBeenCalledTimes(3);
   });
 
@@ -268,15 +258,24 @@ describe("MCP app pane actions", () => {
     ]);
   });
 
-  it("retires pane listeners with their owner and reads the current owner after remount", () => {
+  it("cleans up every pane listener and reads the current owner when resubscribed", () => {
     const f = fixture();
+    const remove = vi.spyOn(f.element, "removeEventListener");
     f.cleanup();
+    expect(remove.mock.calls.map(([name]) => name)).toEqual([
+      MCP_APP_RESOURCE_MENTION_EVENT,
+      MCP_APP_MESSAGE_EVENT,
+      MCP_APP_FILE_OPEN_EVENT,
+      MCP_APP_CONTEXT_EVENT,
+      MCP_APP_OPEN_EVENT,
+      WIDGET_PROMPT_EVENT,
+    ]);
     expect(f.dispatch(MCP_APP_OPEN_EVENT, f.launch).defaultPrevented).toBe(false);
     f.dispatch(WIDGET_PROMPT_EVENT, { text: "not delivered" });
     expect(f.state.handleSendChat).not.toHaveBeenCalled();
     const next = { ...f.owner, state: { ...f.state, handleSendChat: vi.fn(async () => {}) } };
     f.setCurrent(next);
-    f.mount();
+    cleanups.push(f.controller.subscribe());
     f.dispatch(WIDGET_PROMPT_EVENT, { text: "  delivered once  " });
     expect(next.state.handleSendChat).toHaveBeenCalledExactlyOnceWith("delivered once");
     expect(f.state.handleSendChat).not.toHaveBeenCalled();

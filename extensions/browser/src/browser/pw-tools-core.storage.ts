@@ -1,3 +1,4 @@
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserContext } from "playwright-core";
 import { getPageForTargetId } from "./pw-session.js";
 import {
@@ -23,11 +24,15 @@ export async function cookiesSetViaPlaywright(
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
   const cookie = opts.cookie;
-  if (!cookie.name) {
+  if (!cookie.name || cookie.value === undefined) {
     throw new Error("cookie name and value are required");
   }
-  const hasUrl = cookie.url?.trim();
-  const hasDomainPath = cookie.domain?.trim() && cookie.path?.trim();
+  const hasUrl = typeof cookie.url === "string" && cookie.url.trim();
+  const hasDomainPath =
+    typeof cookie.domain === "string" &&
+    cookie.domain.trim() &&
+    typeof cookie.path === "string" &&
+    cookie.path.trim();
   if (!hasUrl && !hasDomainPath) {
     throw new Error("cookie requires url, or domain+path");
   }
@@ -101,7 +106,7 @@ export async function storageGetViaPlaywright(opts: {
 }): Promise<{ values: Record<string, string> }> {
   const page = await getPageForTargetId(opts);
   const kind = opts.kind;
-  const key = opts.key;
+  const key = readStringValue(opts.key);
   // Entry pairs preserve keys that Playwright omits when deserializing objects.
   const entries = await page.evaluate(
     ({ kind: kind2, key: key2 }): Array<[string, string]> => {
@@ -136,6 +141,10 @@ export async function storageSetViaPlaywright(
   },
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
+  const key = opts.key;
+  if (!key) {
+    throw new Error("key is required");
+  }
   if (opts.assertCurrent) {
     await assertInteractionCurrent(opts);
   }
@@ -144,7 +153,7 @@ export async function storageSetViaPlaywright(
       const store = kind === "session" ? window.sessionStorage : window.localStorage;
       store.setItem(k, value);
     },
-    { kind: opts.kind, key: opts.key, value: opts.value },
+    { kind: opts.kind, key, value: opts.value },
   );
 }
 

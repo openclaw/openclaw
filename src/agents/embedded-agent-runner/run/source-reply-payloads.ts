@@ -56,7 +56,6 @@ export function buildSourceReplyPayloadState(params: {
       ...(payload.interactive ? { interactive: payload.interactive } : {}),
       ...(payload.channelData ? { channelData: payload.channelData } : {}),
     });
-    setReplyPayloadMetadata(reply, { sourceReplyFinal: payload.sourceReplyFinal });
     if (params.sessionKey) {
       const idempotencyKey =
         payload.idempotencyKey ??
