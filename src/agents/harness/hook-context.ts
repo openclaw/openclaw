@@ -62,6 +62,9 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
       senderId: params.senderId,
       chatId: params.chatId,
       channelContext: params.channelContext,
+      causalMessageId: params.messageId,
+      senderIsOwner: params.senderIsOwner,
+      inputProvenance: params.inputProvenance,
     }),
   };
 }

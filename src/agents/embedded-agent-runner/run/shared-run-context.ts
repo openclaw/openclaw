@@ -8,6 +8,7 @@ export function projectEmbeddedMessageContext(run: Partial<EmbeddedForegroundPro
     senderUsername: run.senderUsername,
     senderE164: run.senderE164,
     senderIsOwner: run.senderIsOwner,
+    causalMessageId: run.causalMessageId,
     approvalReviewerDeviceId: run.approvalReviewerDeviceId,
     currentChannelId: run.currentChannelId,
     chatId: run.chatId,

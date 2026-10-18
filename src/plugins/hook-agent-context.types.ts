@@ -52,6 +52,14 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   chatId?: string;
   /** Sender identity for channel-originated runs when available. */
   senderId?: string;
+  /**
+   * Opaque provider id of the single external inbound message that initiated this run.
+   * Absent for internal turns, multi-source collections, and synthetic overflow summaries.
+   * Admission-time metadata, not a reply target or live authorization capability.
+   */
+  messageId?: string;
+  /** Host-resolved ownership at admission; absent when the sender or ownership is unknown. */
+  senderIsOwner?: boolean;
   trigger?: string;
   channelId?: string;
   /** Typed origin of the turn's user-role input when supplied by the producer. */
