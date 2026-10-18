@@ -510,6 +510,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
           <ShellLoader
             onShell={(owner) => {
               shell = owner;
+              runtime.setShell(owner);
               readiness?.invalidate();
             }}
             runtime={runtime}

@@ -22,6 +22,7 @@ import type { AssistantDock } from "./assistant-dock.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
+import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
@@ -123,6 +124,7 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly basePath: string;
   readonly resourceBasePath: string;
   readonly lifecycleAbortSignal?: AbortSignal;
+  readonly routeOutlet?: ControlUiReadinessOutlet;
   readonly router: Pick<
     Router<RouteId, ApplicationContext, unknown, unknown>,
     "getState" | "subscribe" | "navigate"

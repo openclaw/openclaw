@@ -291,7 +291,7 @@ it("reuses palette reads through session publications while retaining retries an
         ensure: async () => {},
         subscribe,
       },
-    });
+    }, () => []);
     await vi.waitFor(() => expect(warning).toHaveBeenCalledOnce());
     const styleReads = vi.spyOn(globalThis, "getComputedStyle");
     publishRow({ label: "Retry the failed icon on the next session publication" });

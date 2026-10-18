@@ -1,10 +1,10 @@
-import { createSignal } from "@solidjs/signals";
+import { createSignal, onSettled, runWithOwner } from "@solidjs/signals";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { readNativeHistoryState } from "./native-web-chrome.ts";
 
 /** Synchronous shell state publishes revisions; Solid commits settle its DOM waiters. */
-export class ShellPresentation {
+export abstract class ShellPresentation {
   mobileGatewayStatus: GatewayStatusProps | null = null;
   private readonly readRevision: () => number;
   private readonly writeRevision: (next: (revision: number) => number) => number;
@@ -16,6 +16,8 @@ export class ShellPresentation {
     this.writeRevision = write;
   }
   private disposed = false;
+  private presentationMounted = false;
+  private pendingCommit: object | undefined;
   private commitPromise: Promise<boolean> = Promise.resolve(true);
   private resolveCommit: ((committed: boolean) => void) | undefined;
   private currentNavDrawerOpen = false;
@@ -81,6 +83,40 @@ export class ShellPresentation {
     return this.commitPromise;
   }
 
+  mountPresentation(): () => void {
+    this.presentationMounted = true;
+    this.scheduleCommit();
+    return () => {
+      this.presentationMounted = false;
+      this.suspendPresentation();
+    };
+  }
+
+  protected abstract afterCommit(): void;
+
+  private scheduleCommit(): void {
+    if (this.disposed || !this.presentationMounted || this.pendingCommit) {
+      return;
+    }
+    if (!this.resolveCommit) {
+      this.commitPromise = new Promise((resolve) => {
+        this.resolveCommit = resolve;
+      });
+    }
+    const commit = {};
+    this.pendingCommit = commit;
+    // Router notifications can run inside a render memo that retires before this commit.
+    runWithOwner(null, () =>
+      onSettled(() => {
+        if (this.pendingCommit !== commit) {
+          return;
+        }
+        this.pendingCommit = undefined;
+        this.afterCommit();
+      }),
+    );
+  }
+
   invalidate(): void {
     if (this.disposed) {
       return;
@@ -91,14 +127,17 @@ export class ShellPresentation {
       });
     }
     this.writeRevision((revision) => revision + 1);
+    this.scheduleCommit();
   }
 
   protected resumePresentation(): void {
     this.disposed = false;
+    this.scheduleCommit();
   }
 
   protected suspendPresentation(): void {
     this.disposed = true;
+    this.pendingCommit = undefined;
     this.resolveCommit?.(false);
     this.resolveCommit = undefined;
     this.commitPromise = Promise.resolve(false);
