@@ -1,4 +1,3 @@
-// Msteams tests cover reply stream controller plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { teamsQuotedTableReply } from "./format.test-fixtures.js";
 import { flattenInformativeStatus } from "./informative-status.js";
@@ -57,24 +56,32 @@ function makeContext(stream?: ReturnType<typeof makeStream>) {
   return { activity: { type: "message" }, stream } as never;
 }
 
+type ControllerOptions = Parameters<typeof createTeamsReplyStreamController>[0];
 function makeController(
-  opts: {
-    stream?: ReturnType<typeof makeStream>;
-  } = {},
+  stream: ReturnType<typeof makeStream>,
+  options: Partial<Omit<ControllerOptions, "context">> = {},
 ) {
-  const stream = opts.stream;
   return createTeamsReplyStreamController({
     allowProviderPreview: true,
     conversationType: "personal",
     context: makeContext(stream),
     feedbackLoopEnabled: false,
+    ...options,
   });
+}
+
+function acknowledgedController(text = "abcde") {
+  const stream = makeAcknowledgedStream();
+  const ctrl = makeController(stream);
+  ctrl.onPartialReply({ text });
+  stream.acknowledge(text);
+  return { stream, ctrl };
 }
 
 describe("createTeamsReplyStreamController", () => {
   it("keeps the next chunk after cumulative trailing whitespace is normalized", () => {
     const stream = makeStream();
-    const ctrl = makeController({ stream });
+    const ctrl = makeController(stream);
 
     ctrl.onPartialReply({ text: "Intro\n\n " });
     ctrl.onPartialReply({ text: "Intro\n\nNext" });
@@ -84,11 +91,7 @@ describe("createTeamsReplyStreamController", () => {
   });
 
   it("retains an acknowledged replacement when stream close produces no activity", async () => {
-    const stream = makeAcknowledgedStream();
-    const ctrl = makeController({ stream });
-
-    ctrl.onPartialReply({ text: "abcde" });
-    stream.acknowledge("abcde");
+    const { stream, ctrl } = acknowledgedController();
     ctrl.onPartialReply({ text: "provider replacement" });
     expect(
       ctrl.preparePayload({
@@ -104,18 +107,13 @@ describe("createTeamsReplyStreamController", () => {
       messageId: "stream-acknowledged",
       content: "provider replacement",
       logicalContent: "provider replacement",
-      postNativePayloads: [
-        {
-          text: undefined,
-          mediaUrl: "https://example.test/replacement.png",
-        },
-      ],
+      postNativePayloads: [{ text: undefined, mediaUrl: "https://example.test/replacement.png" }],
     });
   });
 
   it("rejects a delayed common-prefix chunk while awaiting replacement acknowledgement", async () => {
     const stream = makeAcknowledgedStream();
-    const ctrl = makeController({ stream });
+    const ctrl = makeController(stream);
 
     ctrl.onPartialReply({ text: "abcdef" });
     ctrl.onPartialReply({ text: "abcXYZ" });
@@ -131,11 +129,7 @@ describe("createTeamsReplyStreamController", () => {
   });
 
   it("uses the latest partial when no final text payload follows a rewrite", async () => {
-    const stream = makeAcknowledgedStream();
-    const ctrl = makeController({ stream });
-
-    ctrl.onPartialReply({ text: "abcde" });
-    stream.acknowledge("abcde");
+    const { stream, ctrl } = acknowledgedController();
     ctrl.onPartialReply({ text: "abXYZ" });
     ctrl.onPartialReply({ text: "abcdef" });
     expect(ctrl.preparePayload({ mediaUrl: "https://example.test/final.png" })).toBeUndefined();
@@ -153,11 +147,7 @@ describe("createTeamsReplyStreamController", () => {
   });
 
   it("suppresses a replacement after the native stream discovers Stop", async () => {
-    const stream = makeAcknowledgedStream();
-    const ctrl = makeController({ stream });
-
-    ctrl.onPartialReply({ text: "abcde" });
-    stream.acknowledge("abcde");
+    const { stream, ctrl } = acknowledgedController();
     ctrl.onPartialReply({ text: "provider replacement" });
     stream.canceled = true;
 
@@ -171,11 +161,7 @@ describe("createTeamsReplyStreamController", () => {
   });
 
   it("preserves held payload order after replacement close fails", async () => {
-    const stream = makeAcknowledgedStream();
-    const ctrl = makeController({ stream });
-
-    ctrl.onPartialReply({ text: "abcde" });
-    stream.acknowledge("abcde");
+    const { stream, ctrl } = acknowledgedController();
     ctrl.onPartialReply({ text: "provider replacement" });
     expect(ctrl.preparePayload({ mediaUrl: "https://example.test/before.png" })).toBeUndefined();
     stream.close.mockRejectedValueOnce(new Error("network failure"));
@@ -197,7 +183,7 @@ describe("createTeamsReplyStreamController", () => {
 
   it("ignores duplicate or out-of-order partial replies that don't extend the text", () => {
     const stream = makeStream();
-    const ctrl = makeController({ stream });
+    const ctrl = makeController(stream);
     ctrl.onPartialReply({ text: "abcdef" });
     ctrl.onPartialReply({ text: "abc" }); // shorter — could be edit-in-place semantics
     ctrl.onPartialReply({ text: "abcdef" }); // back to known length
@@ -207,7 +193,7 @@ describe("createTeamsReplyStreamController", () => {
 
   it("keeps later partial segments whole after settlement", async () => {
     const stream = makeStream();
-    const ctrl = makeController({ stream });
+    const ctrl = makeController(stream);
 
     ctrl.onPartialReply({ text: "First segment" });
     expect(ctrl.preparePayload({ text: "First segment" })).toBeUndefined();
@@ -222,13 +208,7 @@ describe("createTeamsReplyStreamController", () => {
   it("preserves disabled quoted tables when finalizing formatted replies", async () => {
     const { source: text, expected } = teamsQuotedTableReply;
     const stream = makeStream();
-    const ctrl = createTeamsReplyStreamController({
-      allowProviderPreview: true,
-      conversationType: "personal",
-      context: makeContext(stream),
-      feedbackLoopEnabled: false,
-      tableMode: "off",
-    });
+    const ctrl = makeController(stream, { tableMode: "off" });
 
     ctrl.onPartialReply({ text });
     expect(ctrl.preparePayload({ text })).toBeUndefined();
@@ -249,11 +229,7 @@ describe("createTeamsReplyStreamController", () => {
     vi.useFakeTimers();
     const stream = makeStream();
     try {
-      const ctrl = createTeamsReplyStreamController({
-        allowProviderPreview: true,
-        conversationType: "personal",
-        context: makeContext(stream),
-        feedbackLoopEnabled: false,
+      const ctrl = makeController(stream, {
         log: { debug: vi.fn() } as never,
         msteamsConfig: {
           streaming: { mode: "progress", progress: { toolProgress: true, label: "Working" } },
@@ -277,11 +253,7 @@ describe("createTeamsReplyStreamController", () => {
 
   it("ignores progress after final answer streaming starts and settles", async () => {
     const stream = makeStream();
-    const ctrl = createTeamsReplyStreamController({
-      allowProviderPreview: true,
-      conversationType: "personal",
-      context: makeContext(stream),
-      feedbackLoopEnabled: false,
+    const ctrl = makeController(stream, {
       msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
     });
 
@@ -305,11 +277,7 @@ describe("createTeamsReplyStreamController", () => {
     it("does not update progress after the native stream discovers Stop", async () => {
       const stream = makeStream();
       stream.canceled = true;
-      const ctrl = createTeamsReplyStreamController({
-        allowProviderPreview: true,
-        conversationType: "personal",
-        context: makeContext(stream),
-        feedbackLoopEnabled: false,
+      const ctrl = makeController(stream, {
         msteamsConfig: {
           streaming: { mode: "progress", progress: { toolProgress: true } },
         } as never,
@@ -325,11 +293,7 @@ describe("createTeamsReplyStreamController", () => {
     });
 
     it("does not trim an independent later payload using a previous stream acknowledgement", async () => {
-      const stream = makeAcknowledgedStream();
-      const ctrl = makeController({ stream });
-
-      ctrl.onPartialReply({ text: "hello" });
-      stream.acknowledge("hello");
+      const { stream, ctrl } = acknowledgedController("hello");
       stream.close.mockRejectedValueOnce(new Error("network failure"));
       ctrl.onPartialReply({ text: "hello world" });
 
@@ -337,14 +301,12 @@ describe("createTeamsReplyStreamController", () => {
       await expect(ctrl.finalize()).resolves.toMatchObject({
         fallbackPayload: { text: " world" },
       });
-      expect(ctrl.preparePayload({ text: "hello again" })).toEqual({
-        text: "hello again",
-      });
+      expect(ctrl.preparePayload({ text: "hello again" })).toEqual({ text: "hello again" });
     });
 
     it("ignores unrelated, informative, and out-of-order stream acknowledgements", async () => {
       const stream = makeAcknowledgedStream();
-      const ctrl = makeController({ stream });
+      const ctrl = makeController(stream);
 
       ctrl.onPartialReply({ text: "hello" });
       stream.acknowledge("hello", { type: "message" });
@@ -363,26 +325,19 @@ describe("createTeamsReplyStreamController", () => {
     });
 
     it("retains media when Teams already acknowledged all fallback text", async () => {
-      const stream = makeAcknowledgedStream();
-      const ctrl = makeController({ stream });
-
-      ctrl.onPartialReply({ text: "hello" });
-      stream.acknowledge("hello");
+      const { stream, ctrl } = acknowledgedController("hello");
       stream.close.mockRejectedValueOnce(new Error("network failure"));
       ctrl.onPartialReply({ text: "hello world" });
 
       expect(
         ctrl.preparePayload({ text: "hello", mediaUrl: "https://example.com/image.png" }),
-      ).toEqual({
-        text: undefined,
-        mediaUrl: "https://example.com/image.png",
-      });
+      ).toEqual({ text: undefined, mediaUrl: "https://example.com/image.png" });
       expect((await ctrl.finalize()).fallbackPayload).toBeUndefined();
     });
 
     it("treats post-cancel stream as inactive without further emit attempts", () => {
       const stream = makeStream();
-      const ctrl = makeController({ stream });
+      const ctrl = makeController(stream);
       ctrl.onPartialReply({ text: "first chunk" });
       stream.canceled = true;
       // Later partials must respect the Stop already observed by the SDK.

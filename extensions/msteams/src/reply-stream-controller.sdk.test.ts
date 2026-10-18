@@ -185,22 +185,29 @@ function createLoopbackController(
   };
 }
 
+function scenarioRequests(scenario: string) {
+  return requests.filter((request) => request.scenario === scenario);
+}
+
+async function acknowledgedController(scenario: string, text = acknowledgedPrefix) {
+  const harness = createLoopbackController(scenario);
+  harness.controller.onPartialReply({ text });
+  await harness.firstAcknowledgement;
+  expect(harness.logger.error).not.toHaveBeenCalled();
+  expect(harness.acknowledgements).toEqual([{ id: `stream-${scenario}`, text }]);
+  return harness;
+}
+
 describe("Microsoft Teams SDK acknowledged stream fallback", () => {
   it("redelivers only text not acknowledged by the real Teams SDK and HTTP provider", async () => {
-    const { acknowledgements, controller, firstAcknowledgement, firstFlushFailure, logger } =
-      createLoopbackController("size-limit");
-
-    controller.onPartialReply({ text: acknowledgedPrefix });
-    await firstAcknowledgement;
-    expect(logger.error).not.toHaveBeenCalled();
-    expect(acknowledgements).toEqual([{ id: "stream-size-limit", text: acknowledgedPrefix }]);
+    const { acknowledgements, controller, firstFlushFailure } =
+      await acknowledgedController("size-limit");
 
     controller.onPartialReply({ text: completeReply });
     await firstFlushFailure;
     expect(
-      requests.filter(
-        (request) =>
-          request.scenario === "size-limit" && request.type === "typing" && request.status === 403,
+      scenarioRequests("size-limit").filter(
+        (request) => request.type === "typing" && request.status === 403,
       ),
     ).toHaveLength(1);
     expect(acknowledgements).toEqual([{ id: "stream-size-limit", text: acknowledgedPrefix }]);
@@ -215,27 +222,15 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
     // Finalization queues its own metadata activity; this is a second
     // provider operation, not a retry of the rejected streaming chunk.
     expect(
-      requests.filter(
-        (request) =>
-          request.scenario === "size-limit" && request.type === "typing" && request.status === 403,
+      scenarioRequests("size-limit").filter(
+        (request) => request.type === "typing" && request.status === 403,
       ),
     ).toHaveLength(2);
   });
 
   it("honors a real Teams HTTP cancellation without redelivering the remaining text", async () => {
-    const {
-      acknowledgements,
-      controller,
-      firstAcknowledgement,
-      firstFlushFailure,
-      logger,
-      stream,
-    } = createLoopbackController("cancel");
+    const { controller, firstFlushFailure, stream } = await acknowledgedController("cancel");
 
-    controller.onPartialReply({ text: acknowledgedPrefix });
-    await firstAcknowledgement;
-    expect(logger.error).not.toHaveBeenCalled();
-    expect(acknowledgements).toEqual([{ id: "stream-cancel", text: acknowledgedPrefix }]);
     controller.onPartialReply({ text: completeReply });
     await firstFlushFailure;
     await stream.close();
@@ -247,7 +242,7 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
       content: acknowledgedPrefix,
       messageId: "stream-cancel",
     });
-    expect(requests.filter((request) => request.scenario === "cancel")).toHaveLength(2);
+    expect(scenarioRequests("cancel")).toHaveLength(2);
   });
 
   it("honors Stop discovered by the final HTTP send without redelivering text", async () => {
@@ -265,9 +260,7 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
     expect(controller.wasCanceled()).toBe(true);
     expect(controller.preparePayload({ text: "must not send" })).toBeUndefined();
     expect(
-      requests
-        .filter((request) => request.scenario === "cancel-close")
-        .map((request) => [request.type, request.status]),
+      scenarioRequests("cancel-close").map((request) => [request.type, request.status]),
     ).toEqual([
       ["typing", 201],
       ["typing", 201],
@@ -276,13 +269,7 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
   });
 
   it("replaces a divergent preview through the same real Teams stream", async () => {
-    const { acknowledgements, controller, firstAcknowledgement, logger } =
-      createLoopbackController("replacement");
-
-    controller.onPartialReply({ text: acknowledgedPrefix });
-    await firstAcknowledgement;
-    expect(logger.error).not.toHaveBeenCalled();
-    expect(acknowledgements).toEqual([{ id: "stream-replacement", text: acknowledgedPrefix }]);
+    const { acknowledgements, controller } = await acknowledgedController("replacement");
 
     controller.onPartialReply({ text: replacementReply });
     expect(
@@ -296,30 +283,18 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
       content: replacementReply,
       logicalContent: replacementReply,
       messageId: "stream-replacement",
-      postNativePayloads: [
-        {
-          text: undefined,
-          mediaUrl: "https://example.test/replacement.png",
-        },
-      ],
+      postNativePayloads: [{ text: undefined, mediaUrl: "https://example.test/replacement.png" }],
     });
     expect(acknowledgements).toEqual([
       { id: "stream-replacement", text: acknowledgedPrefix },
       { id: "stream-replacement", text: replacementReply },
     ]);
-    expect(requests.filter((request) => request.scenario === "replacement")).toHaveLength(3);
+    expect(scenarioRequests("replacement")).toHaveLength(3);
   });
 
   it("detects Stop while replacing a divergent preview and suppresses the final", async () => {
-    const { acknowledgements, controller, firstAcknowledgement, logger, stream } =
-      createLoopbackController("cancel-replacement");
-
-    controller.onPartialReply({ text: acknowledgedPrefix });
-    await firstAcknowledgement;
-    expect(logger.error).not.toHaveBeenCalled();
-    expect(acknowledgements).toEqual([
-      { id: "stream-cancel-replacement", text: acknowledgedPrefix },
-    ]);
+    const { acknowledgements, controller, stream } =
+      await acknowledgedController("cancel-replacement");
 
     controller.onPartialReply({ text: replacementReply });
     expect(
@@ -337,7 +312,7 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
     expect(acknowledgements).toEqual([
       { id: "stream-cancel-replacement", text: acknowledgedPrefix },
     ]);
-    expect(requests.filter((request) => request.scenario === "cancel-replacement")).toHaveLength(2);
+    expect(scenarioRequests("cancel-replacement")).toHaveLength(2);
   });
 });
 
@@ -362,11 +337,9 @@ describe("Teams native final text preparation", () => {
         },
       ]),
     );
-    expect(
-      requests
-        .filter((request) => request.scenario === "presentation-timeout")
-        .map((request) => request.status),
-    ).toEqual([201, 201, 403, 201]);
+    expect(scenarioRequests("presentation-timeout").map((request) => request.status)).toEqual([
+      201, 201, 403, 201,
+    ]);
   });
 
   it("does not redeliver logical text already acknowledged after final rendering", async () => {
@@ -383,11 +356,9 @@ describe("Teams native final text preparation", () => {
       logicalContent: text,
       messageId: "stream-presentation-close-failure",
     });
-    expect(
-      requests
-        .filter((request) => request.scenario === "presentation-close-failure")
-        .map((request) => request.status),
-    ).toEqual([201, 201, 403]);
+    expect(scenarioRequests("presentation-close-failure").map((request) => request.status)).toEqual(
+      [201, 201, 403],
+    );
   });
 
   it("retains the acknowledged preview when final rendering discovers Stop", async () => {
@@ -401,11 +372,9 @@ describe("Teams native final text preparation", () => {
       content: text,
       messageId: "stream-presentation-cancel",
     });
-    expect(
-      requests
-        .filter((request) => request.scenario === "presentation-cancel")
-        .map((request) => request.status),
-    ).toEqual([201, 403]);
+    expect(scenarioRequests("presentation-cancel").map((request) => request.status)).toEqual([
+      201, 403,
+    ]);
   });
 });
 

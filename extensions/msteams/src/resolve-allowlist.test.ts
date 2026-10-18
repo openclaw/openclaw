@@ -1,4 +1,3 @@
-// Msteams tests cover resolve allowlist plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -33,6 +32,21 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 
+function page<T>(items: T[], truncated = false) {
+  return { items, truncated };
+}
+
+function users(entries: string[]) {
+  return resolveMSTeamsUserAllowlist({ cfg: {}, entries });
+}
+
+function channels(
+  entries: string[],
+  options: Partial<Parameters<typeof resolveMSTeamsChannelAllowlist>[0]> = {},
+) {
+  return resolveMSTeamsChannelAllowlist({ cfg: {}, entries, ...options });
+}
+
 beforeEach(() => {
   listTeamsByNameWithPageInfo.mockReset();
   listChannelsForTeamWithPageInfo.mockReset();
@@ -42,16 +56,15 @@ beforeEach(() => {
 
 describe("resolveMSTeamsUserAllowlist", () => {
   it("marks empty input unresolved", async () => {
-    const [result] = await resolveMSTeamsUserAllowlist({ cfg: {}, entries: ["  "] });
+    const [result] = await users(["  "]);
     expect(result).toEqual({ input: "  ", resolved: false });
   });
 
   it("uses the selected named account for Graph user lookup credentials", async () => {
     const cfg = { channels: { msteams: { defaultAccount: "default" } } };
-    findGraphUsersByExactIdentity.mockResolvedValueOnce({
-      items: [{ id: "user-1", displayName: "Alice" }],
-      truncated: false,
-    });
+    findGraphUsersByExactIdentity.mockResolvedValueOnce(
+      page([{ id: "user-1", displayName: "Alice" }]),
+    );
 
     await resolveMSTeamsUserAllowlist({ cfg, accountId: "support", entries: ["Alice"] });
 
@@ -60,41 +73,24 @@ describe("resolveMSTeamsUserAllowlist", () => {
 
   it("rejects ambiguous and incomplete Graph user identities", async () => {
     findGraphUsersByExactIdentity
-      .mockResolvedValueOnce({
-        items: [
+      .mockResolvedValueOnce(
+        page([
           { id: "user-1", displayName: "Alice" },
           { id: "user-2", mail: "alice" },
-        ],
-        truncated: false,
-      })
-      .mockResolvedValueOnce({
-        items: [{ id: "user-1", displayName: "Alice" }],
-        truncated: true,
-      });
+        ]),
+      )
+      .mockResolvedValueOnce(page([{ id: "user-1", displayName: "Alice" }], true));
 
-    await expect(resolveMSTeamsUserAllowlist({ cfg: {}, entries: ["Alice"] })).resolves.toEqual([
-      {
-        input: "Alice",
-        resolved: false,
-        note: "user identity is ambiguous",
-      },
+    await expect(users(["Alice"])).resolves.toEqual([
+      { input: "Alice", resolved: false, note: "user identity is ambiguous" },
     ]);
-    await expect(resolveMSTeamsUserAllowlist({ cfg: {}, entries: ["Alice"] })).resolves.toEqual([
-      {
-        input: "Alice",
-        resolved: false,
-        note: "user lookup incomplete",
-      },
+    await expect(users(["Alice"])).resolves.toEqual([
+      { input: "Alice", resolved: false, note: "user lookup incomplete" },
     ]);
   });
 
   it("keeps stable user IDs without acquiring a Graph token", async () => {
-    await expect(
-      resolveMSTeamsUserAllowlist({
-        cfg: {},
-        entries: ["user:40a1a0ed-4ff2-4164-a219-55518990c197"],
-      }),
-    ).resolves.toEqual([
+    await expect(users(["user:40a1a0ed-4ff2-4164-a219-55518990c197"])).resolves.toEqual([
       {
         input: "user:40a1a0ed-4ff2-4164-a219-55518990c197",
         resolved: true,
@@ -155,10 +151,9 @@ describe("projectStableMSTeamsGroupAllowlist", () => {
 
 describe("resolveMSTeamsChannelAllowlist", () => {
   it("normalizes conversation-prefixed configured channel IDs", async () => {
-    const [result] = await resolveMSTeamsChannelAllowlist({
-      cfg: {},
-      entries: ["19:team-general@thread.tacv2/conversation:19:roadmap@thread.tacv2"],
-    });
+    const [result] = await channels([
+      "19:team-general@thread.tacv2/conversation:19:roadmap@thread.tacv2",
+    ]);
 
     expect(result).toEqual({
       input: "19:team-general@thread.tacv2/conversation:19:roadmap@thread.tacv2",
@@ -174,22 +169,17 @@ describe("resolveMSTeamsChannelAllowlist", () => {
   it("uses General channel conversation ID as team key for team-only entry", async () => {
     // When no channel is specified we still resolve the General channel so the
     // stored key matches what Bot Framework sends as channelData.team.id.
-    listTeamsByNameWithPageInfo.mockResolvedValueOnce({
-      items: [{ id: "guid-engineering", displayName: "Engineering" }],
-      truncated: false,
-    });
-    listChannelsForTeamWithPageInfo.mockResolvedValueOnce({
-      items: [
+    listTeamsByNameWithPageInfo.mockResolvedValueOnce(
+      page([{ id: "guid-engineering", displayName: "Engineering" }]),
+    );
+    listChannelsForTeamWithPageInfo.mockResolvedValueOnce(
+      page([
         { id: "19:eng-general@thread.tacv2", displayName: "General" },
         { id: "19:eng-standups@thread.tacv2", displayName: "Standups" },
-      ],
-      truncated: false,
-    });
+      ]),
+    );
 
-    const [result] = await resolveMSTeamsChannelAllowlist({
-      cfg: {},
-      entries: ["Engineering"],
-    });
+    const [result] = await channels(["Engineering"]);
 
     expect(result).toEqual({
       input: "Engineering",
@@ -201,16 +191,12 @@ describe("resolveMSTeamsChannelAllowlist", () => {
   });
 
   it("fails closed when channel lookup fails", async () => {
-    listTeamsByNameWithPageInfo.mockResolvedValueOnce({
-      items: [{ id: "guid-flaky", displayName: "Flaky Team" }],
-      truncated: false,
-    });
+    listTeamsByNameWithPageInfo.mockResolvedValueOnce(
+      page([{ id: "guid-flaky", displayName: "Flaky Team" }]),
+    );
     listChannelsForTeamWithPageInfo.mockRejectedValueOnce(new Error("429 Too Many Requests"));
 
-    const [result] = await resolveMSTeamsChannelAllowlist({
-      cfg: {},
-      entries: ["Flaky Team"],
-    });
+    const [result] = await channels(["Flaky Team"]);
 
     expect(result).toEqual({
       input: "Flaky Team",
@@ -220,22 +206,17 @@ describe("resolveMSTeamsChannelAllowlist", () => {
   });
 
   it("fails closed when the Bot Framework team key cannot be identified", async () => {
-    listTeamsByNameWithPageInfo.mockResolvedValueOnce({
-      items: [{ id: "guid-ops", displayName: "Operations" }],
-      truncated: false,
-    });
-    listChannelsForTeamWithPageInfo.mockResolvedValueOnce({
-      items: [
+    listTeamsByNameWithPageInfo.mockResolvedValueOnce(
+      page([{ id: "guid-ops", displayName: "Operations" }]),
+    );
+    listChannelsForTeamWithPageInfo.mockResolvedValueOnce(
+      page([
         { id: "19:ops-announce@thread.tacv2", displayName: "Announcements" },
         { id: "19:ops-random@thread.tacv2", displayName: "Random" },
-      ],
-      truncated: false,
-    });
+      ]),
+    );
 
-    const [result] = await resolveMSTeamsChannelAllowlist({
-      cfg: {},
-      entries: ["Operations"],
-    });
+    const [result] = await channels(["Operations"]);
 
     expect(result).toEqual({
       input: "Operations",
@@ -247,18 +228,11 @@ describe("resolveMSTeamsChannelAllowlist", () => {
   });
 
   it("does not enumerate channels for a Graph-keyed team-only projection", async () => {
-    listTeamsByNameWithPageInfo.mockResolvedValueOnce({
-      items: [{ id: "guid-ops", displayName: "Operations" }],
-      truncated: false,
-    });
+    listTeamsByNameWithPageInfo.mockResolvedValueOnce(
+      page([{ id: "guid-ops", displayName: "Operations" }]),
+    );
 
-    await expect(
-      resolveMSTeamsChannelAllowlist({
-        cfg: {},
-        entries: ["Operations"],
-        teamIdMode: "graph",
-      }),
-    ).resolves.toEqual([
+    await expect(channels(["Operations"], { teamIdMode: "graph" })).resolves.toEqual([
       {
         input: "Operations",
         resolved: true,
@@ -272,38 +246,29 @@ describe("resolveMSTeamsChannelAllowlist", () => {
 
   it("rejects partial, ambiguous, and incomplete team or channel matches", async () => {
     listTeamsByNameWithPageInfo
-      .mockResolvedValueOnce({
-        items: [{ id: "team-1", displayName: "Product Team Extended" }],
-        truncated: false,
-      })
-      .mockResolvedValueOnce({
-        items: [
+      .mockResolvedValueOnce(page([{ id: "team-1", displayName: "Product Team Extended" }]))
+      .mockResolvedValueOnce(
+        page([
           { id: "team-1", displayName: "Product Team" },
           { id: "team-2", displayName: "product team" },
-        ],
-        truncated: false,
-      })
-      .mockResolvedValueOnce({
-        items: [{ id: "team-1", displayName: "Product Team" }],
-        truncated: true,
-      })
-      .mockResolvedValueOnce({
-        items: [{ id: "team-1", displayName: "Product Team" }],
-        truncated: false,
-      });
-    listChannelsForTeamWithPageInfo.mockResolvedValueOnce({
-      items: [
+        ]),
+      )
+      .mockResolvedValueOnce(page([{ id: "team-1", displayName: "Product Team" }], true))
+      .mockResolvedValueOnce(page([{ id: "team-1", displayName: "Product Team" }]));
+    listChannelsForTeamWithPageInfo.mockResolvedValueOnce(
+      page([
         { id: "general", displayName: "General" },
         { id: "channel-1", displayName: "Roadmap" },
         { id: "channel-2", displayName: "roadmap" },
-      ],
-      truncated: false,
-    });
+      ]),
+    );
 
-    const results = await resolveMSTeamsChannelAllowlist({
-      cfg: {},
-      entries: ["Product Team", "Product Team", "Product Team", "Product Team/Roadmap"],
-    });
+    const results = await channels([
+      "Product Team",
+      "Product Team",
+      "Product Team",
+      "Product Team/Roadmap",
+    ]);
 
     expect(results.map((result) => result.note)).toEqual([
       "team not found",
@@ -317,17 +282,15 @@ describe("resolveMSTeamsChannelAllowlist", () => {
 
 describe("resolveMSTeamsTeamsConfig", () => {
   it("builds a Graph-keyed projection for action routing", async () => {
-    listTeamsByNameWithPageInfo.mockResolvedValueOnce({
-      items: [{ id: "11111111-1111-1111-1111-111111111111", displayName: "Product Team" }],
-      truncated: false,
-    });
-    listChannelsForTeamWithPageInfo.mockResolvedValueOnce({
-      items: [
+    listTeamsByNameWithPageInfo.mockResolvedValueOnce(
+      page([{ id: "11111111-1111-1111-1111-111111111111", displayName: "Product Team" }]),
+    );
+    listChannelsForTeamWithPageInfo.mockResolvedValueOnce(
+      page([
         { id: "19:general@thread.tacv2", displayName: "General" },
         { id: "19:roadmap@thread.tacv2", displayName: "Roadmap" },
-      ],
-      truncated: false,
-    });
+      ]),
+    );
 
     const result = await resolveMSTeamsTeamsConfig({
       cfg: {},
@@ -352,10 +315,7 @@ describe("resolveMSTeamsTeamsConfig", () => {
   });
 
   it("drops unresolved mutable keys while retaining wildcard and stable policy", async () => {
-    listTeamsByNameWithPageInfo.mockResolvedValueOnce({
-      items: [],
-      truncated: false,
-    });
+    listTeamsByNameWithPageInfo.mockResolvedValueOnce(page([]));
 
     const result = await resolveMSTeamsTeamsConfig({
       cfg: {},
