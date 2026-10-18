@@ -31,6 +31,7 @@ import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import {
   onGatewaySuspendAdmissionChange,
+  retainGatewayRootWorkAdmissionContinuation,
   runWithRetainedGatewayRootWork,
 } from "../process/gateway-work-admission.js";
 import {
@@ -303,6 +304,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   );
   const getSessionEvents = createLazyRuntimeModule(() => import("./server-session-events.js"));
 
+  const transcriptPublications = new Map<Promise<false | void>, Promise<boolean>>();
   const getTranscriptUpdateHandler = createLazyRuntimeSurface(
     getSessionEvents,
     ({ createTranscriptUpdateBroadcastHandler }) => createTranscriptUpdateBroadcastHandler(params),
@@ -583,41 +585,63 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
     sessionActivitySummaries.handleTranscript(evt);
-    // Retire synchronously before later cumulative updates, but retain the wire
-    // projection until this committed row has crossed its async publication path.
+    // The committing root is a real completion obligation, separate from the
+    // bounded presentation job. Capture it before leaving the producer context.
+    const releaseRoot = retainGatewayRootWorkAdmissionContinuation();
     const agentHandler = agentEventHandlerLoader.peek();
-    const publication = createDeferredCore<boolean>();
-    let published = true;
-    // Committed publication retains Gateway work, not the producer's actor handle.
-    const dispatch = runWithRetainedGatewayRootWork(() =>
-      runInDetachedAsyncContext(() =>
-        dispatchEventHandler({
-          loadHandler: async () => {
-            if (agentHandler) {
-              await agentHandler.then(
-                (handler) => handler.retireTranscript(evt, publication.promise),
-                () => undefined,
+    const sourcePublication = agentHandler ? createDeferredCore<boolean>() : undefined;
+    let handedOff = false;
+    const dispatch = runInDetachedAsyncContext(() =>
+      dispatchEventHandler({
+        loadHandler: async () => {
+          if (agentHandler && sourcePublication) {
+            await agentHandler.then(
+              (handler) => handler.retireTranscript(evt, sourcePublication.promise),
+              () => undefined,
+            );
+          }
+          const handler = await getTranscriptUpdateHandler();
+          return (event) => {
+            const task = handler(event);
+            let publication = transcriptPublications.get(task);
+            if (!publication) {
+              publication = task.then(
+                (result) => result !== false,
+                (error: unknown) => {
+                  params.log.warn("Transcript update dispatch failed", {
+                    sessionKey: event.sessionKey,
+                    error,
+                  });
+                  return false;
+                },
               );
+              transcriptPublications.set(task, publication);
+              const settled = publication.then(() => undefined);
+              agentEventDispatches.add(settled);
+              void settled.then(() => {
+                transcriptPublications.delete(task);
+                agentEventDispatches.delete(settled);
+              });
             }
-            const handler = await getTranscriptUpdateHandler();
-            return async (event) => {
-              published = (await handler(event)) !== false;
-            };
-          },
-          event: evt,
-          log: params.log,
-          failureMessage: "Transcript update dispatch failed",
-          context: { sessionKey: evt.sessionKey },
-          // Intentional non-publication (hidden/stale/no recipients) keeps its existing semantics.
-          onFailure: () => {
-            published = false;
-          },
-        }),
-      ),
+            handedOff = true;
+            void publication.then((published) => {
+              sourcePublication?.resolve(published);
+              releaseRoot?.();
+            });
+          };
+        },
+        event: evt,
+        log: params.log,
+        failureMessage: "Transcript update dispatch failed",
+        context: { sessionKey: evt.sessionKey },
+      }),
     );
     agentEventDispatches.add(dispatch);
     void dispatch.then(() => {
-      publication.resolve(published);
+      if (!handedOff) {
+        sourcePublication?.resolve(false);
+        releaseRoot?.();
+      }
       agentEventDispatches.delete(dispatch);
     });
   });

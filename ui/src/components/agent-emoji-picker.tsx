@@ -1,4 +1,4 @@
-import { createEffect, createSignal, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { EmojiSearchPanel } from "./emoji-search-panel.tsx";
@@ -43,14 +43,6 @@ export function AgentEmojiPicker(props: AgentEmojiPickerProps) {
   const id = `agent-emoji-trigger-${generateUUID()}`;
   let popover: PopoverHandle | undefined;
   let searchInput!: HTMLInputElement;
-  createEffect(
-    () => props.disabled,
-    (disabled) => {
-      if (disabled) {
-        popover?.hide();
-      }
-    },
-  );
   return (
     <openclaw-agent-emoji-picker>
       <button
@@ -87,14 +79,10 @@ export function AgentEmojiPicker(props: AgentEmojiPickerProps) {
             anchor={anchor()}
             class="agent-emoji-picker__popover"
             placement="bottom-end"
+            disabled={props.disabled}
             label={t("agents.identity.chooseEmoji")}
             ref={(handle) => {
               popover = handle;
-            }}
-            onBeforeShow={(event) => {
-              if (props.disabled) {
-                event.preventDefault();
-              }
             }}
             onOpenChange={(open) => {
               if (open) {

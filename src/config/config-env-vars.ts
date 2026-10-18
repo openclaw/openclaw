@@ -287,13 +287,11 @@ export type PreparedConfigRuntimeEnv = {
 };
 
 type PublishedConfigRuntimeEnvState = {
-  generation: number;
   ownedEnv: Readonly<Record<string, string>>;
   sourceConfig: OpenClawConfig | null;
 };
 
 let publishedConfigRuntimeEnvState: PublishedConfigRuntimeEnvState = {
-  generation: 0,
   ownedEnv: {},
   sourceConfig: null,
 };
@@ -369,7 +367,6 @@ export function initializePublishedConfigRuntimeEnv(
       : (options.ownedEnv ?? {}),
   );
   publishedConfigRuntimeEnvState = {
-    generation: publishedConfigRuntimeEnvState.generation + 1,
     ownedEnv,
     sourceConfig,
   };
@@ -382,11 +379,8 @@ export function resetPublishedConfigRuntimeEnv(
     appliedConfigEnvOwnership.delete(process.env);
   }
   publishedConfigRuntimeEnvState = options.preserveOwnership
-    ? {
-        ...publishedConfigRuntimeEnvState,
-        generation: publishedConfigRuntimeEnvState.generation + 1,
-      }
-    : { generation: 0, ownedEnv: {}, sourceConfig: null };
+    ? { ...publishedConfigRuntimeEnvState }
+    : { ownedEnv: {}, sourceConfig: null };
 }
 
 export function createConfigRuntimeEnvBase(
@@ -554,9 +548,8 @@ function prepareConfigRuntimeEnvPublication(params: {
         }
       }
       normalizeFsSafeNativeEnv(targetEnv);
-      const generation = processPublication ? publishedConfigRuntimeEnvState.generation + 1 : null;
       let processPublicationState: PublishedConfigRuntimeEnvState | null = null;
-      if (generation !== null) {
+      if (processPublication) {
         const ownedEnv: Record<string, string> = {};
         let owned: ReadonlyMap<string, EnvSnapshotEntry> | undefined;
         for (const [key, value] of Object.entries(params.configState?.ownedEnv ?? {})) {
@@ -574,7 +567,6 @@ function prepareConfigRuntimeEnvPublication(params: {
           }
         }
         publishedConfigRuntimeEnvState = {
-          generation,
           ownedEnv: params.configState ? ownedEnv : previousPublishedState.ownedEnv,
           sourceConfig: params.configState?.sourceConfig ?? previousPublishedState.sourceConfig,
         };
@@ -596,10 +588,7 @@ function prepareConfigRuntimeEnvPublication(params: {
         }
         rollbackConfigRuntimeEnvChanges(targetEnv, published);
         if (processPublicationState) {
-          publishedConfigRuntimeEnvState = {
-            ...previousPublishedState,
-            generation: publishedConfigRuntimeEnvState.generation + 1,
-          };
+          publishedConfigRuntimeEnvState = { ...previousPublishedState };
         }
       };
       return Object.assign(() => settle(false), { commit: () => settle(true) });

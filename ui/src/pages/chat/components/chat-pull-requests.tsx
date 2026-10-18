@@ -1,12 +1,4 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  createUniqueId,
-  For,
-  Show,
-  useContext,
-} from "solid-js";
+import { createMemo, createUniqueId, For, Show, useContext } from "solid-js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
@@ -16,12 +8,12 @@ import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { formatGitHubItemReference } from "../../../components/github-link-target.ts";
 import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { Menu } from "../../../components/solid/menu.tsx";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import "../../../components/tooltip.ts";
-import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../../lib/presentation.ts";
+import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { listen } from "../../../lib/reactive/listener.ts";
+import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import {
   orderSessionPullRequests,
   sessionPullRequestStateIcons,
@@ -116,24 +108,9 @@ function Checks(props: {
     const current = checks();
     return current ? t(CHECK_LABEL_KEYS[current.state]) : t("chat.pullRequests.ciMonitoring");
   };
-  const [revision, setRevision] = createSignal(0);
   const parentPresented = useContext(ContentPresentation);
-  // Observe the external presentation owner so nested CI polling parks with its pane.
-  createEffect(
-    () => props.presented,
-    (value) => {
-      if (typeof value !== "object") {
-        return undefined;
-      }
-      const changed = () => setRevision((current) => current + 1);
-      return listen(value.owner, PRESENTATION_CHANGED_EVENT, changed);
-    },
-  );
-  const presented = () => {
-    revision();
-    const value = props.presented ?? true;
-    return parentPresented() && (typeof value === "boolean" ? value : value.isPresented());
-  };
+  const presentation = createMemo(() => projectPresentation(props.presented ?? true));
+  const presented = () => parentPresented() && presentation().read();
   return (
     <ChatPullRequestChecks
       label={label()}
@@ -364,33 +341,8 @@ function PullRequestActions(props: {
 }) {
   const id = createUniqueId();
   const parentPresented = useContext(ContentPresentation);
-  let menu: MenuHandle | undefined;
-  const presented = () => {
-    const value = props.presented;
-    return (
-      parentPresented() &&
-      !props.dismissed &&
-      (typeof value === "boolean" ? value : value.isPresented())
-    );
-  };
-  createEffect(
-    () => [props.presented, presented()] as const,
-    ([value, visible]) => {
-      const sync = () => {
-        if (!presented()) {
-          menu?.close();
-        }
-      };
-      if (!visible) {
-        menu?.close();
-      }
-      if (typeof value === "boolean") {
-        return undefined;
-      }
-      value.owner.addEventListener(PRESENTATION_CHANGED_EVENT, sync);
-      return () => value.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, sync);
-    },
-  );
+  const presentation = createMemo(() => projectPresentation(props.presented));
+  const presented = () => parentPresented() && !props.dismissed && presentation().read();
   return (
     <Menu
       id={"chat-pr-actions-" + id}
@@ -401,9 +353,7 @@ function PullRequestActions(props: {
       placement="bottom-end"
       disabled={props.disabled}
       items={[{ id: "dismiss", label: props.dismissLabel, disabled: props.disabled }]}
-      ref={(handle) => {
-        menu = handle;
-      }}
+      open={presented() ? undefined : false}
       onBeforeShow={(event) => {
         if (!presented()) {
           event.preventDefault();

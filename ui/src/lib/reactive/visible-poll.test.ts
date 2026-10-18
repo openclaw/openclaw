@@ -1,4 +1,4 @@
-import { createRoot } from "solid-js";
+import { createRoot, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useVisiblePoll } from "./visible-poll.ts";
 
@@ -17,6 +17,43 @@ function browserVisibility(initial: DocumentVisibilityState) {
 }
 
 describe("Solid visible polling", () => {
+  it("follows enabled state without restarting equal updates and stops on disposal", () => {
+    vi.useFakeTimers();
+    const visibility = browserVisibility("visible");
+    const tick = vi.fn();
+    const [enabled, setEnabled] = createSignal(false);
+    const dispose = createRoot((stop) => {
+      useVisiblePoll(1_000, tick, { enabled, immediate: true });
+      return stop;
+    });
+    onTestFinished(dispose);
+    flush();
+    expect(tick).not.toHaveBeenCalled();
+    setEnabled(true);
+    flush();
+    expect(tick).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(500);
+    setEnabled(true);
+    flush();
+    vi.advanceTimersByTime(500);
+    expect(tick).toHaveBeenCalledTimes(2);
+    setEnabled(false);
+    flush();
+    visibility("hidden");
+    visibility("visible");
+    vi.advanceTimersByTime(1_000);
+    expect(tick).toHaveBeenCalledTimes(2);
+    visibility("hidden");
+    setEnabled(true);
+    flush();
+    expect(tick).toHaveBeenCalledTimes(2);
+    visibility("visible");
+    expect(tick).toHaveBeenCalledTimes(3);
+    dispose();
+    vi.advanceTimersByTime(1_000);
+    expect(tick).toHaveBeenCalledTimes(3);
+  });
+
   it.each(["visible", "hidden"] as const)(
     "starts explicitly, pauses while hidden and catches up once (initially %s)",
     (initial) => {

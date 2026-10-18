@@ -355,6 +355,14 @@ describe("node SQLite safety", () => {
         changed === "unchanged" ? receipt : undefined,
       );
       native.environment.set(receiptKey, forwarded);
+      if (changed === "unchanged") {
+        vi.resetModules();
+        const reloaded = await loadNodeSqliteWithVersion("3.53.4", 0);
+        expect(reloaded.supportsNodeSqliteJsonb()).toBe(false);
+        expect(reloaded.supportsNodeSqliteExtensionLoading()).toBe(false);
+        expect(reloaded.prepare).not.toHaveBeenCalled();
+        reloaded.prepare.mockRestore();
+      }
       native.mainThread = false;
       vi.resetModules();
       const worker = await loadNodeSqliteWithVersion("3.53.4", 0);

@@ -84,8 +84,14 @@ describe("bootstrap budget", () => {
 
   it("gives a budget-dropped file zero injected chars when a sibling shares its basename", () => {
     const bootstrapFiles: WorkspaceBootstrapFile[] = [
-      bootstrapFile("AGENTS.md", "a".repeat(1_000), "/tmp/workspace/AGENTS.md"),
-      bootstrapFile("AGENTS.md", "b".repeat(500), "/tmp/workspace/packages/core/AGENTS.md"),
+      {
+        ...bootstrapFile("AGENTS.md", "a".repeat(1_000), "/tmp/workspace/AGENTS.md"),
+        origin: { kind: "agent-workspace", rootPath: "/tmp/workspace" },
+      },
+      {
+        ...bootstrapFile("AGENTS.md", "b".repeat(500), "/tmp/workspace/packages/core/AGENTS.md"),
+        origin: { kind: "execution-project", rootPath: "/tmp/workspace/packages/core" },
+      },
     ];
 
     const stats = buildBootstrapInjectionStats({
@@ -95,6 +101,7 @@ describe("bootstrap budget", () => {
     const analysis = analyze(stats, 20_000, 1_000);
 
     expect(analysis.totals.injectedChars).toBe(1_000);
+    expect(stats.map((file) => file.origin)).toEqual(bootstrapFiles.map((file) => file.origin));
     expect(analysis.truncatedFiles).toMatchObject([
       {
         path: "/tmp/workspace/packages/core/AGENTS.md",
