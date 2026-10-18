@@ -1,5 +1,5 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
-import { createEffect, createMemo, createStore } from "solid-js";
+import { createMemo, createStore } from "solid-js";
 import type { CronStatus } from "../../../api/types.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
@@ -22,6 +22,7 @@ import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclo
 
 /** Cron owns durable settings and execution; this element retains only the visible projection. */
 type Props = ChatCiDisclosureProps & { sessionId: string };
+const inputHandlers = new WeakMap<HTMLElement, (key: keyof Props) => void>();
 
 type AutomationState = {
   jobs: CiAutomationJobs;
@@ -54,57 +55,71 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   let inventoryVersion = -1;
   let readController: AbortController | undefined;
   let refreshPending = true;
+  let stopGateway: (() => void) | undefined;
+  let stopEvents: (() => void) | undefined;
+  let targetKey = "";
+  let sessionKey = "";
+  let sessionId = "";
   // Synchronous admission is separate from Solid's deferred presentation writes.
   const writes = new Set<CiAutomationOption>();
   const disclosure = createCiDisclosure(host, handleVisibility, () => {
-    version += 1;
-    connection.dispose();
-    readController?.abort();
+    inputHandlers.set(host, handleInputsChanged);
+    bindGateway();
+    syncTarget();
+    return () => {
+      inputHandlers.delete(host);
+      stopGateway?.();
+      stopEvents?.();
+      version += 1;
+      connection.dispose();
+      readController?.abort();
+    };
   });
 
-  // Bind Gateway inventory and invalidation subscriptions to the current connection.
-  createEffect(
-    () => props.gateway,
-    (source) => {
-      reset();
-      // Retire request authority on every connection transition, before subsequent events.
-      const stopGateway = source?.subscribe(() => {
-        syncConnection();
-        queueRefresh();
-      });
-      const stopEvents = source?.subscribeEvents((event) => {
-        if (event.event === "cron" || event.event === "config.changed") {
-          invalidate();
-        }
-      });
+  function bindGateway() {
+    stopGateway?.();
+    stopEvents?.();
+    const source = host.gateway;
+    reset();
+    // Retire request authority on every connection transition, before subsequent events.
+    stopGateway = source?.subscribe(() => {
       syncConnection();
       queueRefresh();
-      return () => {
-        stopGateway?.();
-        stopEvents?.();
-      };
-    },
-  );
-  const targetKey = createMemo(() =>
-    JSON.stringify([props.sessionKey, props.sessionId, automationTarget(props)]),
-  );
-  // Reset and suspend Gateway work when its session target or disclosure changes.
-  createEffect(
-    () => [targetKey(), props.presented, props.sessionKey, props.sessionId] as const,
-    ([target, , sessionKey, sessionId], previous) => {
-      if (previous?.[0] !== target) {
-        if (
-          previous &&
-          ((previous[2] && previous[2] !== sessionKey) ||
-            (previous[3] && previous[3] !== sessionId))
-        ) {
-          disclosure.close();
-        }
-        reset();
+    });
+    stopEvents = source?.subscribeEvents((event) => {
+      if (event.event === "cron" || event.event === "config.changed") {
+        invalidate();
       }
+    });
+    syncConnection();
+    queueRefresh();
+  }
+
+  function syncTarget() {
+    const next = JSON.stringify([host.sessionKey, host.sessionId, automationTarget()]);
+    if (targetKey === next) {
+      return false;
+    }
+    if (
+      (sessionKey && sessionKey !== host.sessionKey) ||
+      (sessionId && sessionId !== host.sessionId)
+    ) {
+      disclosure.close();
+    }
+    targetKey = next;
+    sessionKey = host.sessionKey;
+    sessionId = host.sessionId;
+    reset();
+    return true;
+  }
+
+  function handleInputsChanged(key: keyof Props) {
+    if (key === "gateway") {
+      bindGateway();
+    } else if (key === "presented" || syncTarget()) {
       handleVisibility();
-    },
-  );
+    }
+  }
   function queueRefresh() {
     queueMicrotask(() => {
       if (refreshPending && disclosure.visible() && !readController && !writes.size) {
@@ -375,6 +390,7 @@ function ChatCiAutomationContent(props: Props, host: SolidBridgeElement<Props>) 
 }
 
 defineSolidBridge<Props>("openclaw-chat-ci-automation", ChatCiAutomationContent, {
+  propertyChanged: (host, key) => inputHandlers.get(host)?.(key),
   properties: {
     gateway: { default: undefined, attribute: false },
     pullRequest: { default: undefined, attribute: false },

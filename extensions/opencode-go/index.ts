@@ -43,7 +43,7 @@ export default defineSingleProviderPluginEntry({
       expectedProviders: ["opencode", "opencode-go"],
       noteMessage: [
         "OpenCode Go is a separate paid subscription that uses the shared OpenCode API key.",
-        "Go focuses on Kimi, GLM, and MiniMax coding models.",
+        "Go includes DeepSeek, Kimi, GLM, Qwen, MiniMax, and other coding models.",
         "Get your API key at: https://opencode.ai/auth",
       ].join("\n"),
       noteTitle: "OpenCode",

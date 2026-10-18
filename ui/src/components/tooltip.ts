@@ -1,3 +1,4 @@
+import { listen } from "../lib/reactive/listener.ts";
 import { isTooltipTriggerElement } from "./tooltip-content.ts";
 import { TooltipOwner, consumeTooltipEscape, type TooltipPolicyProps } from "./tooltip-owner.ts";
 
@@ -16,19 +17,21 @@ export class TooltipProvider extends HTMLElement {
   delayed = true;
   #focusInput: "keyboard" | "pointer" = "keyboard";
   #skipDelayTimer: number | null = null;
+  #stopListeners: (() => void)[] = [];
 
   connectedCallback() {
     this.style.display = "contents";
     this.#focusInput = "keyboard";
     // Pointer focus can arrive after an action re-renders. Keep modality at
     // the provider so delayed focus cannot reopen the action's tooltip.
-    this.ownerDocument.addEventListener("keydown", this.#handleDocumentKeyDown, true);
-    this.ownerDocument.addEventListener("pointerdown", this.#handleDocumentPointerDown, true);
+    this.#stopListeners = [
+      listen(this.ownerDocument, "keydown", this.#handleDocumentKeyDown, true),
+      listen(this.ownerDocument, "pointerdown", this.#handleDocumentPointerDown, true),
+    ];
   }
 
   disconnectedCallback() {
-    this.ownerDocument.removeEventListener("keydown", this.#handleDocumentKeyDown, true);
-    this.ownerDocument.removeEventListener("pointerdown", this.#handleDocumentPointerDown, true);
+    this.#stopListeners.splice(0).forEach((stop) => stop());
     TooltipOwner.closeForProvider(this);
     this.#clearSkipDelayTimer();
     this.delayed = true;
@@ -118,6 +121,7 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
   readonly #rich: HTMLSpanElement;
   readonly #owner: TooltipOwner;
   readonly #children: MutationObserver;
+  #stopListeners: (() => void)[] = [];
   #runtime: TooltipRuntime | undefined;
   #pendingUpdate: Promise<boolean> | undefined;
   #loading: Promise<boolean> | undefined;
@@ -161,6 +165,7 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
         this.#triggerSlot.assignedElements({ flatten: true }).find(isTooltipTriggerElement) ?? null,
       richContent: () => this.#contentSlot.assignedNodes({ flatten: true }),
       richContainer: () => this.#rich,
+      surface: this.#surface,
       preview: (anchor, content) => {
         this.anchor = anchor;
         this.content = content;
@@ -170,16 +175,6 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
     });
     this.#surface.id = this.#owner.id;
     this.#children = new MutationObserver(() => this.#owner.refresh());
-    this.#triggerSlot.addEventListener("slotchange", () => this.#owner.refresh());
-    this.#contentSlot.addEventListener("slotchange", () => this.#owner.contentChanged());
-    this.#rich.addEventListener("pointerenter", (event) =>
-      this.#owner.handleContentPointerEnter(event),
-    );
-    this.#rich.addEventListener("pointerleave", (event) =>
-      this.#owner.handleContentPointerLeave(event),
-    );
-    this.#rich.addEventListener("focusin", () => this.#owner.handleFocusIn());
-    this.#rich.addEventListener("focusout", (event) => this.#owner.handleFocusOut(event));
   }
 
   get updateComplete(): Promise<boolean> {
@@ -190,6 +185,14 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
 
   connectedCallback() {
     this.style.display = "contents";
+    this.#stopListeners = [
+      listen(this.#triggerSlot, "slotchange", () => this.#owner.refresh()),
+      listen(this.#contentSlot, "slotchange", () => this.#owner.contentChanged()),
+      listen(this.#rich, "pointerenter", (event) => this.#owner.handleContentPointerEnter(event)),
+      listen(this.#rich, "pointerleave", (event) => this.#owner.handleContentPointerLeave(event)),
+      listen(this.#rich, "focusin", () => this.#owner.handleFocusIn()),
+      listen(this.#rich, "focusout", (event) => this.#owner.handleFocusOut(event)),
+    ];
     this.#children.observe(this, { childList: true });
     this.#owner.refresh();
   }
@@ -200,6 +203,7 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
 
   disconnectedCallback() {
     this.#wanted = false;
+    this.#stopListeners.splice(0).forEach((stop) => stop());
     this.#children.disconnect();
     this.#owner.dispose();
     this.#runtime?.dispose();

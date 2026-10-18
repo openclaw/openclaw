@@ -211,7 +211,7 @@ describe("getStatusSummary read-only session access", () => {
           expect(readSummary).toHaveBeenCalledTimes(uniquePaths.length);
 
           readSummary.mockClear();
-          const { agentStatus: local } = await collectStatusLocalSnapshot(config);
+          const local = (await collectStatusLocalSnapshot(config)).publish();
           expect(local.totalSessions).toBe(2);
           expect(
             local.agents.map((agent) => [

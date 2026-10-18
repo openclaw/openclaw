@@ -444,7 +444,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             !host().contextualSidebar
           }
           sections={sections()}
-          involvingMe={host().sessionInvolvingMeFilterActive}
         />
       </Show>
     );

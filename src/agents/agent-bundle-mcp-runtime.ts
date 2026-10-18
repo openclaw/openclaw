@@ -586,12 +586,9 @@ function createServerMcpRuntime(
       failIfDisposed();
 
       let session = currentSession;
-      if (session && !session.retiring && !session.connected && !session.connectPromise) {
+      if (session && !session.connected && !session.connectPromise) {
         // A closed SDK client cannot reconnect cleanly on the same transport.
         await retireSessionIfCurrent(session);
-        session = undefined;
-      }
-      if (session?.retiring) {
         session = undefined;
       }
       const reusedSession = Boolean(session);
@@ -788,9 +785,7 @@ function createServerMcpRuntime(
         : undefined;
       return nextCatalog;
     } finally {
-      if (catalogInFlight === inFlight) {
-        catalogInFlight = undefined;
-      }
+      catalogInFlight = undefined;
     }
   };
 
@@ -874,7 +869,7 @@ function createServerMcpRuntime(
           return;
         }
         released = true;
-        activeLeases = Math.max(0, activeLeases - 1);
+        activeLeases -= 1;
         // Release is not use: refreshing lastUsedAt here defeats the idle-sweep TTL.
       };
     },
