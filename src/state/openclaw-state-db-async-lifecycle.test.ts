@@ -59,33 +59,29 @@ function holdReader(
 }
 
 describe("canonical shared-state resource drainage", () => {
-  it.each(["existing"] as const)(
-    "reuses warm %s facts without resolving paths or allocating replacement tokens",
-    () => {
-      const pathname = databasePath();
-      writeFileSync(pathname, "");
-      const consume = () => {
-        const source = prepareOpenClawStateReadSource({ path: pathname });
-        const capture = source.current;
-        const retained = capture();
-        const resolve = vi.spyOn(path, "resolve");
-        let reused = true;
-        let resolutions: number;
-        try {
-          for (let index = 0; index < 100; index++) {
-            const current = capture();
-            reused &&= current === retained;
-          }
-          resolutions = resolve.mock.calls.length;
-        } finally {
-          resolve.mockRestore();
+  it("reuses warm existing facts without resolving paths or allocating replacement tokens", () => {
+    const pathname = databasePath();
+    writeFileSync(pathname, "");
+    withExistingOpenClawStateSchema({ path: pathname }, () => {
+      const source = prepareOpenClawStateReadSource({ path: pathname });
+      const capture = source.current;
+      const retained = capture();
+      const resolve = vi.spyOn(path, "resolve");
+      let reused = true;
+      let resolutions: number;
+      try {
+        for (let index = 0; index < 100; index++) {
+          const current = capture();
+          reused &&= current === retained;
         }
-        expect(resolutions).toBe(0);
-        expect(reused).toBe(true);
-      };
-      withExistingOpenClawStateSchema({ path: pathname }, consume);
-    },
-  );
+        resolutions = resolve.mock.calls.length;
+      } finally {
+        resolve.mockRestore();
+      }
+      expect(resolutions).toBe(0);
+      expect(reused).toBe(true);
+    });
+  });
 
   it("renews prepared reads of the same file without adopting its replacement", async () => {
     const pathname = databasePath();
@@ -172,29 +168,26 @@ describe("canonical shared-state resource drainage", () => {
     },
   );
 
-  it.each(["replacement"] as const)(
-    "publishes physical identity without renewing revoked read authority (%s)",
-    () => {
-      const pathname = databasePath();
-      writeFileSync(pathname, "original");
-      const original = captureOpenClawStateDatabaseReadAdmission(pathname);
-      const originalKey = original.identity.key;
-      const coordinationKey = original.coordinationKey;
-      clearOpenClawStateDatabaseOpenFailure(pathname);
-      expect(original.assertCurrent).toThrow(/admission changed/);
-      renameSync(pathname, `${pathname}.retired`);
-      writeFileSync(pathname, "created");
-      const physical = databaseIdentity.readDatabasePathIdentitySync(pathname);
-      expect(physical.key).not.toBe(originalKey);
-      expect(() => publishOpenClawStateDatabaseWorkerAdmission(original)).toThrow(
-        /admission changed/,
-      );
-      expect(original.assertCurrent).toThrow(/admission changed/);
-      expect(original.coordinationKey).toBe(coordinationKey);
-      expect(original.identity.key).toBe(originalKey);
-      expect(original.identity.key).not.toBe(physical.key);
-    },
-  );
+  it("publishes replacement identity without renewing revoked read authority", () => {
+    const pathname = databasePath();
+    writeFileSync(pathname, "original");
+    const original = captureOpenClawStateDatabaseReadAdmission(pathname);
+    const originalKey = original.identity.key;
+    const coordinationKey = original.coordinationKey;
+    clearOpenClawStateDatabaseOpenFailure(pathname);
+    expect(original.assertCurrent).toThrow(/admission changed/);
+    renameSync(pathname, `${pathname}.retired`);
+    writeFileSync(pathname, "created");
+    const physical = databaseIdentity.readDatabasePathIdentitySync(pathname);
+    expect(physical.key).not.toBe(originalKey);
+    expect(() => publishOpenClawStateDatabaseWorkerAdmission(original)).toThrow(
+      /admission changed/,
+    );
+    expect(original.assertCurrent).toThrow(/admission changed/);
+    expect(original.coordinationKey).toBe(coordinationKey);
+    expect(original.identity.key).toBe(originalKey);
+    expect(original.identity.key).not.toBe(physical.key);
+  });
 
   it("normalizes relative paths for identity, invalidation, exclusion, and closure", async () => {
     const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
@@ -224,37 +217,34 @@ describe("canonical shared-state resource drainage", () => {
     expect(reopened.assertCurrent).toThrow(/admission changed/);
   });
 
-  it.each(["restart"] as const)(
-    "joins the native reader before %s retirement and invalidates old admissions",
-    async () => {
-      const pathname = databasePath();
-      const admitted = captureOpenClawStateDatabaseReadAdmission(pathname);
-      const writer = openOpenClawStateDatabase({ path: pathname });
-      // Successful native admission does not invalidate its own captured generation.
-      admitted.assertCurrent();
-      const reader = openOpenClawStateReadConnection(pathname, pathname);
-      const { entered, finish, unregister } = holdReader(reader, admitted.identity);
-      const closing = drainGlobalSingletonLifecycleState("restart");
-      try {
-        expect(admitted.assertCurrent).toThrow(/admission is closed/);
-        await entered.promise;
-        expect(writer.db.isOpen).toBe(true);
-        expect(reader.database.db.isOpen).toBe(true);
-        finish.resolve();
-        await closing;
-        expect(reader.database.db.isOpen).toBe(false);
-        expect(writer.db.isOpen).toBe(false);
-        expect(admitted.assertCurrent).toThrow(/admission changed/);
-        captureOpenClawStateDatabaseReadAdmission(pathname).assertCurrent();
-        const reopened = openOpenClawStateDatabase({ path: pathname });
-        expect(reopened.db.isOpen).toBe(true);
-      } finally {
-        finish.resolve();
-        await closing;
-        unregister();
-      }
-    },
-  );
+  it("joins the native reader before restart retirement and invalidates old admissions", async () => {
+    const pathname = databasePath();
+    const admitted = captureOpenClawStateDatabaseReadAdmission(pathname);
+    const writer = openOpenClawStateDatabase({ path: pathname });
+    // Successful native admission does not invalidate its own captured generation.
+    admitted.assertCurrent();
+    const reader = openOpenClawStateReadConnection(pathname, pathname);
+    const { entered, finish, unregister } = holdReader(reader, admitted.identity);
+    const closing = drainGlobalSingletonLifecycleState("restart");
+    try {
+      expect(admitted.assertCurrent).toThrow(/admission is closed/);
+      await entered.promise;
+      expect(writer.db.isOpen).toBe(true);
+      expect(reader.database.db.isOpen).toBe(true);
+      finish.resolve();
+      await closing;
+      expect(reader.database.db.isOpen).toBe(false);
+      expect(writer.db.isOpen).toBe(false);
+      expect(admitted.assertCurrent).toThrow(/admission changed/);
+      captureOpenClawStateDatabaseReadAdmission(pathname).assertCurrent();
+      const reopened = openOpenClawStateDatabase({ path: pathname });
+      expect(reopened.db.isOpen).toBe(true);
+    } finally {
+      finish.resolve();
+      await closing;
+      unregister();
+    }
+  });
 
   it("retains an unregistered multipath resource after failure and retries only requested paths", async () => {
     const first = openOpenClawStateDatabase({ path: databasePath("first") });

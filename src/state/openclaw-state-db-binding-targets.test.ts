@@ -73,24 +73,10 @@ function createVersion14Bindings() {
 
   const legacy = openNodeSqliteDatabase(databasePath);
   try {
-    const columns = new Set(
-      legacy
-        .prepare("PRAGMA table_info(current_conversation_bindings)")
-        .all()
-        .map((row) => row.name),
-    );
-    for (const [column, declaration] of [
-      ["target_agent_id", "TEXT NOT NULL DEFAULT 'main'"],
-      ["target_session_id", "TEXT"],
-    ]) {
-      if (!columns.has(column)) {
-        legacy.exec(
-          `ALTER TABLE current_conversation_bindings ADD COLUMN ${column} ${declaration};`,
-        );
-      }
-    }
     // A compatible future column must survive; copying only canonical columns loses its data.
     legacy.exec(`
+      ALTER TABLE current_conversation_bindings ADD COLUMN target_agent_id TEXT NOT NULL DEFAULT 'main';
+      ALTER TABLE current_conversation_bindings ADD COLUMN target_session_id TEXT;
       ALTER TABLE current_conversation_bindings ADD COLUMN future_note TEXT;
       DROP INDEX idx_current_conversation_bindings_target;
       CREATE INDEX idx_current_conversation_bindings_target
@@ -113,21 +99,6 @@ function createVersion14Bindings() {
     ] as const) {
       const bindingId = `generic:fixture-channel␟${accountId}␟parent␟${conversationId}`;
       const metadata = { owner: "fixture", lastActivityAt: 15 };
-      const record = {
-        bindingId,
-        targetSessionKey: target,
-        targetKind: "session",
-        conversation: {
-          channel: "fixture-channel",
-          accountId,
-          parentConversationId: "parent",
-          conversationId,
-        },
-        status: "active",
-        boundAt: 10,
-        ...(expiresAt === null ? {} : { expiresAt }),
-        metadata,
-      };
       insert.run(
         bindingId.slice("generic:".length),
         bindingId,
@@ -138,7 +109,7 @@ function createVersion14Bindings() {
         conversationId,
         expiresAt,
         JSON.stringify(metadata, null, 2),
-        JSON.stringify(record, null, 2),
+        JSON.stringify({ bindingId, targetSessionKey: target, metadata }, null, 2),
         `keep:${conversationId}`,
       );
     }
@@ -169,7 +140,6 @@ async function holdGatewayLifecycle(databasePath: string, signal: AbortSignal) {
   const closed = new Promise<void>((resolve) => {
     child.once("close", () => resolve());
   });
-  let ready = false;
   try {
     await withinTest(
       new Promise<void>((resolve, reject) => {
@@ -190,14 +160,12 @@ async function holdGatewayLifecycle(databasePath: string, signal: AbortSignal) {
       }),
       signal,
     );
-    ready = true;
-  } finally {
-    if (!ready) {
-      await fixture.verifyCleanup(async () => {
-        child.kill("SIGTERM");
-        await closed;
-      });
-    }
+  } catch (error) {
+    await fixture.verifyCleanup(async () => {
+      child.kill("SIGTERM");
+      await closed;
+    });
+    throw error;
   }
   let releasing: Promise<void> | undefined;
   return {
@@ -292,19 +260,14 @@ describe("conversation binding target migration", () => {
           .map((row) => row.name);
         expect(columns).not.toContain("target_agent_id");
         expect(columns).not.toContain("target_session_id");
-        expect(readBindings(migrated.db)).toEqual(
+        const after = readMigrationSnapshot(migrated.db);
+        expect(after.rows).toEqual(
           before.rows.map(
             ({ target_agent_id: _agent, target_session_id: _session, ...row }) => row,
           ),
         );
         expectVersion(migrated.db);
-        expect(
-          migrated.db
-            .prepare(
-              "SELECT schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'",
-            )
-            .get(),
-        ).toEqual({
+        expect(after.metadata).toMatchObject({
           schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
           app_version: migrationPath === "runtime open" ? VERSION : null,
         });
@@ -333,7 +296,6 @@ describe("conversation binding target migration", () => {
         });
         expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
 
-        const after = readMigrationSnapshot(migrated.db);
         closeOpenClawStateDatabaseForTest();
         const holder = await holdGatewayLifecycle(databasePath, signal);
         try {

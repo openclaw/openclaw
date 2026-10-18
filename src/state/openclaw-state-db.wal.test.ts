@@ -82,10 +82,6 @@ function observeHostSql(db: EngineConnection) {
       prepare.mockClear();
       exec.mockClear();
     },
-    [Symbol.dispose]() {
-      prepare.mockRestore();
-      exec.mockRestore();
-    },
   };
 }
 
@@ -96,7 +92,20 @@ function ownedMaintenance(pathname: string) {
     assertOwnerCurrent: owner.assertCurrent,
     assertDatabaseAccess: owner.assertDatabaseAccess,
   });
-  return { owner, maintenance };
+  return {
+    maintenance,
+    async close(pending?: Promise<unknown>) {
+      try {
+        await maintenance.close();
+      } finally {
+        try {
+          await pending;
+        } finally {
+          owner.release();
+        }
+      }
+    },
+  };
 }
 
 function seedEvent(db: EngineConnection, scope: string) {
@@ -132,6 +141,25 @@ function observeCheckpoints(pathname: string) {
     stop,
     wait: (signal: AbortSignal) => withinTest(first.promise, signal),
   };
+}
+
+async function expectPeriodicCheckpoint(
+  database: ReturnType<typeof openOpenClawStateDatabase>,
+  periodic: () => unknown,
+  signal: AbortSignal,
+  check: (observations: string[]) => void,
+) {
+  const observed = observeCheckpoints(database.path);
+  let pending: Promise<unknown> | undefined;
+  try {
+    pending = Promise.resolve(periodic());
+    await observed.wait(signal);
+    await pending;
+    check(observed.observations);
+  } finally {
+    await pending;
+    observed.stop();
+  }
 }
 
 function sqliteBytes(databasePath: string) {
@@ -231,13 +259,11 @@ it("suspends shared-worker ticks only while maintenance clients retain the actor
   }
 });
 
-it("keeps periodic WAL work off the host before and after a competing SQLite writer releases", async ({
-  signal,
-}) => {
+it("keeps periodic WAL off-host across native contention", async ({ signal }) => {
   const { database, periodic } = openWithPeriodicMaintenance(makeDatabasePath("native-writer"));
   const writer = new DatabaseSync(database.path);
   const { observations, wait, stop } = observeCheckpoints(database.path);
-  using sql = observeHostSql(database.db);
+  const sql = observeHostSql(database.db);
   let periodicWork: Promise<unknown> | undefined;
   try {
     writer.exec("BEGIN IMMEDIATE");
@@ -261,25 +287,17 @@ it("keeps periodic WAL work off the host before and after a competing SQLite wri
     writer.close();
     await periodicWork;
   }
-  const afterRelease = observeCheckpoints(database.path);
-  try {
-    periodicWork = Promise.resolve(periodic());
-    await afterRelease.wait(signal);
-    await periodicWork;
-    expect(afterRelease.observations[0]).toBe("complete");
+  await expectPeriodicCheckpoint(database, periodic, signal, (states) => {
+    expect(states[0]).toBe("complete");
     expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
     sql.assertIdle();
-  } finally {
-    await periodicWork;
-    sql[Symbol.dispose]();
-    afterRelease.stop();
-  }
+  });
   expect(database.db.prepare("SELECT tbl FROM sqlite_stat1 WHERE tbl='schema_meta'").get()).toEqual(
     { tbl: "schema_meta" },
   );
 });
 
-it("maintains planner statistics per periodic pass without disturbing snapshots or run-index plans", async () => {
+it("refreshes planner stats without changing snapshots or indexes", async () => {
   const { database, periodic } = openWithPeriodicMaintenance(makeDatabasePath("planner"));
   database.db.exec(`
     WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM rows WHERE n<8192)
@@ -403,9 +421,9 @@ it("maintains planner statistics per periodic pass without disturbing snapshots 
   }
 });
 
-it("joins private maintenance timer cancellation before retiring its native handle (publisher failure: true)", async () => {
+it("joins private timer cancellation after publisher failure", async () => {
   const pathname = makeDatabasePath("private-owner");
-  const { owner, maintenance } = ownedMaintenance(pathname);
+  const { maintenance, close } = ownedMaintenance(pathname);
   let periodicMaintenance: Promise<walAdmission.SqliteWalPeriodicResult | undefined> | undefined;
   let scheduledWork: Promise<unknown> | undefined;
   let periodicSettled = false;
@@ -438,7 +456,7 @@ it("joins private maintenance timer cancellation before retiring its native hand
           },
           { database, path: pathname },
         );
-        using sql = observeHostSql(database.db);
+        const sql = observeHostSql(database.db);
         scheduledWork = Promise.resolve(opened.periodic());
         sql.assertIdle();
 
@@ -455,15 +473,7 @@ it("joins private maintenance timer cancellation before retiring its native hand
     expect(database?.db.isOpen).toBe(false);
   } finally {
     registration.mockRestore();
-    try {
-      await maintenance.close();
-    } finally {
-      try {
-        await scheduledWork;
-      } finally {
-        owner.release();
-      }
-    }
+    await close(scheduledWork);
   }
   const reopened = openOpenClawStateDatabase({ path: pathname });
   expect(
@@ -473,38 +483,30 @@ it("joins private maintenance timer cancellation before retiring its native hand
   ).toEqual({ value_json: "true" });
 });
 
-it("keeps periodic maintenance after a parent caller adopts its cached handle", async ({
-  signal,
-}) => {
+it("keeps periodic WAL after parent adoption", async ({ signal }) => {
   const pathname = makeDatabasePath("adopted-owner");
   const parent = createOpenClawDatabaseMaintenanceScope();
   const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
   const { database, periodic } = child.run(() => openWithPeriodicMaintenance(pathname));
-  using sql = observeHostSql(database.db);
-  const observed = observeCheckpoints(database.path);
-  let periodicWork: Promise<unknown> | undefined;
+  const sql = observeHostSql(database.db);
   try {
     const adopt = () => openOpenClawStateDatabase({ path: pathname });
     expect(parent.run(adopt)).toBe(database);
     await child.close();
     expect(database.db.isOpen).toBe(true);
     sql.clear();
-    periodicWork = Promise.resolve(periodic());
-    await observed.wait(signal);
-    await periodicWork;
-    expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
-    sql.assertIdle();
+    await expectPeriodicCheckpoint(database, periodic, signal, () => {
+      expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
+      sql.assertIdle();
+    });
   } finally {
-    await periodicWork;
-    observed.stop();
-    sql[Symbol.dispose]();
     await child.close();
     await parent.close();
     await closeOpenClawStateDatabaseByPathAsync(database.path);
   }
 });
 
-it("refuses independent adoption after its cached handle starts closing", async () => {
+it("refuses adoption once cached-handle retirement starts", async () => {
   const pathname = makeDatabasePath("closing-owner");
   const parent = createOpenClawDatabaseMaintenanceScope();
   const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
@@ -554,11 +556,9 @@ it("refuses independent adoption after its cached handle starts closing", async 
   }
 });
 
-it("refuses checkpoints without borrowing the timer caller's maintenance authority", async ({
-  signal,
-}) => {
+it("does not borrow a timer caller's maintenance authority", async ({ signal }) => {
   const { database, periodic } = openWithPeriodicMaintenance(makeDatabasePath("authority"));
-  const { owner, maintenance } = ownedMaintenance(database.path);
+  const { maintenance, close } = ownedMaintenance(database.path);
   const before = sqliteBytes(database.path);
   const { observations, wait, stop } = observeCheckpoints(database.path);
   const prepare = vi.spyOn(database.db, "prepare");
@@ -577,31 +577,16 @@ it("refuses checkpoints without borrowing the timer caller's maintenance authori
   } finally {
     prepare.mockRestore();
     stop();
-    try {
-      await maintenance.close();
-    } finally {
-      try {
-        await periodicWork;
-      } finally {
-        owner.release();
-      }
-    }
+    await close(periodicWork);
   }
-  const afterRelease = observeCheckpoints(database.path);
-  try {
-    periodicWork = Promise.resolve(periodic());
-    await afterRelease.wait(signal);
-    await periodicWork;
-    expect(afterRelease.observations[0]).toBe("complete");
-  } finally {
-    await periodicWork;
-    afterRelease.stop();
-  }
+  await expectPeriodicCheckpoint(database, periodic, signal, (states) => {
+    expect(states[0]).toBe("complete");
+  });
 });
 
 // Windows cannot rename a directory while SQLite retains its native files.
 it.runIf(process.platform !== "win32")(
-  "refuses a physically replaced database after periodic admission yields",
+  "refuses physical replacement after periodic admission yields",
   async ({ signal }) => {
     const root = tempDirs.make("state-wal-replacement-");
     const originalDirectory = path.join(root, "original");
@@ -652,11 +637,11 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
-it("cancels queued periodic maintenance during synchronous close without replaying it", async () => {
+it("cancels queued WAL work without replay on synchronous close", async () => {
   const { database, periodic } = openWithPeriodicMaintenance(makeDatabasePath("close"));
   seedEvent(database.db, "maintenance-close");
   const { observations, stop } = observeCheckpoints(database.path);
-  using sql = observeHostSql(database.db);
+  const sql = observeHostSql(database.db);
   const periodicWork: Promise<unknown>[] = [];
   try {
     periodicWork.push(Promise.resolve(periodic()));
@@ -677,7 +662,6 @@ it("cancels queued periodic maintenance during synchronous close without replayi
         .all("maintenance-close"),
     ).toEqual([{ event_key: "preserved" }]);
   } finally {
-    sql[Symbol.dispose]();
     stop();
     try {
       await closeOpenClawStateDatabaseByPathAsync(database.path);
@@ -687,10 +671,10 @@ it("cancels queued periodic maintenance during synchronous close without replayi
   }
 });
 
-it("checkpoints committed worker writes before retiring the host without host SQL", async () => {
+it("flushes worker writes before host close without host SQL", async () => {
   const { store, database } = await pluginStore("worker-shutdown", "initial");
   await store.register("retained", "final");
-  using sql = observeHostSql(database.db);
+  const sql = observeHostSql(database.db);
   const nativeClose = database.db.close.bind(database.db);
   let walBytesAtHostClose: number | undefined;
   const close = vi.spyOn(database.db, "close").mockImplementation(() => {
@@ -702,7 +686,6 @@ it("checkpoints committed worker writes before retiring the host without host SQ
     sql.assertIdle();
     expect(walBytesAtHostClose).toBe(0);
   } finally {
-    sql[Symbol.dispose]();
     close.mockRestore();
   }
   using reopened = new DatabaseSync(database.path, { readOnly: true });
@@ -713,7 +696,7 @@ it("checkpoints committed worker writes before retiring the host without host SQ
   ).toEqual({ value_json: '"final"' });
 });
 
-it("leaves raw access sole custody only after the orderly close joins worker retirement", async () => {
+it("joins worker retirement before granting raw sole custody", async () => {
   const { database } = await pluginStore("worker-retirement", "value");
   // Every open WAL connection keeps a shared file lock, so only a sole
   // connection can take this exclusive lock.

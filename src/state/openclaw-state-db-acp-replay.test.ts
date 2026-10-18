@@ -21,18 +21,13 @@ function seedLegacyReplay(db: EngineConnection) {
   const event = db.prepare(`INSERT INTO acp_replay_events
     (session_id, seq, at, session_key, run_id, update_json, estimated_bytes)
     VALUES (?, ?, 321, ?, ?, ?, ?)`);
+  const update =
+    '{ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "漢😀\\u0000\\ud800" } }  ';
   for (const [index, estimate] of [0, 17, 9000].entries()) {
     const id = `session-${index}-漢\0\ud800`;
     session.run(id, "key😀", "/é/e\u0301/台\0😀", estimate);
     for (let seq = 1; seq <= 3; seq++) {
-      event.run(
-        id,
-        seq,
-        "key😀\0",
-        seq % 2 ? null : "run-\udc00",
-        '{ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "漢😀\\u0000\\ud800" } }  ',
-        estimate,
-      );
+      event.run(id, seq, "key😀\0", seq % 2 ? null : "run-\udc00", update, estimate);
     }
   }
   // Even already-correct event estimates must contribute to a repaired aggregate.
@@ -42,30 +37,26 @@ function seedLegacyReplay(db: EngineConnection) {
   );
 }
 
-function rows(db: EngineConnection, table: string, columns: string, order = "session_id") {
-  return db.prepare(`SELECT ${columns} FROM ${table} ORDER BY ${order}`).all();
+function rows(db: EngineConnection, table: "sessions" | "events", columns: string) {
+  const order = table === "events" ? "session_id, seq" : "session_id";
+  return db.prepare(`SELECT ${columns} FROM acp_replay_${table} ORDER BY ${order}`).all();
 }
 
+const canonicalColumns = {
+  sessions: "session_id, session_key, cwd, complete, created_at, updated_at, next_seq",
+  events: "session_id, seq, at, session_key, run_id, update_json",
+};
 function canonicalReplay(db: EngineConnection) {
   return {
-    sessions: rows(
-      db,
-      "acp_replay_sessions",
-      "session_id, session_key, cwd, complete, created_at, updated_at, next_seq",
-    ),
-    events: rows(
-      db,
-      "acp_replay_events",
-      "session_id, seq, at, session_key, run_id, update_json",
-      "session_id, seq",
-    ),
+    sessions: rows(db, "sessions", canonicalColumns.sessions),
+    events: rows(db, "events", canonicalColumns.events),
   };
 }
 
 function estimates(db: EngineConnection) {
   return {
-    sessions: rows(db, "acp_replay_sessions", "estimated_bytes"),
-    events: rows(db, "acp_replay_events", "estimated_bytes", "session_id, seq"),
+    sessions: rows(db, "sessions", "estimated_bytes"),
+    events: rows(db, "events", "estimated_bytes"),
     version: db.prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary'").get(),
   };
 }
