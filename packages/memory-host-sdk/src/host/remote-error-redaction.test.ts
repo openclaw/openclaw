@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { uploadBatchJsonlFile } from "./batch-upload.js";
@@ -17,21 +17,8 @@ type RequestRecord = {
   path: string;
 };
 
-async function listenOnLoopback(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-}
-
-async function closeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
-function createMemoryRemoteServer(records: RequestRecord[]): Server {
+async function fixture() {
+  const records: RequestRecord[] = [];
   const server = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => {
@@ -74,16 +61,20 @@ function createMemoryRemoteServer(records: RequestRecord[]): Server {
       response.end(body);
     });
   });
-  onTestFinished(() => closeServer(server));
-  return server;
+  onTestFinished(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return { records, baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
 }
-
-async function fixture() {
-  const records: RequestRecord[] = [];
-  const baseUrl = await listenOnLoopback(createMemoryRemoteServer(records));
-  return { records, baseUrl };
-}
-function expectRedacted(error: unknown, secrets = [API_KEY, UNIQUE_NEEDLE]) {
+function expectRedacted(error: unknown, message: string, secrets = [API_KEY, UNIQUE_NEEDLE]) {
+  expect(error).toMatchObject({ message: expect.stringContaining(message) });
   expect(error).toBeInstanceOf(Error);
   for (const secret of secrets) {
     expect((error as Error).message).not.toContain(secret);
@@ -110,36 +101,26 @@ describe("memory remote error redaction", { concurrent: false }, () => {
     vi.unstubAllEnvs();
   });
 
-  it("redacts lower-case bearer credentials through the real remote embedding fetch path", async () => {
+  it.each([
+    [API_KEY, "error", "Authorization: ***"],
+    [SHORT_API_KEY, "quoted-error", '{"Authorization":"***"}'],
+  ])("redacts bearer credentials from %s embedding errors", async (key, route, redacted) => {
     const { records, baseUrl } = await fixture();
-
-    const error = await fetchVectors(baseUrl, "/v1/embeddings/error").catch(
+    const error = await fetchVectors(baseUrl, `/v1/embeddings/${route}`, key).catch(
       (cause: unknown) => cause,
     );
-
-    expect((error as Error).message).toContain(
-      "embedding fetch failed (model: proof, batch size: 1) (401)",
+    expectRedacted(error, redacted, key === API_KEY ? [API_KEY, UNIQUE_NEEDLE] : [SHORT_API_KEY]);
+    if (key === API_KEY) {
+      expect(error).toMatchObject({
+        message: expect.stringContaining(
+          "embedding fetch failed (model: proof, batch size: 1) (401)",
+        ),
+      });
+      await expect(fetchVectors(baseUrl, "/v1/embeddings/ok")).resolves.toEqual([[0.25, 0.5]]);
+    }
+    expect(records.map((record) => record.authorization)).toEqual(
+      Array.from({ length: key === API_KEY ? 2 : 1 }, () => `bearer ${key}`),
     );
-    expect((error as Error).message).toContain("Authorization: ***");
-    expectRedacted(error);
-
-    await expect(fetchVectors(baseUrl, "/v1/embeddings/ok")).resolves.toEqual([[0.25, 0.5]]);
-    expect(records.map((record) => record.authorization)).toEqual([
-      `bearer ${API_KEY}`,
-      `bearer ${API_KEY}`,
-    ]);
-  });
-
-  it("redacts quoted short bearer credentials through the real JSON error path", async () => {
-    const { records, baseUrl } = await fixture();
-
-    const error = await fetchVectors(baseUrl, "/v1/embeddings/quoted-error", SHORT_API_KEY).catch(
-      (cause: unknown) => cause,
-    );
-
-    expect((error as Error).message).toContain('{"Authorization":"***"}');
-    expectRedacted(error, [SHORT_API_KEY]);
-    expect(records.map((record) => record.authorization)).toEqual([`bearer ${SHORT_API_KEY}`]);
   });
 
   it("preserves status metadata and harmless provider diagnostics", async () => {
@@ -156,12 +137,14 @@ describe("memory remote error redaction", { concurrent: false }, () => {
 
     const secretError = await request("/v1/post/error").catch((cause: unknown) => cause);
     expect((secretError as { status?: unknown }).status).toBe(401);
-    expectRedacted(secretError);
+    expectRedacted(secretError, "post failed (401)");
 
     const benignError = await request("/v1/post/benign").catch((cause: unknown) => cause);
     expect(benignError).toBeInstanceOf(Error);
-    expect((benignError as { status?: unknown }).status).toBe(400);
-    expect((benignError as Error).message).toBe("post failed (400): harmless diagnostic");
+    expect(benignError).toMatchObject({
+      status: 400,
+      message: "post failed (400): harmless diagnostic",
+    });
   });
 
   it("redacts lower-case bearer credentials from batch errors without changing success", async () => {
@@ -178,14 +161,12 @@ describe("memory remote error redaction", { concurrent: false }, () => {
       });
 
     const error = await upload("/error").catch((cause: unknown) => cause);
-    expect((error as Error).message).toContain("file upload failed: 401");
-    expectRedacted(error);
+    expectRedacted(error, "file upload failed: 401");
 
     const shortError = await upload("/quoted-error", SHORT_API_KEY).catch(
       (cause: unknown) => cause,
     );
-    expect((shortError as Error).message).toContain('{"Authorization":"***"}');
-    expectRedacted(shortError, [SHORT_API_KEY]);
+    expectRedacted(shortError, '{"Authorization":"***"}', [SHORT_API_KEY]);
 
     await expect(upload("/ok")).resolves.toBe("file_control");
     const batchRecords = records.filter((record) => record.path.endsWith("/files"));

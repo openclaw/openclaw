@@ -1,15 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readMemoryFile } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 function requireMemoryReadSuccess(result: Awaited<ReturnType<typeof readMemoryFile>>) {
-  if (result.status === "not_found") {
-    throw new Error(`expected memory content for ${result.path}`);
-  }
+  assert(result.status === "ok", `expected memory content for ${result.path}`);
   return result;
 }
 
@@ -234,25 +233,16 @@ describe("MemoryIndexManager.readFile", () => {
 
     const realOpen = fs.open;
     let injected = false;
-    const openSpy = vi
-      .spyOn(fs, "open")
-      .mockImplementation(async (...args: Parameters<typeof realOpen>) => {
-        const [target, flags, mode] = args;
-        if (!injected && typeof target === "string" && path.resolve(target) === absPath) {
-          injected = true;
-          const err = new Error("missing") as NodeJS.ErrnoException;
-          err.code = "ENOENT";
-          throw err;
-        }
-        return realOpen(target, flags, mode);
-      });
+    vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof realOpen>) => {
+      const [target, flags, mode] = args;
+      if (!injected && typeof target === "string" && path.resolve(target) === absPath) {
+        injected = true;
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+      return realOpen(target, flags, mode);
+    });
 
-    try {
-      const result = await read(relPath);
-      expect(result).toEqual({ status: "not_found", text: "", path: relPath });
-    } finally {
-      openSpy.mockRestore();
-    }
+    expect(await read(relPath)).toEqual({ status: "not_found", text: "", path: relPath });
   });
 
   it("rejects non-memory paths", async () => {
@@ -282,21 +272,17 @@ describe("MemoryIndexManager.readFile", () => {
     expect(oversized.text).not.toContain("use read on the source file");
 
     const linkPath = path.join(extraDir, "linked.md");
-    let symlinkOk = true;
     try {
       await fs.symlink(path.join(extraDir, "extra.md"), linkPath, "file");
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "EPERM" || code === "EACCES") {
-        symlinkOk = false;
-      } else {
-        throw err;
+        return;
       }
+      throw err;
     }
-    if (symlinkOk) {
-      await expect(read("extra/linked.md", [extraDir])).rejects.toThrow(
-        "path is not an allowed Markdown memory file",
-      );
-    }
+    await expect(read("extra/linked.md", [extraDir])).rejects.toThrow(
+      "path is not an allowed Markdown memory file",
+    );
   });
 });

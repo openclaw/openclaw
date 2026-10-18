@@ -12,6 +12,9 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
+const expectDenied = (result: ReturnType<typeof readMemoryFile>) =>
+  expect(result).rejects.toThrow("path is not an allowed Markdown memory file");
+
 async function fixture(files: Record<string, string | Buffer>) {
   const directory = tempDirs.make("memory-read-");
   const workspaceDir = path.join(directory, "workspace");
@@ -22,18 +25,6 @@ async function fixture(files: Record<string, string | Buffer>) {
     await fs.writeFile(target, text);
   }
   return { directory, workspaceDir, extraDir: path.join(directory, "extra") };
-}
-async function createDirectorySymlink(target: string, linkPath: string): Promise<boolean> {
-  try {
-    await fs.symlink(target, linkPath, "dir");
-    return true;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EPERM" || code === "EACCES") {
-      return false;
-    }
-    throw err;
-  }
 }
 
 it.each([
@@ -107,18 +98,15 @@ it.each(["EAGAIN", "EIO"])("preserves read-time %s handling for workspace memory
   });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const result = readMemoryFile({ workspaceDir, relPath }).then(
-    (value) => ({ status: "fulfilled" as const, value }),
-    (error: unknown) => ({ status: "rejected" as const, error }),
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
   );
   await Promise.race([faultSeen.promise, result]);
   await vi.runAllTimersAsync();
   expect(await result).toEqual(
     code === "EAGAIN"
-      ? {
-          status: "fulfilled",
-          value: { status: "ok", text: "memory contents", path: relPath, from: 1, lines: 1 },
-        }
-      : { status: "rejected", error: failure },
+      ? { value: { status: "ok", text: "memory contents", path: relPath, from: 1, lines: 1 } }
+      : { error: failure },
   );
   expect(injected).toBe(true);
 });
@@ -187,9 +175,7 @@ it("returns not found for absent extra paths and rejects non-directory parents",
     text: "",
     path: "../extra/missing.md",
   });
-  await expect(read("note.md/child.md")).rejects.toThrow(
-    "path is not an allowed Markdown memory file",
-  );
+  await expectDenied(read("note.md/child.md"));
 });
 
 it.each(["EACCES", "EIO"])("scopes extra-path %s errors to the requested file", async (code) => {
@@ -230,13 +216,9 @@ it.each(["EACCES", "EIO"])("scopes extra-path %s errors to the requested file", 
   await expect(read(path.join(healthyDir, "note.md"))).resolves.toMatchObject({ text: "healthy" });
   await expect(read(target, [extraDir, target])).resolves.toMatchObject({ text: "secret" });
   for (const relPath of [path.join(directory, "outside.md"), path.join(extraDir, "note.txt")]) {
-    await expect(read(relPath, [extraDir])).rejects.toThrow(
-      "path is not an allowed Markdown memory file",
-    );
+    await expectDenied(read(relPath, [extraDir]));
   }
-  await expect(read(target, [{ path: extraDir, pattern: "runbooks/**/*.md" }])).rejects.toThrow(
-    "path is not an allowed Markdown memory file",
-  );
+  await expectDenied(read(target, [{ path: extraDir, pattern: "runbooks/**/*.md" }]));
 });
 
 it("rejects extra path reads through symlinked directory components", async () => {
@@ -251,13 +233,17 @@ it("rejects extra path reads through symlinked directory components", async () =
     [extraDir, "inside-link", ["inside.md"]],
     [path.join(directory, "outside"), "link", ["private.md", "missing.md"]],
   ] as const) {
-    if (!(await createDirectorySymlink(target, path.join(extraDir, link)))) {
-      return;
+    try {
+      await fs.symlink(target, path.join(extraDir, link), "dir");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        return;
+      }
+      throw err;
     }
     for (const file of files) {
-      await expect(read(path.join(link, file))).rejects.toThrow(
-        "path is not an allowed Markdown memory file",
-      );
+      await expectDenied(read(path.join(link, file)));
     }
   }
 });
@@ -276,7 +262,7 @@ it.each(["runbooks", "..notes", "...notes", "~"])(
     const read = (relativePath: string) =>
       readAgentMemoryFile({ cfg, agentId: "main", relPath: path.join(extraDir, relativePath) });
     await expect(read(`${name}/team/allowed.md`)).resolves.toMatchObject({ text: "allowed" });
-    await expect(read("private.md")).rejects.toThrow("path is not an allowed Markdown memory file");
+    await expectDenied(read("private.md"));
   },
 );
 

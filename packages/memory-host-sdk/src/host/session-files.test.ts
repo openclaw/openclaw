@@ -1,22 +1,22 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import { encodeSessionArchiveContent } from "../../../../src/config/sessions/archive-compression.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../../../../src/state/openclaw-state-db.js";
-import { cleanupSessionStateForTest } from "../../../../src/test-utils/session-state-cleanup.js";
+import {
+  cleanupSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../../../../src/test-utils/session-state-cleanup.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
@@ -27,48 +27,28 @@ import {
   type SessionFileEntry,
 } from "./session-files.js";
 
-let fixtureRoot: string;
-let tmpDir: string;
-let envSnapshot: Record<string, string | undefined> | undefined;
-let fixtureId = 0;
-
-beforeAll(() => {
-  fixtureRoot = fsSync.realpathSync.native(
-    fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-")),
-  );
-});
-
-afterAll(async () => {
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
-});
-
-beforeEach(() => {
-  tmpDir = path.join(fixtureRoot, `case-${fixtureId++}`);
-  fsSync.mkdirSync(tmpDir, { recursive: true });
-  envSnapshot = {
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-  };
-  Reflect.set(process.env, "OPENCLAW_STATE_DIR", tmpDir);
+function clearRuntimeConfig() {
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+}
+
+const listCorpus = () => listSessionTranscriptCorpusEntriesForAgent("main");
+const tempDirs = useSessionStoreTempDirs(afterAll, "session-entry-test-");
+let tmpDir: string;
+
+beforeEach(() => {
+  tmpDir = tempDirs.make();
+  vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", process.env.OPENCLAW_CONFIG_PATH);
+  clearRuntimeConfig();
 });
 
 afterEach(async () => {
   // Close case databases before restoring its environment or removing its files.
   await cleanupSessionStateForTest({ stateDir: tmpDir, rootPath: tmpDir });
-  for (const [key, value] of Object.entries(envSnapshot ?? {})) {
-    if (value === undefined) {
-      Reflect.deleteProperty(process.env, key);
-    } else {
-      Reflect.set(process.env, key, value);
-    }
-  }
-  envSnapshot = undefined;
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  clearRuntimeConfig();
   fsSync.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -77,10 +57,14 @@ async function buildEntry(
   options?: Parameters<typeof buildSessionEntry>[1],
 ): Promise<SessionFileEntry> {
   const entry = await buildSessionEntry(filePath, options);
-  if (!entry) {
-    throw new Error("expected session entry");
-  }
+  assert(entry, "expected session entry");
   return entry;
+}
+
+function sessionDirectory(relativePath = "agents/main/sessions") {
+  const dir = path.join(tmpDir, relativePath);
+  fsSync.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 function writeRecords(name: string, records: unknown[]) {
@@ -101,31 +85,22 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
   });
 
   it("surfaces unexpected archive-directory scan failures", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    sessionDirectory();
     const scanError = Object.assign(new Error("transient session archive scan failure"), {
       code: "EIO",
     });
-    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(async () => {
-      throw scanError;
-    });
-
-    try {
-      await expect(listSessionTranscriptCorpusEntriesForAgent("main")).rejects.toBe(scanError);
-    } finally {
-      readdirSpy.mockRestore();
-    }
+    vi.spyOn(fs, "readdir").mockRejectedValue(scanError);
+    await expect(listCorpus()).rejects.toBe(scanError);
   });
 
   it("reads live SQLite rows by session identity while preserving archived JSONL artifacts", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const sessionsDir = sessionDirectory();
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = "agent:main:chat:sqlite-live:heartbeat";
     const sessionId = "sqlite-live";
     const sourceText = `API_TOKEN = computeToken() sk-${"a".repeat(48)}`;
     const updatedAt = Date.parse("2026-06-25T12:00:00.000Z");
     const identity = { agentId: "main", sessionId, sessionKey, storePath };
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
 
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
@@ -145,7 +120,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     ]);
 
     expect(fsSync.existsSync(path.join(sessionsDir, `${sessionId}.jsonl`))).toBe(false);
-    const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
+    const entries = await listCorpus();
     expect(entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -190,8 +165,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     expect(messages).toEqual([expect.objectContaining({ role: "user", content: sourceText })]);
     const archiveEntry = await buildEntry(archivePath);
 
-    expect(liveEntry.path).toBe("sessions/main/sqlite-live.jsonl");
-    expect(liveEntry.content).toBe(`User: ${sourceText}`);
+    expect(liveEntry).toMatchObject({
+      path: "sessions/main/sqlite-live.jsonl",
+      content: `User: ${sourceText}`,
+    });
     expect(liveState).toEqual({
       absPath: sessionKey,
       path: liveEntry.path,
@@ -199,28 +176,25 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       revisionMs: liveEntry.revisionMs,
       size: liveEntry.size,
     });
-    expect(archiveEntry.path).toBe(
-      "sessions/main/sqlite-live.jsonl.deleted.2026-06-25T12-01-00.000Z",
-    );
-    expect(archiveEntry.content).toBe("User: Archived JSONL transcript text");
+    expect(archiveEntry).toMatchObject({
+      path: "sessions/main/sqlite-live.jsonl.deleted.2026-06-25T12-01-00.000Z",
+      content: "User: Archived JSONL transcript text",
+    });
     await persistSessionTranscriptTurn(identity, {
       messages: [{ message: makeUserMessage("A newer transcript message", updatedAt + 1) }],
       touchSessionEntry: true,
       updateMode: "none",
     });
-    const updatedState = await statSessionEntry(sessionKey, {
-      ...identity,
-    });
+    const updatedState = await statSessionEntry(sessionKey, identity);
     expect(updatedState?.size).toBeGreaterThan(liveEntry.size);
   });
 
   it("omits symlinked archive artifacts from the session corpus", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const sessionsDir = sessionDirectory();
     const targetPath = path.join(tmpDir, "external.jsonl");
     const symlinkPath = path.join(sessionsDir, "linked.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
     fsSync.writeFileSync(symlinkPath, "");
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
+    await expect(listCorpus()).resolves.toContainEqual(
       expect.objectContaining({
         artifactKind: "archive-artifact",
         sessionFile: symlinkPath,
@@ -238,20 +212,18 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     }
     expect(fsSync.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
 
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
+    await expect(listCorpus()).resolves.toEqual([]);
   });
 
   it("uses SQLite identity for entries in a custom session store", async () => {
-    const sessionsDir = path.join(tmpDir, "custom-sessions");
+    const sessionsDir = sessionDirectory("custom-sessions");
     const sessionFile = path.join(sessionsDir, "custom-thread.jsonl");
     const storePath = path.join(sessionsDir, "sessions.json");
     const configPath = path.join(tmpDir, "openclaw.json");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
     fsSync.writeFileSync(sessionFile, "");
     fsSync.writeFileSync(configPath, JSON.stringify({ session: { store: storePath } }));
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
+    clearRuntimeConfig();
     await captureRuntimeConfigAsyncReader()();
     await upsertSessionEntryCore(
       { sessionKey: "agent:main:chat:custom", storePath },
@@ -262,7 +234,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     );
 
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
+    await expect(listCorpus()).resolves.toContainEqual(
       expect.objectContaining({
         sessionFile: "agent:main:chat:custom",
         sessionId: "custom-thread",
@@ -272,22 +244,19 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
   });
 });
 
-describe("memory session sync targets", () => {
-  it("rejects arbitrary deprecated transcript path hints", () => {
-    expect(parseCanonicalSessionSyncTargetFromPath(path.join(tmpDir, "active.jsonl"))).toBeNull();
-    expect(
-      parseCanonicalSessionSyncTargetFromPath(
-        path.join(tmpDir, "agents", "main", "sessions", "active.trajectory.jsonl"),
-      ),
-    ).toBeNull();
-  });
+it("rejects arbitrary deprecated transcript path hints", () => {
+  expect(parseCanonicalSessionSyncTargetFromPath(path.join(tmpDir, "active.jsonl"))).toBeNull();
+  expect(
+    parseCanonicalSessionSyncTargetFromPath(
+      path.join(tmpDir, "agents", "main", "sessions", "active.trajectory.jsonl"),
+    ),
+  ).toBeNull();
 });
 
 describe("buildSessionEntry", () => {
   it("preserves the persisted export hash for wrapped Unicode messages", async () => {
     const records = Array.from({ length: 4 }, (_, index) => ({
       type: "message",
-      id: `m${index}`,
       timestamp: "2026-09-01T00:00:00Z",
       message: {
         role: index % 2 ? "assistant" : "user",
@@ -322,26 +291,26 @@ describe("buildSessionEntry", () => {
   it("does not wipe earlier or later archive messages after a user-authored cron prompt (#98241)", async () => {
     const archivePath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
     const messages = [
-      { role: "user", content: "Remember before: project codename is Atlas." },
-      { role: "assistant", content: "Saved project codename Atlas." },
-      { role: "user", content: "[cron:daily-digest] why did my digest job fail last night?" },
-      { role: "assistant", content: "The digest job failed because the API token expired." },
+      { role: "user", content: "Remember Atlas." },
+      { role: "assistant", content: "Saved Atlas." },
+      { role: "user", content: "[cron:daily-digest] why did it fail?" },
+      { role: "assistant", content: "Token expired." },
       {
         role: "user",
-        content: "Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
+        content: "Remember Acme.",
       },
-      { role: "assistant", content: "Noted. Acme Robotics, budget 5000 USD." },
+      { role: "assistant", content: "Saved Acme." },
     ];
     writeMessages(path.relative(tmpDir, archivePath), messages);
     const entry = await buildEntry(archivePath);
     expect(entry.generatedByCronRun).toBeFalsy();
     expect(entry.content).toBe(
       [
-        "User: Remember before: project codename is Atlas.",
-        "Assistant: Saved project codename Atlas.",
-        "Assistant: The digest job failed because the API token expired.",
-        "User: Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
-        "Assistant: Noted. Acme Robotics, budget 5000 USD.",
+        "User: Remember Atlas.",
+        "Assistant: Saved Atlas.",
+        "Assistant: Token expired.",
+        "User: Remember Acme.",
+        "Assistant: Saved Acme.",
       ].join("\n"),
     );
     expect(entry.lineMap).toStrictEqual([1, 2, 4, 5, 6]);
@@ -359,9 +328,7 @@ describe("buildSessionEntry", () => {
 
     const entry = await buildEntry(archivePath);
 
-    expect(entry.content).toBe("");
-    expect(entry.lineMap).toStrictEqual([]);
-    expect(entry.generatedByCronRun).toBe(true);
+    expect(entry).toMatchObject({ content: "", lineMap: [], generatedByCronRun: true });
   });
 
   it("preserves blank/malformed compressed archive line ordinals", async () => {
@@ -382,8 +349,10 @@ describe("buildSessionEntry", () => {
     fsSync.writeFileSync(filePath, encoded.bytes);
 
     const entry = await buildEntry(filePath);
-    expect(entry.content).toBe("User: First\nAssistant: Second");
-    expect(entry.lineMap).toStrictEqual([3, 5]);
+    expect({ content: entry.content, lineMap: entry.lineMap }).toStrictEqual({
+      content: "User: First\nAssistant: Second",
+      lineMap: [3, 5],
+    });
   });
 
   it("strips inbound metadata when a user envelope is split across text blocks", async () => {
