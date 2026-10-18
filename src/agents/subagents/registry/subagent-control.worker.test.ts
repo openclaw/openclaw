@@ -511,6 +511,7 @@ it.each([
           agentId: "main",
         }),
         identities: [key(runId), `${runId}-session`],
+        run: { runId, sessionKey: key(runId), sessionId: `${runId}-session`, agentId: "main" },
         assertAllowed: () => {},
         onInterrupt: () => {
           handles.find(({ id }) => id === runId)!.abort();
@@ -532,6 +533,7 @@ it.each([
               : { phase: "end", status: "error", aborted: true, endedAt: Date.now() },
           });
           runnerSettlement = fixture.settle().finally(() => admission?.release());
+          return { runId };
         },
       });
     }

@@ -208,6 +208,8 @@ run and their descendants, including ordinary sub-agents and [Swarm](/tools/swar
 collectors. Successful cancellation keeps selected queued collectors from
 starting while running children stop. Exact-run cancellation does not cancel
 unrelated turns or clear unrelated session-wide queues.
+Cancelling a queued follow-up by its `runId` removes only that follow-up; the
+active run and other queued follow-ups in the same session continue.
 
 Every new registration records its selected owning agent as `childAgentId`,
 including agent-qualified child keys, and the original child session identity.
