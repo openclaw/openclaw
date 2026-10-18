@@ -401,13 +401,7 @@ plugin files owned by a different Unix user than the process loading them.
 Keep the plugin config in place; fix the filesystem ownership or run OpenClaw
 as the same user that owns the state directory.
 
-For Docker installs, the official image runs as `node` (uid `1000`), so the
-host bind-mounted OpenClaw config and workspace directories should normally be
-owned by uid `1000`:
-
-```bash
-sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
-```
+For Docker installs, see [Permissions and EACCES](/install/docker/compose-operations#permissions-and-eacces) — chown the host bind-mounted OpenClaw config and workspace directories to uid `1000` (the default), or set `OPENCLAW_PUID`/`OPENCLAW_PGID` to match a share you can't chown.
 
 If you intentionally run OpenClaw as root, repair the managed plugin root to
 root ownership instead:

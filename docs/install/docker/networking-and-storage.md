@@ -113,6 +113,8 @@ Use the published Gateway URL, Tailscale, or wide-area DNS-SD for Docker hosts o
 
 Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw`, `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, and `OPENCLAW_AUTH_PROFILE_SECRET_DIR` to `/home/node/.config/openclaw`, so those paths survive container replacement. When a variable is unset, `docker-compose.yml` falls back under `${HOME}`, or `/tmp` if `HOME` itself is missing, so `docker compose up` never emits an empty-source volume spec on bare environments.
 
+Bind mounts carry host ownership numerically, and the container runs as uid 1000 by default, so those host directories normally need to be owned by uid 1000. When you can't change their ownership, see [Running as a different uid](/install/docker/compose-operations#running-as-a-different-uid).
+
 That mounted config directory holds:
 
 - `openclaw.json` for behavior config

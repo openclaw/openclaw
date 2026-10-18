@@ -154,8 +154,11 @@ export const prestartContainerEnvFlags = [
   "-e OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace",
 ].join(" ");
 
+// The owner is a positional argument (`$1`) so an operator-supplied
+// OPENCLAW_PUID/OPENCLAW_PGID value never becomes part of the root command string.
 export const noFollowOwnershipRepair = (root: string) =>
-  `/usr/bin/find -P ${root} -xdev -execdir /usr/bin/chown -h node:node {} +`;
+  `/usr/bin/find -P ${root} -xdev -execdir /usr/bin/chown -h "$1" {} +`;
+export const ownershipRepairOwnerArg = (owner: string) => `openclaw-docker-setup ${owner}`;
 export const prestartSafePath = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 export const resetDockerLog = (sandbox: DockerSetupSandbox) => writeFile(sandbox.logPath, "");

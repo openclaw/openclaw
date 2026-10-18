@@ -130,13 +130,17 @@ does not reveal the full token.
   </Accordion>
 
   <Accordion title="Permissions and EACCES">
-    The image runs as `node` (uid 1000). If you see permission errors on `/home/node/.openclaw`, make sure your host bind mounts are owned by uid 1000:
+    The container runs as uid 1000 by default (the image's `node` user). If you see permission errors on `/home/node/.openclaw`, pick the branch that matches your host storage:
+
+    **You control the host directories** (local disk, most VPS/root-accessible setups) — chown them to match the container default:
 
     ```bash
     sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
     ```
 
-    The same mismatch can show up as `blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)` followed by `plugin present but blocked` — the process uid and the mounted plugin directory owner disagree. Prefer running as the default uid 1000 and fixing the bind mount ownership. Only chown `/path/to/openclaw-config/npm` to `root:root` if you intentionally run OpenClaw as root long term.
+    **You cannot change the ownership** (shared storage, an owner you don't control, a uid policy you can't change) — set `OPENCLAW_PUID`/`OPENCLAW_PGID` in `.env` to the directory's own uid/gid instead. `scripts/docker/setup.sh` validates and persists these (decimal only, `0` rejected, max `65533`); both `openclaw-gateway` and `openclaw-cli` pick them up from `.env` on the next `docker compose up -d`. See [Running as a different uid](#running-as-a-different-uid) for the full recipe and its limitations.
+
+    The same mismatch can show up as `blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)` followed by `plugin present but blocked` — the process uid and the mounted plugin directory owner disagree; apply whichever branch above matches your storage. Only chown `/path/to/openclaw-config/npm` to `root:root` if you intentionally run OpenClaw as root long term.
 
   </Accordion>
 
@@ -157,7 +161,7 @@ does not reveal the full token.
     for live-test containers.
 
     The same Dockerfile preserves the production runtime contract: digest-pinned
-    Node and Bun bases, non-root uid 1000, `tini`, the built-in health check, and
+    Node and Bun bases, a non-root user (uid 1000 by default), `tini`, the built-in health check, and
     the `/usr/local/bin/openclaw` symlink. Dependabot refreshes the reviewed base
     digests; do not replace them with floating `FROM node:24-bookworm` tags.
 
@@ -182,6 +186,135 @@ does not reveal the full token.
     The runtime image uses `node:24-bookworm-slim` and runs `tini` as PID 1 so zombie processes are reaped and signals handled correctly in long-running containers. It publishes OCI base-image annotations including `org.opencontainers.image.base.name` and `org.opencontainers.image.source`. Dependabot refreshes the pinned Node base digest, and each build applies current Debian point-release updates. See [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md).
   </Accordion>
 </AccordionGroup>
+
+## Running as a different uid
+
+Docker bind mounts carry ownership numerically: the container sees the host's
+uid and gid, never its user names. A write succeeds only when the container's
+uid owns the mounted directory, or reaches it through its gid. The image runs
+as uid 1000, so any host whose directories belong to a different uid runs into
+this — a Linux account that happens to be uid 1001, a CI runner, an LDAP or
+NFS-mapped home directory, or network-attached storage.
+
+The usual fix is to chown the host directories to `1000:1000`. When you cannot
+— shared storage, an owner you do not control, or a uid policy you cannot
+change — set `OPENCLAW_PUID`/`OPENCLAW_PGID` instead. Both `openclaw-gateway`
+and `openclaw-cli` run as `"${OPENCLAW_PUID:-1000}:${OPENCLAW_PGID:-1000}"`, so
+leaving them unset reproduces the previous default byte for byte, and the
+Gateway refuses to start if you set `OPENCLAW_PUID=0` — root is never allowed.
+
+### Find the uid and gid
+
+Run `stat -c '%u %g' /path/to/openclaw-config` on the mounted directory itself,
+or `id <user>` for the account that owns it. If you cannot get a shell on the
+host, start the container once with the defaults and run `openclaw doctor`.
+On an ownership mismatch it prints `Owner mismatch (uid N)`, where `N` is the
+uid that owns the mounted directory; use it as `OPENCLAW_PUID` (the `chown`
+command in the same hint targets the container's current uid instead). Restart
+with that uid and run `openclaw doctor` again: a `Group mismatch (gid N)` hint
+names the directory's gid for `OPENCLAW_PGID`, and no hint means the gid
+already works.
+
+With `scripts/docker/setup.sh`, put them in the environment and the script
+validates them (decimal only, `0` rejected, max `65533`) and writes them to
+`.env`. Without the script, set them in `.env` directly or in the compose file
+you deploy.
+
+### Example: a GUI container manager with no shell access
+
+Some hosts only expose a compose editor — a NAS appliance such as Synology's
+Container Manager is the common case. The recipe below is self-contained: it
+pulls the published image, needs no repo checkout, and hard-codes the values
+that the repo's own `docker-compose.yml` would otherwise read from `.env`.
+
+Replace `1026:100` with your own uid:gid, `/volume1/docker/openclaw/...` with
+your own directory paths, `REPLACE_WITH_A_LONG_RANDOM_TOKEN` with a real token,
+and `<host-ip>` with the LAN IP or hostname you will browse to. Pre-create the
+three host directories and chown them to your uid:gid before starting — the
+container cannot create top-level bind-mount directories it does not own.
+All three must be mounted: the auth-profile secret directory holds credentials
+that would otherwise be lost every time the container is replaced.
+
+```yaml
+services:
+  openclaw-gateway:
+    image: ghcr.io/openclaw/openclaw:latest
+    user: "1026:100" # replace with the output of `id <user>`
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      XDG_CACHE_HOME: /home/node/.openclaw/cache
+      NPM_CONFIG_CACHE: /home/node/.openclaw/.npm
+      OPENCLAW_PUID: "1026" # lets the Gateway refuse an accidental OPENCLAW_PUID=0
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_PORT: "18789"
+      OPENCLAW_GATEWAY_TOKEN: "REPLACE_WITH_A_LONG_RANDOM_TOKEN"
+    volumes:
+      - /volume1/docker/openclaw/config:/home/node/.openclaw
+      - /volume1/docker/openclaw/workspace:/home/node/.openclaw/workspace
+      - /volume1/docker/openclaw/auth-profile-secrets:/home/node/.config/openclaw
+    ports:
+      - "18789:18789"
+    command: ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789"]
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "dist/docker-healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+```
+
+On first boot, run the same onboarding and config-set commands as the
+[manual flow](/install/docker#manual-flow), substituting your project's
+service name for `openclaw-gateway`. Include
+`gateway.controlUi.allowedOrigins` in that config-set call, or add it
+afterwards:
+
+```bash
+docker compose exec openclaw-gateway node dist/index.js \
+  config set gateway.controlUi.allowedOrigins '["http://<host-ip>:18789"]'
+```
+
+### Reaching the Control UI from another host
+
+`--bind lan` publishes the gateway on the LAN. The Gateway refuses a
+non-loopback bind unless a shared secret is configured —
+`OPENCLAW_GATEWAY_TOKEN` above satisfies that — and separately refuses a
+non-loopback Control UI unless `gateway.controlUi.allowedOrigins` lists the
+origins you'll browse from, which is why the config-set call above is
+required before you can open the Control UI at `http://<host-ip>:18789/`.
+
+<Warning>
+A directory exposed as world-writable (`chmod 777`) is rejected outright for
+non-bundled plugins — don't "fix" a permissions error that way. Chown to the
+correct uid/gid instead.
+</Warning>
+
+### Limitations
+
+- **The ssh sandbox backend and node pairing over ssh don't work at a custom uid.** `ssh` refuses to run for a uid with no `/etc/passwd` entry (`No user exists for uid <N>`), so both are unavailable once `OPENCLAW_PUID` is anything other than 1000. The image still installs `openssh-client` for the sandbox backend on the default uid.
+- **Named volumes need a one-off ownership repair.** If you use `OPENCLAW_HOME_VOLUME`, repair its ownership once after first start:
+
+  ```bash
+  docker compose run --rm --user root --entrypoint sh openclaw-gateway -c 'chown -R <PUID>:<PGID> /home/node/.openclaw'
+  ```
+
+- **Changing the uid on an existing install** needs a host-side `chown -R` of the bind mounts to the new uid/gid first. Otherwise previously installed (non-bundled) plugins fail the ownership gate and get blocked.
+- **Kubernetes ignores these variables.** The [Kubernetes manifests](/install/kubernetes) pin `runAsUser`/`runAsGroup` directly; `OPENCLAW_PUID`/`OPENCLAW_PGID` only apply to this Docker Compose setup.
+- **Docker userns-remap or rootless Docker changes the host-side owner** of files the container writes, which changes what you'd need to chown. These instructions assume a normal, non-remapped Docker daemon.
+- **Don't set `agents.defaults.sandbox.docker.user`.** OpenClaw already derives the agent sandbox container's user from the workspace owner; pinning it yourself disables that detection.
+
+See [Storage and persistence](/install/docker/networking-and-storage#storage-and-persistence) for what else the mounted config directory holds.
 
 ## Image contents and security scanning
 

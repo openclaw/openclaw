@@ -26,6 +26,8 @@ Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway c
 | `OPENCLAW_INSTALL_BROWSER`                      | Bake Chromium + Xvfb into the image at build time                                                                                   |
 | `OPENCLAW_EXTRA_MOUNTS`                         | Extra host bind mounts (comma-separated `source:target[:opts]`)                                                                     |
 | `OPENCLAW_HOME_VOLUME`                          | Persist `/home/node` in a named Docker volume                                                                                       |
+| `OPENCLAW_PUID`                                 | Container runtime uid; decimal only, `0` rejected, max `65533` (default `1000`, the image's `node` user)                            |
+| `OPENCLAW_PGID`                                 | Container runtime gid; decimal only, `0` rejected, max `65533` (default `1000`)                                                     |
 | `OPENCLAW_TZ`                                   | Set the gateway and CLI container timezone to an IANA name (default `UTC`)                                                          |
 | `OPENCLAW_SANDBOX`                              | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)                                                                              |
 | `OPENCLAW_SKIP_ONBOARDING`                      | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`)                                                                     |
@@ -39,6 +41,8 @@ Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway c
 | `OTEL_SERVICE_NAME`                             | Service name used for OpenTelemetry resources                                                                                       |
 | `OTEL_SEMCONV_STABILITY_OPT_IN`                 | Opt in to latest experimental GenAI semantic attributes                                                                             |
 | `OPENCLAW_OTEL_PRELOADED`                       | Skip starting a second OpenTelemetry SDK when one is preloaded                                                                      |
+
+See [Running as a different uid](/install/docker/compose-operations#running-as-a-different-uid) for a complete `OPENCLAW_PUID`/`OPENCLAW_PGID` example and its limitations.
 
 After changing `.env` or Compose environment settings, run `docker compose up -d openclaw-gateway` to recreate the gateway with the new values. `docker compose restart` does not apply environment changes.
 

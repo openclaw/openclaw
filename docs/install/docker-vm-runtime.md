@@ -113,7 +113,7 @@ export OPENCLAW_IMAGE_APT_PACKAGES="socat"
 For downloaded release binaries such as `gog`, `goplaces`, or `wacli`, add the
 download and install commands to the repo-root `Dockerfile` final runtime stage,
 after its package-install blocks and before `USER node`. Preserve the existing
-non-root uid 1000 setup, `tini` entrypoint, health check, and `openclaw` symlink.
+non-root; uid 1000 by default setup, `tini` entrypoint, health check, and `openclaw` symlink.
 
 <Note>
 The repository Dockerfile digest-pins its Node and Bun base images. Keep those
