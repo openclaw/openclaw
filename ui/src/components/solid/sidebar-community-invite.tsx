@@ -37,19 +37,20 @@ export function SidebarCommunityInvite() {
   const [open, setOpen] = createSignal(false);
   const id = createUniqueId();
   return (
-    <div class="sidebar-community">
-      <button
-        type="button"
-        class="sidebar-community__entry"
-        aria-haspopup="dialog"
-        aria-expanded={open() ? "true" : "false"}
-        aria-controls={id}
-        onClick={() => setOpen(true)}
-      >
-        <Icon name="users" />
-        <span>{t("communityInvite.title")}</span>
-        <Icon name="chevronRight" />
-      </button>
+    <>
+      <openclaw-tooltip prop:content={t("communityInvite.title")} prop:placement="right">
+        <button
+          type="button"
+          class="sidebar-rail__button sidebar-community__entry"
+          aria-label={t("communityInvite.title")}
+          aria-haspopup="dialog"
+          aria-expanded={open() ? "true" : "false"}
+          aria-controls={id}
+          onClick={() => setOpen(true)}
+        >
+          <Icon name="users" />
+        </button>
+      </openclaw-tooltip>
       <Show when={open()}>
         <Errored
           fallback={(error, reset) => (
@@ -106,6 +107,6 @@ export function SidebarCommunityInvite() {
           </Loading>
         </Errored>
       </Show>
-    </div>
+    </>
   );
 }

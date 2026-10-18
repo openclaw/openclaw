@@ -25,6 +25,8 @@ export function readMemoryUsage(input: unknown, label: string): DiagnosticMemory
     memory,
     label,
     [
+      "anonymousRssBytes",
+      "anonymousSwapBytes",
       "workerCount",
       "workerHeapSampledCount",
       "workerHeapTotalBytes",

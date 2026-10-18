@@ -31,6 +31,7 @@ import { appendTranscriptEventInTransaction as appendEvent } from "./session-acc
 import * as retirement from "./session-retirement-read.js";
 import type { SessionRetirementReadOperation } from "./session-retirement-read.types.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
+import * as sessionTargets from "./targets.js";
 
 const { tempDirs, createFixture } = setupLegacyMainSessionMigrationTests();
 afterEach(() => {
@@ -374,16 +375,14 @@ function recordTranscriptReads() {
 
 it("rejects startup when session-store discovery fails", async () => {
   const stateDir = tempDirs.make("openclaw-startup-discovery-");
+  vi.spyOn(sessionTargets, "resolveAllAgentSessionStoreTargetsSync").mockImplementation(() => {
+    throw new Error("session-store discovery failed");
+  });
   await expect(
     runSessionStartupMigration({
       cfg: {},
       env: { OPENCLAW_STATE_DIR: stateDir },
       log: { info: vi.fn(), warn: vi.fn() },
-      deps: {
-        resolveAllAgentSessionStoreTargetsSync() {
-          throw new Error("session-store discovery failed");
-        },
-      },
     }),
   ).rejects.toThrow("session-store discovery failed");
 });

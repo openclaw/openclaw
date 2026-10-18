@@ -29,9 +29,9 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync: ps,
 }));
-// mock-isolation: Native Darwin census must use the same synthetic PIDs as ps.
-vi.mock("../process/supervisor/darwin-bun-process-census.js", () => ({
-  readDarwinBunProcessCensus: nativeCensus,
+// mock-isolation: Only synthetic PIDs may participate in capture cleanup.
+vi.mock("../process/darwin-process-inspection.js", () => ({
+  readDarwinProcessCensus: nativeCensus,
 }));
 vi.mock("@openclaw/proc-safe/inspect", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/inspect")>()),
@@ -187,21 +187,10 @@ it.each([
       });
     }
     inspectAsLaterProcess();
-    const rows = [
-      { pid: process.pid, pgid: process.pid, state: "S", ppid: 0, uid },
-      { pid: peer, pgid: peer, state: "S", ppid: 0, uid: sameUid ? uid : uid + 1 },
-    ];
-    // Node uses ps; Bun uses libproc. Both must observe the same synthetic census.
-    nativeCensus.mockReturnValue(rows);
-    ps.mockReturnValue({
-      status: 0,
-      stdout: rows
-        .map(
-          ({ pid, pgid, state, ppid, uid: memberUid }) =>
-            `${pid} ${pgid} ${state} ${ppid} ${memberUid}\n`,
-        )
-        .join(""),
-    });
+    nativeCensus.mockReturnValue([
+      { pid: process.pid, pgid: process.pid, state: "S", ppid: 0, owner: "same" },
+      { pid: peer, pgid: peer, state: "S", ppid: 0, owner: sameUid ? "same" : "different" },
+    ]);
     readProcessCommand.mockImplementation((pid: number) => {
       if (pid === peer) {
         throw new ProcSafeError("access-denied", "Process arguments denied");

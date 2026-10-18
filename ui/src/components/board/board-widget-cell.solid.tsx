@@ -1,15 +1,6 @@
 import { createErrorBoundary } from "@solidjs/signals";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  Show,
-  Switch,
-  Match,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show, Switch, Match } from "solid-js";
 import {
   ensureCustomElementDefined,
   isOptionalElementDefined,
@@ -59,6 +50,10 @@ import { BoardWidgetMenu } from "./board-widget-menu.tsx";
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 const cells = new WeakMap<HTMLElement, BoardWidgetCellHandle>();
 
+export function boardWidgetPresentationReady(host: HTMLElement): boolean {
+  return cells.get(host)?.presentationReady ?? false;
+}
+
 function BoardWidgetCellContent(
   props: BoardWidgetCellProps,
   host: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>,
@@ -66,21 +61,22 @@ function BoardWidgetCellContent(
   const context = useOptionalApplication();
   Object.defineProperty(host, "presentationReady", {
     configurable: true,
-    get: () => cells.get(host)?.presentationReady ?? false,
+    get: () => boardWidgetPresentationReady(host),
   });
   onCleanup(() => cells.delete(host));
   const [actionError, setActionError] = createSignal("");
   const [actionPending, setActionPending] = createSignal(false);
   const [widgetRoot, setWidgetRoot] = createSignal<HTMLElement>();
   const [bodyErrored, setBodyErrored] = createSignal(false, { ownedWrite: true });
+  let mcpElement: HTMLElementTagNameMap["mcp-app-view"] | undefined;
   // Signals commit later; admission must reject a second action in the same tick.
   let actionInFlight = false;
   let menu: MenuHandle | undefined;
   let resetBodyError: (() => void) | undefined;
   let connected = true;
+  // Retain the MCP renderer until its teardown acknowledgement releases it.
   const [renderedMcp, setRenderedMcp] = createSignal(
-    untrack(() => props.widget?.contentKind === "mcp-app"),
-    { ownedWrite: true },
+    (previous = false) => props.widget?.contentKind === "mcp-app" || previous,
   );
   const active = () => props.active !== false;
   const canMutate = () => props.canMutate !== false;
@@ -204,46 +200,40 @@ function BoardWidgetCellContent(
     frame.presentationReady;
   cells.set(host, {
     get presentationReady() {
-      return untrack(presentationReady);
+      return presentationReady();
     },
+    focusWidget: () => widgetRoot()?.focus(),
     selectMenuItem,
     async teardown() {
-      await host
-        .querySelector<HTMLElement & { teardown?: () => Promise<void> }>("mcp-app-view")
-        ?.teardown?.();
+      await mcpElement?.teardown?.();
     },
     restartAfterTeardown() {
-      host
-        .querySelector<HTMLElement & { restartAfterTeardown?: () => void }>("mcp-app-view")
-        ?.restartAfterTeardown?.();
+      mcpElement?.restartAfterTeardown?.();
     },
   });
-  let previousWidget = untrack(() => props.widget);
-  let previousBoardRevision = untrack(() => props.boardRevision);
   createEffect(
     () => [props.widget, props.boardRevision, active(), contribution(), gatewayBinding()] as const,
     // Owner callbacks intentionally read the current binding captured above.
-    () => {
-      if (previousBoardRevision !== props.boardRevision) {
+    ([widget, boardRevision, isActive, coreWidget], previous) => {
+      if (previous && previous[1] !== boardRevision) {
         setActionError("");
       }
-      previousBoardRevision = props.boardRevision;
-      if (previousWidget && previousWidget !== props.widget) {
+      const previousWidget = previous?.[0];
+      if (previousWidget && previousWidget !== widget) {
         if (
-          previousWidget.name !== props.widget?.name ||
-          previousWidget.instanceId !== props.widget?.instanceId ||
-          previousWidget.revision !== props.widget?.revision
+          previousWidget.name !== widget?.name ||
+          previousWidget.instanceId !== widget?.instanceId ||
+          previousWidget.revision !== widget?.revision
         ) {
           setActionError("");
         }
-        frame.widgetChanged(previousWidget, props.widget);
+        frame.widgetChanged(previousWidget, widget);
       }
-      previousWidget = props.widget;
       frame.activityChanged();
       for (const element of CORE_BOARD_WIDGET_ELEMENTS) {
-        loader.requestWhileActive(element, active() && contribution() === element);
+        loader.requestWhileActive(element, isActive && coreWidget === element);
       }
-      if (props.widget?.contentKind === "mcp-app") {
+      if (widget?.contentKind === "mcp-app") {
         void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
       }
     },
@@ -269,16 +259,6 @@ function BoardWidgetCellContent(
       frame.update();
       if (props.loadingCovered && presentationReady()) {
         host.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
-      }
-    },
-  );
-  createEffect(
-    () => props.widget?.contentKind,
-    (kind) => {
-      if (kind === "mcp-app") {
-        setRenderedMcp(true);
-      } else if (!host.querySelector("mcp-app-view")) {
-        setRenderedMcp(false);
       }
     },
   );
@@ -459,6 +439,9 @@ function BoardWidgetCellContent(
           expired={() => appView.expire()}
           remove={() => void runAction(() => props.callbacks!.remove(props.widget!))}
           retry={() => appView.retry()}
+          viewRef={(element) => {
+            mcpElement = element;
+          }}
           retired={() => {
             if (props.widget?.contentKind !== "mcp-app") {
               setRenderedMcp(false);
@@ -671,6 +654,7 @@ export const BoardWidgetCell = defineSolidBridge<BoardWidgetCellProps, BoardWidg
       loadingCovered: { default: false, type: Boolean },
     },
     methods: {
+      focusWidget: (host) => cells.get(host)?.focusWidget(),
       selectMenuItem: (host, value) => cells.get(host)?.selectMenuItem(value),
       teardown: async (host) => {
         await cells.get(host)?.teardown();

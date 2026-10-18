@@ -186,6 +186,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_payload_large_total`                            | counter   | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_payload_large_bytes`                            | histogram | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_memory_bytes`                                   | gauge     | `kind`                                                                                    |
+| `openclaw_process_anonymous_memory_bytes`                 | gauge     | `kind` (`rss`, `swap`)                                                                    |
 | `openclaw_heap_space_bytes`                               | gauge     | `space`, `stat`                                                                           |
 | `openclaw_worker_count`                                   | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_queue_depth`                             | gauge     | `kind`                                                                                    |
@@ -209,6 +210,15 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_prometheus_series_dropped_total`                | counter   | none                                                                                      |
 | `openclaw_diagnostic_async_queue_dropped_total`           | counter   | `drop_class`                                                                              |
 | `openclaw_diagnostic_async_queue_length`                  | gauge     | none                                                                                      |
+
+On Linux, `openclaw_process_anonymous_memory_bytes` reports `RssAnon` as `kind="rss"`
+and `VmSwap` as `kind="swap"` from `/proc/self/status`, converted to bytes. The
+existing diagnostic heartbeat reads these counters asynchronously. They include
+managed heaps and buffers; they do not measure total native or allocator memory.
+`VmSwap` excludes shared-memory swap. Unavailable counters are omitted, including
+when a later read fails, rather than reported as zero or retained from an older
+sample. Other platforms do not expose these gauges. OpenClaw does not currently
+expose a total SQLite or jemalloc allocation counter.
 
 Worker message counters describe posts and receives on Gateway main-thread worker transports,
 with `direction="to_worker"` or `direction="from_worker"`. The fixed `kind` labels

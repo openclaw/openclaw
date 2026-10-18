@@ -318,6 +318,9 @@ async function resolveBootstrapFiles(
     params.readOnlyState,
   );
   const rawFiles = await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  for (const file of rawFiles) {
+    file.origin = { kind: "agent-workspace", rootPath: resolveUserPath(params.workspaceDir) };
+  }
   const personalFile = await loadPersonalUserBootstrapFile(
     params.workspaceDir,
     params.bootstrapUserProfileId,
