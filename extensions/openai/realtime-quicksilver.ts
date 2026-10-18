@@ -46,6 +46,10 @@ export type OpenAIGptLiveVoice =
   | (typeof OPENAI_GPT_LIVE_API_VOICES)[number]
   | (typeof OPENAI_GPT_LIVE_VOICES)[number]
   | (typeof OPENAI_GPT_LIVE_UNLISTED_VOICES)[number];
+export type OpenAIGptLiveCustomVoice = { id: string };
+export type OpenAIGptLiveVoiceSelection = OpenAIGptLiveVoice | OpenAIGptLiveCustomVoice;
+
+const OPENAI_GPT_LIVE_CUSTOM_VOICE_ID_RE = /^voice_[A-Za-z0-9_-]+$/;
 
 export function isOpenAIGptLiveApiModel(model: string | undefined): boolean {
   return model?.trim().toLowerCase() === "gpt-live-1";
@@ -59,10 +63,40 @@ export function isSupportedOpenAIGptLiveModel(model: string | undefined): boolea
   return isOpenAIGptLiveApiModel(model) || isOpenAIGptLiveSubscriptionModel(model);
 }
 
-export function resolveOpenAIQuicksilverVoice(model: string, value: unknown): OpenAIGptLiveVoice {
+export function normalizeOpenAIQuicksilverVoiceInput(
+  value: unknown,
+): string | OpenAIGptLiveCustomVoice | undefined {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (normalized) {
+    return normalized;
+  }
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error('Invalid GPT-Live custom voice reference: expected { id: "voice_..." }');
+  }
+  const record = value as Record<string, unknown>;
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  if (Object.keys(record).length !== 1 || !OPENAI_GPT_LIVE_CUSTOM_VOICE_ID_RE.test(id)) {
+    throw new Error('Invalid GPT-Live custom voice reference: expected { id: "voice_..." }');
+  }
+  return { id };
+}
+
+export function resolveOpenAIQuicksilverVoice(
+  model: string,
+  value: unknown,
+): OpenAIGptLiveVoiceSelection {
   const voices = resolveOpenAIQuicksilverVoices(model);
   const defaultVoice = isOpenAIGptLiveSubscriptionModel(model) ? "cove" : "marin";
-  const normalized = normalizeOptionalLowercaseString(value);
+  const normalized = normalizeOpenAIQuicksilverVoiceInput(value);
+  if (typeof normalized === "object") {
+    if (!isOpenAIGptLiveApiModel(model)) {
+      throw new Error("GPT-Live custom voice references require model gpt-live-1");
+    }
+    return normalized;
+  }
   return voices.find((voice) => voice === normalized) ?? defaultVoice;
 }
 

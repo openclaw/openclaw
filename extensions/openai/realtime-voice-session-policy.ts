@@ -47,6 +47,7 @@ import {
   OPENAI_GPT_LIVE_MODELS,
   OPENAI_GPT_LIVE_MODEL_PREFIX,
   isOpenAIGptLiveSubscriptionModel,
+  normalizeOpenAIQuicksilverVoiceInput,
   resolveOpenAIQuicksilverVoiceCapabilities,
 } from "./realtime-quicksilver.js";
 
@@ -203,7 +204,7 @@ export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
     }),
     model: normalizeOptionalString(raw.model),
     // Session creation selects the effective model; an earlier family fallback loses overrides.
-    voice: normalizeOptionalLowercaseString(raw.speakerVoice ?? raw.voice),
+    voice: normalizeOpenAIQuicksilverVoiceInput(raw.speakerVoice ?? raw.voice),
     temperature: asFiniteNumber(raw.temperature),
     vadThreshold: asFiniteNumberInRange(raw.vadThreshold, { min: 0, max: 1 }),
     silenceDurationMs: asSafeIntegerInRange(raw.silenceDurationMs, { min: 0 }),

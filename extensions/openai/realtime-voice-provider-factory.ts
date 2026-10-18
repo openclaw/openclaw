@@ -24,9 +24,11 @@ import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instr
 import type { OpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
 import {
   OPENAI_QUICKSILVER_CAPABILITIES,
+  isOpenAIGptLiveApiModel,
   isOpenAIGptLiveModel,
   isOpenAIGptLiveSubscriptionModel,
   resolveOpenAIQuicksilverVoiceCapabilities,
+  resolveOpenAIQuicksilverVoice,
 } from "./realtime-quicksilver.js";
 import { OpenAIRealtimeBridge } from "./realtime-voice-bridge.js";
 import {
@@ -198,6 +200,9 @@ async function createOpenAIRealtimeBrowserSession(
   }
 
   const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+  if (typeof config.voice === "object") {
+    resolveOpenAIQuicksilverVoice(model, config.voice);
+  }
   if (isOpenAIGptLiveModel(model)) {
     if (!quicksilverBroker) {
       throw new Error("OpenAI GPT-Live browser session broker is unavailable");
@@ -411,6 +416,9 @@ export function buildOpenAIRealtimeVoiceProvider(
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const model = config.model;
+      if (typeof config.voice === "object" && !isOpenAIGptLiveApiModel(model)) {
+        resolveOpenAIQuicksilverVoice(model ?? OPENAI_REALTIME_DEFAULT_MODEL, config.voice);
+      }
       if (model && isOpenAIGptLiveModel(model)) {
         if (config.baseUrl) {
           throw new Error(

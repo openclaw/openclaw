@@ -98,10 +98,13 @@ function createGaFetch(callId: string) {
 
 async function reserveLiveSession(
   realtime: ReturnType<typeof createBroker>["realtime"],
-  overrides: Pick<
-    RealtimeVoiceBrowserSessionCreateRequest,
-    "model" | "runAgentConsult" | "gatewayControl" | "voice"
-  > = {},
+  overrides: Omit<
+    Pick<
+      RealtimeVoiceBrowserSessionCreateRequest,
+      "model" | "runAgentConsult" | "gatewayControl" | "voice"
+    >,
+    "voice"
+  > & { voice?: string | { id: string } } = {},
 ) {
   const reservation = await realtime.broker.createBrowserSession(
     {
@@ -119,6 +122,17 @@ async function reserveLiveSession(
 }
 
 describe("GPT-Live offer broker", () => {
+  it("keeps saved voice references out of the browser reservation", async () => {
+    const { realtime } = makeBroker();
+    const reservation = await reserveLiveSession(realtime, {
+      model: "gpt-live-1",
+      voice: { id: "voice_demo123" },
+    });
+
+    expect(reservation).not.toHaveProperty("voice");
+    await realtime.broker.cancelBrowserSession(reservation);
+  });
+
   it("waits for the GA sideband before returning an audio-only SDP answer and hangs up once", async () => {
     const { promise: sidebandReady, resolve: releaseSideband } = Promise.withResolvers<void>();
     const bridge = makeBridge({ connect: vi.fn(async () => await sidebandReady) });

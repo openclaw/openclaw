@@ -502,6 +502,24 @@ describe("OpenAI realtime voice provider routing", () => {
     },
   );
 
+  it("passes a saved GPT-Live voice reference to the native broker", async () => {
+    const { provider, createBrowserSession } = browserFixture();
+    const voice = { id: "voice_demo123" };
+    await provider.createBrowserSession?.({
+      providerConfig: await provider.resolveConfigAsync?.({
+        cfg: {} as never,
+        rawConfig: { apiKey: PLATFORM_KEY, model: "gpt-live-1", voice },
+      }),
+      ...browserRequest,
+      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+    } as never);
+
+    expect(createBrowserSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-live-1", voice }),
+      { type: "api-key", token: PLATFORM_KEY },
+    );
+  });
+
   it.each(["gpt-live-1"])("rejects OAuth-only %s before broker session creation", async (model) => {
     mockOAuth();
     const { provider, createBrowserSession } = browserFixture();

@@ -45,6 +45,7 @@ import {
   isOpenAIGptLiveModel,
   isOpenAIGptLiveApiModel,
   resolveOpenAIQuicksilverVoice,
+  type OpenAIGptLiveVoiceSelection,
 } from "./realtime-quicksilver.js";
 import { assertOpenAIRealtimeAudioOnlyOffer } from "./realtime-sdp-offer.js";
 import {
@@ -61,14 +62,18 @@ const OPENAI_QUICKSILVER_UPSTREAM_TIMEOUT_MS = 30_000;
 type OpenAIQuicksilverSessionRequest = {
   initialItems?: RealtimeVoiceAgentConsultTranscriptEntry[];
   ownerConnId?: string;
+  voice?: OpenAIGptLiveVoiceSelection;
 } & (
-  | (RealtimeVoiceBrowserSessionCreateRequest & {
+  | (Omit<RealtimeVoiceBrowserSessionCreateRequest, "voice"> & {
       gaSession?: Record<string, unknown> & { model: string };
       gaSideband?: never;
     })
   // Stable GA hosts bind a full bridge. Keep that broker-only mode separate
   // from the public negotiated request, which requires command binding.
-  | (Omit<RealtimeVoiceBrowserSessionCreateRequest, "clientControl" | "gatewayControl"> & {
+  | (Omit<
+      RealtimeVoiceBrowserSessionCreateRequest,
+      "clientControl" | "gatewayControl" | "voice"
+    > & {
       clientControl: { owner: "gateway" };
       gatewayControl: RealtimeVoiceGatewayControl;
       gaSession: Record<string, unknown> & { model: string };
@@ -257,7 +262,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
         clientSecret: token,
         offerUrl: OPENAI_QUICKSILVER_OFFER_PATH,
         offerResponseMaxBytes: 256 * 1024,
-        ...(request.gaSideband ? {} : { model, voice }),
+        ...(request.gaSideband ? {} : { model, ...(typeof voice === "string" ? { voice } : {}) }),
         expiresAt,
       };
     },
