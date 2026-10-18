@@ -64,20 +64,9 @@ async function createToolResultRunner(overrides: FactoryOverrides = {}) {
   const factory = createFactory({ sessionManager, ...overrides });
   assert(factory, "Expected embedded tool-result extension factory");
   const runtime = createExtensionRuntime();
-  const extension = await loadExtensionFromFactory(
-    factory,
-    "/tmp",
-    createEventBus(),
-    runtime,
-    "<embedded-test>",
-  );
-  return new ExtensionRunner(
-    [extension],
-    runtime,
-    "/tmp",
-    sessionManager,
-    ModelRegistry.inMemory(AuthStorage.inMemory()),
-  );
+  const extension = await loadExtensionFromFactory(factory, "/tmp", createEventBus(), runtime);
+  const models = ModelRegistry.inMemory(AuthStorage.inMemory());
+  return new ExtensionRunner([extension], runtime, "/tmp", sessionManager, models);
 }
 
 async function createToolResultHandler(overrides: FactoryOverrides = {}) {
@@ -179,9 +168,8 @@ describe("buildEmbeddedExtensionFactories", () => {
 
     expect(first).toEqual(textToolResult("compacted 1", {}));
     expect(second).toEqual(textToolResult("compacted 2", {}));
-    expect(seenToolCallIds).toHaveLength(2);
-    expect(seenToolCallIds[0]).toMatch(/^openclaw-/);
-    expect(seenToolCallIds[1]).toMatch(/^openclaw-/);
+    const generatedId = expect.stringMatching(/^openclaw-/);
+    expect(seenToolCallIds).toEqual([generatedId, generatedId]);
     expect(seenToolCallIds[0]).not.toBe(seenToolCallIds[1]);
   });
 

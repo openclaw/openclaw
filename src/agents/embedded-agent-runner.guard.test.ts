@@ -29,6 +29,8 @@ import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 
+const text = (value: string) => [{ type: "text" as const, text: value }];
+
 function installWriteHook(handler: (...args: unknown[]) => unknown) {
   initializeGlobalHookRunner(
     createMockPluginRegistry([{ hookName: "before_message_write", handler }]),
@@ -87,7 +89,7 @@ describe("guardSessionManager integration", () => {
       role: "assistant",
       provider: "openclaw",
       model: "delivery-mirror",
-      content: [{ type: "text", text: "display copy" }],
+      content: text("display copy"),
     } as AgentMessage);
     appendMessage(textToolResult("call_1", "n", "real output", { isError: false }) as AgentMessage);
 
@@ -97,7 +99,7 @@ describe("guardSessionManager integration", () => {
     expect(messages[1]).toMatchObject({ model: "delivery-mirror" });
     expect(messages[2]).toMatchObject({
       isError: false,
-      content: [{ type: "text", text: "real output" }],
+      content: text("real output"),
     });
     expect(JSON.stringify(messages)).not.toContain("missing tool result");
   });
@@ -175,7 +177,7 @@ describe("guardSessionManager integration", () => {
       const replacement =
         role === "user"
           ? { role, content: "redacted", timestamp: 2, __openclaw: { hookOwned: true } }
-          : makeAgentAssistantMessage({ content: [{ type: "text", text: "rewritten" }] });
+          : makeAgentAssistantMessage({ content: text("rewritten") });
       installWriteHook(() => ({ message: replacement }));
       // Generic harness hooks only constrain sender provenance; runtime preparation
       // separately protects operational fields, not editable reply/media display.
@@ -231,10 +233,7 @@ describe("guardSessionManager integration", () => {
   it("commits queued group sender metadata to JSONL and completes its recorder", () => {
     const dir = tempDirs.make("openclaw-queued-group-turn-");
     const sessionManager = createFileBackedSessionManagerForTest(dir, dir);
-    const sessionFile = expectDefined(
-      sessionManager.getSessionFile(),
-      "expected file-backed session manager",
-    );
+    const sessionFile = expectDefined(sessionManager.getSessionFile(), "session file");
     const recorder = createUserTurnTranscriptRecorder({
       input: {
         text: "visible group prompt",
@@ -245,16 +244,10 @@ describe("guardSessionManager integration", () => {
     const sm = guardSessionManager(sessionManager, {
       inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
     });
-    const runtimeMessage = queuedRuntime(
-      recorder,
-      [{ type: "text", text: "runtime group prompt" }],
-      456,
-    );
+    const runtimeMessage = queuedRuntime(recorder, text("runtime group prompt"), 456);
 
     sm.appendMessage(runtimeMessage);
-    sm.appendMessage(
-      makeAgentAssistantMessage({ content: [{ type: "text", text: "acknowledged" }] }),
-    );
+    sm.appendMessage(makeAgentAssistantMessage({ content: text("acknowledged") }));
 
     const entries = readFileSync(sessionFile, "utf8")
       .trim()
@@ -301,7 +294,7 @@ describe("guardSessionManager integration", () => {
     });
     const blocked = {
       role: "user",
-      content: [{ type: "text", text: "blocked" }],
+      content: text("blocked"),
       timestamp: 124,
       __openclaw: { beforeAgentRunBlocked: { blockedBy: "test", blockedAt: 123 } },
     } as AgentMessage;
@@ -319,9 +312,7 @@ describe("guardSessionManager integration", () => {
 
   it("skips plugin hooks while preserving every persisted transcript content field", () => {
     installWriteHook(() => ({
-      message: makeAgentAssistantMessage({
-        content: [{ type: "text", text: "changed by hook" }],
-      }),
+      message: makeAgentAssistantMessage({ content: text("changed by hook") }),
     }));
 
     const { sm, appendMessage } = createGuard({
@@ -350,7 +341,7 @@ describe("guardSessionManager integration", () => {
 
     expect(messages).toMatchObject([
       { role: "assistant", content: assistant.content },
-      { role: "toolResult", content: [{ type: "text", text: "peter@dc.io\n" }] },
+      { role: "toolResult", content: text("peter@dc.io\n") },
     ]);
     expect(JSON.stringify(messages)).not.toContain("changed by hook");
   });
@@ -380,7 +371,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
         appendMessage({
           role: "toolResult",
           toolCallId: id,
-          content: [{ type: "text", text: "command output here" }],
+          content: text("command output here"),
           isError: false,
         } as AgentMessage);
         idle.resolve();
@@ -392,7 +383,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
       expect(messages[1]).toMatchObject(
         timesOut
           ? { toolCallId: id, isError: true }
-          : { isError: false, content: [{ type: "text", text: "command output here" }] },
+          : { isError: false, content: text("command output here") },
       );
       if (timesOut) {
         appendMessage(makeUserMessage("still there?", Date.now()));
