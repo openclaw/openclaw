@@ -6,6 +6,7 @@ import type {
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import type { ChatSessionProgressProps } from "./chat-composer-types.ts";
+import type { ChatDetailsEnvironmentDesktopProps } from "./chat-details-environment.tsx";
 import type { ChatOutputsDesktopProps } from "./chat-outputs.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
@@ -20,6 +21,16 @@ export type ChatDetailsDesktopSectionId =
   | "subagents"
   | "processes"
   | "outputs";
+
+export type ChatDetailsEnvironmentData = Pick<
+  ChatDetailsEnvironmentDesktopProps,
+  | "onOpenProject"
+  | "onOpenMachine"
+  | "uncommitted"
+  | "onRequestUncommitted"
+  | "onOpenUncommitted"
+  | "placement"
+>;
 
 /** Published assistant-artifact/dashboard facts and real destination/icon operations. */
 export type ChatDetailsOutputs = ChatOutputsDesktopProps;
@@ -42,6 +53,7 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "onOpenSubagents"
     | "onScrollPortRef"
   > & {
+    environment?: ChatDetailsEnvironmentData;
     outputs?: ChatDetailsOutputs;
     /** Stable per native resource identity; acquire only while Details is presented. */
     retainOutputs?: () => (() => void) | undefined;
