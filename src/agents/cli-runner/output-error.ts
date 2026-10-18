@@ -1,8 +1,8 @@
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { CliOutput } from "../cli-output-contracts.js";
 import { formatCliOutputError } from "../cli-output.js";
-import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { classifyFailoverReason } from "../failover/classify.js";
 
 export function createCliOutputFailoverError(params: {
   output: CliOutput;

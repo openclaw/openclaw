@@ -149,7 +149,20 @@ describe("persistent chat session snapshots", () => {
         ...snapshot("history"),
         deltaCursor: "cursor-1",
         historyState: {
-          stateRevision: { pendingInputs: "inputs-1", sessionInfo: "info-1" },
+          stateRevision: {
+            pendingInputs: "inputs-1",
+            sessionInfo: "info-1",
+            commands: "commands-1",
+          },
+          commands: [
+            {
+              name: "skill",
+              description: "Run skill",
+              source: "skill",
+              scope: "text",
+              acceptsArgs: true,
+            },
+          ],
           pendingInputs: {
             items: [
               {
@@ -187,6 +200,27 @@ describe("persistent chat session snapshots", () => {
       );
     },
   );
+
+  it("restores persisted startup state from before command receipts were added", async () => {
+    const sessionKey = key("agent:main:existing-snapshot");
+    await persist(writer, sessionKey, snapshot("initialize database"));
+    const previous: ChatSessionSnapshot = {
+      ...snapshot("Existing conversation"),
+      deltaCursor: "existing-cursor",
+      historyState: {
+        stateRevision: { pendingInputs: "inputs-1", sessionInfo: "info-1" },
+        pendingInputs: { items: [], total: 0 },
+        sessionInfo: {
+          key: "agent:main:existing-snapshot",
+          kind: "direct",
+          sessionId: "session-1",
+          updatedAt: 1,
+        },
+      },
+    };
+    await putRawRecord(envelope(sessionKey, previous));
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(previous);
+  });
 
   it("restores bounded sidebar facts with legacy defaults and strips live-only fields", async () => {
     const store = makeStore(undefined, true);
@@ -619,6 +653,39 @@ describe("persistent chat session snapshots", () => {
       }
     },
   );
+
+  it("retains persisted snapshots through a temporary database open failure", async () => {
+    const sessionKey = key("agent:main:temporary-open-failure");
+    const value = snapshot("Retained conversation");
+    writer.write(sessionKey, value);
+    await writer.flush();
+    vi.spyOn(indexedDB, "open").mockImplementationOnce(() => {
+      throw new DOMException("temporarily unavailable", "UnknownError");
+    });
+
+    const reader = new SessionSnapshotStore();
+    expect(await reader.read(sessionKey)).toBeNull();
+    expect(await reader.read(sessionKey)).toEqual(value);
+  });
+
+  it("rebuilds a missing snapshot store after a non-fatal read failure", async () => {
+    const request = indexedDB.open(DB, 8);
+    request.addEventListener("upgradeneeded", () => {
+      for (const name of [METADATA, SIDEBAR]) {
+        request.result.createObjectStore(name, { keyPath: "sessionKey" });
+      }
+    });
+    const database = await requestResult(request);
+    database.close();
+    const sessionKey = key("agent:main:missing-snapshot-store");
+    const store = new SessionSnapshotStore();
+    expect(await store.read(sessionKey)).toBeNull();
+
+    const value = snapshot("Rebuilt conversation");
+    store.write(sessionKey, value);
+    await store.flush();
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(value);
+  });
 
   it("keeps every operation non-fatal when IndexedDB is unavailable or throws", async () => {
     vi.stubGlobal("indexedDB", undefined);

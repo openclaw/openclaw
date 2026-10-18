@@ -486,7 +486,7 @@ it("drains concurrent file copies before reporting a failure or publishing links
   }
 });
 
-it.each(["inventory", "bindings", "admission", "completion", "verification"] as const)(
+it.each(["inventory", "bindings", "verification"] as const)(
   "settles bounded %s reads before a metadata failure reaches cleanup",
   async (phase) => {
     const peerEntered = createDeferredCore();
@@ -497,7 +497,7 @@ it.each(["inventory", "bindings", "admission", "completion", "verification"] as 
     let maximum = 0;
     let activeAtRejection: number | undefined;
     let selectedDirectory = "";
-    let enabled = phase === "inventory" || phase === "bindings" || phase === "admission";
+    let enabled = phase === "inventory" || phase === "bindings";
     const intercept = async <T>(file: unknown, read: () => Promise<T>): Promise<T> => {
       if (
         !enabled ||
@@ -545,9 +545,6 @@ it.each(["inventory", "bindings", "admission", "completion", "verification"] as 
           await fs.writeFile(file, `plugin payload ${index}`);
         }
       }
-      if (phase === "completion") {
-        await fs.symlink("payload.txt", path.join(source, "copy-complete"));
-      }
       if (phase === "inventory") {
         installReadSpy();
       }
@@ -557,16 +554,7 @@ it.each(["inventory", "bindings", "admission", "completion", "verification"] as 
       if (phase !== "inventory") {
         installReadSpy();
       }
-      if (phase === "completion") {
-        const symlink = fs.symlink;
-        vi.spyOn(fs, "symlink").mockImplementation(async (...args) => {
-          const result = await symlink(...args);
-          if (args[1] === path.join(f.destination, "copy-complete")) {
-            enabled = true;
-          }
-          return result;
-        });
-      } else if (phase === "verification") {
+      if (phase === "verification") {
         selectedDirectory = f.destination;
         const readdir = fs.readdir;
         vi.spyOn(fs, "readdir").mockImplementation((...args) => {

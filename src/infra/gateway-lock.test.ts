@@ -788,7 +788,7 @@ describe("gateway lock", () => {
         expect(scope?.ownsSchemaMaintenance).toBe(true);
         scope?.own({}, "shared-resources", close);
       });
-      const releases = [lock.release(), lock.releaseInTree(), lock.release()];
+      const releases = [lock.release(), lock.release(), lock.release()];
       try {
         await started.promise;
         await expect(contender()).rejects.toBeInstanceOf(GatewayLockError);
@@ -799,7 +799,7 @@ describe("gateway lock", () => {
         await Promise.all(releases);
       }
       expect(close).toHaveBeenCalledTimes(1);
-      await Promise.all([lock.release(), lock.releaseInTree()]);
+      await Promise.all([lock.release(), lock.release()]);
       expect(close).toHaveBeenCalledTimes(1);
       await expect(fs.access(lock.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(lock.stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -830,16 +830,5 @@ describe("gateway lock", () => {
       expect(closeShared).toHaveBeenCalledTimes(2);
       await (await contender())?.release();
     });
-  });
-
-  it("releases in-tree locks separately from Gateway lifecycle ownership", async () => {
-    const lock = expectGatewayLock(await acquireForTest(await makeEnv()));
-    try {
-      await lock.releaseInTree();
-      await fs.access(lock.lockPath);
-      await expect(fs.access(lock.stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await lock.release();
-    }
   });
 });

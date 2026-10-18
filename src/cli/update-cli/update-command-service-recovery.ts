@@ -245,7 +245,9 @@ export async function admitInstalledGatewayRecovery(
     !params.shouldRestart ||
     !params.preManagedServiceStop?.stopped ||
     databaseRollback?.exitCode === 0 ||
-    (!settlement && !databaseRollback) ||
+    // Normal Doctor completion needs no settlement receipt. The candidate's
+    // schema inspection below can still admit forward recovery after migration.
+    (!settlement && !databaseRollback && !params.candidateSchemaVersions) ||
     (result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "source-rollback-failed")
   ) {

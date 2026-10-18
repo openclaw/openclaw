@@ -577,6 +577,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     const peer = new Ws.WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`);
     await once(peer, "open");
     const [socket, request] = (await accepted) as [Ws.WebSocket, IncomingMessage];
+    const writes = vi.spyOn(request.socket, "write");
     try {
       const { clients } = attachGatewayWsForTest({
         attach: attachGatewayWsConnectionHandler,
@@ -608,7 +609,7 @@ describe("attachGatewayWsConnectionHandler", () => {
           usesSharedGatewayAuth: false,
         }),
       ).toBe(true);
-      const writes = vi.spyOn(request.socket, "_writev");
+      writes.mockClear();
       const received: unknown[] = [];
       const complete = createDeferred();
       peer.on("message", (data) => {
@@ -626,6 +627,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       broadcast("tick", { value: 2 });
       handler.send({ type: "res", id: "between", ok: true });
       broadcast("tick", { value: 3 });
+      expect([...clients][0]!.socket.bufferedAmount).toBeGreaterThan(0);
       await complete.promise;
       expect(received).toEqual([
         { type: "event", event: "tick", payload: { value: 1 }, seq: 1 },
@@ -634,6 +636,7 @@ describe("attachGatewayWsConnectionHandler", () => {
         { type: "event", event: "tick", payload: { value: 3 }, seq: 3 },
       ]);
       expect(writes).toHaveBeenCalledTimes(1);
+      expect(writes.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
     } finally {
       peer.terminate();
       socket.terminate();

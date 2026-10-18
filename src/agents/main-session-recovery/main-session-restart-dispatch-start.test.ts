@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { AgentTurnIo } from "../../gateway/agent-turn/types.js";
@@ -21,7 +22,7 @@ import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { createEmbeddedRunLaneController } from "../embedded-agent-runner/run/lane-controller.js";
 import type { RunEmbeddedAgentParams } from "../embedded-agent-runner/run/params.js";
-import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
+import { dispatchRestartRecoveryUntilStarted as dispatchRecovery } from "./main-session-restart-dispatch-start.js";
 
 const sessionKey = "agent:main:recovery-capacity";
 const sessionId = "recovery-session";
@@ -64,166 +65,162 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("restart recovery startup ownership", () => {
-  it.each([
-    "session queue",
-    "global queue",
-    "cached queue",
-    "runtime preparation",
-    "expired startup",
-  ] as const)("uses the registered startup owner during %s", async (stage) => {
-    const context = createDirectChatContext({ trackExecution: trackAsyncWork });
-    const runtime = createGatewayInstanceRuntime({
-      getContext: () => context,
-      getMethodRegistry: () => createGatewayMethodRegistry([]),
-      isDispatchAvailable: () => true,
-    });
-    const preparation = createDeferred();
-    const registered = createDeferred();
-    const finish = createDeferred();
-    const executionEntered = createDeferred();
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const timeoutMs = 60_000;
-    const registration = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
-      ...identity,
-      lifecycleGeneration,
-      kind: "agent",
-      timeoutMs,
-      expiresAtMs: resolveAgentRunExpiresAtMs({ now: Date.now(), timeoutMs }),
-    });
-    registerAgentRunContext(runId, { sessionKey, sessionId, lifecycleGeneration });
-    let params: RunEmbeddedAgentParams & { sessionFile: string } = {
-      admittedRunContext: createTestAdmittedRunContext(runId),
-      ...identity,
-      sessionFile: sessionKey,
-      lifecycleGeneration,
-      abortSignal: registration.controller.signal,
-      prompt: "continue after restart",
-      timeoutMs,
-      trigger: "user",
-      inputProvenance: {
-        kind: "internal_system",
-        sourceTool: MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL,
-      },
-      workspaceDir: "/tmp",
-    };
-    const lanes = createEmbeddedRunLaneController({
-      getLifecycleGeneration: () => lifecycleGeneration,
-      getParams: () => params,
-      globalLane,
-      initialQueuedLifecycleGeneration: lifecycleGeneration,
-      sessionLane,
-      setLifecycleGeneration: () => {},
-      setParams: (next) => {
-        params = next;
-      },
-    });
-    const blockedLane =
-      stage === "session queue"
-        ? sessionLane
-        : stage === "global queue" || stage === "cached queue"
-          ? globalLane
-          : undefined;
-    if (blockedLane) {
-      setCommandLaneConcurrency(blockedLane, 0);
-    }
-    let execution: Promise<void> | undefined;
-    startTurn.mockImplementation(({ io }) => {
-      execution = (async () => {
-        if (!registration.registered) {
-          throw new Error("expected a registered recovery owner");
-        }
-        if (stage !== "cached queue") {
-          io.emitStartOwner?.(runId, registration.entry);
-        }
-        registered.resolve();
-        if (stage === "runtime preparation" || stage === "expired startup") {
-          await preparation.promise;
-          registration.controller.signal.throwIfAborted();
-        }
-        io.emitAcceptance(
-          [true, { runId, status: stage === "cached queue" ? "in_flight" : "accepted" }, undefined],
-          { runId, ...(stage === "cached queue" ? { cached: true } : {}) },
-        );
-        await lanes.enqueueSession(() =>
-          lanes.enqueueGlobal(async () => {
-            registration.markExecutionStarted();
-            executionEntered.resolve();
-            if (stage !== "cached queue") {
-              io.emitExecutionStarted?.();
-            }
-            await finish.promise;
-            return { meta: { durationMs: 0 } };
-          }),
-        );
-        io.emitFinal([true, { runId, status: "ok" }, undefined], { runId });
-      })();
-      return execution;
-    });
-    const onSettled = vi.fn();
-    const recovery = dispatchRestartRecoveryUntilStarted({
-      agentParams: {
-        agentId: "main",
-        expectedExistingSessionId: sessionId,
-        idempotencyKey: runId,
-        message: "continue after restart",
-        sessionKey,
-      },
-      gatewayRuntime: runtime.recovery,
-      onSettled,
-    });
-    try {
-      await registered.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      if (blockedLane) {
-        expect(getCommandLaneSnapshot(blockedLane).queuedCount).toBe(1);
-      }
-      if (stage === "expired startup") {
-        await vi.advanceTimersByTimeAsync(120_000);
-        expect(registration.controller.signal.aborted).toBe(true);
-        await expect(recovery).resolves.toMatchObject({
-          kind: "failed",
-          observation: { executionStarted: false, preStartAbortConfirmed: true },
-        });
-        return;
-      }
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(registration.controller.signal.aborted).toBe(false);
-      preparation.resolve();
-      if (blockedLane) {
-        setCommandLaneConcurrency(blockedLane, 1);
-      }
-      if (stage === "cached queue") {
-        if (!execution) {
-          throw new Error("expected recovery execution to be registered");
-        }
-        await awaitGateBeforeSettlement(
-          executionEntered.promise,
-          execution,
-          "recovery execution settled before entering its task",
-        );
-        await vi.advanceTimersByTimeAsync(10_000);
-      }
-      expect(onSettled).not.toHaveBeenCalled();
-      await expect(recovery).resolves.toMatchObject({
-        kind: "started",
-        observation: { dispatchAccepted: true, executionStarted: true },
-      });
-    } finally {
-      preparation.resolve();
-      finish.resolve();
-      if (blockedLane) {
-        setCommandLaneConcurrency(blockedLane, 1);
-      }
-      await execution?.catch(() => {});
-      await recovery;
-      await vi.advanceTimersByTimeAsync(0);
-      if (stage !== "cached queue" && stage !== "expired startup") {
-        expect(onSettled).toHaveBeenCalledOnce();
-      }
-      registration.cleanup();
-      runtime.close();
-    }
+it.each([
+  "session queue",
+  "global queue",
+  "cached queue",
+  "runtime preparation",
+  "expired startup",
+] as const)("uses the registered startup owner during %s", async (stage) => {
+  const cached = stage === "cached queue";
+  const expired = stage === "expired startup";
+  const context = createDirectChatContext({ trackExecution: trackAsyncWork });
+  const runtime = createGatewayInstanceRuntime({
+    getContext: () => context,
+    getMethodRegistry: () => createGatewayMethodRegistry([]),
+    isDispatchAvailable: () => true,
   });
+  const preparation = createDeferred();
+  const registered = createDeferred();
+  const finish = createDeferred();
+  const executionEntered = createDeferred();
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const timeoutMs = 60_000;
+  const registration = registerChatAbortController({
+    chatAbortControllers: context.chatAbortControllers,
+    ...identity,
+    lifecycleGeneration,
+    kind: "agent",
+    timeoutMs,
+    expiresAtMs: resolveAgentRunExpiresAtMs({ now: Date.now(), timeoutMs }),
+  });
+  registerAgentRunContext(runId, { sessionKey, sessionId, lifecycleGeneration });
+  let params: RunEmbeddedAgentParams & { sessionFile: string } = {
+    admittedRunContext: createTestAdmittedRunContext(runId),
+    ...identity,
+    sessionFile: sessionKey,
+    lifecycleGeneration,
+    abortSignal: registration.controller.signal,
+    prompt: "continue after restart",
+    timeoutMs,
+    trigger: "user",
+    inputProvenance: {
+      kind: "internal_system",
+      sourceTool: MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL,
+    },
+    workspaceDir: "/tmp",
+  };
+  const lanes = createEmbeddedRunLaneController({
+    getLifecycleGeneration: () => lifecycleGeneration,
+    getParams: () => params,
+    globalLane,
+    initialQueuedLifecycleGeneration: lifecycleGeneration,
+    sessionLane,
+    setLifecycleGeneration: () => {},
+    setParams: (next) => {
+      params = next;
+    },
+  });
+  const blockedLane =
+    stage === "session queue"
+      ? sessionLane
+      : stage === "global queue" || cached
+        ? globalLane
+        : undefined;
+  if (blockedLane) {
+    setCommandLaneConcurrency(blockedLane, 0);
+  }
+  let execution: Promise<void> | undefined;
+  startTurn.mockImplementation(({ io }) => {
+    execution = (async () => {
+      assert(registration.registered, "expected a registered recovery owner");
+      if (!cached) {
+        io.emitStartOwner?.(runId, registration.entry);
+      }
+      registered.resolve();
+      if (stage === "runtime preparation" || expired) {
+        await preparation.promise;
+        registration.controller.signal.throwIfAborted();
+      }
+      io.emitAcceptance([true, { runId, status: cached ? "in_flight" : "accepted" }, undefined], {
+        runId,
+        ...(cached ? { cached: true } : {}),
+      });
+      await lanes.enqueueSession(() =>
+        lanes.enqueueGlobal(async () => {
+          registration.markExecutionStarted();
+          executionEntered.resolve();
+          if (!cached) {
+            io.emitExecutionStarted?.();
+          }
+          await finish.promise;
+          return { meta: { durationMs: 0 } };
+        }),
+      );
+      io.emitFinal([true, { runId, status: "ok" }, undefined], { runId });
+    })();
+    return execution;
+  });
+  const onSettled = vi.fn();
+  const recovery = dispatchRecovery({
+    agentParams: {
+      agentId: "main",
+      expectedExistingSessionId: sessionId,
+      idempotencyKey: runId,
+      message: "continue after restart",
+      sessionKey,
+    },
+    gatewayRuntime: runtime.recovery,
+    onSettled,
+  });
+  try {
+    await registered.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    if (blockedLane) {
+      expect(getCommandLaneSnapshot(blockedLane).queuedCount).toBe(1);
+    }
+    if (expired) {
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(registration.controller.signal.aborted).toBe(true);
+      await expect(recovery).resolves.toMatchObject({
+        kind: "failed",
+        observation: { executionStarted: false, preStartAbortConfirmed: true },
+      });
+      return;
+    }
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(registration.controller.signal.aborted).toBe(false);
+    preparation.resolve();
+    if (blockedLane) {
+      setCommandLaneConcurrency(blockedLane, 1);
+    }
+    if (cached) {
+      assert(execution, "expected recovery execution to be registered");
+      await awaitGateBeforeSettlement(
+        executionEntered.promise,
+        execution,
+        "recovery execution settled before entering its task",
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(onSettled).not.toHaveBeenCalled();
+    await expect(recovery).resolves.toMatchObject({
+      kind: "started",
+      observation: { dispatchAccepted: true, executionStarted: true },
+    });
+  } finally {
+    preparation.resolve();
+    finish.resolve();
+    if (blockedLane) {
+      setCommandLaneConcurrency(blockedLane, 1);
+    }
+    await execution?.catch(() => {});
+    await recovery;
+    await vi.advanceTimersByTimeAsync(0);
+    if (!cached && !expired) {
+      expect(onSettled).toHaveBeenCalledOnce();
+    }
+    registration.cleanup();
+    runtime.close();
+  }
 });

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
@@ -15,6 +15,7 @@ import {
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { withEnv } from "../../src/test-utils/env.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
 import {
   gatewayDatabaseWorkerTestFiles,
@@ -55,9 +56,10 @@ const VITEST_NODE_PREFIX = [
 ];
 
 describe("test-projects args", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeAll(() => {
     for (const target of [
-      "src/gateway/gateway-connection.test-mocks.ts",
       "extensions/memory-core/src/memory/test-runtime-mocks.ts",
       "test/helpers/temp-dir.ts",
       "src/commands/onboard-non-interactive.test-helpers.ts",
@@ -533,7 +535,21 @@ describe("test-projects args", () => {
   });
 
   it("routes non-test helper file targets to importing tests inside the routed suites", () => {
-    expect(buildVitestRunPlans(["src/gateway/gateway-connection.test-mocks.ts"])).toEqual([
+    const tempDir = tempDirs.make("openclaw-helper-routing-");
+    const helper = "src/gateway/gateway-connection.test-mocks.ts";
+    fs.mkdirSync(path.join(tempDir, "src/gateway"), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, "src/tui"), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, helper), "export const fixture = 1;\n");
+    fs.writeFileSync(
+      path.join(tempDir, "src/gateway/call.test.ts"),
+      'import { fixture } from "./gateway-connection.test-mocks.js";\nvoid fixture;\n',
+    );
+    fs.writeFileSync(
+      path.join(tempDir, "src/tui/gateway-chat.connection.test.ts"),
+      'import { fixture } from "../gateway/gateway-connection.test-mocks.js";\nvoid fixture;\n',
+    );
+
+    expect(buildVitestRunPlans([helper], tempDir)).toEqual([
       {
         config: "test/vitest/vitest.gateway.config.ts",
         forwardedArgs: [],

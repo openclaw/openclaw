@@ -165,7 +165,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   }
   const unsubscribePrivateAuditEvents = onAgentAuditEvent(auditRecorder.record);
   const unsubscribeToolAuditEvents = onTrustedToolExecutionEvent(auditRecorder.recordTool);
-  const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner(params.scheduler);
+  const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner();
   const agentEventDispatches = new Set<Promise<void>>();
   const eventRowOwners = new WeakMap<
     AgentEventRuntimePayload,

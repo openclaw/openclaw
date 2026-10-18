@@ -1631,10 +1631,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(registeredToolNames).toContain("message");
     expect(registeredToolNames).toContain("heartbeat_respond");
     expect(normalInstructions).not.toContain(
-      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
+      "Deferred searchable OpenClaw dynamic tools available: openclaw.heartbeat_respond",
     );
     expect(heartbeatInstructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond.",
+      "Deferred searchable OpenClaw dynamic tools available: openclaw.heartbeat_respond.",
     );
     for (const bridge of [normalBridge, heartbeatBridge, nextNormalBridge]) {
       const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(

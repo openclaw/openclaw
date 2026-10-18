@@ -88,7 +88,7 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
   async function search() {
     const client = context.gateway.snapshot.client;
     const selectedServer = serverSelect?.value ?? serverName();
-    if (!client || !selectedServer) {
+    if (!client || !catalog().available || !selectedServer) {
       return;
     }
     const searchGeneration = ++generation;
@@ -216,7 +216,7 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
                 }));
               }}
             />
-            <button class="btn" type="submit" disabled={view().busy}>
+            <button class="btn" type="submit" disabled={view().busy || !catalog().available}>
               {t("mcpApp.resourceSearch")}
             </button>
           </form>
@@ -226,7 +226,7 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
                 <button
                   type="button"
                   class="btn mcp-app-resources__result"
-                  disabled={view().busy}
+                  disabled={view().busy || !catalog().available}
                   onClick={() => attach(resource)}
                 >
                   <span>{resource.title || resource.name}</span>

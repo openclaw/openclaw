@@ -62,6 +62,10 @@ describe("interrupted assistant replies", () => {
       chatRunId: "stopped-run",
       chatStream: "Partial reply",
       chatStreamStartedAt: 100,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
       lastError: null,
       hello: null,
     };

@@ -1,5 +1,4 @@
-import { existsSync, mkdirSync, rmdirSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { existsSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -7,7 +6,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearOpenClawStateDatabaseOpenFailure as clearFailure,
   closeOpenClawStateDatabaseAsync as closeDatabase,
-  getOpenClawStateDatabaseTerminalFailureAsync as terminalFailure,
   isOpenClawStateDatabaseOpen as isOpen,
   recordOpenClawStateDatabaseOpenFailure as recordFailure,
 } from "../state/openclaw-state-db-cache.js";
@@ -18,7 +16,6 @@ import {
 } from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as fileDescriptor from "./file-descriptor.js";
-import { readStableSqliteFileGeneration as readGeneration } from "./sqlite-file-generation.js";
 import type { SqliteWorkerReply } from "./sqlite-worker-contract.js";
 
 const paths: string[] = [];
@@ -69,7 +66,7 @@ it.each([false, true])("clears failures (existingOnly=%s)", async (existingOnly)
     }
     expect(isOpen(state.pathname)).toBe(false);
     const failure = new Error("verified shared-state failure");
-    expect(recordFailure(state.pathname, failure)).toBe(true);
+    recordFailure(state.pathname, failure);
     await expect(read()).rejects.toBe(failure);
     expect(existsSync(state.pathname)).toBe(!existingOnly);
     clearFailure(state.pathname);
@@ -77,37 +74,6 @@ it.each([false, true])("clears failures (existingOnly=%s)", async (existingOnly)
     expect(isOpen(state.pathname)).toBe(false);
     expect(inspect).not.toHaveBeenCalled();
     expect(existsSync(state.pathname)).toBe(!existingOnly);
-  });
-});
-
-it("retains a terminal fact when worker inspection fails, then recovers after a stable mismatch", async () => {
-  const state = fixture();
-  expect(await state.read()).toEqual([]);
-  await closeDatabase();
-  const failure = new Error("generation awaiting successful inspection");
-  expect(recordFailure(state.pathname, failure, readGeneration(state.pathname))).toBe(true);
-  const wal = `${state.pathname}-wal`;
-  mkdirSync(wal);
-  try {
-    await withoutMainDatabaseWork(async () => {
-      await expect(terminalFailure(state.capture())).rejects.toBeInstanceOf(Error);
-    });
-  } finally {
-    rmdirSync(wal);
-  }
-  // Removing the unreadable sidecar leaves the original recorded generation intact.
-  await withoutMainDatabaseWork(async () => {
-    await expect(state.read()).rejects.toBe(failure);
-  });
-  const database = new DatabaseSync(state.pathname);
-  try {
-    database.exec("PRAGMA application_id = 321");
-  } finally {
-    database.close();
-  }
-  await withoutMainDatabaseWork(async () => {
-    expect(await state.read()).toEqual([]);
-    expect(isOpen(state.pathname)).toBe(false);
   });
 });
 

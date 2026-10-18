@@ -186,6 +186,10 @@ function* openOpenClawAgentDatabaseSteps(
   repairAdmission?: OpenClawAgentDatabaseRepairAdmission,
 ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
   const engineInput = agentEngineInput();
+  const integrityCheck = engineInput
+    ? undefined
+    : (repairAdmission?.integrityCheck ??
+      getOpenClawDatabaseMaintenanceScope()?.sqliteIntegrityCheck);
   if (engineInput) {
     assertEngineStoreExecutionAllowed();
   }
@@ -436,6 +440,8 @@ function* openOpenClawAgentDatabaseSteps(
           verification,
           isValidatedReopen && reuseAdmittedIntegrity,
           reusedSchema,
+          integrityCheck,
+          repairAdmission?.integrityTables ?? [],
         );
         assertCurrent(validationDatabase);
         if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {
@@ -465,7 +471,16 @@ function* openOpenClawAgentDatabaseSteps(
         finishPhase("configuration");
         assertCurrent(validationDatabase);
         if (!isValidatedReopen) {
-          ensureOpenClawAgentSchema(db, agentId, pathname);
+          ensureOpenClawAgentSchema(
+            db,
+            agentId,
+            pathname,
+            undefined,
+            undefined,
+            undefined,
+            false,
+            integrityCheck,
+          );
         }
         finishPhase("schema");
         selected = openAgentEngineStore(db, agentId, pathname);
@@ -518,7 +533,13 @@ function* openOpenClawAgentDatabaseSteps(
     ) {
       assertCurrent(database);
       registerOpenClawAgentDatabase(
-        { agentId, path: pathname, env: options.env, admittedDb: selected },
+        {
+          agentId,
+          path: pathname,
+          env: options.env,
+          // A temporary QUICK repair handle must not publish FULL runtime admission.
+          admittedDb: integrityCheck === "quick" ? undefined : selected,
+        },
         registrationObserver,
       );
     } else if (!reusedSchema) {

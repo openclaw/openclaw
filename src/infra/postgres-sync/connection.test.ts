@@ -254,7 +254,7 @@ describe("PostgreSQL bridge request correlation", () => {
               lockTimeoutMs: 60_000,
               statementTimeoutMs: 90_000,
             }),
-        ).toThrow("only synchronous admission and migrations may run on the main thread");
+        ).toThrow("PostgreSQL connections must run in a worker");
       } finally {
         anchor.close();
       }

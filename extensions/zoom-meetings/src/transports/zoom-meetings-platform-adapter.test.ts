@@ -71,18 +71,8 @@ function statusDocument(params: {
     params.microphone,
   ].filter((control): control is ReturnType<typeof pageControl> => Boolean(control));
   return {
-    body: { appendChild: () => {}, textContent: params.bodyText },
-    defaultView: {
-      Event: globalThis.Event,
-      HTMLInputElement: function HTMLInputElement() {
-        return undefined;
-      },
-      MutationObserver: function MutationObserver() {
-        return undefined;
-      },
-    },
+    body: { textContent: params.bodyText },
     title: "Zoom",
-    getElementById: () => undefined,
     querySelector(selector: string) {
       if (selector.includes("preview-join-button")) {
         return params.join;
@@ -143,12 +133,10 @@ async function runStatusFixture(params: {
     })})()`,
     {
       URL: globalThis.URL,
-      crypto: { randomUUID: () => "caption-id" },
       document: params.document,
       location: new globalThis.URL(params.currentUrl ?? URL),
       navigator: params.navigator ?? {},
       setTimeout,
-      clearTimeout,
       window: params.window ?? {},
     },
   );

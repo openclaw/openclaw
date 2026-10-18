@@ -118,10 +118,14 @@ describe("scoped session archive tools", () => {
                 );
                 expect(tool.parameters).toMatchObject({
                   properties: {
-                    action: { enum: ["patch", "assign_owner"] },
+                    action: { enum: expect.arrayContaining(["patch", "assign_owner"]) },
                     archived: { type: "boolean" },
                   },
                 });
+                expect(tool.parameters).not.toHaveProperty(
+                  "properties.action.enum",
+                  expect.arrayContaining(["stop"]),
+                );
                 expect(tool.parameters).not.toHaveProperty("properties.runId");
                 await expect(
                   tool.execute("collector-stop", { action: "stop", sessionKey: TARGET }),
@@ -153,14 +157,10 @@ describe("scoped session archive tools", () => {
             createOpenClawCodingTools(options).find((tool) => tool.name === "sessions"),
             "assignment-only tool",
           );
+          // The definition is the same for every caller; the archive call is refused.
           expect(assignment.parameters).toMatchObject({
-            properties: {
-              action: {
-                enum: caller === "session-writer" ? ["patch", "assign_owner"] : ["assign_owner"],
-              },
-            },
+            properties: { action: { enum: expect.arrayContaining(["patch", "assign_owner"]) } },
           });
-          expect(assignment.parameters).not.toHaveProperty("properties.archived");
           await expect(
             assignment.execute("no-archive", { action: "patch", archived: true }),
           ).rejects.toThrow(
@@ -445,7 +445,7 @@ describe("scoped session archive tools", () => {
                 );
                 expect(tool.parameters).toMatchObject({
                   properties: {
-                    action: { enum: ["patch", "stop", "assign_owner"] },
+                    action: { enum: expect.arrayContaining(["patch", "stop", "assign_owner"]) },
                     archived: { type: "boolean" },
                   },
                   required: ["action"],

@@ -304,10 +304,7 @@ function createSessionsResultFromRows(sessions: GatewaySessionRow[]): SessionsLi
   };
 }
 
-function createSettingsLaneHost(
-  patch: SessionPatchRoute,
-  refresh: () => Promise<void> = async () => {},
-) {
+function createSettingsLaneHost(patch: SessionPatchRoute) {
   const host = makeChatHost({
     requestHandlers: {},
     sessionKey: "main",
@@ -329,7 +326,6 @@ function createSettingsLaneHost(
     ]),
   });
   vi.spyOn(host.sessions, "patch").mockImplementation(patch);
-  vi.spyOn(host.sessions, "refresh").mockImplementation(refresh);
   onTestFinished(() => host.sessions.dispose());
   return host;
 }
@@ -3605,46 +3601,42 @@ describe("chat model controls", () => {
         label: "Workspace",
         authProfileId: profiles[0]!.profileId,
       };
-      const draw = () =>
-        renderModelControls(
-          state,
-          {
-            modelAuthStatusResult: status,
-            renderAccountSection: (model) =>
-              renderChatModelAccountControl({
-                owner: state,
-                client,
-                selection,
-                model,
-                modelAuthStatusResult: status,
-                disabled: false,
-                ownsSelection: () => true,
-                onSelect: vi.fn(),
-                onRequestUpdate: draw,
-              }),
-          },
-          container,
-        );
-      draw();
+      renderModelControls(
+        state,
+        {
+          modelAuthStatusResult: status,
+          renderAccountSection: (model) =>
+            renderChatModelAccountControl({
+              owner: state,
+              client,
+              selection,
+              model,
+              modelAuthStatusResult: status,
+              disabled: false,
+              ownsSelection: () => true,
+              onSelect: vi.fn(),
+            }),
+        },
+        container,
+      );
       expect(container.querySelector(".chat-controls__account-selection")?.textContent).toBe(
         "work@example.com · Sign in with ChatGPT",
       );
       container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      await vi.waitFor(() =>
-        expect(container.querySelectorAll("[data-chat-account-option]")).toHaveLength(count),
-      );
-      for (const [index, row] of [
-        ...container.querySelectorAll("[data-chat-account-option]"),
-      ].entries()) {
-        expect(row.querySelector(".chat-controls__model-option-name")?.textContent?.trim()).toBe(
-          profiles[index]!.displayName,
-        );
-        expect(row.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
-          profiles[index]!.email,
-        );
-        expect(row.textContent).not.toContain(profiles[index]!.profileId);
-      }
+      await vi.waitFor(() => {
+        const rows = [...container.querySelectorAll("[data-chat-account-option]")];
+        expect(rows).toHaveLength(count);
+        for (const [index, row] of rows.entries()) {
+          expect(row.querySelector(".chat-controls__model-option-name")?.textContent?.trim()).toBe(
+            profiles[index]!.displayName,
+          );
+          expect(row.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
+            profiles[index]!.email,
+          );
+          expect(row.textContent).not.toContain(profiles[index]!.profileId);
+        }
+      });
     },
   );
 
@@ -4443,11 +4435,9 @@ describe("chat model controls", () => {
           await options.waitFor;
         }
         patches.push(patch);
-        return patchResult;
-      },
-      async () => {
         reconciliationStarted.resolve();
         await releaseReconciliation.promise;
+        return patchResult;
       },
     );
 

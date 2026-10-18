@@ -19,7 +19,7 @@ installRealOtelSdkTestHarness();
 const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0]) =>
   emitTrustedDiagnosticEventWithPrivateData(event, {});
 
-test("exports trusted session retention gauges and clears them on retirement", async () => {
+test("exports trusted session retention gauges and wire baseline reset counts", async () => {
   const reader = new PeriodicExportingMetricReader({
     exporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
   });
@@ -37,7 +37,8 @@ test("exports trusted session retention gauges and clears them on retirement", a
         .filter(
           (metric) =>
             metric.descriptor.name.startsWith("openclaw.sessions.list.retained_") ||
-            metric.descriptor.name.startsWith("openclaw.session_event_rows_retained_"),
+            metric.descriptor.name.startsWith("openclaw.session_event_rows_retained_") ||
+            metric.descriptor.name === "openclaw.session_event_rows_reset",
         )
         .map(
           (metric) =>
@@ -54,6 +55,16 @@ test("exports trusted session retention gauges and clears them on retirement", a
   try {
     emit({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
     emit({ type: "sessions.event.retention", entries: 25_600, estimatedBytes: 24_985_600 });
+    for (const cause of [
+      "close",
+      "delivery-lost",
+      "generation",
+      "evicted",
+      "projection",
+    ] as const) {
+      emit({ type: "sessions.event.rows.reset", cause, count: 3 });
+      emit({ type: "sessions.event.rows.reset", cause, count: 2 });
+    }
     for (const emitUntrusted of [emitDiagnosticEvent, emitInternalDiagnosticEventForTest]) {
       emitUntrusted({
         type: "sessions.list.retention",
@@ -62,6 +73,7 @@ test("exports trusted session retention gauges and clears them on retirement", a
         estimatedBytes: 99_999,
       });
       emitUntrusted({ type: "sessions.event.retention", entries: 99_999, estimatedBytes: 99_999 });
+      emitUntrusted({ type: "sessions.event.rows.reset", cause: "close", count: 99 });
     }
     expect(await collectRetention()).toEqual({
       "openclaw.sessions.list.retained_views": {
@@ -84,12 +96,27 @@ test("exports trusted session retention gauges and clears them on retirement", a
         unit: "By",
         points: [{ attributes: {}, value: 24_985_600 }],
       },
+      "openclaw.session_event_rows_reset": {
+        unit: "1",
+        points: [
+          { attributes: { cause: "close" }, value: 5 },
+          { attributes: { cause: "delivery-lost" }, value: 5 },
+          { attributes: { cause: "generation" }, value: 5 },
+          { attributes: { cause: "evicted" }, value: 5 },
+          { attributes: { cause: "projection" }, value: 5 },
+        ],
+      },
     });
     emit({ type: "sessions.list.retention", views: 0, refs: 0, estimatedBytes: 0 });
     emit({ type: "sessions.event.retention", entries: 0, estimatedBytes: 0 });
     const cleared = await collectRetention();
-    expect(Object.keys(cleared)).toHaveLength(5);
-    for (const metric of Object.values(cleared)) {
+    expect(Object.keys(cleared)).toHaveLength(6);
+    for (const [name, metric] of Object.entries(cleared)) {
+      if (name === "openclaw.session_event_rows_reset") {
+        expect(metric.points).toHaveLength(5);
+        expect(metric.points.map(({ value }) => value)).toEqual([5, 5, 5, 5, 5]);
+        continue;
+      }
       expect(metric.points).toEqual([{ attributes: {}, value: 0 }]);
     }
   } finally {

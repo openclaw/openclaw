@@ -154,7 +154,6 @@ export async function patchSessionEntryInWorker(params: {
             params.guard?.assertCurrent?.();
           },
           beforeWrite() {},
-          async release() {},
         }),
     async run(worker, commit) {
       const prepared = input;

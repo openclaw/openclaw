@@ -91,6 +91,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       runDoctorConfigPreflight({
         retiredStateAdmitted: params.retiredStateAdmitted,
         stateSchemaPreparation: params.stateSchemaPreparation,
+        integrityCheck: params.options.fullIntegrityCheck ? "full" : "quick",
         observe: false,
         invocationPurpose: "doctor",
         repairPrefixedConfig: shouldRepair,

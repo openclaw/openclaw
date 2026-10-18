@@ -172,7 +172,7 @@ function harness(provider?: string) {
   onTestFinished(() => context.runtimeConfig.dispose());
   const state = createPageState(
     context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
+    { afterCommit: () => () => {} },
     {
       sessionKey,
       dispatchEvent: () => true,

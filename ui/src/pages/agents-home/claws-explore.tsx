@@ -173,6 +173,7 @@ export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => vo
                   <button
                     type="button"
                     class="btn btn--sm agents-home__claw-add oc-action oc-action-secondary"
+                    aria-label={t("clawsCatalog.addNamed", { name: entry().displayName })}
                     disabled={!entry().latestVersion}
                     onClick={() => props.onSelect?.(entry())}
                   >

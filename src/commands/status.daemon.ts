@@ -1,4 +1,3 @@
-// Daemon service summary helpers for status output.
 // Gateway and node service state share the same normalized shape.
 
 import { resolveNodeService } from "../daemon/node-service.js";

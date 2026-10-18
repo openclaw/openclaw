@@ -9,6 +9,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqli
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
+import * as bundledStamp from "../model-catalog/bundled-catalog-stamp.js";
 import { refreshRemoteModelCatalog } from "../model-catalog/remote-refresh.js";
 import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import { createHookRunner } from "../plugins/hooks.js";
@@ -41,6 +42,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) {
     await cleanup();
   }
+  vi.unstubAllGlobals();
 });
 async function prepareClosingGateway(signal: AbortSignal) {
   const name = "gateway-catalog-write-close";
@@ -112,6 +114,11 @@ it("persists accepted catalog writes before closing the state writer", async ({ 
     models: [{ id: "catalog-close", provider: "anthropic", pricing: { status: "unknown" } }],
   };
   context.holdCommand("modelCatalog.remote.write");
+  vi.spyOn(bundledStamp, "bundledCatalogGeneratedAt").mockReturnValue(bundle.generatedAt - 1);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify(bundle))),
+  );
   const refreshing = context.track(
     lifecycle.run((catalogSignal) =>
       refreshRemoteModelCatalog({
@@ -119,8 +126,6 @@ it("persists accepted catalog writes before closing the state writer", async ({ 
         force: true,
         signal: catalogSignal,
         databaseOptions: { env: fixture.state.env },
-        bundledGeneratedAt: () => bundle.generatedAt - 1,
-        fetchImpl: async () => new Response(JSON.stringify(bundle)),
       }),
     ),
   );

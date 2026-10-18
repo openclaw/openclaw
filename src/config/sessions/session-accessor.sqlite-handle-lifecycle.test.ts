@@ -13,6 +13,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
@@ -229,6 +230,15 @@ describe("SQLite session handle lifecycle", () => {
       }),
     ];
     await persist(messages);
+    runOpenClawAgentWriteTransaction((database) => {
+      database.db
+        .prepare(`UPDATE transcript_events
+          SET navigation_type = NULL, navigation_custom_type = NULL,
+              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+              navigation_last_custom_type = NULL, navigation_valid = 1
+          WHERE session_id = ?`)
+        .run(scope.sessionId);
+    }, databaseOptions());
     const facts = await withTranscriptWriteLock(scope, (transcript) =>
       transcript.readMessageFacts({
         idempotencyKeys: ["old-delivery"],

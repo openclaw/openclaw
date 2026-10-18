@@ -22,6 +22,7 @@ const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const mockGetCurrentPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
 
 let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").readBestEffortRuntimeConfigSchema;
+let loadGatewayConfigRedactionHints: typeof import("./runtime-schema.js").loadGatewayConfigRedactionHints;
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
 let invalidateGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").invalidateGatewayRuntimeConfigSchema;
 
@@ -148,6 +149,7 @@ beforeAll(async () => {
   ({
     readBestEffortRuntimeConfigSchema,
     loadGatewayRuntimeConfigSchema,
+    loadGatewayConfigRedactionHints,
     invalidateGatewayRuntimeConfigSchema,
   } = await import("./runtime-schema.js"));
 });
@@ -271,13 +273,21 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     "refreshes shared schema metadata after %s changes",
     (change) => {
       let config = explicitMainRoster();
-      loadGatewayRuntimeConfigSchema(config);
-      loadGatewayRuntimeConfigSchema(config);
+      const hints = loadGatewayConfigRedactionHints(config);
+      const response = loadGatewayRuntimeConfigSchema(config);
+      expect(loadGatewayConfigRedactionHints(config)).toBe(hints);
+      expect(loadGatewayRuntimeConfigSchema(config)).toBe(response);
       expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
 
       setGatewayPluginMetadataSnapshot(
         createPluginMetadataSnapshotFixture({
-          plugins: [{ id: "updated-plugin", configSchema: { type: "object" } }],
+          plugins: [
+            {
+              id: "updated-plugin",
+              configSchema: { type: "object" },
+              configUiHints: { credential: { sensitive: true } },
+            },
+          ],
         }),
       );
 
@@ -289,6 +299,10 @@ describe("loadGatewayRuntimeConfigSchema", () => {
         invalidateGatewayRuntimeConfigSchema();
       }
 
+      expect(
+        loadGatewayConfigRedactionHints(config)["plugins.entries.updated-plugin.config.credential"]
+          ?.sensitive,
+      ).toBe(true);
       expect(loadGatewayRuntimeConfigSchema(config).schema).toHaveProperty(
         "properties.plugins.properties.entries.properties.updated-plugin",
       );

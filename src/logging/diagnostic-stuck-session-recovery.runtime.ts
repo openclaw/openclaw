@@ -28,7 +28,10 @@ import {
   type StuckSessionRecoveryOutcome,
   type StuckSessionRecoveryRequest,
 } from "./diagnostic-session-recovery.js";
-import { isDiagnosticSessionStateCurrent } from "./diagnostic-session-state.js";
+import {
+  isDiagnosticSessionStateCurrent,
+  isIncognitoDiagnosticSession,
+} from "./diagnostic-session-state.js";
 
 const STUCK_SESSION_ABORT_SETTLE_MS = 15_000;
 const STUCK_SESSION_PROGRESS_STALE_MS = 5 * 60_000;
@@ -122,14 +125,19 @@ function formatRecoveryContext(
   ].join(" ");
 }
 
-function reportRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): StuckSessionRecoveryOutcome {
-  diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
-  return outcome;
-}
-
 export async function recoverStuckDiagnosticSession(
   params: StuckSessionRecoveryRequest,
 ): Promise<StuckSessionRecoveryOutcome> {
+  // Diagnostic aliases can retire while recovery awaits placement or run settlement.
+  const incognito = isIncognitoDiagnosticSession(params);
+  const reportRecoveryOutcome = (
+    outcome: StuckSessionRecoveryOutcome,
+  ): StuckSessionRecoveryOutcome => {
+    if (!incognito) {
+      diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+    }
+    return outcome;
+  };
   const key = resolveStuckSessionRecoveryRef(params);
   if (!key || recoveriesInFlight.has(key)) {
     return {
@@ -298,14 +306,14 @@ export async function recoverStuckDiagnosticSession(
           activeSessionId: recoverySessionId,
           activeWorkKind: "embedded_run",
         };
-        if (hasRunHandle) {
+        if (hasRunHandle && !incognito) {
           diag.warn(
             `stuck session recovery skipped: ${formatRecoveryContext(params, recoverySessionId)}`,
           );
         }
         return reportRecoveryOutcome(outcome);
       }
-      if (params.allowActiveAbort !== true) {
+      if (params.allowActiveAbort !== true && !incognito) {
         const work = hasRunHandle ? "run" : "reply work";
         diag.warn(
           `stuck session recovery reclaiming stale active ${work}: ${formatRecoveryContext(params, recoverySessionId)}`,
@@ -421,17 +429,19 @@ export async function recoverStuckDiagnosticSession(
     if (aborted || forceCleared || released > 0 || clearStaleSession) {
       retireStaleFollowupDrain?.();
       const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
-      void logWithSessionDiagnosticContext({
-        level: "warn",
-        sessionKey: params.sessionKey,
-        cronNameLabel: "stopped",
-        format: (stoppedFields) =>
-          `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${
-            params.sessionKey ?? "unknown"
-          } age=${Math.round(params.ageMs / 1000)}s action=${action} aborted=${aborted} drained=${drained} released=${released}${
-            stoppedFields ? ` ${stoppedFields}` : ""
-          }`,
-      });
+      if (!incognito) {
+        void logWithSessionDiagnosticContext({
+          level: "warn",
+          sessionKey: params.sessionKey,
+          cronNameLabel: "stopped",
+          format: (stoppedFields) =>
+            `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${
+              params.sessionKey ?? "unknown"
+            } age=${Math.round(params.ageMs / 1000)}s action=${action} aborted=${aborted} drained=${drained} released=${released}${
+              stoppedFields ? ` ${stoppedFields}` : ""
+            }`,
+        });
+      }
       return reportRecoveryOutcome(
         aborted || forceCleared
           ? {
@@ -479,11 +489,13 @@ export async function recoverStuckDiagnosticSession(
       sessionKey: params.sessionKey,
       error: String(err),
     };
-    diag.warn(
-      `stuck session recovery failed: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
-        params.sessionKey ?? "unknown"
-      } err=${String(err)}`,
-    );
+    if (!incognito) {
+      diag.warn(
+        `stuck session recovery failed: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
+          params.sessionKey ?? "unknown"
+        } err=${String(err)}`,
+      );
+    }
     return outcome;
   } finally {
     recoveriesInFlight.delete(key);

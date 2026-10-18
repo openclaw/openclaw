@@ -27,7 +27,7 @@ import {
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
-import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
+import { pickFallbackThinkingLevel } from "../embedded-agent-helpers/thinking.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
@@ -151,10 +151,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
       missingToolResultText: responsesApi ? "aborted" : undefined,
       allowedToolNames,
-      withCompactionPersistence: params.transcriptByteCompactionPersistence,
       withCompactionPersistenceAsync:
-        params.transcriptByteCompactionPersistenceAsync ??
-        accountingRecorder?.withCompactionPersistenceAsync,
+        params.seedCompaction ?? accountingRecorder?.withCompactionPersistenceAsync,
     });
     compactionSessionManager = sessionManager;
     const recordUsage = accountingRecorder?.recordUsage
@@ -457,7 +455,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             compactionKind: "server-endpoint",
           });
         };
-        const serverResult = params.transcriptBytePreflightAuthority
+        const serverResult = params.seedCompaction
           ? undefined
           : await attemptServerEndpointCompaction({
               trigger,

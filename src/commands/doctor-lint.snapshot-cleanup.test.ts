@@ -140,7 +140,7 @@ it("preserves detector failures when ordinary snapshot cleanup fails in human ou
       detect,
     },
   ]);
-  const { exitCode, output } = await runCleanupLint(
+  const { exitCode, output, runtime } = await runCleanupLint(
     { json: false, onlyIds: ["core/doctor/runtime-tool-schemas"] },
     {
       OPENCLAW_UPDATE_IN_PROGRESS: "0",
@@ -152,5 +152,7 @@ it("preserves detector failures when ordinary snapshot cleanup fails in human ou
   expect(exitCode).toBe(1);
   expect(output).toContain("[error] core/doctor/runtime-tool-schemas");
   expect(output).toContain("Authoritative detector fixture failure.");
-  expect(output).toContain("snapshot cleanup did not complete");
+  expect(runtime.error).toHaveBeenCalledWith(
+    expect.stringContaining("snapshot cleanup did not complete"),
+  );
 });

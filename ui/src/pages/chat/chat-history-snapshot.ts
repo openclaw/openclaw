@@ -48,7 +48,7 @@ export type ChatHistoryResult = {
   defaults?: GatewaySessionsDefaults;
   sessionInfo?: GatewaySessionRow;
   sessionInfoSnapshotAt?: number;
-  metadata?: ChatMetadataResult;
+  metadata?: Partial<ChatMetadataResult>;
   inFlightRun?: {
     runId: string;
     text?: string;
@@ -65,7 +65,7 @@ export type ChatHistoryDeltaResult = Omit<
 > & {
   sessionInfo?: GatewaySessionRow;
   inFlightRun?: ChatHistoryResult["inFlightRun"];
-  metadata?: ChatMetadataResult;
+  metadata?: Partial<ChatMetadataResult>;
 };
 
 export type { ChatHistoryResetResult };

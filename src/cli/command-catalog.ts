@@ -34,7 +34,12 @@ const serviceInstallStartupPolicy: CliCommandCatalogEntry["policy"] = {
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["setup"],
-    policy: { configGuard: "skip", loadPlugins: "never", ensureCliPath: false },
+    policy: {
+      configGuard: ({ argv, options }) =>
+        options?.reset === true || hasFlag(argv, "--reset") ? "defer" : "skip",
+      loadPlugins: "never",
+      ensureCliPath: false,
+    },
   },
   {
     commandPath: ["qa"],
@@ -526,7 +531,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["onboard"],
     exact: true,
-    policy: { loadPlugins: "never" },
+    policy: {
+      loadPlugins: "never",
+      configGuard: ({ argv, options }) =>
+        options?.reset === true || hasFlag(argv, "--reset") ? "defer" : "run",
+    },
   },
   ...[["recommendations"], ["recommendations", "acknowledge"], ["recommendations", "refresh"]].map(
     (path): CliCommandCatalogEntry => ({
@@ -544,7 +553,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["channels", "logs"],
     exact: true,
-    policy: { loadPlugins: "never", networkProxy: "bypass" },
+    policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
   },
   ...["remove", "resolve"].map((subcommand): CliCommandCatalogEntry => ({
     commandPath: ["channels", subcommand],

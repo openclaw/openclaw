@@ -1,4 +1,3 @@
-// ACP cleanup deadlines and fresh metadata preparation for Gateway reset/delete.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";

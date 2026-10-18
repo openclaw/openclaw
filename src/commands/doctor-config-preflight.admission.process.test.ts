@@ -98,11 +98,13 @@ type AdmissionCase = {
   unavailablePlugin?: boolean;
   selectedSession?: boolean;
   restored?: boolean;
+  redirected?: boolean;
   identityFile?: string;
   canonicalIdentity?: boolean;
 };
 it.each<[string, AdmissionCase]>([
   ["Config auto-restored from backup", { config: "clobbered", restored: true }],
+  ["Config auto-restored from backup", { config: "clobbered", restored: true, redirected: true }],
   ["Legacy workspace setup state requires migration", { config: "clobbered", workspace: true }],
   ["Legacy session store requires migration", { selectedSession: true }],
   ["Missing config", { config: "absent" }],
@@ -123,6 +125,7 @@ it.each<[string, AdmissionCase]>([
       unavailablePlugin,
       selectedSession,
       restored,
+      redirected,
       identityFile,
       canonicalIdentity,
     },
@@ -261,6 +264,11 @@ it.each<[string, AdmissionCase]>([
         if (${Boolean(restored)} && process.env.OPENCLAW_GATEWAY_TOKEN) {
           throw new Error("Discarded clobbered config environment leaked through admission.");
         }
+        if (${Boolean(redirected)} &&
+            (process.env.PGCLI_ADMISSION_BOOTSTRAP !== "retained" ||
+             process.env.PGCLI_ADMISSION_DOTENV !== "retained")) {
+          throw new Error("Config recovery discarded accepted routing or dotenv environment.");
+        }
         if (${Boolean(canonicalIdentity)}) {
           const { DatabaseSync } = await import("node:sqlite");
           const db = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });
@@ -280,6 +288,20 @@ it.each<[string, AdmissionCase]>([
           config === "clobbered" ? path.join(stateDir, "empty-workspace") : workspaceDir,
         OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
       };
+      if (redirected) {
+        fs.mkdirSync(path.join(root, ".openclaw"));
+        writeJson(path.join(root, ".openclaw", "openclaw.json"), {
+          env: {
+            vars: {
+              OPENCLAW_STATE_DIR: stateDir,
+              PGCLI_ADMISSION_BOOTSTRAP: "retained",
+            },
+          },
+        });
+        fs.writeFileSync(path.join(stateDir, ".env"), "PGCLI_ADMISSION_DOTENV=retained\n");
+        delete env.OPENCLAW_STATE_DIR;
+        delete env.OPENCLAW_CONFIG_PATH;
+      }
       const result = await runFixture(
         runtimeRoot,
         env,

@@ -47,6 +47,30 @@ type PreparedWorkerTranscript = {
 };
 
 const preparedWorkerTranscript = new AsyncLocalStorage<PreparedWorkerTranscript>();
+const admittedWorkerTranscript = new AsyncLocalStorage<{
+  target: BoundAgentRunSessionTarget;
+  assertCurrent: () => void;
+}>();
+
+/** Only the launching worker owner can attest setup before input consumption. */
+export function captureWorkerTurnInputSource(
+  identity: Pick<BoundAgentRunSessionTarget, "agentId" | "sessionKey" | "sessionId">,
+): SessionSourceAssertion {
+  const admitted = admittedWorkerTranscript.getStore();
+  if (
+    !admitted ||
+    admitted.target.agentId !== identity.agentId ||
+    admitted.target.sessionKey !== identity.sessionKey ||
+    admitted.target.sessionId !== identity.sessionId
+  ) {
+    throw new Error("Worker input requires current placement admission");
+  }
+  admitted.assertCurrent();
+  return composeSessionSourceAssertion([
+    admitted.assertCurrent,
+    captureWorkerTurnTranscriptSource(admitted.target),
+  ]);
+}
 
 /** Keep receipt-published facts alive from the worker read through the final effect. */
 async function prepareWorkerTranscript(
@@ -271,7 +295,10 @@ export async function withWorkerTurnTranscriptDatabase<T>(
     const originalSessionTarget = turn.sessionTarget;
     turn.sessionTarget = current;
     try {
-      return await run(current);
+      return await admittedWorkerTranscript.run(
+        { target: current, assertCurrent: () => controls.assertCurrent() },
+        () => run(current),
+      );
     } finally {
       turn.sessionTarget = originalSessionTarget;
     }

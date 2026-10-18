@@ -35,6 +35,7 @@ CREATE TABLE "github_publication_requests" (
   "created_at_ms" bigint NOT NULL,
   "updated_at_ms" bigint NOT NULL,
   "reported_at_ms" bigint,
+  "draft" bigint,
   PRIMARY KEY ("request_id"),
   CHECK ("owner_epoch" IS NULL OR ("owner_epoch" >= 1)),
   CHECK ("placement_generation" IS NULL OR ("placement_generation" >= 0)),

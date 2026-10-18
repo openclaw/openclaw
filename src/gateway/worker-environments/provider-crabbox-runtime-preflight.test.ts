@@ -10,7 +10,7 @@ import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../plugin-sdk/test-helpers/import-fresh.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
-import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import { createPluginStateKeyedStoreV2 } from "../../plugin-state/plugin-state-store.js";
 import { resolvePluginModuleExport } from "../../plugins/module-export.js";
 import * as support from "./service.test-support.js";
 
@@ -52,7 +52,8 @@ describe("Crabbox runtime preflight cleanup", () => {
         id: "crabbox",
         runtime: createPluginRuntimeMock({
           state: {
-            openKeyedStore: (options) => createPluginStateKeyedStore("crabbox", options),
+            openKeyedStoreV2: (options) =>
+              createPluginStateKeyedStoreV2("crabbox", options, { assertCurrent() {} }),
           },
         }),
         rootDir: fileURLToPath(new URL("../../../extensions/crabbox/", import.meta.url)),

@@ -4,6 +4,7 @@ import {
   resolveActiveEmbeddedRunSessionId,
 } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
+import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { isHeartbeatAcknowledgementText } from "../auto-reply/heartbeat.js";
 import {
@@ -235,7 +236,6 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     return skippedBusyStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
   }
 
-  // Phase 2: Stronger heartbeat deferral while a final delivery replay is pending.
   // Plain `updatedAt` changes are normal for heartbeat sessions and should not
   // suppress heartbeat runs; only defer when final delivery recovery is active.
   const { sessionKey: recentSessionKey, entry: recentSessionEntry } = await resolveHeartbeatSession(
@@ -529,6 +529,22 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
           sessionKey: staleIsolatedSessionKey,
         })
       : undefined;
+    // Keep usage/transcript lineage without adopting the predecessor's native thread.
+    // As with ordinary rollovers, reset the harness before replacing the entry.
+    const isolatedEntry = await readSessionEntryReadOnlyInWorker({
+      agentId,
+      storePath: isolatedStorePath,
+      sessionKey: isolatedSessionKey,
+    });
+    if (isolatedEntry?.sessionId) {
+      await resetRegisteredAgentHarnessSessions({
+        agentId,
+        sessionId: isolatedEntry.sessionId,
+        sessionKey: isolatedSessionKey,
+        sessionFile: isolatedSessionKey,
+        reason: "new",
+      });
+    }
     const removals: SessionEntryLifecycleRemoval[] = staleIsolatedSessionKey
       ? [
           {

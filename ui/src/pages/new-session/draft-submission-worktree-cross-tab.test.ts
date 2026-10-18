@@ -1,61 +1,68 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.ts";
 import * as toast from "../../lib/toast.ts";
+import {
+  holdPreferenceClear,
+  acceptIdlePlacement,
+  chooseModel,
+  resetWorktreeMocks,
+  startAcceptedWorktree,
+  acceptedNameWarning,
+  preferenceGate,
+} from "./draft-worktree-checks.test-support.ts";
 import { identityPreferences } from "./draft-worktree-preferences.test-support.ts";
 import {
   acceptedWorktreeSession,
+  disposeWorktreeDraft,
   readyPreferenceDraft,
   selectCloudWorktree,
 } from "./draft-worktree-submission.test-support.ts";
-import { renderControl } from "./model-control.test-support.ts";
 import { decodeIdentityPreferences } from "./preferences.ts";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  localStorage.clear();
-  sessionStorage.clear();
-});
+afterEach(resetWorktreeMocks);
+
+const acceptedWarnings = (warning: { mock: { calls: Parameters<typeof toast.showToast>[] } }) =>
+  warning.mock.calls.filter(
+    ([notice]) =>
+      typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
+  );
 
 const models = ["gpt-5.6-luna", "gpt-5.6-sol"].map((id) => ({ id, name: id, provider: "openai" }));
+const decodePreference = (entry: unknown) =>
+  decodeIdentityPreferences({ "new-session.v1:main": entry });
+const hasPreference = (entry: unknown, key: string, value: string) =>
+  entry !== null && typeof entry === "object" && Reflect.get(entry, key) === value;
+
+async function independentDrafts(prefs: ReturnType<typeof identityPreferences>, sequential = true) {
+  const first = sequential ? await readyPreferenceDraft(prefs) : prefs.make();
+  const next = prefs.make();
+  expect(first.context.gateway).not.toBe(next.context.gateway);
+  expect(first.context.gateway.snapshot.client).not.toBe(next.context.gateway.snapshot.client);
+  expect(first.context.gateway.snapshot.selfUser?.id).toBe(
+    next.context.gateway.snapshot.selfUser?.id,
+  );
+  if (!sequential) {
+    await prefs.ready(first);
+  }
+  await prefs.ready(next);
+  return { first, next };
+}
 
 it.each(["repository", "model", "empty base", "base before read"] as const)(
-  "reconciles concurrent independent draft intent: %s",
+  "reconciles independent intent: %s",
   async (change) => {
     const prefs = identityPreferences(
       true,
       change === "base before read" ? undefined : async () => ({ models }),
     );
-    const first = await readyPreferenceDraft(prefs);
-    const next = await readyPreferenceDraft(prefs);
-    expect(first.context.gateway).not.toBe(next.context.gateway);
-    expect(first.context.gateway.snapshot.client).not.toBe(next.context.gateway.snapshot.client);
-    expect(first.context.gateway.snapshot.selfUser?.id).toBe(
-      next.context.gateway.snapshot.selfUser?.id,
-    );
-    const started = createDeferred();
-    const release = createDeferred();
-    let held = false;
+    const { first, next } = await independentDrafts(prefs);
+    const { started, release, wait } = preferenceGate();
     if (change === "base before read") {
       vi.mocked(first.context.sessions.createResult).mockImplementation(async () => {
-        started.resolve();
-        await release.promise;
+        await wait();
         return acceptedWorktreeSession;
       });
     } else {
-      prefs.beforeSave.mockImplementation(async ({ entries }) => {
-        const entry = entries["new-session.v1:main"];
-        if (
-          !held &&
-          entry &&
-          typeof entry === "object" &&
-          "worktreeName" in entry &&
-          entry.worktreeName === ""
-        ) {
-          held = true;
-          started.resolve();
-          await release.promise;
-        }
-      });
+      holdPreferenceClear(prefs, true, { started, release });
       vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
     }
     const warning =
@@ -73,17 +80,7 @@ it.each(["repository", "model", "empty base", "base before read"] as const)(
         next.place.setWorktreeName("next-task");
       }
       if (change === "repository" || change === "model") {
-        const control = next.place.modelControl;
-        await vi.waitFor(() =>
-          expect(
-            renderControl(control, next.context).querySelector(
-              '[data-chat-model-option="openai/gpt-5.6-sol"]',
-            ),
-          ).not.toBeNull(),
-        );
-        renderControl(control, next.context)
-          .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')!
-          .click();
+        await chooseModel(next);
         await vi.waitFor(() =>
           expect(prefs.stored()).toMatchObject({
             model: "openai/gpt-5.6-sol",
@@ -109,19 +106,12 @@ it.each(["repository", "model", "empty base", "base before read"] as const)(
     expect(next.context.sessions.createResult).not.toHaveBeenCalled();
     expect(first.flow.error).toBeNull();
     if (warning) {
-      expect(
-        warning.mock.calls.filter(
-          ([notice]) =>
-            typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
-        ),
-      ).toEqual([]);
+      expect(acceptedWarnings(warning)).toEqual([]);
     }
     if (change === "model") {
       expect(prefs.stored()).toMatchObject({ worktreeName: "", model: "openai/gpt-5.6-sol" });
-      expect(decodeIdentityPreferences({ "new-session.v1:main": prefs.stored() })).toEqual(
-        decodeIdentityPreferences({
-          "new-session.v1:main": { ...(newer as object), worktreeName: "" },
-        }),
+      expect(decodePreference(prefs.stored())).toEqual(
+        decodePreference({ ...(newer as object), worktreeName: "" }),
       );
     } else {
       expect(prefs.stored()).toEqual(newer);
@@ -133,46 +123,25 @@ it.each(["repository", "model", "empty base", "base before read"] as const)(
 );
 
 it.each(["accepted clear", "ordinary edit"] as const)(
-  "bounds contention for %s without replaying creation",
+  "bounds %s contention without replaying creation",
   async (operation) => {
     const prefs = identityPreferences();
-    const first = await readyPreferenceDraft(prefs);
-    const next = await readyPreferenceDraft(prefs);
+    const { first, next } = await independentDrafts(prefs);
     const accepted = operation === "accepted clear";
     let attempts = 0;
     prefs.beforeSave.mockImplementation(async ({ entries }) => {
       const entry = entries["new-session.v1:main"];
-      if (
-        entry &&
-        typeof entry === "object" &&
-        (accepted
-          ? "worktreeName" in entry && entry.worktreeName === ""
-          : "baseRef" in entry && entry.baseRef === "release")
-      ) {
+      if (hasPreference(entry, accepted ? "worktreeName" : "baseRef", accepted ? "" : "release")) {
         attempts += 1;
         await prefs.publish(next, { thinkingLevel: `concurrent-${attempts}` });
       }
     });
     const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
     if (accepted) {
-      vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
-      first.flow.setMessage("first task");
-      await first.flow.submit(undefined, true);
+      await startAcceptedWorktree(first);
       expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
       expect(first.flow.error).toBeNull();
-      expect(
-        warning.mock.calls.filter(
-          ([notice]) =>
-            typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
-        ),
-      ).toEqual([
-        [
-          {
-            message:
-              "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
-          },
-        ],
-      ]);
+      expect(acceptedWarnings(warning)).toEqual([[acceptedNameWarning]]);
     } else {
       const writes = vi.spyOn(first.gateway, "persistPreference");
       first.place.setBaseRef("release");
@@ -193,25 +162,16 @@ it.each(["accepted clear", "ordinary edit"] as const)(
 );
 
 it.each(["explicit", "implicit", "cleared"] as const)(
-  "reconciles a restored creating placement with an %s base without guessing newer intent",
+  "restores creating placement with %s base",
   async (base) => {
     const prefs = identityPreferences();
     let first = await readyPreferenceDraft(prefs);
-    const independent = base === "cleared" ? prefs.make() : undefined;
-    if (independent) {
-      await prefs.ready(independent);
-    }
-    const dispose = (fixture: typeof first) => {
-      fixture.gateway.disconnect();
-      fixture.place.browser.disconnect();
-      fixture.flow.disconnect();
-    };
+    const independent = base === "cleared" ? await readyPreferenceDraft(prefs) : undefined;
     if (base === "implicit") {
       first.place.setBaseRef("");
       await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ baseRef: "" }));
-      dispose(first);
-      first = prefs.make();
-      await prefs.ready(first);
+      disposeWorktreeDraft(first);
+      first = await readyPreferenceDraft(prefs);
       expect(first.place.baseRef).toBe("");
     }
     selectCloudWorktree(first);
@@ -226,20 +186,17 @@ it.each(["explicit", "implicit", "cleared"] as const)(
     } else {
       expect(original).toHaveProperty("worktreeBaseRef", "main");
     }
-    dispose(first);
+    disposeWorktreeDraft(first);
     if (independent) {
       independent.place.setBaseRef("");
       await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ baseRef: "" }));
-      dispose(independent);
+      disposeWorktreeDraft(independent);
     }
     const retained = structuredClone(prefs.stored());
     const retry = await readyPreferenceDraft(prefs, first.context.gateway);
     const start = vi.fn();
     retry.context.placementStartup.start = start;
-    vi.mocked(retry.context.sessions.createResult).mockImplementation(async (params) => ({
-      key: params!.key!,
-      initialRun: { status: "idle" },
-    }));
+    acceptIdlePlacement(retry);
     const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
     await retry.flow.submit(undefined, true);
     expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(original, {
@@ -249,80 +206,40 @@ it.each(["explicit", "implicit", "cleared"] as const)(
     expect(retry.flow.error).toBeNull();
     if (base !== "cleared") {
       expect(prefs.stored()).toMatchObject({ worktreeName: "" });
-      expect(
-        warning.mock.calls.filter(
-          ([notice]) =>
-            typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
-        ),
-      ).toEqual([]);
+      expect(acceptedWarnings(warning)).toEqual([]);
     } else {
       expect(prefs.stored()).toEqual(retained);
-      expect(
-        warning.mock.calls.filter(
-          ([notice]) =>
-            typeof notice.message === "string" && notice.message.startsWith("Session accepted,"),
-        ),
-      ).toHaveLength(1);
+      expect(acceptedWarnings(warning)).toHaveLength(1);
     }
   },
 );
 
-it("keeps an accepted name retired when an older independent model save commits last", async () => {
+it("keeps accepted names retired when older model saves commit last", async () => {
   const prefs = identityPreferences(true, async () => ({ models }));
-  const first = prefs.make();
-  const next = prefs.make();
-  expect(first.context.gateway).not.toBe(next.context.gateway);
-  expect(first.context.gateway.snapshot.client).not.toBe(next.context.gateway.snapshot.client);
-  expect(first.context.gateway.snapshot.selfUser?.id).toBe(
-    next.context.gateway.snapshot.selfUser?.id,
-  );
-  await prefs.ready(first);
-  await prefs.ready(next);
-  const modelSaveStarted = createDeferred();
-  const releaseModelSave = createDeferred();
+  const { first, next } = await independentDrafts(prefs, false);
+  const modelSave = preferenceGate();
   let heldModelSave = false;
   prefs.beforeSave.mockImplementation(async (params) => {
     const entry = params.entries["new-session.v1:main"];
-    if (
-      !heldModelSave &&
-      entry &&
-      typeof entry === "object" &&
-      "model" in entry &&
-      entry.model === "openai/gpt-5.6-sol"
-    ) {
+    if (!heldModelSave && hasPreference(entry, "model", "openai/gpt-5.6-sol")) {
       heldModelSave = true;
       expect(entry).toMatchObject({ worktreeName: "first-task" });
-      modelSaveStarted.resolve();
-      await releaseModelSave.promise;
+      await modelSave.wait();
     }
   });
   const writes = vi.spyOn(next.gateway, "persistPreference");
-  const control = next.place.modelControl;
-  await vi.waitFor(() =>
-    expect(
-      renderControl(control, next.context).querySelector(
-        '[data-chat-model-option="openai/gpt-5.6-sol"]',
-      ),
-    ).not.toBeNull(),
-  );
-  renderControl(control, next.context)
-    .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')!
-    .click();
+  await chooseModel(next);
   try {
-    await modelSaveStarted.promise;
-    vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
-    first.flow.setMessage("first task");
-    await first.flow.submit(undefined, true);
+    await modelSave.started.promise;
+    await startAcceptedWorktree(first);
     expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
     expect(first.flow.error).toBeNull();
     expect(prefs.stored()).toMatchObject({ worktreeName: "" });
   } finally {
-    releaseModelSave.resolve();
+    modelSave.release.resolve();
     await Promise.all(writes.mock.results.map((result) => result.value));
   }
   expect(next.context.sessions.createResult).not.toHaveBeenCalled();
   expect(prefs.stored()).toMatchObject({ model: "openai/gpt-5.6-sol" });
-  expect(
-    decodeIdentityPreferences({ "new-session.v1:main": prefs.stored() }).main?.worktreeName,
-  ).toBeUndefined();
+  expect(decodePreference(prefs.stored()).main?.worktreeName).toBeUndefined();
 });

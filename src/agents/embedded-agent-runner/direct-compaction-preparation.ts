@@ -31,6 +31,7 @@ import {
 import { resolveSandboxContext } from "../sandbox.js";
 import { withSandboxRuntimeStatusInWorker } from "../sandbox/runtime-status.js";
 import type { SandboxContext } from "../sandbox/types.js";
+import type { CompactionAppendPersistenceAsync } from "../sessions/session-compaction-persistence.js";
 import { classifyCompactionReason } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "./compaction-runtime-context.js";
@@ -41,18 +42,12 @@ import {
 import { log } from "./logger.js";
 import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
-import type {
-  TranscriptByteCompactionPersistence,
-  TranscriptByteCompactionPersistenceAsync,
-} from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSessionParams & {
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
   requestedRouteResolution?: "resolved";
-  transcriptBytePreflightAuthority?: true;
-  transcriptByteCompactionPersistence?: TranscriptByteCompactionPersistence;
-  transcriptByteCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync;
+  seedCompaction?: CompactionAppendPersistenceAsync;
   sandbox?: SandboxContext | null;
 };
 

@@ -38,8 +38,8 @@ import {
   setChatRunOwner,
 } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
-import type { ToolStreamHost } from "./tool-stream-contract.ts";
-import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
+import type { ToolStreamHost, ToolStreamState } from "./tool-stream-contract.ts";
+import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
@@ -89,19 +89,20 @@ export type LocalTerminalReconcile = {
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
-type RunLifecycleHost = Omit<Partial<ToolStreamHost>, "sessions"> & {
-  sessionKey: string;
-  chatRunError?: ChatRunError | null;
-  chatRunLifecycleGeneration?: number;
-  chatRunSessionAbortable?: boolean;
-  compactionClearTimer?: TimerHandle | number | null;
-  fallbackClearTimer?: TimerHandle | number | null;
-  chatRunStatus?: ChatRunUiStatus | null;
-  chatRunStatusClearTimer?: TimerHandle | number | null;
-  sessionsResult?: SessionsListResult | null;
-  sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal">>;
-  lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
-};
+type RunLifecycleHost = ToolStreamState &
+  Omit<Partial<ToolStreamHost>, "sessions"> & {
+    sessionKey: string;
+    chatRunError?: ChatRunError | null;
+    chatRunLifecycleGeneration?: number;
+    chatRunSessionAbortable?: boolean;
+    compactionClearTimer?: TimerHandle | number | null;
+    fallbackClearTimer?: TimerHandle | number | null;
+    chatRunStatus?: ChatRunUiStatus | null;
+    chatRunStatusClearTimer?: TimerHandle | number | null;
+    sessionsResult?: SessionsListResult | null;
+    sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal">>;
+    lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
+  };
 
 type ReconcileOptions = {
   outcome?: ChatRunUiStatus["phase"];
@@ -140,6 +141,7 @@ type ChatAbortHost = ChatAbortRunState &
   ChatInputHistoryState & {
     pendingAbort?: PendingChatAbort | null;
     chatReplyTarget?: ChatReplyTarget | null;
+    composerDraftChanged?: () => void;
     sessions?: Partial<Pick<SessionCapability, "deletionState">>;
   };
 
@@ -379,6 +381,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
     host.chatMentions = [];
     host.chatReplyTarget = null;
     resetChatInputHistoryNavigation(host);
+    host.composerDraftChanged?.();
   }
   if (pendingAbort) {
     host.pendingAbort = pendingAbort;
@@ -529,12 +532,10 @@ function applyChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions
     host.chatRunId = null;
     host.chatRunSessionAbortable = undefined;
   }
-  if (canResetToolStream(host)) {
-    if (options.clearToolStream) {
-      resetToolStream(host);
-    } else if (options.clearToolStreamForRun && runId) {
-      resetToolStreamRun(host, runId);
-    }
+  if (options.clearToolStream) {
+    resetToolStream(host);
+  } else if (options.clearToolStreamForRun && runId) {
+    resetToolStreamRun(host, runId);
   }
   if (options.outcome) {
     const status: ChatRunUiStatus = {
