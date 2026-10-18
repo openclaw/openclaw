@@ -16,7 +16,7 @@ import {
 
 type EntrySample = { id: number; kind: string; y: number; height: number };
 type TimedEntrySample = EntrySample & { time: number };
-type EntryFrame = { time: number; samples: EntrySample[]; scrollTop: number | undefined };
+type EntryFrame = { time: number; samples: EntrySample[] };
 type EntryRecorder = { enabled: boolean; done: boolean; frames: EntryFrame[] };
 const homeKey = "agent:main:main";
 const entryKey = "agent:main:entry-proof";
@@ -65,58 +65,59 @@ function recordEntryFrames({ target, enabled, lastEntryId }: RecorderOptions) {
     if (recorder.done) {
       return;
     }
-    if (recorder.enabled) {
-      const panes = document.querySelectorAll<HTMLElement & { sessionKey: string }>(
-        "openclaw-chat-pane",
-      );
-      const pane = Array.from(panes).find(
-        (el) => el.sessionKey === target && el.getBoundingClientRect().height > 0,
-      );
-      const thread = pane?.querySelector<HTMLElement>(".chat-thread");
-      const viewport = thread?.getBoundingClientRect();
-      const elements = [
-        document.querySelector(".shell"),
-        ...(pane?.querySelectorAll(".chat-pane__header, .chat, .chat-bubble[data-entry-id]") ?? []),
-      ];
-      const samples: EntrySample[] = [];
-      for (const element of elements) {
-        // Layout boxes alone do not prove that pixels were painted.
-        if (!element?.checkVisibility(visibility)) {
-          continue;
-        }
-        const rect = element.getBoundingClientRect();
-        const entryId = element.getAttribute("data-entry-id");
-        if (
-          !rect.height ||
-          (entryId && (!viewport || rect.bottom <= viewport.top || rect.top >= viewport.bottom))
-        ) {
-          continue;
-        }
-        let id = ids.get(element);
-        if (id === undefined) {
-          id = ++nextId;
-          ids.set(element, id);
-        }
-        const kind = entryId ?? element.className;
-        samples.push({ id, kind, y: rect.y, height: rect.height });
-        if (entryId === lastEntryId) {
-          lastEntryPaintedAt ??= time;
-          lastEntryPaintedFrames += 1;
-        }
+    requestAnimationFrame(tick);
+    if (!recorder.enabled) {
+      return;
+    }
+    const panes = document.querySelectorAll<HTMLElement & { sessionKey: string }>(
+      "openclaw-chat-pane",
+    );
+    const pane = Array.from(panes).find(
+      (el) => el.sessionKey === target && el.getBoundingClientRect().height > 0,
+    );
+    const thread = pane?.querySelector<HTMLElement>(".chat-thread");
+    const viewport = thread?.getBoundingClientRect();
+    const elements = [
+      document.querySelector(".shell"),
+      ...(pane?.querySelectorAll(".chat-pane__header, .chat, .chat-bubble[data-entry-id]") ?? []),
+    ];
+    const samples: EntrySample[] = [];
+    for (const element of elements) {
+      // Layout boxes alone do not prove that pixels were painted.
+      if (!element?.checkVisibility(visibility)) {
+        continue;
       }
-      if (samples.length) {
-        recorder.frames.push({ time, samples, scrollTop: thread?.scrollTop });
-      }
-      // Include the first paint and outlast the 300 ms entry animation.
+      const rect = element.getBoundingClientRect();
+      const entryId = element.getAttribute("data-entry-id");
       if (
-        lastEntryPaintedAt !== undefined &&
-        time - lastEntryPaintedAt >= 750 &&
-        lastEntryPaintedFrames >= 10
+        !rect.height ||
+        (entryId && (!viewport || rect.bottom <= viewport.top || rect.top >= viewport.bottom))
       ) {
-        recorder.done = true;
+        continue;
+      }
+      let id = ids.get(element);
+      if (id === undefined) {
+        id = ++nextId;
+        ids.set(element, id);
+      }
+      const kind = entryId ?? element.className;
+      samples.push({ id, kind, y: rect.y, height: rect.height });
+      if (entryId === lastEntryId) {
+        lastEntryPaintedAt ??= time;
+        lastEntryPaintedFrames += 1;
       }
     }
-    requestAnimationFrame(tick);
+    if (samples.length) {
+      recorder.frames.push({ time, samples });
+    }
+    // Include the first paint and outlast the 300 ms entry animation.
+    if (
+      lastEntryPaintedAt !== undefined &&
+      time - lastEntryPaintedAt >= 750 &&
+      lastEntryPaintedFrames >= 10
+    ) {
+      recorder.done = true;
+    }
   };
   requestAnimationFrame(tick);
 }
@@ -124,26 +125,23 @@ function recordEntryFrames({ target, enabled, lastEntryId }: RecorderOptions) {
 function assertEntryFrames(frames: EntryFrame[], lastEntryId: string) {
   expect(frames.length).toBeGreaterThanOrEqual(10);
   const samplesById = new Map<number, [TimedEntrySample, ...TimedEntrySample[]]>();
-  for (const frame of frames) {
-    for (const sample of frame.samples) {
-      const timedSample = { ...sample, time: frame.time };
-      const samples = samplesById.get(sample.id);
-      if (samples) {
-        samples.push(timedSample);
+  for (const { time, samples } of frames) {
+    for (const sample of samples) {
+      const timed = { ...sample, time };
+      const trace = samplesById.get(sample.id);
+      if (trace) {
+        trace.push(timed);
       } else {
-        samplesById.set(sample.id, [timedSample]);
+        samplesById.set(sample.id, [timed]);
       }
     }
   }
   const observed = Array.from(samplesById.values());
   for (const kind of ["chat-pane__header", "chat", "shell", lastEntryId]) {
     const samples = observed.find((rows) => rows[0].kind.split(" ").includes(kind));
-    expect(samples, `missing painted ${kind}`).toBeDefined();
-    expect(samples!.length, `${kind} frame coverage`).toBeGreaterThanOrEqual(10);
-    expect(
-      samples!.at(-1)!.time - samples![0].time,
-      `${kind} observation duration`,
-    ).toBeGreaterThanOrEqual(700);
+    expect(samples?.length, `${kind} painted frame coverage`).toBeGreaterThanOrEqual(10);
+    const duration = samples!.at(-1)!.time - samples![0].time;
+    expect(duration, `${kind} observation duration`).toBeGreaterThanOrEqual(700);
   }
   expect(
     observed.filter((rows) => rows[0].kind.startsWith("entry-")).length,
@@ -186,16 +184,15 @@ suite.define(() => {
           }));
           const gateway = await installMockGateway(page, {
             sessionKey: target,
-            sessionTranscripts: {
-              [target]: { messages },
-              ...(entry === "sidebar"
+            sessionTranscripts:
+              entry === "sidebar"
                 ? {
                     [homeKey]: {
                       messages: [{ role: "assistant", content: [text(chooseSession)] }],
                     },
+                    [target]: { messages },
                   }
-                : {}),
-            },
+                : { [target]: { messages } },
             sessions: [
               { key: homeKey, label: "Home", kind: "direct", updatedAt: 1000 },
               { key: entryKey, label: "Entry proof", kind: "direct", updatedAt: 2000 },

@@ -108,9 +108,7 @@ const suite = createControlUiE2eSuite({
       return { baseUrl: "http://127.0.0.1:" + owner.port + "/", close: () => owner.cleanup() };
     } catch (error) {
       await runQaGatewayFixture(
-        async () => {
-          throw error;
-        },
+        () => Promise.reject(error),
         () => owner.cleanup(),
       );
       throw error;
@@ -178,13 +176,11 @@ suite.define(() => {
         });
         const servedAssets: { url: string; sha256: string }[] = [];
         page.on("response", (response) => {
-          if (/\/assets\/index-[^/]+\.js$/.test(new URL(response.url()).pathname)) {
-            void response.body().then((bytes) =>
-              servedAssets.push({
-                url: new URL(response.url()).pathname,
-                sha256: sha256(bytes),
-              }),
-            );
+          const assetUrl = new URL(response.url()).pathname;
+          if (/\/assets\/index-[^/]+\.js$/.test(assetUrl)) {
+            void response
+              .body()
+              .then((bytes) => servedAssets.push({ url: assetUrl, sha256: sha256(bytes) }));
           }
         });
         await page.goto(url.toString());

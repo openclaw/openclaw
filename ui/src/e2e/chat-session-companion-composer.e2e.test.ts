@@ -8,7 +8,7 @@ import {
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { captureUiProofEnabled } from "./chat-flow.test-support.ts";
+import { captureUiProofEnabled, confirmIme } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -62,12 +62,8 @@ async function dropSideChatImage(composer: Locator, fileName: string) {
   return image;
 }
 
-function composerGeometry(composer: Locator) {
-  return composer.evaluate((element) => ({
-    height: element.getBoundingClientRect().height,
-    clientWidth: element.clientWidth,
-    scrollWidth: element.scrollWidth,
-  }));
+function composerHeight(composer: Locator) {
+  return composer.evaluate((element) => element.getBoundingClientRect().height);
 }
 
 function screenshot(page: Page, name: string, animations: "allow" | "disabled" = "allow") {
@@ -150,69 +146,50 @@ suite.define(() => {
     },
   );
 
-  it("wraps and grows a question, keeps Shift+Enter, then sends and shrinks", async () => {
-    await withSideChat(async (gateway, composer, page) => {
-      const capture = screenshot(page, "chat-session-companion-composer");
-      const empty = await composerGeometry(composer);
-      await capture("empty.png");
-
-      const question = "Explain the next step and remaining checks. ".repeat(6).trim();
-      await composer.fill(question);
-      const filled = await composerGeometry(composer);
-      await capture("wrapped.png");
-      expect(filled.scrollWidth).toBeLessThanOrEqual(filled.clientWidth);
-      expect(filled.height).toBeGreaterThan(empty.height);
-
-      await composer.press("End");
-      await composer.press("Shift+Enter");
-      await page.keyboard.type("Include the final verification.");
-      const multiline = `${question}\nInclude the final verification.`;
-      expect(await composer.inputValue()).toBe(multiline);
-      expect(await gateway.getRequests(ask)).toHaveLength(0);
-
-      const confirmationConsumed = await composer.evaluate((textarea) => {
-        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-        const end = new CompositionEvent("compositionend", { bubbles: true });
-        textarea.dispatchEvent(end);
-        const confirm = new KeyboardEvent("keydown", {
-          key: "Enter",
-          keyCode: 13,
-          bubbles: true,
-          cancelable: true,
-        });
-        Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
-        textarea.dispatchEvent(confirm);
-        return confirm.defaultPrevented;
-      });
-      await capture("ime-confirmation.png");
-      expect(confirmationConsumed).toBe(false);
-      expect(await composer.inputValue()).toBe(multiline);
-      expect(await gateway.getRequests(ask)).toHaveLength(0);
-      await composer.dispatchEvent("keyup", { key: "Enter" });
-      await composer.press("Enter");
-      const request = await gateway.waitForRequest(ask);
-      expect(request.params).toMatchObject({ question: multiline });
-      await expect.poll(() => composer.inputValue()).toBe("");
-      await expect.poll(async () => (await composerGeometry(composer)).height).toBe(empty.height);
-      await capture("cleared.png");
-    });
-  });
-
-  it.each(["Control", "Meta"])(
-    "uses %s+Enter to send when the configured shortcut requires a modifier",
-    async (modifier) => {
-      await withSideChat(async (gateway, composer, page) => {
-        await composer.fill("Explain the next step.");
-        await composer.press("Enter");
-        await page.keyboard.type("Include the checks.");
-        const question = "Explain the next step.\nInclude the checks.";
-        expect(await composer.inputValue()).toBe(question);
-        expect(await gateway.getRequests(ask)).toHaveLength(0);
-        await composer.press(`${modifier}+Enter`);
-        const request = await gateway.waitForRequest(ask);
-        expect(request.params).toMatchObject({ question });
-        await expect.poll(() => composer.inputValue()).toBe("");
-      }, "modifier-enter");
+  it.each(["Enter", "Control+Enter", "Meta+Enter"])(
+    "preserves newlines and sends with the configured %s shortcut",
+    async (shortcut) => {
+      const plain = shortcut === "Enter";
+      await withSideChat(
+        async (gateway, composer, page) => {
+          const capture = plain ? screenshot(page, "chat-session-companion-composer") : undefined;
+          const empty = plain ? await composerHeight(composer) : null;
+          await capture?.("empty.png");
+          const initial = plain
+            ? "Explain the next step and remaining checks. ".repeat(6).trim()
+            : "Explain the next step.";
+          const continuation = plain ? "Include the final verification." : "Include the checks.";
+          await composer.fill(initial);
+          if (empty !== null) {
+            await capture?.("wrapped.png");
+            expect(await composer.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+            expect(await composerHeight(composer)).toBeGreaterThan(empty);
+            await composer.press("End");
+          }
+          await composer.press(plain ? "Shift+Enter" : "Enter");
+          await page.keyboard.type(continuation);
+          const question = `${initial}\n${continuation}`;
+          expect(await composer.inputValue()).toBe(question);
+          expect(await gateway.getRequests(ask)).toHaveLength(0);
+          if (plain) {
+            const confirmationConsumed = await confirmIme(composer, "");
+            await capture?.("ime-confirmation.png");
+            expect(confirmationConsumed).toBe(false);
+            expect(await composer.inputValue()).toBe(question);
+            expect(await gateway.getRequests(ask)).toHaveLength(0);
+            await composer.dispatchEvent("keyup", { key: "Enter" });
+          }
+          await composer.press(shortcut);
+          const request = await gateway.waitForRequest(ask);
+          expect(request.params).toMatchObject({ question });
+          await expect.poll(() => composer.inputValue()).toBe("");
+          if (empty !== null) {
+            await expect.poll(() => composerHeight(composer)).toBe(empty);
+            await capture?.("cleared.png");
+          }
+        },
+        plain ? "enter" : "modifier-enter",
+      );
     },
   );
 });
