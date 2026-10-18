@@ -432,9 +432,7 @@ suite.define(() => {
         );
         expect(await dialog.locator('[data-value="device:runner"]').isDisabled()).toBe(true);
         expect(await dialog.locator('[data-value="cloud:other"]').isDisabled()).toBe(true);
-        expect(await dialog.locator('[data-value^="machine:"], [data-value^="os:"]').count()).toBe(
-          0,
-        );
+        expect(await dialog.locator(".session-move__configuration").count()).toBe(0);
         await gateway.deferNext("sessions.move");
         await dialog.getByRole("button", { name: "Move session", exact: true }).click();
         await expectMove(gateway, { target: { kind: "profile", profileId: "cloud" } });

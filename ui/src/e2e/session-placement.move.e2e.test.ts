@@ -606,11 +606,15 @@ suite.define(() => {
       await profile.click();
       await expect.poll(() => profile.getAttribute("aria-pressed")).toBe("true");
       if (machineId) {
-        await page.locator(`[data-value="machine:${machineId}"]`).click();
+        await page.getByRole("button", { name: "Machine", exact: true }).click();
+        await page
+          .getByRole("menu", { name: "Machine", exact: true })
+          .locator(`[role="menuitemradio"][data-value="${machineId}"]`)
+          .click();
       } else {
         const dialog = page.locator("openclaw-modal-dialog");
         expect(await dialog.getByText("Machine", { exact: true }).count()).toBe(0);
-        expect(await dialog.locator('[data-value^="machine:"]').count()).toBe(0);
+        expect(await dialog.getByRole("button", { name: "Machine", exact: true }).count()).toBe(0);
       }
       await page.getByRole("button", { name: "Move session", exact: true }).click();
 
