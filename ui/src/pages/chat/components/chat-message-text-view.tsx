@@ -23,6 +23,8 @@ import type { MarkdownDomMedia, MarkdownMediaRoot } from "../../../lib/markdown-
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
+import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
@@ -53,7 +55,13 @@ export function MessageJson(props: {
       options={props.options}
       parts={content().parts}
     >
-      {(elementRef) => <MarkdownText content={content()} elementRef={elementRef} />}
+      {(elementRef) => (
+        <MarkdownText
+          content={content()}
+          elementRef={elementRef}
+          fetchLinkFavicon={props.options.fetchLinkFavicon}
+        />
+      )}
     </TextDisclosure>
   );
 }
@@ -91,6 +99,7 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
             media={props.media}
             direction={detectTextDirection(props.media?.text ?? presentation().source)}
             elementRef={elementRef}
+            fetchLinkFavicon={props.options.fetchLinkFavicon}
           />
         )}
       </TextDisclosure>
@@ -226,6 +235,7 @@ type MarkdownContentProps = {
   content: MarkdownContentValue;
   media?: MarkdownMedia;
   incremental?: boolean;
+  onUpdate?: () => void;
 };
 
 /** Transcript text and inline media share the same incremental DOM owner. */
@@ -278,7 +288,13 @@ export function MarkdownContent(props: MarkdownContentProps) {
         return root;
       },
     };
-    return { content: props.content, media: renderer, incremental: props.incremental, connected };
+    return {
+      content: props.content,
+      media: renderer,
+      incremental: props.incremental,
+      connected,
+      onUpdate: props.onUpdate,
+    };
   });
   markdown(fragment);
   return Array.from(fragment.childNodes);
@@ -289,15 +305,24 @@ export function MarkdownText(
     direction?: "ltr" | "rtl" | "auto";
     class?: string;
     elementRef?: (element: HTMLDivElement) => void;
+    fetchLinkFavicon?: LinkFaviconFetcher;
   },
 ) {
+  let element!: HTMLDivElement;
+  const hydrate = createMemo(() => {
+    const fetcher = props.fetchLinkFavicon;
+    return fetcher ? () => hydrateLinkFavicons(element, fetcher) : undefined;
+  });
   return (
     <div
       class={props.class ?? "chat-text"}
       dir={props.direction}
-      ref={(element) => props.elementRef?.(element)}
+      ref={(node) => {
+        element = node;
+        props.elementRef?.(node);
+      }}
     >
-      <MarkdownContent {...props} />
+      <MarkdownContent {...props} onUpdate={hydrate()} />
     </div>
   );
 }

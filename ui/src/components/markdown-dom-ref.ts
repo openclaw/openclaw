@@ -12,6 +12,7 @@ export function createMarkdownRef(
     media?: MarkdownDomMedia;
     incremental?: boolean;
     connected?: boolean;
+    onUpdate?: () => void;
   },
 ): (element: ParentNode) => void {
   // Fragment consumers attach during construction; ordinary element refs run unowned.
@@ -32,6 +33,7 @@ export function createMarkdownRef(
         const { messageKey, source, parts } = value.content;
         reconciler.update(messageKey, source, parts, value.media);
       }
+      value.onUpdate?.();
     },
   );
   onCleanup(() => current?.dispose());

@@ -508,6 +508,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         this.announcement.sync(announcement, announce);
         return this.renderer.render({
           applicationContext: snapshot.applicationContext,
+          messageElements: this.messageElements,
           layout: this.layout,
           headerHeight: this.headerHeight,
           presented: snapshot.presented,

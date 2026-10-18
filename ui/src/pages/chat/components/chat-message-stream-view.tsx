@@ -74,7 +74,6 @@ export type StreamGroupOptions = StreamMessageOptions & {
   branding?: ThemeBranding;
   bubbleMode?: boolean;
   firstBubbleKey?: string | null;
-  entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
   onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: ChatAvatarProps["assistant"];
@@ -219,7 +218,6 @@ function StreamingMessage(props: {
       options={{
         ...props.options,
         isStreaming: part().isStreaming,
-        entryRef: props.options.entryRefFor?.(part().key),
         showReasoning: Boolean(part().thinking),
         messageActions: actions(),
       }}

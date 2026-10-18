@@ -35,6 +35,7 @@ import { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
 import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
+import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
 import {
   GuardedTranscriptItem,
   type NativeTranscriptView,
@@ -310,11 +311,13 @@ export class ChatTranscriptRenderer {
           const capture = (event: Event) => snapshot().captureInteractionResize(event);
           onCleanup(listen(element, "click", capture, true));
           const content = () => (
-            <TranscriptMediaDisconnect value={this.mediaDisconnect}>
-              <ContentPresentation value={active}>
-                <TranscriptRows snapshot={snapshot()} />
-              </ContentPresentation>
-            </TranscriptMediaDisconnect>
+            <TranscriptMessageElementsContext value={next.messageElements}>
+              <TranscriptMediaDisconnect value={this.mediaDisconnect}>
+                <ContentPresentation value={active}>
+                  <TranscriptRows snapshot={snapshot()} />
+                </ContentPresentation>
+              </TranscriptMediaDisconnect>
+            </TranscriptMessageElementsContext>
           );
           // Keep the session root independent while retaining its application capabilities.
           return (

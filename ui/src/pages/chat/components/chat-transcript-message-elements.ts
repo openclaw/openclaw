@@ -1,3 +1,5 @@
+import { createContext } from "solid-js";
+
 type MessageElementRef = (element?: Element) => void;
 
 /** The transcript's bubble refs are shared by navigation and selection. */
@@ -47,3 +49,7 @@ export class TranscriptMessageElements {
     this.listeners.clear();
   }
 }
+
+export const TranscriptMessageElementsContext = createContext<TranscriptMessageElements | null>(
+  null,
+);

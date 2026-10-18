@@ -118,7 +118,6 @@ function PreparedMessage(props: {
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
       entryId: persistedMessageEntryId(props.item.message) ?? undefined,
-      entryRef: props.options.entryRefFor?.(props.item.key),
       duplicateCount: props.item.duplicateCount ?? 1,
       showToolCalls: props.options.showToolCalls ?? true,
       assistantMessageDisclosure,
