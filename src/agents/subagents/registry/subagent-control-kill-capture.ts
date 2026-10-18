@@ -76,7 +76,9 @@ export function captureSubagentKillSources(params: {
       operations: stop.operations,
     }),
     preparation: captureSessionControllerStop({
-      inputs: stop.activeInputs.filter((input) => !input.claim?.operation),
+      inputs: (exactRun ? stop.inputs : stop.activeInputs).filter(
+        (input) => !input.claim?.operation,
+      ),
     }),
   };
 }
