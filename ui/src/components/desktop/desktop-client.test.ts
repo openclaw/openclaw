@@ -52,6 +52,23 @@ function mockDesktopClient(
   return new DesktopClient();
 }
 
+function setupClient() {
+  const { Rfb, instances } = createFakeRfb();
+  const client = mockDesktopClient(Rfb);
+  const target = document.createElement("div");
+  const canvas = document.createElement("canvas");
+  target.append(canvas);
+  const connect = (options: Partial<Parameters<DesktopClient["connect"]>[0]> = {}) =>
+    client.connect({
+      target,
+      wsUrl: "ws://control.example.test/desktop/observe",
+      viewOnly: false,
+      isCurrent: () => true,
+      ...options,
+    });
+  return { instances, target, canvas, connect };
+}
+
 afterEach(() => {
   vi.doUnmock("@novnc/novnc");
   vi.unstubAllGlobals();
@@ -65,17 +82,8 @@ describe("DesktopClient", () => {
   ])(
     "reconciles keyboard focus snapshots only when trusted=$trusted, held=$held",
     async ({ trusted, held }) => {
-      const { Rfb } = createFakeRfb();
-      const client = mockDesktopClient(Rfb);
-      const target = document.createElement("div");
-      const canvas = document.createElement("canvas");
-      target.append(canvas);
-      const handle = await client.connect({
-        target,
-        wsUrl: "ws://control.example.test/desktop/observe",
-        viewOnly: false,
-        isCurrent: () => true,
-      });
+      const { canvas, connect } = setupClient();
+      const handle = await connect();
       const input = document.createElement("textarea");
       const [keyboard, dispose] = createRoot(
         (disposeRoot) => [createDesktopMobileKeyboard(() => handle), disposeRoot] as const,
@@ -127,18 +135,7 @@ describe("DesktopClient", () => {
   it.each(["blur", "reset", "replacement", "view-only"])(
     "does not restore old keyboard modifiers after %s",
     async (transition) => {
-      const { Rfb } = createFakeRfb();
-      const client = mockDesktopClient(Rfb);
-      const target = document.createElement("div");
-      const canvas = document.createElement("canvas");
-      target.append(canvas);
-      const connect = () =>
-        client.connect({
-          target,
-          wsUrl: "ws://control.example.test/desktop/observe",
-          viewOnly: false,
-          isCurrent: () => true,
-        });
+      const { canvas, connect } = setupClient();
       const original = await connect();
       let handle = original;
       let controlling = true;
@@ -248,29 +245,22 @@ describe("DesktopClient", () => {
   });
 
   it("propagates RFB options and disconnects through the returned handle", async () => {
-    const { Rfb, instances } = createFakeRfb();
-    const socket = new FakeSocket("ws://control.example.test/desktop/observe");
-    const client = mockDesktopClient(Rfb, () => socket);
-    const target = document.createElement("div");
-    const canvas = document.createElement("canvas");
+    const { instances, canvas, connect } = setupClient();
     const onKeyDown = vi.fn();
     canvas.addEventListener("keydown", onKeyDown);
-    target.append(canvas);
-
-    const handle = await client.connect({
+    const handle = await connect({
       gatewayUrl: "ws://control.example.test",
-      isCurrent: () => true,
       wsUrl: "/desktop/observe",
       credentials: { username: "operator", password: "secret" },
       background: "rgb(8, 8, 8)",
-      viewOnly: false,
       sizingMode: "actual",
-      target,
     });
 
-    expect(instances[0]?.background).toBe("rgb(8, 8, 8)");
-    expect(instances[0]?.viewOnly).toBe(false);
-    expect(instances[0]?.scaleViewport).toBe(false);
+    expect(instances[0]).toMatchObject({
+      background: "rgb(8, 8, 8)",
+      viewOnly: false,
+      scaleViewport: false,
+    });
     expect(instances[0]?.options).toEqual({
       credentials: { username: "operator", password: "secret" },
     });
@@ -302,12 +292,8 @@ describe("DesktopClient", () => {
   ])(
     "gates Match at the authenticated controller boundary ($canResize/$viewOnly)",
     async ({ canResize, viewOnly, resizes }) => {
-      const { Rfb, instances } = createFakeRfb();
-      const client = mockDesktopClient(Rfb);
-      const handle = await client.connect({
-        target: document.createElement("div"),
-        wsUrl: "ws://control.example.test/desktop/observe",
-        isCurrent: () => true,
+      const { instances, connect } = setupClient();
+      const handle = await connect({
         canResize,
         viewOnly,
         sizingMode: "match",
@@ -336,15 +322,11 @@ describe("DesktopClient", () => {
   it.each(["disableInput", "disconnect", "securityfailure", "stale", "onConnect"] as const)(
     "never re-enables resizing after %s",
     async (transition) => {
-      const { Rfb, instances } = createFakeRfb();
-      const client = mockDesktopClient(Rfb);
+      const { instances, connect } = setupClient();
       let current = true;
-      const handle = await client.connect({
-        target: document.createElement("div"),
-        wsUrl: "ws://control.example.test/desktop/observe",
+      const handle = await connect({
         isCurrent: () => current,
         canResize: true,
-        viewOnly: false,
         sizingMode: "match",
         onConnect: transition === "onConnect" ? () => handle.disconnect() : undefined,
       });
@@ -404,22 +386,12 @@ describe("DesktopClient", () => {
     ["CR", "é\rΩ", ["é", "Enter", "Ω"]],
     ["blank lines", "\n\r\n\r", ["Enter", "Enter", "Enter"]],
   ] as const)("sends %s text line breaks as single Enter presses", async (_name, text, keys) => {
-    const { Rfb } = createFakeRfb();
-    const socket = new FakeSocket("ws://control.example.test/desktop/observe");
-    const client = mockDesktopClient(Rfb, () => socket);
-    const target = document.createElement("div");
-    const canvas = document.createElement("canvas");
+    const { canvas, connect } = setupClient();
     const events: KeyboardEvent[] = [];
     const onKey = (event: KeyboardEvent) => events.push(event);
     canvas.addEventListener("keydown", onKey);
     canvas.addEventListener("keyup", onKey);
-    target.append(canvas);
-    const handle = await client.connect({
-      wsUrl: "ws://control.example.test/desktop/observe",
-      isCurrent: () => true,
-      viewOnly: false,
-      target,
-    });
+    const handle = await connect();
 
     handle.sendText(text);
 

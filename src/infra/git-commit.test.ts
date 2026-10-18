@@ -176,7 +176,7 @@ describe("git commit resolution", () => {
       expect(resolveAt(root, { readers })).toBe(expected);
       const reads = probe.mock.calls.length;
       if (source === "caught null") {
-        expect(reads).toBe(2);
+        expect(reads).toBe(1);
       } else {
         expect(reads).toBeGreaterThan(0);
       }

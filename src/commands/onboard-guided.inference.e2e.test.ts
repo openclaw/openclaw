@@ -137,6 +137,8 @@ describe("guided onboarding inference composition", () => {
       configModule.clearConfigCache();
       const setupInference = await import("../system-agent/setup-inference.js");
       const onboardInference = await import("./onboard-inference.js");
+      const detectBackends = onboardInference.detectInferenceBackends;
+      const providerChoices = await import("../plugins/provider-auth-choices.js");
       const { runGuidedOnboardingWithFixtures: runGuidedOnboarding } =
         await import("./onboard-guided-runtime.test-support.js");
       const { applySystemAgentSetup } = await import("../system-agent/setup-apply.js");
@@ -150,9 +152,13 @@ describe("guided onboarding inference composition", () => {
             found: false,
             error: "not found",
           });
-          const result = await setupInference.detectSetupInference({
-            detectInferenceBackends: async (options) =>
-              await onboardInference.detectInferenceBackends({
+          const choices = vi
+            .spyOn(providerChoices, "resolveManifestProviderAuthChoices")
+            .mockReturnValue([]);
+          const backends = vi
+            .spyOn(onboardInference, "detectInferenceBackends")
+            .mockImplementation(async (options) =>
+              detectBackends({
                 config: options?.config,
                 env: process.env,
                 platform: "linux",
@@ -162,9 +168,13 @@ describe("guided onboarding inference composition", () => {
                   readGeminiCliCredentials: () => null,
                 },
               }),
-            resolveManifestProviderAuthChoices: () => [],
-          });
-          return result;
+            );
+          try {
+            return await setupInference.detectSetupInference();
+          } finally {
+            backends.mockRestore();
+            choices.mockRestore();
+          }
         },
         activate: async (params) => {
           const result = await setupInference.activateSetupInference(params);

@@ -24,7 +24,7 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { createNonExitingRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
-import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js";
+import * as verifiedInference from "./verified-inference.js";
 
 // mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -158,7 +158,7 @@ it.each([false, true])(
             { id: providerId, label: "Fixture", auth: [] },
           );
         });
-        const capture = vi.fn(captureSystemAgentOwnerPluginArtifacts);
+        const capture = vi.spyOn(verifiedInference, "captureSystemAgentOwnerPluginArtifacts");
         const runEmbeddedAgent = vi.fn<typeof embeddedAgent.runEmbeddedAgent>(async (params) => {
           expect(onPreparationComplete).toHaveBeenCalledOnce();
           params.onSuccessfulAuthBinding?.({
@@ -213,7 +213,6 @@ it.each([false, true])(
                   choiceLabel: "Fixture",
                   appGuidedSecret: true,
                 }),
-                captureSystemAgentOwnerPluginArtifacts: capture,
               },
             });
             expect(onPreparationComplete).toHaveBeenCalledOnce();

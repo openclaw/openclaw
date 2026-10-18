@@ -217,6 +217,8 @@ async function reconcileAt(
     );
   }
   await fs.utimes(file, timestamp, timestamp);
+  // Exercise metadata authority independently of asynchronous watcher delivery.
+  await fs.utimes(path.dirname(file), timestamp, timestamp);
   await index.reconcile();
 }
 

@@ -625,11 +625,13 @@ export function trackSqliteSchema(
     };
     owners.set(database, owner);
     trackSchemaChanges(database, owner, native, writable);
+    // Read the generation first so a concurrent publication cannot certify an older catalog.
+    const processRevision = getSqliteDatabaseSchemaRevision(database, { existingOnly: true });
     const retained = getSqliteDatabaseAdmission(database, schemaAdmission, { existingOnly: true });
     if (retained) {
       owner.admitted = true;
       owner.facts = { ...retained, revision: owner.revision };
-      owner.processRevision = getSqliteDatabaseSchemaRevision(database);
+      owner.processRevision = processRevision;
     }
   }
 }

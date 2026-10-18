@@ -55,7 +55,6 @@ import { retainPersistedStreamPrefix } from "./stream-causal-boundary.ts";
 import {
   hasVisibleStreamParts,
   historyReplacedVisibleStream,
-  maybeResetToolStream,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
 import {
@@ -65,6 +64,7 @@ import {
 } from "./stream-segment-pruning.ts";
 import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
 import { persistedCurrentToolStreamIds } from "./tool-stream-identity.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
 
 export async function hydrateChatHistory(
   state: ChatHistoryHost,
@@ -373,7 +373,7 @@ export async function hydrateChatHistory(
       const liveToolStreamReplaced = liveToolIds.length === 0 || historyReplacedToolStream;
       const reconcileToolStream = (replaced: boolean, preserveStreamSegments: boolean) => {
         if (replaced) {
-          maybeResetToolStream(state, { preserveStreamSegments });
+          resetToolStream(state, { preserveStreamSegments });
         } else {
           prunePersistedToolStreamMessages(state, persistedToolStreamIds);
         }
@@ -392,7 +392,7 @@ export async function hydrateChatHistory(
           state,
           materializeVisibleAssistantStreamMessages(state.chatMessages, state),
         );
-        maybeResetToolStream(state);
+        resetToolStream(state);
         state.chatStream = null;
         state.chatStreamStartedAt = null;
       } else if (historyReplacedSomeToolStream) {

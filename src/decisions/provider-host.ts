@@ -465,7 +465,9 @@ export class DecisionProviderHost {
                 ...(options.agentId ? { agentId: options.agentId } : {}),
                 signal,
                 deadlineMonotonicMs,
-                ...(isAdmissible ? { isAdmissible: admissible } : {}),
+                // Explicit callers may have no predicate; transports must still fence
+                // host secret/config generations after asynchronous preparation.
+                isAdmissible: admissible,
               });
             }
             if (!this.registration) {

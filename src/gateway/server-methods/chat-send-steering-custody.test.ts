@@ -23,8 +23,9 @@ import type { AgentSessionEvent } from "../../agents/sessions/agent-session-type
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
-import { buildReplyPromptEnvelopeBase } from "../../auto-reply/reply/prompt-prelude.js";
+import { buildCommandContext } from "../../auto-reply/reply/commands.js";
+import { prepareReplyRunContext } from "../../auto-reply/reply/get-reply-run-context.js";
+import { baseParams } from "../../auto-reply/reply/get-reply-run.test-support.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
@@ -227,15 +228,43 @@ describe("steering input custody", () => {
           >[0];
           const ownerCtx = ownerDispatchParams.ctx;
           expect(ownerCtx).not.toHaveProperty("SenderId");
-          ownerContext = buildReplyPromptEnvelopeBase({
-            ctx: ownerCtx,
-            sessionCtx: ownerCtx,
-            baseBody: ownerCtx.BodyForAgent!,
-            hasUserBody: true,
-            inboundUserContext: buildInboundUserContextPrefix(ownerCtx),
-            isBareSessionReset: false,
-            startupAction: "new",
-          }).currentInboundContext;
+          const ownerConfig = fixture.context.getRuntimeConfig();
+          const prepared = await prepareReplyRunContext(
+            baseParams({
+              ctx: ownerCtx,
+              sessionCtx: ownerCtx,
+              cfg: ownerConfig,
+              agentId: fixture.scope.agentId,
+              sessionKey: fixture.scope.sessionKey,
+              sessionId: fixture.scope.sessionId,
+              storePath: fixture.scope.storePath,
+              isNewSession: false,
+              systemSent: true,
+              provider: "openai",
+              model: "gpt-test",
+              opts: ownerDispatchParams.replyOptions,
+              commandAuthorized: ownerCtx.CommandAuthorized === true,
+              command: buildCommandContext(
+                {
+                  ctx: ownerCtx,
+                  cfg: ownerConfig,
+                  agentId: fixture.scope.agentId,
+                  sessionKey: fixture.scope.sessionKey,
+                  isGroup: false,
+                  triggerBodyNormalized: ownerCtx.commandText ?? ownerCtx.Body ?? "",
+                },
+                resolveCommandAuthorization({
+                  cfg: ownerConfig,
+                  ctx: ownerCtx,
+                  commandAuthorized: ownerCtx.CommandAuthorized === true,
+                }),
+              ),
+            }),
+          );
+          if (prepared.kind !== "ready") {
+            throw new Error("Expected prepared owner reply context");
+          }
+          ownerContext = prepared.buildPromptBodies({}).currentInboundContext;
           dispatchInboundMessageMock.mockClear();
           operation = createReplyOperation({ ...fixture.scope, resetTriggered: false });
         }

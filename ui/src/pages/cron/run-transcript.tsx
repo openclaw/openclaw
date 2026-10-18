@@ -79,10 +79,7 @@ export function createCronRunTranscript(notify: () => void, capture: () => Scope
     state.failedCursor = cursor;
     notify();
     try {
-      if (
-        !entry.jobId ||
-        (!entry.runId && (typeof entry.runAtMs !== "number" || !Number.isFinite(entry.runAtMs)))
-      ) {
+      if (!entry.runId && entry.runAtMs === undefined) {
         throw new Error(t("cron.runEntry.transcriptMissingMetadata"));
       }
       const result = await captured.client.request<CronHistoryResult>("cron.history", {
@@ -93,9 +90,6 @@ export function createCronRunTranscript(notify: () => void, capture: () => Scope
       });
       if (!current()) {
         return;
-      }
-      if (!Array.isArray(result.messages)) {
-        throw new Error(t("cron.runEntry.transcriptUnavailable"));
       }
       const messages = visibleChatHistoryMessages(attachHistoryActivity(result).messages);
       if (cursor) {

@@ -123,7 +123,9 @@ statuses: `completed`, `waiting`, or `failed`.
 
 - A `waiting` result retains an executor continuation, pending bridge requests, and
   scoping metadata (agent run id, session id/key) until `wait` resumes it or
-  it expires.
+  it expires. Successful completion of the observing tool call or model response
+  leaves this parked work available. Cancellation of an active `exec`/`wait`,
+  the parent run, or its catalog still cancels the cell and pending calls.
 - Expiry, wrong-session, wrong-run, and unknown/already-resuming `runId`
   values do not produce a distinct terminal status; they surface as a
   `failed` result (`code: "invalid_input"`) with a message such as `code mode

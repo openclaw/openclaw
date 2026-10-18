@@ -10,6 +10,7 @@ import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnv } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { isTuiBusyActivityStatus } from "./tui-activity-status.js";
 import { resolveFinalAssistantText } from "./tui-formatters.js";
 import { beginTuiShutdown } from "./tui-shutdown.js";
 import {
@@ -27,7 +28,6 @@ import {
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
   resolveTuiToolsToggleActivityStatus,
-  isTuiBusyActivityStatus,
   resolveTuiCtrlCAction,
   resolveTuiLocalAuthCliInvocation,
   resolveTuiSessionSelection,
