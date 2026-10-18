@@ -116,6 +116,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_ws_session_event_frames_total`          | counter   | `event`, `reason`, `delivery`                                                             |
 | `openclaw_gateway_ws_session_event_bytes_total`           | counter   | `event`, `reason`, `delivery`                                                             |
 | `openclaw_gateway_ws_event_bytes_total`                   | counter   | `event`                                                                                   |
+| `openclaw_gateway_ws_event_wire_bytes_total`              | counter   | `event`                                                                                   |
+| `openclaw_gateway_ws_event_frame_bytes`                   | counter   | `event`, `le`                                                                             |
 | `openclaw_gateway_ws_presence_frames_total`               | counter   | `mode`                                                                                    |
 | `openclaw_gateway_ws_presence_bytes_total`                | counter   | `mode`                                                                                    |
 | `openclaw_gateway_ws_operator_connections`                | gauge     | none                                                                                      |
@@ -273,6 +275,19 @@ by event name within one event-loop turn while preserving per-socket frame and
 byte totals. Connection counts update on
 connect/disconnect and refresh every 30 seconds so a late-starting exporter or
 dropped snapshot can recover.
+
+`openclaw_gateway_ws_event_wire_bytes_total{event}` sums payload bytes actually
+handed to the socket after the codec: deflated payload length when compressed,
+raw length otherwise. It excludes WebSocket, TLS, and TCP headers and does not
+prove client receipt. The codec can report completion after raw-frame acceptance;
+direct local delivery contributes its raw payload size. Manual diagnostic
+observations without a wire size do not fabricate a wire-byte measurement.
+
+`openclaw_gateway_ws_event_frame_bytes{event,le}` contains cumulative counts of
+accepted raw event frames, with byte-size upper bounds `256`, `512`, `1024`,
+`2048`, `4096`, `8192`, `16384`, `65536`, and `+Inf`. Each frame increments all
+matching bounds. This is a bounded bucket counter, not a histogram family: use
+the metric name directly with `histogram_quantile`, without a `_bucket` suffix.
 
 `openclaw_gateway_ws_presence_frames_total{mode}` and
 `openclaw_gateway_ws_presence_bytes_total{mode}` split presence traffic by
@@ -937,8 +952,15 @@ attributes.
 # Gateway RPC requests per second by method
 sum by (method) (rate(openclaw_gateway_rpc_requests_total[5m]))
 
-# Outbound WebSocket event bytes per second by event, including fan-out
+# Raw outbound WebSocket event bytes per second by event, including fan-out
 sum by (event) (rate(openclaw_gateway_ws_event_bytes_total[5m]))
+
+# Post-codec outbound payload bytes per second by event
+sum by (event) (rate(openclaw_gateway_ws_event_wire_bytes_total[5m]))
+
+# p50 raw event frame size by event; use 0.90 for p90
+histogram_quantile(0.50,
+  sum by (event, le) (rate(openclaw_gateway_ws_event_frame_bytes[5m])))
 
 # Model catalog calls per minute by caller and request shape over ten minutes
 60 * sum by (client_kind, source, view, scope, refresh, prepared_only)

@@ -35,6 +35,7 @@ export function SessionRailComposer(props: {
   attachmentProps: ChatAttachmentControlsProps;
   submit: () => void;
   onDraftChange?: (draft: string) => void;
+  textareaRef: (element: HTMLTextAreaElement) => void;
 }) {
   let textarea!: HTMLTextAreaElement;
   createEffect(
@@ -102,6 +103,7 @@ export function SessionRailComposer(props: {
             }}
             ref={(element) => {
               textarea = element;
+              props.textareaRef(element);
               observeTextareaOverflow(element);
               scheduleTextareaHeightAdjustment(element);
             }}

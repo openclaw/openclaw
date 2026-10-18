@@ -97,7 +97,12 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
   host.style.display = "contents";
   const [text, setText] = createSignal<string | null>(null);
   const [failed, setFailed] = createSignal(false);
-  const [source, setSource] = createSignal(false);
+  // A different attachment starts in preview mode; renewed tickets keep the chosen view.
+  const identity = createMemo(() => props.sourceIdentity);
+  const [source, setSource] = createSignal(() => {
+    identity();
+    return false;
+  });
   const [version, setVersion] = createSignal(0);
   const [retry, setRetry] = createSignal(0);
   const htmlPreviewLoader = createLazyCustomElementRequests({
@@ -141,22 +146,16 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
   let previous: ReturnType<typeof sourceInput> | undefined;
   const readSource = (current: ReturnType<typeof sourceInput>) => {
     onSettled(() => {
-      const policyChanged =
+      const clear =
         !previous ||
         previous.plain !== current.plain ||
         previous.mime !== current.mime ||
-        previous.label !== current.label;
-      const identityChanged = !previous || previous.identity !== current.identity;
-      const clear =
-        policyChanged ||
-        identityChanged ||
-        previous?.size !== current.size ||
-        previous?.retry !== current.retry ||
+        previous.label !== current.label ||
+        previous.identity !== current.identity ||
+        previous.size !== current.size ||
+        previous.retry !== current.retry ||
         !current.src ||
         !current.identity;
-      if (identityChanged) {
-        setSource(false);
-      }
       if (clear) {
         setText(null);
       }
