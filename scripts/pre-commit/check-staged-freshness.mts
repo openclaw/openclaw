@@ -19,10 +19,13 @@ type FreshnessCheck = {
   script: string;
   args: string[];
   fix: string;
-  /** Whether these paths feed the check; used for staged selection and unstaged skips. */
-  reads: (paths: string[]) => boolean;
-  /** The check reads the index itself, so unstaged edits cannot change its verdict. */
-  readsIndex?: true;
+  /** Staged paths that select the check. A trigger list, not the check's full input set. */
+  selects: (paths: string[]) => boolean;
+  /**
+   * Which unstaged edits can change the verdict: "index" checks read staged bytes only;
+   * "tree" checks import the working-tree code graph, so any unstaged edit skips them.
+   */
+  unstagedInputs: "index" | "tree" | ((paths: string[]) => boolean);
 };
 
 /** Selects freshness checks for staged paths; an empty list means the hook adds no work. */
@@ -34,46 +37,53 @@ export function selectStagedFreshnessChecks(paths: string[]): FreshnessCheck[] {
       script: "lint:docs",
       args: ["--no-globs", ...docs],
       fix: "pnpm lint:docs:fix",
-      reads: (changed) => changed.some((file) => docs.includes(file)),
+      selects: () => docs.length > 0,
+      // markdownlint reads only the named files and its config.
+      unstagedInputs: (changed) =>
+        changed.some((file) => docs.includes(file) || file.startsWith("config/markdownlint")),
     },
     {
       name: "AGENTS.md bootstrap size",
       script: "check:agents-md-size",
       args: [],
       fix: "cut rules or move them to the owning scoped AGENTS.md",
-      reads: hasAgentsInstructionInput,
+      selects: hasAgentsInstructionInput,
+      unstagedInputs: "tree",
     },
     {
       name: "protocol generated models",
       script: "protocol:check",
       args: [],
       fix: "pnpm protocol:gen:swift && pnpm protocol:gen:kotlin",
-      reads: hasProtocolGenerationInput,
+      selects: hasProtocolGenerationInput,
+      unstagedInputs: "tree",
     },
     {
       name: "native app i18n inventory",
       script: "native:i18n:verify",
       args: [],
       fix: "pnpm native:i18n:baseline",
-      reads: hasNativeI18nInput,
+      selects: hasNativeI18nInput,
+      unstagedInputs: "tree",
     },
     {
       name: "config docs baseline",
       script: "config:docs:check",
       args: [],
       fix: "pnpm config:docs:gen",
-      reads: hasConfigDocInput,
+      selects: hasConfigDocInput,
+      unstagedInputs: "tree",
     },
     {
       name: "line-cap growth ratchet",
       script: "check:line-cap-ratchet",
       args: ["--staged", "--base", "HEAD"],
       fix: "move new code or tests to a sibling file",
-      reads: hasLineCapRatchetInput,
-      readsIndex: true,
+      selects: hasLineCapRatchetInput,
+      unstagedInputs: "index",
     },
   ];
-  return checks.filter((check) => check.reads(paths));
+  return checks.filter((check) => check.selects(paths));
 }
 
 function gitPaths(args: string[]) {
@@ -130,10 +140,15 @@ if (import.meta.main && !replayingCommits()) {
     "--diff-filter=ACDMRT",
   ]);
   const selected = selectStagedFreshnessChecks(staged);
-  // Judge only the bytes being committed: unstaged edits to a check's inputs skip it.
+  // Judge only the bytes being committed: unstaged edits a check may read skip it.
   const unstaged = selected.length ? gitPaths(["diff", "--name-only", "--no-renames"]) : [];
   const checks = selected.filter((check) => {
-    if (!check.readsIndex && check.reads(unstaged)) {
+    const { unstagedInputs } = check;
+    const dirty =
+      unstagedInputs === "tree"
+        ? unstaged.length > 0
+        : unstagedInputs !== "index" && unstagedInputs(unstaged);
+    if (dirty) {
       process.stdout.write(
         `[pre-commit] ${check.name} skipped: its inputs have unstaged changes.\n`,
       );

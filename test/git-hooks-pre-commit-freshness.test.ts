@@ -23,7 +23,13 @@ function freshnessFixture() {
   symlinkSync(path.join(process.cwd(), "scripts/pre-commit/check-staged-freshness.mts"), script);
   writeFileSync(
     path.join(dir, "package.json"),
-    JSON.stringify({ scripts: { "lint:docs": "node lint-docs.cjs" } }),
+    JSON.stringify({
+      scripts: {
+        "lint:docs": "node lint-docs.cjs",
+        "protocol:check": "node protocol-check.cjs",
+        "check:line-cap-ratchet": "node line-cap.cjs",
+      },
+    }),
   );
   writeFileSync(
     path.join(dir, "lint-docs.cjs"),
@@ -36,8 +42,16 @@ function freshnessFixture() {
       "",
     ].join("\n"),
   );
+  // The protocol stand-in fails on any working-tree bytes it would import.
+  writeFileSync(
+    path.join(dir, "protocol-check.cjs"),
+    'console.error("protocol models drift"); process.exit(1);\n',
+  );
+  writeFileSync(path.join(dir, "line-cap.cjs"), 'console.log("line-cap ran");\n');
   stage(dir, "docs/page.md", "# Page\n");
-  run(dir, "git", ["add", "package.json", "lint-docs.cjs"]);
+  stage(dir, "packages/gateway-protocol/src/schema/logs-chat.ts", "export const a = 1;\n");
+  stage(dir, "src/gateway/methods/core-method-policy.ts", "export const b = 1;\n");
+  run(dir, "git", ["add", "package.json", "lint-docs.cjs", "protocol-check.cjs", "line-cap.cjs"]);
   run(dir, "git", ["commit", "-qm", "fixture", "--no-verify"]);
   return dir;
 }
@@ -54,6 +68,28 @@ describe("pre-commit freshness checks", () => {
     expect(output).not.toContain(literals[0]);
     run(dir, "git", commitArgs);
     expect(run(dir, "git", ["show", "HEAD:docs/page.md"])).toBe("# Page\n\nClean line.");
+  });
+
+  it("skips working-tree checks for unstaged edits outside their trigger paths", () => {
+    const dir = freshnessFixture();
+    const schema = "packages/gateway-protocol/src/schema/logs-chat.ts";
+    stage(dir, schema, "export const a = 2;\n");
+    expect(runFailure(dir, "bash", ["git-hooks/pre-commit"]).stderr).toContain(
+      "protocol generated models failed",
+    );
+
+    // protocol-gen imports this owner, but it is not a protocol trigger path.
+    appendFileSync(
+      path.join(dir, "src/gateway/methods/core-method-policy.ts"),
+      "export const = ;\n",
+    );
+    const output = run(dir, "bash", ["git-hooks/pre-commit"]);
+
+    expect(output).toContain(
+      "protocol generated models skipped: its inputs have unstaged changes.",
+    );
+    // The line-cap ratchet reads the index, so it still runs.
+    expect(output).not.toContain("line-cap growth ratchet skipped");
   });
 
   it("redacts private literals that a failing check prints from the working tree", () => {
