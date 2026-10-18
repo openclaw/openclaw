@@ -64,15 +64,9 @@ describe("session store target selection", () => {
         paths.map((pathname) => ({ agentId, path: pathname })),
       );
       for (const agentId of ["openclaw", "crestodian"]) {
-        expect(
-          resolveConfiguredAgentDatabaseTargets(cfg, { env, registeredDatabases: [], agentId }),
-        ).toEqual([]);
-        const databasePath = path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite");
-        fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-        fs.writeFileSync(databasePath, "synthetic file identity; no database reads");
         expected.push({
           agentId,
-          path: databasePath,
+          path: path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite"),
         });
       }
       const all = resolveConfiguredAgentDatabaseTargets(cfg, { env, registeredDatabases: [] });
@@ -86,19 +80,14 @@ describe("session store target selection", () => {
     },
   );
 
-  it("retains unreadable reserved native paths for admission diagnostics", () => {
-    const root = tempDirs.make("unreadable-system-database-");
+  it("resolves reserved startup targets without probing their files", () => {
+    const root = tempDirs.make("system-database-targets-");
     const env = { OPENCLAW_STATE_DIR: root };
     const cfg = { agents: { entries: { main: {} } } };
     const databasePath = path.join(root, "agents", "openclaw", "agent", "openclaw-agent.sqlite");
-    const lstatSync = fs.lstatSync;
-    using probe = vi.spyOn(fs, "lstatSync");
-    probe.mockImplementation((...args) => {
-      if (args[0] === databasePath) {
-        throw Object.assign(new Error("synthetic access denial"), { code: "EACCES" });
-      }
-      return lstatSync(...args);
-    });
+    using lstat = vi.spyOn(fs, "lstatSync");
+    using stat = vi.spyOn(fs, "statSync");
+    using realpath = vi.spyOn(fs.realpathSync, "native");
 
     expect(resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env })).toContain(databasePath);
     expect(
@@ -108,6 +97,9 @@ describe("session store target selection", () => {
         agentId: "openclaw",
       }),
     ).toEqual([{ agentId: "openclaw", path: databasePath }]);
+    for (const probe of [lstat, stat, realpath]) {
+      expect(probe.mock.calls.filter(([pathname]) => pathname === databasePath)).toEqual([]);
+    }
   });
 
   it("rejects a blank agent instead of selecting the default store", () => {
