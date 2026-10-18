@@ -51,29 +51,39 @@ afterEach(async () => {
   await page.viewport(1280, 720);
 });
 
-async function draw(name: string, source = true, onOpenReply = vi.fn()) {
-  const group: MessageGroupData = {
+function messageGroup(
+  message: MessageGroupData["messages"][number]["message"],
+  overrides: Partial<MessageGroupData> = {},
+  messageKey = "answer-message",
+): MessageGroupData {
+  return {
     kind: "group",
     key: "answer",
     role: "assistant",
     timestamp: 0,
     isStreaming: false,
     visibleContent: "text",
-    replyToSender: { id: "casey", name, identity: { type: "agent", id: "casey" } },
-    replyToMessage: {
-      key: "prompt",
-      message: source
-        ? { role: "user", content: "Original question", __openclaw: { id: "prompt" } }
-        : null,
-    },
-    messages: [
-      {
-        key: "answer-message",
-        hasVisibleContent: true,
-        message: { role: "assistant", content: "OK." },
-      },
-    ],
+    messages: [{ key: messageKey, hasVisibleContent: true, message }],
+    ...overrides,
   };
+}
+const bounds = (element: Element) => element.getBoundingClientRect();
+const part = (name: string, root: ParentNode = host) =>
+  root.querySelector<HTMLElement>(`.chat-reply-attribution__${name}`)!;
+
+async function draw(name: string, source = true, onOpenReply = vi.fn()) {
+  const group = messageGroup(
+    { role: "assistant", content: "OK." },
+    {
+      replyToSender: { id: "casey", name, identity: { type: "agent", id: "casey" } },
+      replyToMessage: {
+        key: "prompt",
+        message: source
+          ? { role: "user", content: "Original question", __openclaw: { id: "prompt" } }
+          : null,
+      },
+    },
+  );
   drawGroup(group, {
     showReasoning: false,
     showToolCalls: false,
@@ -92,21 +102,21 @@ async function draw(name: string, source = true, onOpenReply = vi.fn()) {
   const row = host.querySelector<HTMLElement>(".chat-reply-attribution--reply")!;
   return {
     row,
-    name: row.querySelector<HTMLElement>(".chat-reply-attribution__name")!,
+    name: part("name", row),
   };
 }
 
 function expectSingleLine(row: HTMLElement) {
-  const box = row.getBoundingClientRect();
-  const label = row.querySelector<HTMLElement>(".chat-reply-attribution__label")!;
-  const labelBox = label.getBoundingClientRect();
+  const box = bounds(row);
+  const label = part("label", row);
+  const labelBox = bounds(label);
   expect(box.height).toBeGreaterThan(0);
   expect(row.scrollWidth - row.clientWidth).toBeLessThanOrEqual(1);
-  expect(box.right).toBeLessThanOrEqual(host.getBoundingClientRect().right + 1);
+  expect(box.right).toBeLessThanOrEqual(bounds(host).right + 1);
   for (const text of row.querySelectorAll<HTMLElement>(
     ".chat-reply-attribution__label, .chat-reply-attribution__name, .chat-reply-attribution__unavailable",
   )) {
-    const textBox = text.getBoundingClientRect();
+    const textBox = bounds(text);
     // A second flex line must not hide below an otherwise single-line label.
     expect(textBox.top).toBeLessThan(labelBox.bottom);
     expect(textBox.bottom).toBeGreaterThan(labelBox.top);
@@ -140,35 +150,33 @@ describe.each([1440, 360])("reply attribution (%d px)", (width) => {
       host.dir = direction;
       const { row } = await draw("Casey Morgan");
       const group = row.closest(".chat-group")!;
-      const icon = row.querySelector<HTMLElement>(".chat-reply-attribution__mobile-icon")!;
+      const icon = part("mobile-icon", row);
       // The hidden text fallback must not stretch the agent image past its 16px circle.
       const face = row.querySelector(".chat-author-avatar .identity-avatar__fallback")!;
-      expect([face.getBoundingClientRect().width, face.getBoundingClientRect().height]).toEqual([
-        16, 16,
-      ]);
+      expect([bounds(face).width, bounds(face).height]).toEqual([16, 16]);
       if (width < 768) {
         const avatar = group.querySelector(":scope > .chat-avatar, :scope > .chat-avatar-slot")!;
-        expect(avatar.getBoundingClientRect().width).toBe(0);
+        expect(bounds(avatar).width).toBe(0);
         expect(group.querySelector(".chat-reply-connector")!.getBoundingClientRect().width).toBe(0);
-        expect(icon.getBoundingClientRect().width).toBe(14);
-        expect(icon.getBoundingClientRect().height).toBe(14);
+        expect(bounds(icon).width).toBe(14);
+        expect(bounds(icon).height).toBe(14);
         const transform = new DOMMatrixReadOnly(getComputedStyle(icon).transform);
         expect(transform.a).toBe(direction === "rtl" ? -1 : 1);
-        const bounds = group.getBoundingClientRect();
-        const rowBounds = row.getBoundingClientRect();
-        expect(Math.abs(rowBounds.left - bounds.left)).toBeLessThanOrEqual(1);
-        expect(Math.abs(rowBounds.right - bounds.right)).toBeLessThanOrEqual(1);
+        const groupBounds = bounds(group);
+        const rowBounds = bounds(row);
+        expect(Math.abs(rowBounds.left - groupBounds.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(rowBounds.right - groupBounds.right)).toBeLessThanOrEqual(1);
         const bubble = group.querySelector(".chat-bubble")!;
         const content = bubble.querySelector(".chat-text")!.getBoundingClientRect();
-        expect(content.top - bubble.getBoundingClientRect().top).toBeCloseTo(4, 1);
+        expect(content.top - bounds(bubble).top).toBeCloseTo(4, 1);
         expect(content.top - rowBounds.bottom).toBeCloseTo(12, 1);
         return;
       }
-      expect(icon.getBoundingClientRect().width).toBe(0);
+      expect(bounds(icon).width).toBe(0);
       const speaker = group.querySelector(":scope > .chat-avatar, :scope > .chat-avatar-slot")!;
       const text = group.querySelector(".chat-bubble > .chat-text")!;
-      const speakerBounds = speaker.getBoundingClientRect();
-      const textBounds = text.getBoundingClientRect();
+      const speakerBounds = bounds(speaker);
+      const textBounds = bounds(text);
       const lineHeight = Number.parseFloat(getComputedStyle(text).lineHeight);
       expect(
         Math.abs(speakerBounds.top + speakerBounds.height / 2 - textBounds.top - lineHeight / 2),
@@ -206,7 +214,7 @@ describe.each([1440, 360])("reply attribution (%d px)", (width) => {
   ])("keeps the label and name $name on one line", async ({ name, source, fits }) => {
     const result = await draw(name, source);
     expectSingleLine(result.row);
-    const label = result.row.querySelector<HTMLElement>(".chat-reply-attribution__label")!;
+    const label = part("label", result.row);
     expect(label.scrollWidth - label.clientWidth).toBeLessThanOrEqual(1);
     expect(result.name.clientWidth).toBeGreaterThan(0);
     expect(result.name.scrollWidth - result.name.clientWidth > 1).toBe(!fits);
@@ -234,25 +242,15 @@ it("keeps the unavailable-original label visible inside an own reply without a s
   await page.viewport(1440, 800);
   host.style.width = "720px";
   drawGroup(
-    {
-      kind: "group",
-      key: "own-missing-reply",
-      role: "user",
-      timestamp: 1,
-      isStreaming: false,
-      visibleContent: "text",
-      messages: [
-        {
-          key: "reply-paged",
-          hasVisibleContent: true,
-          message: {
-            role: "user",
-            content: "Follow up on the earlier synthetic answer.",
-            __openclaw: { id: "reply-paged", replyToId: "earlier-answer" },
-          },
-        },
-      ],
-    },
+    messageGroup(
+      {
+        role: "user",
+        content: "Follow up on the earlier synthetic answer.",
+        __openclaw: { id: "reply-paged", replyToId: "earlier-answer" },
+      },
+      { key: "own-missing-reply", role: "user", timestamp: 1 },
+      "reply-paged",
+    ),
     { showReasoning: false, resolveReplyPreview: () => ({ missing: true }) },
   );
   await document.fonts.ready;
@@ -261,12 +259,12 @@ it("keeps the unavailable-original label visible inside an own reply without a s
   )!;
   expect(fallback.textContent?.trim()).toBe("Original message unavailable");
   expect(getComputedStyle(fallback).visibility).toBe("visible");
-  const bounds = fallback.getBoundingClientRect();
+  const fallbackBounds = bounds(fallback);
   const bubble = fallback.closest(".chat-bubble")!.getBoundingClientRect();
-  expect(bounds.width).toBeGreaterThan(0);
-  expect(bounds.height).toBeGreaterThan(0);
-  expect(bounds.left).toBeGreaterThanOrEqual(bubble.left);
-  expect(bounds.right).toBeLessThanOrEqual(bubble.right);
+  expect(fallbackBounds.width).toBeGreaterThan(0);
+  expect(fallbackBounds.height).toBeGreaterThan(0);
+  expect(fallbackBounds.left).toBeGreaterThanOrEqual(bubble.left);
+  expect(fallbackBounds.right).toBeLessThanOrEqual(bubble.right);
 });
 
 it.each([1440, 390])(
@@ -278,43 +276,33 @@ it.each([1440, 390])(
       host.dir = direction;
       host.style.width = width - 32 + "px";
       drawGroup(
-        {
-          kind: "group",
-          key: "own",
-          role: "user",
-          timestamp: 1,
-          isStreaming: false,
-          visibleContent: "text",
-          messages: [
-            {
-              key: "reply",
-              hasVisibleContent: true,
-              message: {
-                role: "user",
-                content: "OK",
-                __openclaw: {
-                  id: "reply",
-                  replyToId: "source",
-                  replyToPreview: {
-                    senderLabel: "Casey Morgan",
-                    text: "Please review the release checklist. ".repeat(20),
-                  },
-                },
+        messageGroup(
+          {
+            role: "user",
+            content: "OK",
+            __openclaw: {
+              id: "reply",
+              replyToId: "source",
+              replyToPreview: {
+                senderLabel: "Casey Morgan",
+                text: "Please review the release checklist. ".repeat(20),
               },
             },
-          ],
-        },
+          },
+          { key: "own", role: "user", timestamp: 1 },
+          "reply",
+        ),
         { showReasoning: false, onOpenReply },
       );
       await document.fonts.ready;
       const row = host.querySelector<HTMLElement>(".chat-reply-attribution--inline")!;
-      const name = row.querySelector<HTMLElement>(".chat-reply-attribution__name")!;
-      const label = row.querySelector<HTMLElement>(".chat-reply-attribution__label")!;
+      const name = part("name", row);
+      const label = part("label", row);
       const button = row.querySelector<HTMLButtonElement>("button")!;
       expect(name.scrollWidth - name.clientWidth).toBeLessThanOrEqual(1);
       expect(label.scrollWidth - label.clientWidth).toBeLessThanOrEqual(1);
-      const a = label.getBoundingClientRect(),
-        b = button.getBoundingClientRect();
+      const a = bounds(label),
+        b = bounds(button);
       const bubble = row.closest(".chat-bubble")!.getBoundingClientRect();
       // The padded hit area may extend past the row, but not its containing bubble.
       expect(b.left).toBeGreaterThanOrEqual(bubble.left);
@@ -395,30 +383,18 @@ it.each([1440, 390])(
       });
     try {
       for (const outcome of outcomes) {
-        const group: MessageGroupData = {
-          kind: "group",
-          key: "answer",
-          role: "assistant",
-          timestamp: 0,
-          isStreaming: false,
-          visibleContent: "text",
-          replyShared: true,
-          messages: [
-            {
-              key: "answer-message",
-              hasVisibleContent: true,
-              message: {
-                role: "assistant",
-                content: "Step 3 moved to Friday.",
-                __openclaw: {
-                  id: "answer",
-                  replyToId: "older",
-                  ...(outcome.snapshot ? { replyToPreview: outcome.snapshot } : {}),
-                },
-              },
+        const group = messageGroup(
+          {
+            role: "assistant",
+            content: "Step 3 moved to Friday.",
+            __openclaw: {
+              id: "answer",
+              replyToId: "older",
+              ...(outcome.snapshot ? { replyToPreview: outcome.snapshot } : {}),
             },
-          ],
-        };
+          },
+          { replyShared: true },
+        );
         const drawLookup = (lookup: Lookup) =>
           drawGroup(
             group,

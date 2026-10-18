@@ -19,6 +19,12 @@ import {
 } from "./chat-message-markdown-view.tsx";
 import { installTranscriptDomMocks } from "./chat-transcript.test-support.ts";
 
+const speech: TtsSpeakResult = {
+  audioBase64: "UklGRg==",
+  mimeType: "audio/wav",
+  provider: "openai",
+};
+const speechText = "Local voice is working.";
 const audio: HTMLAudioElement[] = [];
 const play = vi.fn<HTMLAudioElement["play"]>(async () => undefined);
 const pause = vi.fn();
@@ -49,6 +55,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function readButton(view: ReturnType<typeof mount>, name = "Read aloud") {
+  return view.getByRole<HTMLButtonElement>("button", { name });
+}
+function pendingSpeech(gatewayListeners?: Set<() => void>) {
+  const pending = createDeferred<TtsSpeakResult>();
+  const request = vi.fn(() => pending.promise);
+  return { pending, request, view: mount(request, true, gatewayListeners) };
+}
 function mount(
   request: ReturnType<typeof vi.fn>,
   configured = true,
@@ -68,7 +82,7 @@ function mount(
   }
   const provider = createSolidApplicationContextProvider(context);
   const details = resolveMessageActionDetails(
-    prepareChatMessageRender({ role: "assistant", content: "Local voice is working." }),
+    prepareChatMessageRender({ role: "assistant", content: speechText }),
     { messageId: "reply-1", senderLabel: "OpenClaw" },
   );
   return mountSolid(() => <MessageActions details={details} options={{}} />, {
@@ -90,18 +104,18 @@ it("unlocks and reuses the same audio element before awaiting Gateway speech", a
       : Promise.reject(new DOMException("User activation required", "NotAllowedError"));
   });
   const view = mount(request);
-  const button = view.getByRole<HTMLButtonElement>("button", { name: "Read aloud" });
+  const button = readButton(view);
   button.click();
   userActivation = false;
   expect(play).toHaveBeenCalledOnce();
   expect(audio).toHaveLength(1);
   expect(audio[0]?.src).toMatch(/^data:audio\/wav/);
-  pending.resolve({ audioBase64: "UklGRg==", mimeType: "audio/wav", provider: "openai" });
+  pending.resolve(speech);
   await waitForSolid(() => expect(play).toHaveBeenCalledTimes(2));
-  expect(request).toHaveBeenCalledWith("tts.speak", { text: "Local voice is working." });
+  expect(request).toHaveBeenCalledWith("tts.speak", { text: speechText });
   expect(createUrl.mock.calls[0]?.[0]).toMatchObject({ type: "audio/wav", size: 4 });
   expect(audio[0]?.src).toBe("blob:synthetic-speech");
-  view.getByRole<HTMLButtonElement>("button", { name: "Stop reading" }).click();
+  readButton(view, "Stop reading").click();
   flush();
   expect(pause).toHaveBeenCalledTimes(2);
   expect(revoke).toHaveBeenCalledWith("blob:synthetic-speech");
@@ -109,26 +123,21 @@ it("unlocks and reuses the same audio element before awaiting Gateway speech", a
 });
 
 it("keeps speech through Gateway notifications that preserve connection and text", async () => {
-  const pending = createDeferred<TtsSpeakResult>();
   const gatewayListeners = new Set<() => void>();
-  const view = mount(
-    vi.fn(() => pending.promise),
-    true,
-    gatewayListeners,
-  );
-  view.getByRole<HTMLButtonElement>("button", { name: "Read aloud" }).click();
+  const { pending, view } = pendingSpeech(gatewayListeners);
+  readButton(view).click();
   for (const notify of gatewayListeners) {
     notify();
   }
   flush();
-  pending.resolve({ audioBase64: "UklGRg==", mimeType: "audio/wav", provider: "openai" });
+  pending.resolve(speech);
   await waitForSolid(() => expect(play).toHaveBeenCalledTimes(2));
   for (const notify of gatewayListeners) {
     notify();
   }
   flush();
   expect(revoke).not.toHaveBeenCalled();
-  view.getByRole<HTMLButtonElement>("button", { name: "Stop reading" }).click();
+  readButton(view, "Stop reading").click();
   flush();
   expect(revoke).toHaveBeenCalledWith("blob:synthetic-speech");
 });
@@ -141,32 +150,20 @@ it("keeps native transcript speech with its current application context", async 
       speechStarted.resolve();
     }
   });
-  const synthesize = async () => ({
-    audioBase64: "UklGRg==",
-    mimeType: "audio/wav",
-    provider: "openai",
-  });
+  const synthesize = async () => speech;
   const request = vi.fn(synthesize);
-  const stub = createRuntimeConfigStub();
-  const runtimeConfig = {
-    ...stub,
-    state: {
-      ...stub.state,
-      configSnapshot: {
-        hash: "synthetic",
-        sourceConfig: {},
-        runtimeConfig: { tts: { provider: "openai" } },
-      },
+  const runtimeConfig = createRuntimeConfigStub();
+  Object.assign(runtimeConfig.state, {
+    configSnapshot: {
+      hash: "synthetic",
+      sourceConfig: {},
+      runtimeConfig: { tts: { provider: "openai" } },
     },
-  };
+  });
   const context = createContext(request, { methods: ["tts.speak"], runtimeConfig });
   const transcript = createTestTranscript();
-  const messages = [{ role: "assistant", content: "Local voice is working." }];
-  const props = {
-    applicationContext: context,
-    transcript,
-    messages,
-  };
+  const messages = [{ role: "assistant", content: speechText }];
+  const props = { applicationContext: context, transcript, messages };
   const container = renderChatView(props);
   const thread = container.querySelector(".chat-thread-inner");
   const button = expectDefined(
@@ -176,11 +173,10 @@ it("keeps native transcript speech with its current application context", async 
   button.click();
   await speechStarted.promise;
   expect(play).toHaveBeenCalledTimes(2);
-  expect(request).toHaveBeenCalledWith("tts.speak", { text: "Local voice is working." });
+  expect(request).toHaveBeenCalledWith("tts.speak", { text: speechText });
   renderChatInto(container, props);
   expect(container.querySelector('[aria-label="Stop reading"]')).toBe(button);
   expect(revoke).not.toHaveBeenCalled();
-
   const replacementRequest = vi.fn(synthesize);
   renderChatInto(container, {
     ...props,
@@ -214,11 +210,10 @@ it("leaves unconfigured speech controls absent", () => {
 });
 
 it("does not play a synthesis result after the message is unmounted", async () => {
-  const pending = createDeferred<TtsSpeakResult>();
-  const view = mount(vi.fn(() => pending.promise));
-  view.getByRole<HTMLButtonElement>("button", { name: "Read aloud" }).click();
+  const { pending, view } = pendingSpeech();
+  readButton(view).click();
   view.unmount();
-  pending.resolve({ audioBase64: "UklGRg==", mimeType: "audio/wav", provider: "openai" });
+  pending.resolve(speech);
   await pending.promise;
   await Promise.resolve();
   expect(createUrl).not.toHaveBeenCalled();
@@ -230,7 +225,7 @@ it("shows a Gateway synthesis failure instead of starting another speech provide
     throw new Error("Local speech endpoint unavailable");
   });
   const view = mount(request);
-  view.getByRole<HTMLButtonElement>("button", { name: "Read aloud" }).click();
+  readButton(view).click();
   await waitForSolid(() =>
     expect(view.getByRole("status").textContent).toContain("Local speech endpoint unavailable"),
   );

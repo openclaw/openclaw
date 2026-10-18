@@ -109,6 +109,7 @@ describe("conversation position rail scroll rendering", () => {
       ),
     }));
     const ids = rows.map((row) => row.key);
+    const identityMap = () => new Map(ids.map((id) => [id, id]));
     const positions = {
       markers: ids.map((id, index) => ({
         id,
@@ -116,7 +117,7 @@ describe("conversation position rail scroll rendering", () => {
         role: "user" as const,
         message: message(id, "user", `Checkpoint ${index}`, index + 1),
       })),
-      markerIdsByMessageId: new Map(ids.map((id) => [id, id])),
+      markerIdsByMessageId: identityMap(),
     };
     container.className = "chat-thread";
     const readHeight = vi.fn(() => 600);
@@ -135,10 +136,7 @@ describe("conversation position rail scroll rendering", () => {
     });
     const transcriptView = () =>
       transcript.renderSession("agent:main:rail-notification", (session) => {
-        session.syncMessageRows(
-          new Map(ids.map((id) => [id, id])),
-          new Map(ids.map((id) => [id, id])),
-        );
+        session.syncMessageRows(identityMap(), identityMap());
         return session.render(
           rows,
           (row) => (row.kind === "content" ? row.content : null),
@@ -152,6 +150,10 @@ describe("conversation position rail scroll rendering", () => {
       while (host.isUpdatePending) {
         await host.updateComplete;
       }
+    };
+    const frame = () => {
+      flushFrame();
+      return settleUpdates();
     };
     const scrollTo = (offset: number) => {
       container.scrollTop = offset;
@@ -167,6 +169,10 @@ describe("conversation position rail scroll rendering", () => {
     const tabStops = () => [
       ...container.querySelectorAll<HTMLButtonElement>('.chat-position-rail [tabindex="0"]'),
     ];
+    const expectCurrent = (id: string) => {
+      expect(current()?.dataset.positionMarkerId).toBe(id);
+      expect(tabStops()).toEqual([current()]);
+    };
     try {
       document.body.append(host);
       await settleUpdates();
@@ -181,12 +187,9 @@ describe("conversation position rail scroll rendering", () => {
       }
       scrollTo(50);
       await settleUpdates();
-      flushFrame();
-      await settleUpdates();
-      flushFrame();
-      await settleUpdates();
-      expect(current()?.dataset.positionMarkerId).toBe("row-2");
-      expect(tabStops()).toEqual([current()]);
+      await frame();
+      await frame();
+      expectCurrent("row-2");
       // A prior sibling commit can leave layout dirty in this checkpoint.
       // Recording the render's scroll facts must consume already observed geometry.
       readHeight.mockClear();
@@ -197,7 +200,6 @@ describe("conversation position rail scroll rendering", () => {
       expect(readContentHeight).not.toHaveBeenCalled();
       expect(readOffset).not.toHaveBeenCalled();
       performUpdate.mockClear();
-
       const clearRailReads = () => {
         readRailHeight.mockClear();
         readRailOffset.mockClear();
@@ -217,8 +219,7 @@ describe("conversation position rail scroll rendering", () => {
       host.requestRender();
       await settleUpdates();
       clearRailReads();
-      flushFrame();
-      await settleUpdates();
+      await frame();
       expectNoRailFrameReads();
       performUpdate.mockClear();
 
@@ -237,28 +238,22 @@ describe("conversation position rail scroll rendering", () => {
         viewport: { clientHeight: 600, scrollHeight: 4800, scrollTop: 50 },
       });
       expectNoRailFrameReads();
-
       offsets.length = 0;
       scrollTo(55);
       expect(offsets).toEqual([5]);
       clearRailReads();
-      flushFrame();
-      await settleUpdates();
+      await frame();
       expectNoRailFrameReads();
       expect(performUpdate).not.toHaveBeenCalled();
-      expect(current()?.dataset.positionMarkerId).toBe("row-2");
-      expect(tabStops()).toEqual([current()]);
+      expectCurrent("row-2");
 
       // Both viewports span rows 0–5. With no new intersections or pane render,
       // the rail must still publish its midpoint crossing and keyboard entry.
       scrollTo(70);
       expect(offsets).toEqual([5, 15]);
-      flushFrame();
-      await settleUpdates();
+      await frame();
       expect(performUpdate).not.toHaveBeenCalled();
-      expect(current()?.dataset.positionMarkerId).toBe("row-3");
-      expect(tabStops()).toEqual([current()]);
-
+      expectCurrent("row-3");
       container.dispatchEvent(new WheelEvent("wheel", { deltaY: 600 }));
       await settleUpdates();
       performUpdate.mockClear();
@@ -269,26 +264,20 @@ describe("conversation position rail scroll rendering", () => {
       // The precise end edge is recorded without committing the unchanged virtual range.
       scrollTo(4198.5);
       await settleUpdates();
-      flushFrame();
-      await settleUpdates();
-      flushFrame();
-      await settleUpdates();
+      await frame();
+      await frame();
       expect(recordViewport.mock.results.at(-1)?.value).toBe(false);
       performUpdate.mockClear();
       scrollTo(4199.5);
       await settleUpdates();
       expect(recordViewport.mock.results.at(-1)?.value).toBe(true);
       expect(performUpdate).not.toHaveBeenCalled();
-      flushFrame();
-      await settleUpdates();
-      expect(current()?.dataset.positionMarkerId).toBe("row-39");
-      expect(tabStops()).toEqual([current()]);
-      flushFrame();
-      await settleUpdates();
+      await frame();
+      expectCurrent("row-39");
+      await frame();
       performUpdate.mockClear();
       scrollTo(4199.75);
-      flushFrame();
-      await settleUpdates();
+      await frame();
       expect(performUpdate).not.toHaveBeenCalled();
 
       // The physical end crosses row 35's boundary, so its new virtual range
@@ -297,16 +286,13 @@ describe("conversation position rail scroll rendering", () => {
         container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey;
       scrollTo(4200);
       await settleUpdates();
-      flushFrame();
-      await settleUpdates();
+      await frame();
       expect(performUpdate).toHaveBeenCalledTimes(1);
       expect(
         container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
       ).not.toBe(firstRowBefore);
       expect(container.querySelector('[data-virtual-row-key="row-35"]')).not.toBeNull();
-      expect(current()?.dataset.positionMarkerId).toBe("row-39");
-      expect(tabStops()).toEqual([current()]);
-
+      expectCurrent("row-39");
       host.remove();
       performUpdate.mockClear();
       scrollTo(70);
