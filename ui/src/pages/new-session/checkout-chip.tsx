@@ -1,96 +1,62 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, untrack } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
+import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import type { CheckoutChipOptions } from "./checkout-chip.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
-import { onOwnPopoverEvent } from "./new-session-runtime.ts";
-import { PickerLabel } from "./picker-label.tsx";
-let fieldDragging = false;
+import { SessionPicker } from "./picker.tsx";
 
-function handleFieldPointer(event: PointerEvent) {
-  fieldDragging = event.type === "pointerdown";
-}
-
-function handlePopoverHide(event: Event, onHide: () => void) {
-  if (event.target !== event.currentTarget) {
-    return;
-  }
-  const active = document.activeElement;
-  if (
-    active instanceof HTMLInputElement &&
-    fieldDragging &&
-    active.selectionStart !== active.selectionEnd
-  ) {
-    fieldDragging = false;
-    event.preventDefault();
-    return;
-  }
-  onHide();
-}
-
-function clearActiveBranchSuggestion(field: Element | null) {
-  field?.querySelector("input")?.removeAttribute("aria-activedescendant");
-  for (const suggestion of field?.querySelectorAll("[data-worktree-suggestion]") ?? []) {
-    suggestion.setAttribute("aria-selected", "false");
-  }
-}
-
-function setBranchSuggestionsOpen(target: EventTarget | null, open: boolean) {
-  if (!(target instanceof HTMLElement)) {
-    return;
-  }
-  const field = target.closest(".new-session-page__branch-field");
-  field?.querySelector("wa-popup")?.toggleAttribute("active", open);
-  const input = field?.querySelector("input");
-  input?.setAttribute("aria-expanded", String(open));
-  if (!open) {
-    clearActiveBranchSuggestion(field);
-  }
-}
-
-function handleBranchKeydown(target: HTMLElement, event: KeyboardEvent): boolean {
-  const field = target.closest(".new-session-page__branch-field");
-  const suggestions = [
-    ...(field?.querySelectorAll<HTMLButtonElement>("[data-worktree-suggestion]") ?? []),
-  ];
-  if (suggestions.length === 0) {
-    return false;
-  }
-  const activeIndex = suggestions.findIndex(
-    (suggestion) => suggestion.getAttribute("aria-selected") === "true",
-  );
-  if (event.key === "Enter" && !event.isComposing && activeIndex >= 0) {
-    suggestions[activeIndex]!.click();
-    return true;
-  }
-  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
-    return false;
-  }
-  const direction = event.key === "ArrowDown" ? 1 : -1;
-  const nextIndex =
-    activeIndex < 0
-      ? direction === 1
-        ? 0
-        : suggestions.length - 1
-      : (activeIndex + direction + suggestions.length) % suggestions.length;
-  for (const [index, suggestion] of suggestions.entries()) {
-    suggestion.setAttribute("aria-selected", String(index === nextIndex));
-  }
-  target.setAttribute("aria-activedescendant", suggestions[nextIndex]!.id);
-  setBranchSuggestionsOpen(target, true);
-  return true;
-}
-
-function WorktreeFields(props: { params: CheckoutChipOptions }) {
-  const handleFieldKeydown = (event: KeyboardEvent) => {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLElement)) {
-      return;
+function WorktreeFields(props: {
+  params: CheckoutChipOptions;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const [suggestionsOpen, setSuggestionsOpen] = createSignal(false);
+  let baseRef!: HTMLInputElement;
+  let nameInput!: HTMLInputElement;
+  const suggestionRefs = new Map<string, HTMLButtonElement>();
+  let activeSuggestion: HTMLButtonElement | undefined;
+  const clearActiveSuggestion = () => {
+    baseRef.removeAttribute("aria-activedescendant");
+    activeSuggestion?.setAttribute("aria-selected", "false");
+    activeSuggestion = undefined;
+  };
+  const closeSuggestions = () => {
+    setSuggestionsOpen(false);
+    clearActiveSuggestion();
+  };
+  // Native selection commits synchronously, including consecutive keys before Solid settles.
+  const handleBranchKeydown = (event: KeyboardEvent) => {
+    const rows = suggestions().flatMap((branch) => suggestionRefs.get(branch.name) ?? []);
+    if (event.currentTarget !== baseRef || rows.length === 0) {
+      return false;
     }
-    if (handleBranchKeydown(target, event)) {
+    const activeIndex = activeSuggestion ? rows.indexOf(activeSuggestion) : -1;
+    if (event.key === "Enter" && !event.isComposing && activeIndex >= 0) {
+      activeSuggestion!.click();
+      return true;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+      return false;
+    }
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    const nextIndex =
+      activeIndex < 0
+        ? direction === 1
+          ? 0
+          : rows.length - 1
+        : (activeIndex + direction + rows.length) % rows.length;
+    clearActiveSuggestion();
+    activeSuggestion = rows[nextIndex]!;
+    activeSuggestion.setAttribute("aria-selected", "true");
+    baseRef.setAttribute("aria-activedescendant", activeSuggestion.id);
+    setSuggestionsOpen(true);
+    return true;
+  };
+  const handleFieldKeydown = (event: KeyboardEvent) => {
+    if (handleBranchKeydown(event)) {
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -98,33 +64,18 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      target.closest("wa-popover")?.removeAttribute("open");
+      props.onClose();
       return;
     }
-    const popover = target.closest("wa-popover");
-    const liveWorktreeName =
-      popover?.querySelector<HTMLInputElement>("input[data-worktree-name]")?.value ??
-      props.params.worktreeName;
     if (
       event.key !== "Enter" ||
       event.isComposing ||
-      (!props.params.repository && !isWorktreeNameValid(liveWorktreeName))
+      (!props.params.repository && !isWorktreeNameValid(nameInput.value))
     ) {
       return;
     }
-    fieldDragging = false;
     event.preventDefault();
-    if (popover) {
-      const confirmAfterOuterHide = (hideEvent: Event) => {
-        if (hideEvent.target !== popover) {
-          return;
-        }
-        popover.removeEventListener("wa-after-hide", confirmAfterOuterHide);
-        props.params.onConfirm();
-      };
-      popover.addEventListener("wa-after-hide", confirmAfterOuterHide);
-      popover.removeAttribute("open");
-    }
+    props.onConfirm();
   };
   const suggestions = createMemo(() => (props.params.branches?.branches ?? []).slice(0, 8));
   const branchName = () => props.params.worktreeName.trim();
@@ -136,7 +87,7 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
       aria-label={t("newSession.worktreeBaseRef")}
       aria-autocomplete={suggestions().length ? "list" : undefined}
       aria-controls={suggestions().length ? "new-session-worktree-branch-suggestions" : undefined}
-      aria-expanded={suggestions().length ? "false" : undefined}
+      aria-expanded={suggestions().length ? (suggestionsOpen() ? "true" : "false") : undefined}
       disabled={props.params.submitting || props.params.pendingPlacement}
       placeholder={
         props.params.branchesLoading
@@ -144,20 +95,16 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
           : (props.params.branches?.defaultBranch ?? t("newSession.worktreeBaseRef"))
       }
       value={props.params.baseRef}
-      onFocus={(event: FocusEvent) => setBranchSuggestionsOpen(event.currentTarget, true)}
-      onInput={(event: Event) => {
-        if (event.currentTarget instanceof HTMLInputElement) {
-          clearActiveBranchSuggestion(
-            event.currentTarget.closest(".new-session-page__branch-field"),
-          );
-          setBranchSuggestionsOpen(event.currentTarget, true);
-          props.params.onBaseRefInput(event.currentTarget.value);
-        }
+      onFocus={() => setSuggestionsOpen(true)}
+      onInput={(event) => {
+        clearActiveSuggestion();
+        setSuggestionsOpen(true);
+        props.params.onBaseRefInput(event.currentTarget.value);
       }}
-      ref={nativeListener("keydown", handleFieldKeydown)}
-      onPointerDown={handleFieldPointer}
-      onPointerUp={handleFieldPointer}
-      onPointerCancel={handleFieldPointer}
+      ref={(node) => {
+        baseRef = node;
+      }}
+      onKeyDown={handleFieldKeydown}
     />
   );
   return (
@@ -167,22 +114,23 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
         {suggestions().length ? (
           <div
             class="new-session-page__branch-field"
-            onFocusOut={(event: FocusEvent) => {
-              const field = event.currentTarget;
+            onFocusOut={(event) => {
               if (
-                field instanceof HTMLElement &&
-                (!(event.relatedTarget instanceof Node) || !field.contains(event.relatedTarget))
+                !(event.relatedTarget instanceof Node) ||
+                !event.currentTarget.contains(event.relatedTarget)
               ) {
-                setBranchSuggestionsOpen(field, false);
+                closeSuggestions();
               }
             }}
           >
             {baseRefInput}
-            <wa-popup
+            <Popover
+              id="new-session-worktree-branch-popup"
+              label={t("newSession.worktreeBaseRef")}
               class="new-session-page__branch-popup"
-              anchor="new-session-worktree-base-ref"
-              placement="bottom-start"
-              sync="width"
+              anchor={baseRef}
+              open={suggestionsOpen()}
+              onOpenChange={setSuggestionsOpen}
             >
               <div
                 id="new-session-worktree-branch-suggestions"
@@ -190,9 +138,18 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
                 role="listbox"
                 aria-label={t("newSession.worktreeBaseRef")}
               >
-                {
-                  <For each={suggestions()} keyed={(branch) => branch.name}>
-                    {(branch, index) => (
+                <For each={suggestions()} keyed={(branch) => branch.name}>
+                  {(branch, index) => {
+                    let button: HTMLButtonElement;
+                    // The For key fixes this identity for the row's entire lifetime.
+                    const name = untrack(() => branch().name);
+                    onCleanup(() => {
+                      suggestionRefs.delete(name);
+                      if (activeSuggestion === button) {
+                        clearActiveSuggestion();
+                      }
+                    });
+                    return (
                       <button
                         id={`new-session-worktree-branch-suggestion-${index()}`}
                         type="button"
@@ -202,18 +159,24 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
                         data-worktree-suggestion={branch().name}
                         tabindex="-1"
                         onMouseDown={(event: MouseEvent) => event.preventDefault()}
-                        ref={nativeListener("click", (event: MouseEvent) => {
-                          props.params.onBaseRefInput(branch().name);
-                          setBranchSuggestionsOpen(event.currentTarget, false);
-                        })}
+                        ref={[
+                          (node) => {
+                            button = node;
+                            suggestionRefs.set(name, node);
+                          },
+                          nativeListener("click", () => {
+                            props.params.onBaseRefInput(branch().name);
+                            closeSuggestions();
+                          }),
+                        ]}
                       >
                         <span class="session-menu__text">{branch().name}</span>
                       </button>
-                    )}
-                  </For>
-                }
+                    );
+                  }}
+                </For>
               </div>
-            </wa-popup>
+            </Popover>
           </div>
         ) : (
           baseRefInput
@@ -236,15 +199,8 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
               disabled={props.params.submitting || props.params.pendingPlacement}
               placeholder={t("newSession.worktreeNamePlaceholder")}
               value={props.params.worktreeName}
-              onInput={(event: Event) => {
-                if (event.currentTarget instanceof HTMLInputElement) {
-                  props.params.onWorktreeNameInput(event.currentTarget.value);
-                }
-              }}
-              ref={nativeListener("keydown", handleFieldKeydown)}
-              onPointerDown={handleFieldPointer}
-              onPointerUp={handleFieldPointer}
-              onPointerCancel={handleFieldPointer}
+              onInput={(event) => props.params.onWorktreeNameInput(event.currentTarget.value)}
+              ref={[(node) => (nameInput = node), nativeListener("keydown", handleFieldKeydown)]}
             />
           </label>
           <div class="new-session-page__menu-note">
@@ -259,92 +215,95 @@ function WorktreeFields(props: { params: CheckoutChipOptions }) {
 }
 
 export function CheckoutChip(props: { params: CheckoutChipOptions }) {
+  let popover!: PopoverHandle;
+  let confirmPending = false;
   return (
-    <>
-      <span class="new-session-page__select">
-        <button
-          id="new-session-checkout-trigger"
-          type="button"
-          class={[
-            "new-session-page__trigger",
-            { "new-session-page__trigger--hiding": props.params.popoverHiding },
-          ]}
-          title={`${t("newSession.checkout")}: ${props.params.state.label}`}
-          aria-label={`${t("newSession.checkout")}: ${props.params.state.label}`}
-          data-worktree={String(props.params.worktree)}
-          aria-haspopup="dialog"
-          aria-expanded={props.params.popoverOpen ? "true" : "false"}
-          disabled={props.params.submitting || props.params.pendingPlacement}
-          ref={nativeListener("click", (event) => props.params.onGuardTransition(event))}
-        >
-          <PickerLabel icon={<Icon name="gitBranch" />} label={props.params.state.label} />
-        </button>
-      </span>
-      <wa-popover
-        ref={syncPopoverLabel}
-        class="new-session-page__select new-session-page__checkout-popover new-session-page__picker-popover"
-        for="new-session-checkout-trigger"
-        placement="bottom-start"
-        without-arrow
-        onWa-show={onOwnPopoverEvent(() => props.params.onPopoverShow())}
-        onWa-hide={(event: Event) => handlePopoverHide(event, props.params.onPopoverHide)}
-        onWa-after-hide={onOwnPopoverEvent(() => props.params.onPopoverAfterHide())}
-      >
-        <div class="new-session-page__picker-root">
-          <div class="new-session-page__menu-title">{t("newSession.checkout")}</div>
-          {props.params.repository ? undefined : (
-            <>
-              <SessionMenuItem
-                item={{
-                  value: "checkout",
-                  label: t("newSession.checkoutCurrent"),
-                  icon: <Icon name="folder" />,
-                  sub: props.params.branches?.headBranch,
-                  checked: !props.params.worktree,
-                  disabled: props.params.remotePlacement,
-                  title: props.params.remotePlacement
-                    ? t("newSession.checkoutRemoteLocked")
-                    : undefined,
-                  onSelect: () => props.params.onSelectWorktree(false),
-                  keepOpen: true,
-                }}
-                submitting={props.params.submitting}
-              />
-              <SessionMenuItem
-                item={{
-                  value: "worktree",
-                  label: t("newSession.checkoutWorktree"),
-                  icon: <Icon name="gitBranch" />,
-                  sub: t("newSession.checkoutWorktreeSub"),
-                  checked: props.params.worktree,
-                  disabled: !props.params.worktreeAvailable,
-                  title: props.params.worktreeAvailable
-                    ? undefined
-                    : props.params.repositoryUnavailable
+    <SessionPicker
+      kind="checkout"
+      label={`${t("newSession.checkout")}: ${props.params.state.label}`}
+      value={props.params.state.label}
+      icon={<Icon name="gitBranch" />}
+      triggerAttributes={{
+        title: `${t("newSession.checkout")}: ${props.params.state.label}`,
+        "data-worktree": String(props.params.worktree),
+      }}
+      state={props.params}
+      ref={(handle) => {
+        popover = handle;
+      }}
+      onAfterHide={() => {
+        if (confirmPending) {
+          confirmPending = false;
+          props.params.onConfirm();
+        }
+      }}
+    >
+      <div class="new-session-page__picker-root">
+        <div class="new-session-page__menu-title">{t("newSession.checkout")}</div>
+        {props.params.repository ? undefined : (
+          <>
+            <SessionMenuItem
+              item={{
+                value: "checkout",
+                label: t("newSession.checkoutCurrent"),
+                icon: <Icon name="folder" />,
+                sub: props.params.branches?.headBranch,
+                description: props.params.currentCheckoutUnavailableReason,
+                checked: !props.params.worktree,
+                disabled:
+                  props.params.remotePlacement ||
+                  Boolean(props.params.currentCheckoutUnavailableReason),
+                title: props.params.remotePlacement
+                  ? t("newSession.checkoutRemoteLocked")
+                  : props.params.currentCheckoutUnavailableReason,
+                onSelect: () => props.params.onSelectWorktree(false),
+                keepOpen: true,
+              }}
+              submitting={props.params.submitting}
+            />
+            <SessionMenuItem
+              item={{
+                value: "worktree",
+                label: t("newSession.checkoutWorktree"),
+                icon: <Icon name="gitBranch" />,
+                sub: t("newSession.checkoutWorktreeSub"),
+                checked: props.params.worktree,
+                disabled: !props.params.worktreeAvailable,
+                title: props.params.worktreeAvailable
+                  ? undefined
+                  : (props.params.currentCheckoutUnavailableReason ??
+                    (props.params.repositoryUnavailable
                       ? t("newSession.gitCheckUnavailable")
-                      : t("newSession.worktreeUnavailable"),
-                  onSelect: () => props.params.onSelectWorktree(true),
-                  keepOpen: true,
-                }}
-                submitting={props.params.submitting}
-              />
-            </>
-          )}
-          {props.params.worktree || props.params.repository ? (
-            <WorktreeFields params={props.params} />
-          ) : undefined}
-          {props.params.remotePlacement ? (
-            <div class="new-session-page__menu-note">
-              {t(
-                props.params.repository
-                  ? "newSession.placementClonesRepository"
-                  : "newSession.placementSyncsFolder",
-                { folder: props.params.folderLabel },
-              )}
-            </div>
-          ) : undefined}
-        </div>
-      </wa-popover>
-    </>
+                      : t("newSession.worktreeUnavailable"))),
+                onSelect: () => props.params.onSelectWorktree(true),
+                keepOpen: true,
+              }}
+              submitting={props.params.submitting}
+            />
+          </>
+        )}
+        {props.params.worktree || props.params.repository ? (
+          <WorktreeFields
+            params={props.params}
+            onClose={() => popover.hide()}
+            onConfirm={() => {
+              if (popover.hide()) {
+                confirmPending = true;
+              }
+            }}
+          />
+        ) : undefined}
+        {props.params.remotePlacement ? (
+          <div class="new-session-page__menu-note">
+            {t(
+              props.params.repository
+                ? "newSession.placementClonesRepository"
+                : "newSession.placementSyncsFolder",
+              { folder: props.params.folderLabel },
+            )}
+          </div>
+        ) : undefined}
+      </div>
+    </SessionPicker>
   );
 }

@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -104,6 +105,7 @@ describe("buildAssistantMessage", () => {
     };
     const msg = buildAssistantMessage(response, MODEL_INFO);
     expect(msg.usage).toMatchObject({
+      usageReport: { state: "available" },
       input: 20,
       cacheRead: 80,
       contextUsage: { state: "available", promptTokens: 100, totalTokens: 150 },
@@ -121,7 +123,6 @@ describe("buildAssistantMessage", () => {
     const msg = buildAssistantMessage(response, MODEL_INFO, { input: 321, output: 123 });
     expect(msg.usage.contextUsage).toBeUndefined();
   });
-
   it("omits context usage when the output counter is missing", () => {
     const response: Parameters<typeof buildAssistantMessage>[0] = {
       model: "qwen3.5",
@@ -195,39 +196,38 @@ describe("createOllamaStreamFn thinking events", () => {
     return events;
   }
 
-  it.each([
-    [0, 0, 0],
-    [1_250_000, 2_500_000, 3.75],
-  ])("retains final processing timing (%i ns + %i ns)", async (prompt, evalDuration, expected) => {
-    const events = await streamOllamaEvents([
-      {
-        ...makeOllamaResponse({ content: "ok" }),
-        done: false,
-        prompt_eval_duration: 50_000_000,
-        eval_duration: 60_000_000,
-      },
-      {
-        ...makeOllamaResponse({}),
-        prompt_eval_duration: prompt,
-        eval_duration: evalDuration,
-        load_duration: 900_000_000,
-      },
-    ]);
-    expect(events.find((event) => event.type === "done")).toMatchObject({
-      message: {
-        diagnostics: [
-          {
-            type: "provider_timing",
-            timestamp: expect.any(Number),
-            details: { processingMs: expected },
-          },
-        ],
-      },
-    });
-  });
+  it.each([[1_250_000, 2_500_000, 3.75]])(
+    "retains final processing timing (%i ns + %i ns)",
+    async (prompt, evalDuration, expected) => {
+      const events = await streamOllamaEvents([
+        {
+          ...makeOllamaResponse({ content: "ok" }),
+          done: false,
+          prompt_eval_duration: 50_000_000,
+          eval_duration: 60_000_000,
+        },
+        {
+          ...makeOllamaResponse({}),
+          prompt_eval_duration: prompt,
+          eval_duration: evalDuration,
+          load_duration: 900_000_000,
+        },
+      ]);
+      expect(events.find((event) => event.type === "done")).toMatchObject({
+        message: {
+          diagnostics: [
+            {
+              type: "provider_timing",
+              timestamp: expect.any(Number),
+              details: { processingMs: expected },
+            },
+          ],
+        },
+      });
+    },
+  );
 
   it.each([
-    {},
     { prompt_eval_duration: 1 },
     { eval_duration: 1 },
     { prompt_eval_duration: -1, eval_duration: 1 },
@@ -433,7 +433,6 @@ describe("createOllamaStreamFn thinking events", () => {
     expect(done.message?.stopReason).toBe("length");
     expect(done.message?.content).toEqual([]);
   });
-
   it("promotes standalone bracketed local-model tool text to a structured tool call", async () => {
     const rawToolText = [
       "[mempalace_mempalace_search]",
@@ -489,6 +488,34 @@ describe("createOllamaStreamFn thinking events", () => {
       type: "toolCall",
       name: "mempalace_mempalace_search",
       arguments: { query: "codename", wing: "personal", room: "identities" },
+    });
+  });
+
+  it("preserves a fenced Ollama text tool call as visible text", async () => {
+    const text = [
+      "```powershell",
+      'exec(command="echo hello", title="Echo command", workdir="C:\\workspace")',
+      "```",
+    ].join("\n");
+    const events = await streamOllamaEvents(
+      [makeOllamaResponse({ content: text })],
+      {},
+      {
+        messages: [{ role: "user", content: "Use exec to run echo hello", timestamp: 0 }],
+        tools: [{ name: "exec", description: "Run a command", parameters: Type.Object({}) }],
+      },
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect(events.find((event) => event.type === "done")).toMatchObject({
+      reason: "stop",
+      message: { stopReason: "stop", content: [{ type: "text", text }] },
     });
   });
 

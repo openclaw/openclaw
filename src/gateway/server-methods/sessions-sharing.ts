@@ -38,7 +38,6 @@ import { requireSessionRowProjection } from "../session-row-projection-access.js
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import {
   allowedSessionVisibilities,
-  invalidateSessionSharingSnapshot,
   isSessionVisibilityAllowed,
   resolveSessionVisibility,
 } from "../session-sharing.js";
@@ -143,7 +142,6 @@ function publishSharingChange(params: {
   event: Omit<SessionSharingEvidenceEvent, "actorState">;
 }): void {
   bumpGatewayAccessRevision();
-  invalidateSessionSharingSnapshot(params.event.sessionKey);
   const eventOptions = {
     sessionKeys: [params.event.sessionKey],
   };
@@ -202,9 +200,9 @@ function createSessionMembersListHandler(
       await projection.withSelectionPreparation(async () => {
         do {
           await measureSessionCollaborationPhase(`${method}.projection`, () =>
-            Promise.resolve(projection.prepareSelection()),
+            Promise.resolve(projection.prepareSelection({ metadataOnly: true })),
           );
-        } while (projection.needsSelectionPreparation());
+        } while (projection.needsSelectionPreparation({ metadataOnly: true }));
         let tokenCodec = resolveSessionPublicShare(managed.entry)
           ? await loadPublicSessionShareTokenCodec()
           : undefined;
@@ -324,8 +322,8 @@ function createSessionMemberMutationHandler(
       if (action === "add") {
         const projection = requireSessionRowProjection(context);
         do {
-          await projection.ensureMaterialized();
-        } while (projection.needsMaterialization);
+          await projection.prepareSelection({ metadataOnly: true });
+        } while (projection.needsSelectionPreparation({ metadataOnly: true }));
         access.assertCurrent();
         addActor = actorIdentity(client);
         const known = knownSessionIdentities({

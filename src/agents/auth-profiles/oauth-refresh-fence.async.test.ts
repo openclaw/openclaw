@@ -42,6 +42,8 @@ describe("awaited OAuth persistence", () => {
     "bounds an observer waiting for a %s",
     async (scenario) => {
       vi.useFakeTimers();
+      const startedAt = performance.now();
+      const clock = vi.spyOn(performance, "now");
       const reading = createDeferredCore<{ pending: boolean }>();
       const resolve = vi.fn(async () => "synthetic-access");
       const observing = observeOAuthRefreshFenceSettlement({
@@ -56,7 +58,8 @@ describe("awaited OAuth persistence", () => {
         if (scenario === "stalled read") {
           await vi.advanceTimersByTimeAsync(100);
         } else {
-          vi.setSystemTime(Date.now() + 101);
+          await vi.advanceTimersByTimeAsync(0);
+          clock.mockReturnValue(startedAt + 101);
           if (scenario === "expired rejection") {
             reading.reject(new Error("synthetic late read failure"));
           } else {
@@ -71,6 +74,7 @@ describe("awaited OAuth persistence", () => {
       } finally {
         reading.resolve({ pending: false });
         await observing.catch(() => {});
+        clock.mockRestore();
         vi.useRealTimers();
       }
     },
@@ -252,6 +256,149 @@ describe("awaited OAuth persistence", () => {
           closeOpenClawStateDatabaseForTest();
         }
       });
+    },
+  );
+
+  it.each([
+    { kind: "owner", wallStep: -60_000 },
+    { kind: "owner", wallStep: 60_000 },
+    { kind: "blocked read", wallStep: -60_000 },
+    { kind: "blocked read", wallStep: 60_000 },
+    { kind: "polling", wallStep: -60_000 },
+    { kind: "polling", wallStep: 60_000 },
+  ])(
+    "keeps the $kind deadline after a $wallStep ms wall-clock step",
+    async ({ kind, wallStep }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(100_000);
+      const controller = new AbortController();
+      const reading = createDeferredCore<{ pending: boolean }>();
+      const resolve = vi.fn(async () => "synthetic-access");
+      const observing =
+        kind === "owner"
+          ? observeOAuthRefreshSettlement(
+              "clock-step owner",
+              100,
+              reading.promise,
+              controller.signal,
+            )
+          : observeOAuthRefreshFenceSettlement({
+              label: "clock-step observer",
+              timeoutMs: 100,
+              signal: controller.signal,
+              read: () => (kind === "polling" ? { pending: true } : reading.promise),
+              isPending: (snapshot) => snapshot.pending,
+              resolve,
+            });
+      let settled = false;
+      const outcome = observing.then(
+        (value) => {
+          settled = true;
+          return { value };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { error };
+        },
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        vi.setSystemTime(Date.now() + wallStep);
+        await vi.advanceTimersByTimeAsync(99);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        expect(await outcome).toEqual({
+          error: expect.objectContaining({
+            message: expect.stringContaining("exceeded hard timeout (100ms)"),
+          }),
+        });
+        reading.resolve({ pending: false });
+        await vi.advanceTimersByTimeAsync(100);
+        expect(resolve).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        controller.abort();
+        reading.resolve({ pending: false });
+        await outcome;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["owner", "fence", "polling"] as const)(
+    "does not round the fractional %s deadline down",
+    async (kind) => {
+      vi.useFakeTimers();
+      const fakeNow = performance.now.bind(performance);
+      // The high-resolution clock advances between deadline creation and timer arming.
+      const clock = vi
+        .spyOn(performance, "now")
+        .mockImplementationOnce(() => fakeNow() + 0.25)
+        .mockImplementation(() => fakeNow() + 0.75);
+      const controller = new AbortController();
+      const reading = createDeferredCore<string>();
+      let lastReadAt: number | undefined;
+      const observing =
+        kind === "owner"
+          ? observeOAuthRefreshSettlement(
+              "fractional owner",
+              100,
+              reading.promise,
+              controller.signal,
+            )
+          : observeOAuthRefreshFenceSettlement({
+              label: "fractional fence",
+              timeoutMs: 100,
+              signal: controller.signal,
+              read: () => {
+                if (kind !== "polling") {
+                  return reading.promise;
+                }
+                const now = fakeNow();
+                // Fail a zero-delay polling regression instead of spinning forever.
+                if (lastReadAt === now) {
+                  throw new Error("polling did not advance the clock");
+                }
+                lastReadAt = now;
+                return "pending";
+              },
+              isPending: (value) => value === "pending",
+              resolve: async (value) => value,
+            });
+      let settled = false;
+      const outcome = observing.then(
+        (value) => {
+          settled = true;
+          return { value };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { error };
+        },
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(99);
+        expect(settled).toBe(false);
+        if (kind === "polling") {
+          await vi.advanceTimersByTimeAsync(1);
+          expect(await outcome).toEqual({
+            error: expect.objectContaining({
+              message: expect.stringContaining("exceeded hard timeout (100ms)"),
+            }),
+          });
+        } else {
+          reading.resolve("settled before deadline");
+          expect(await outcome).toEqual({ value: "settled before deadline" });
+        }
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        controller.abort();
+        reading.resolve("cleanup");
+        await outcome;
+        clock.mockRestore();
+        vi.useRealTimers();
+      }
     },
   );
 });

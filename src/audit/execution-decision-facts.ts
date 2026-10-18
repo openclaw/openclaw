@@ -1,5 +1,5 @@
 /** Immutable decision facts for action boundaries without an owner-native record. */
-import type { DatabaseSync } from "node:sqlite";
+
 import { sql, type Selectable } from "kysely";
 import { validateDecisionReceiptV1 } from "../../packages/gateway-protocol/src/audit-run-validators.js";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
@@ -8,6 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -62,7 +63,7 @@ type ExecutionDecisionFactOptions = OpenClawStateDatabaseOptions & {
   limits?: { maxRows: number; pruneBatchRows: number };
 };
 
-function decisionDb(db: DatabaseSync) {
+function decisionDb(db: EngineConnection) {
   return getNodeSqliteKysely<ExecutionDecisionDatabase>(db);
 }
 
@@ -140,7 +141,10 @@ function unknownDecisionReceipt(
 
 type ExecutionDecisionContext = Pick<DecisionReceiptV1, "contextId" | "executionId" | "runId">;
 
-function hasExactExecutionContext(db: DatabaseSync, context: ExecutionDecisionContext): boolean {
+function hasExactExecutionContext(
+  db: EngineConnection,
+  context: ExecutionDecisionContext,
+): boolean {
   if (!tableExists(db, "execution_identity_contexts")) {
     return false;
   }
@@ -157,7 +161,7 @@ function hasExactExecutionContext(db: DatabaseSync, context: ExecutionDecisionCo
   );
 }
 
-function deleteExpiredDecisionFacts(db: DatabaseSync, now: number, limit: number) {
+function deleteExpiredDecisionFacts(db: EngineConnection, now: number, limit: number) {
   const kysely = decisionDb(db);
   const expiredIds = kysely
     .selectFrom("execution_decision_facts")
@@ -173,7 +177,7 @@ function deleteExpiredDecisionFacts(db: DatabaseSync, now: number, limit: number
 }
 
 function pruneDecisionFactsAfterInsert(
-  db: DatabaseSync,
+  db: EngineConnection,
   now: number,
   limits: { maxRows: number; pruneBatchRows: number },
 ): void {
@@ -226,10 +230,6 @@ export function recordExecutionDecisionFactInDatabase(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = decisionDb(db);
-      // The context is the authoritative tuple owner; reread it inside the commit section.
-      if (!hasExactExecutionContext(db, receipt)) {
-        throw new Error("execution decision fact requires an exact retained execution context");
-      }
       const existing = executeSqliteQueryTakeFirstSync(
         db,
         kysely
@@ -284,7 +284,11 @@ export function recordExecutionDecisionFactInDatabase(
   );
 }
 
-function retainedDecisionFactsForContextQuery(db: DatabaseSync, contextId: string, now: number) {
+function retainedDecisionFactsForContextQuery(
+  db: EngineConnection,
+  contextId: string,
+  now: number,
+) {
   return decisionDb(db)
     .selectFrom("execution_decision_facts")
     .where("context_id", "=", contextId)
@@ -310,7 +314,7 @@ function executionDecisionSelectorId(row: ExecutionDecisionMetadataRow): string 
 }
 
 function retainedDecisionFactMetadata(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   contextId: string;
   now: number;
   after?: ExecutionDecisionFactCursor;
@@ -410,7 +414,7 @@ function projectDecisionMetadata(
 
 /** Summarize at most 128 owner rows; the 129th makes coverage explicitly unknown. */
 export function summarizeExecutionDecisionFactsForContextInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     context: ExecutionDecisionContext;
     now?: number;
@@ -462,7 +466,7 @@ export function summarizeExecutionDecisionFactsForContextInDatabase(
 }
 
 export function hasExecutionDecisionFactsForRunInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     runId: string;
     now?: number;
@@ -489,7 +493,7 @@ export function hasExecutionDecisionFactsForRunInDatabase(
 }
 
 export function pageExecutionDecisionFactsForContextInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     context: ExecutionDecisionContext;
     after?: ExecutionDecisionFactCursor;

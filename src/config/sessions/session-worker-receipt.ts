@@ -1,4 +1,7 @@
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  SqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 
@@ -6,6 +9,15 @@ export type SessionWorkerReceiptAdmission = {
   admission: SqliteWorkerOperationAdmission;
   retained: RetainedWorkerTransactionAdmission;
 };
+
+export function throwSessionWorkerOutcomeUnknown(message: string, cause: unknown): never {
+  if (hasSqliteWorkerOutcomeUnknown(cause)) {
+    throw cause;
+  }
+  const error = new SqliteWorkerError(message, "outcome-unknown");
+  error.cause = cause;
+  throw error;
+}
 
 /** An acknowledged native receipt survives failed result delivery; FIFO stays held until settlement. */
 export async function settleSessionWorkerReceipt<T>(

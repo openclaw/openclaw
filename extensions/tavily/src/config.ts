@@ -7,7 +7,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com";
+const DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com";
 const DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS = 30;
 const DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS = 60;
 const TAVILY_API_KEY_ENV_VAR = "TAVILY_API_KEY";

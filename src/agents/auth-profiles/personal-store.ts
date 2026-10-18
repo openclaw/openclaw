@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
@@ -109,7 +111,7 @@ export function withPersonalAuthProfileStore<T>(
               usageStats: store.usageStats?.[profileId],
             });
             registerUserModelAuthProfileSecrets(next.credential);
-            const digest = createHash("sha256").update(JSON.stringify(next)).digest("hex");
+            const digest = createHash("sha256").update(stableStringify(next)).digest("hex");
             let nativeAdmission: SqliteWorkerOperationAdmission | undefined;
             const admission = createSqliteWorkerWriteAdmission(
               (request) => {
@@ -160,33 +162,15 @@ export function withPersonalAuthProfileStore<T>(
             if (prepared.type !== "oauth") {
               throw new Error("Personal credential codec changed the prepared credential type");
             }
-            // Accept while the actor still holds the exact-row snapshot and FIFO turn.
-            const accepted = await runOpenClawStateWorkerOperation(
-              context,
-              (reader) =>
-                reader.execute({
-                  type: "authProfiles.personalAccept",
-                  input: { profileId, credential: prepared },
-                }),
-              {
-                assertCurrent,
-                createAdmission: createSqliteWorkerWriteAdmission(
-                  (request) => {
-                    assertCurrent();
-                    assertSelectionCurrent?.(structuredClone(prepared));
-                    if (request.stage === "commit") {
-                      observeCanonicalAuthProfileCredentials(context.admission.databasePath, {
-                        [profileId]: prepared,
-                      });
-                    }
-                  },
-                  [context.admission.databasePath],
-                ),
-              },
-            );
-            if (!accepted) {
+            assertCurrent();
+            assertSelectionCurrent?.(prepared);
+            // Credential writers publish before settlement; acceptance needs no database turn.
+            if (!isDeepStrictEqual(owner.readCurrentCredential(), prepared)) {
               throw new Error("Personal model account changed during provider preparation");
             }
+            observeCanonicalAuthProfileCredentials(context.admission.databasePath, {
+              [profileId]: prepared,
+            });
             return prepared;
           },
         };

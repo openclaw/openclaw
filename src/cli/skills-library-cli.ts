@@ -1,3 +1,4 @@
+import { lstat } from "node:fs/promises";
 import { Option, type Command } from "commander";
 import type {
   SkillsLibraryActivateResult,
@@ -250,7 +251,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
               },
             );
           }
-          if (source.toLowerCase().endsWith(".zip")) {
+          if (source.toLowerCase().endsWith(".zip") && !(await lstat(source)).isDirectory()) {
             return uploadLibraryZip(source, opts.slug, rpc);
           }
           return saveLocalLibrarySkill(source, opts.slug, rpc);

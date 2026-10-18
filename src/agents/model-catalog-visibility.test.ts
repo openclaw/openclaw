@@ -70,7 +70,8 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         generatedAt: 1,
         revision: "fixture",
         // "gone" is no longer served by alpha; beta recommends nothing.
-        providers: { alpha: { models: [], recommendedModels: ["a-3", "gone", "a-1"] } },
+        recommendations: { alpha: ["a-3", "gone", "a-1"] },
+        providers: {},
         pricing: {},
         upstreamPricing: {},
       },

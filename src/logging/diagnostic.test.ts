@@ -12,6 +12,7 @@ import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../infra/net/undici-global-dispatcher.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   beginDiagnosticBackendActivity,
@@ -51,11 +52,10 @@ import {
   logMessageQueued,
   logSessionStateChange,
   markDiagnosticSessionProgress,
+  startGatewayDiagnosticHeartbeat,
 } from "./diagnostic.js";
 import {
   resetDiagnosticStateForTest,
-  resolveStuckSessionAbortMs,
-  resolveStuckSessionWarnMs,
   startDiagnosticHeartbeatForTest as startDiagnosticHeartbeat,
   startEnabledDiagnosticHeartbeatForTest as startEnabledDiagnosticHeartbeat,
 } from "./diagnostic.test-support.js";
@@ -258,6 +258,7 @@ describe("stuck session diagnostics threshold", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.setSystemTime(0);
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
     events = [];
@@ -291,7 +292,10 @@ describe("stuck session diagnostics threshold", () => {
     expectRecoveryCall(recoverStuckSession, { ...session, sessionFile, queueDepth: 0 });
   });
 
-  it("defers a material heartbeat stall even when elapsed time is below the abort threshold", () => {
+  it.each([
+    { name: "material stall", progressAt: 20_000, tickAt: 35_000, warns: true },
+    { name: "ordinary jitter", progressAt: 15_500, tickAt: 30_999, warns: false },
+  ])("preserves the remaining abort budget after $name", ({ progressAt, tickAt, warns }) => {
     const recoverStuckSession = vi.fn();
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
@@ -300,46 +304,22 @@ describe("stuck session diagnostics threshold", () => {
     logSessionStateChange({ ...session, state: "processing" });
     markDiagnosticEmbeddedRunStarted(session);
 
-    vi.advanceTimersByTime(20_000);
+    vi.advanceTimersByTime(progressAt);
     markDiagnosticSessionProgress(session);
     markDiagnosticRunProgress({
       ...session,
       reason: "embedded_run:progress",
     });
-    vi.advanceTimersByTime(10_000);
+    vi.advanceTimersByTime(30_000 - progressAt);
 
-    vi.setSystemTime(35_000);
+    vi.setSystemTime(tickAt);
     vi.advanceTimersByTime(30_000);
 
-    expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
-    expect(recoverStuckSession).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(30_000);
-
-    expectRecoveryCall(recoverStuckSession, { ...session, queueDepth: 0, allowActiveAbort: true });
-  });
-
-  it("does not let ordinary heartbeat jitter consume the remaining abort budget", () => {
-    const recoverStuckSession = vi.fn();
-    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
-
-    vi.setSystemTime(0);
-    startEnabledDiagnosticHeartbeat({ recoverStuckSession });
-    logSessionStateChange({ ...session, state: "processing" });
-    markDiagnosticEmbeddedRunStarted(session);
-
-    vi.advanceTimersByTime(15_500);
-    markDiagnosticSessionProgress(session);
-    markDiagnosticRunProgress({
-      ...session,
-      reason: "embedded_run:progress",
-    });
-    vi.advanceTimersByTime(14_500);
-
-    vi.setSystemTime(30_999);
-    vi.advanceTimersByTime(30_000);
-
-    expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    if (warns) {
+      expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    } else {
+      expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    }
     expect(recoverStuckSession).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(30_000);
@@ -367,16 +347,14 @@ describe("stuck session diagnostics threshold", () => {
     ).toEqual([60_000, 90_000, 120_000]);
   });
 
-  it("aborts and drains embedded runs after an extended no-progress stall", () => {
+  it("aborts and drains embedded runs after the default no-progress stall", () => {
     const recoverStuckSession = vi.fn();
-    const stuckSessionWarnMs = resolveStuckSessionWarnMs() / 4;
-    const stuckSessionAbortMs = resolveStuckSessionAbortMs(stuckSessionWarnMs);
-    expect(stuckSessionWarnMs).toBe(30_000);
-    expect(stuckSessionAbortMs).toBe(300_000);
-    startEnabledDiagnosticHeartbeat({
-      recoverStuckSession,
-      testTimings: { stuckSessionWarnMs, stuckSessionAbortMs },
-    });
+    const stuckSessionAbortMs = 360_000;
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
+      { diagnostics: { enabled: true } },
+      { recoverStuckSession },
+    );
     logSessionStateChange({ ...session, state: "processing" });
     markDiagnosticEmbeddedRunStarted(session);
 

@@ -13,6 +13,11 @@ import {
 } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type {
+  FileSecretProviderConfig,
+  ManualExecSecretProviderConfig,
+  SecretProviderConfig,
+} from "../config/types.secrets.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import {
   killPidIfAlive,
@@ -60,15 +65,21 @@ describe("secret ref resolver", () => {
   let fixtureRoot = "";
   let receipts: FixtureReceiptChannel;
   let caseId = 0;
-  let execProtocolV1ScriptPath = "";
-  let execPlainScriptPath = "";
-  let execProtocolV2ScriptPath = "";
-  let execMissingIdScriptPath = "";
-  let execInheritedErrorScriptPath = "";
-  let execProviderErrorScriptPath = "";
-  let execUnsafeProviderErrorScriptPath = "";
-  let execInvalidJsonScriptPath = "";
   let execFastExitScriptPath = "";
+  const execResponses = {
+    v1: '{"protocolVersion":1,"values":{"openai/api-key":"value:openai/api-key"}}',
+    plain: "plain-secret",
+    v2: '{"protocolVersion":2,"values":{"openai/api-key":"x"}}',
+    missing: '{"protocolVersion":1,"values":{}}',
+    inherited: '{"protocolVersion":1,"values":{"toString":"resolved"},"errors":{}}',
+    error:
+      '{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"NOT_FOUND","message":"provider-private-detail-7f3c"}}}',
+    unsafe:
+      '{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"PROVIDERPRIVATEDETAIL9C2E"}}}',
+    invalid: "not-json",
+  };
+  const execScript = (name: keyof typeof execResponses) =>
+    path.join(fixtureRoot, "shared-exec", `${name}.sh`);
 
   const createCaseDir = async (label: string): Promise<string> => {
     const dir = path.join(fixtureRoot, `${label}-${caseId++}`);
@@ -76,52 +87,28 @@ describe("secret ref resolver", () => {
     return dir;
   };
 
-  type ExecProviderConfig = {
-    source: "exec";
-    command: string;
-    passEnv?: string[];
-    jsonOnly?: boolean;
-    allowSymlinkCommand?: boolean;
-    trustedDirs?: string[];
-    env?: Record<string, string>;
-    args?: string[];
-    timeoutMs?: number;
-    noOutputTimeoutMs?: number;
-  };
-  type FileProviderConfig = {
-    source: "file";
-    path: string;
-    mode: "json" | "singleValue";
-    timeoutMs?: number;
-  };
+  type ExecProviderConfig = ManualExecSecretProviderConfig & { allowSymlinkCommand?: boolean };
+  type FileProviderConfig = FileSecretProviderConfig;
 
   function createExecProviderConfig(
     command: string,
     overrides: Partial<ExecProviderConfig> = {},
   ): ExecProviderConfig {
-    return {
-      source: "exec",
-      command,
-      passEnv: ["PATH"],
-      ...overrides,
-    };
+    return { source: "exec", command, passEnv: ["PATH"], ...overrides };
+  }
+
+  function providerOptions(name: string, provider: SecretProviderConfig) {
+    return { config: { secrets: { providers: { [name]: provider } } } };
   }
 
   async function resolveExecSecret(
     command: string,
     overrides: Partial<ExecProviderConfig> = {},
+    id = "openai/api-key",
   ): Promise<string> {
     return resolveSecretRefString(
-      { source: "exec", provider: "execmain", id: "openai/api-key" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              execmain: createExecProviderConfig(command, overrides),
-            },
-          },
-        },
-      },
+      { source: "exec", provider: "execmain", id },
+      providerOptions("execmain", createExecProviderConfig(command, overrides)),
     );
   }
 
@@ -129,12 +116,32 @@ describe("secret ref resolver", () => {
     filePath: string,
     overrides: Partial<FileProviderConfig> = {},
   ): FileProviderConfig {
-    return {
-      source: "file",
-      path: filePath,
-      mode: "json",
-      ...overrides,
-    };
+    return { source: "file", path: filePath, mode: "json", ...overrides };
+  }
+
+  function resolveFileSecret(
+    filePath: string,
+    overrides: Partial<FileProviderConfig> = {},
+    id = "/providers/openai/apiKey",
+  ) {
+    return resolveSecretRefString(
+      { source: "file", provider: "filemain", id },
+      providerOptions("filemain", createFileProviderConfig(filePath, overrides)),
+    );
+  }
+
+  const filePayload = JSON.stringify({ providers: { openai: { apiKey: "sk-file-value" } } }); // pragma: allowlist secret
+
+  function expectWindowsProviderError(error: unknown, kind: "file" | "exec") {
+    expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+    expect(error).toHaveProperty("code", "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE");
+    expect(describeSecretResolutionError(error)).toBe("secret provider failed");
+    expect(describeSecretResolutionOperatorDiagnostic(error)).toBe(
+      "Windows path security could not be verified",
+    );
+    expect(describeSecretResolutionOperatorRecovery(error)).toBe(
+      `Restore Windows path security verification, or use an existing ${kind === "file" ? "secret file" : "provider command"} whose owner and ACLs OpenClaw can verify`,
+    );
   }
 
   beforeAll(async () => {
@@ -143,38 +150,13 @@ describe("secret ref resolver", () => {
     const sharedExecDir = path.join(fixtureRoot, "shared-exec");
     await fs.mkdir(sharedExecDir, { recursive: true });
 
-    async function writeResolver(name: string, output: string): Promise<string> {
-      const scriptPath = path.join(sharedExecDir, `${name}.sh`);
-      await writeSecureFile(scriptPath, `#!/bin/sh\nprintf '%s' '${output}'`, 0o700);
-      return scriptPath;
+    for (const [name, output] of Object.entries(execResponses)) {
+      await writeSecureFile(
+        path.join(sharedExecDir, `${name}.sh`),
+        `#!/bin/sh\nprintf '%s' '${output}'`,
+        0o700,
+      );
     }
-
-    execProtocolV1ScriptPath = await writeResolver(
-      "resolver-v1",
-      '{"protocolVersion":1,"values":{"openai/api-key":"value:openai/api-key"}}',
-    );
-    execPlainScriptPath = await writeResolver("resolver-plain", "plain-secret");
-    execProtocolV2ScriptPath = await writeResolver(
-      "resolver-v2",
-      '{"protocolVersion":2,"values":{"openai/api-key":"x"}}',
-    );
-    execMissingIdScriptPath = await writeResolver(
-      "resolver-missing-id",
-      '{"protocolVersion":1,"values":{}}',
-    );
-    execInheritedErrorScriptPath = await writeResolver(
-      "resolver-inherited-error",
-      '{"protocolVersion":1,"values":{"toString":"resolved"},"errors":{}}',
-    );
-    execProviderErrorScriptPath = await writeResolver(
-      "resolver-error",
-      '{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"NOT_FOUND","message":"provider-private-detail-7f3c"}}}',
-    );
-    execUnsafeProviderErrorScriptPath = await writeResolver(
-      "resolver-unsafe-error",
-      '{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"PROVIDERPRIVATEDETAIL9C2E"}}}',
-    );
-    execInvalidJsonScriptPath = await writeResolver("resolver-invalid-json", "not-json");
 
     execFastExitScriptPath = path.join(sharedExecDir, "resolver-fast-exit.sh");
     await writeSecureFile(execFastExitScriptPath, ["#!/bin/sh", "exit 0"].join("\n"), 0o700);
@@ -211,30 +193,9 @@ describe("secret ref resolver", () => {
       const root = await createCaseDir("file");
       const filePath = path.join(root, "secrets.json");
       const aliasPath = path.join(root, "old-secret-link.json");
-      await writeSecureFile(
-        filePath,
-        JSON.stringify({
-          providers: {
-            openai: {
-              apiKey: "sk-file-value", // pragma: allowlist secret
-            },
-          },
-        }),
-      );
+      await writeSecureFile(filePath, filePayload);
 
-      const resolve = () =>
-        resolveSecretRefString(
-          { source: "file", provider: "filemain", id: "/providers/openai/apiKey" },
-          {
-            config: {
-              secrets: {
-                providers: {
-                  filemain: createFileProviderConfig(filePath),
-                },
-              },
-            },
-          },
-        );
+      const resolve = () => resolveFileSecret(filePath);
       await expect(resolve()).resolves.toBe("sk-file-value");
       const original = await fs.stat(filePath);
       const contents = await fs.readFile(filePath, "utf8");
@@ -265,15 +226,10 @@ describe("secret ref resolver", () => {
     const filePath = path.join(root, "secrets.json");
     await writeSecureFile(filePath, JSON.stringify({ providers: [] }));
     const ref = { source: "file", provider: "filemain", id: "/providers/0" } as const;
-    const error = await resolveSecretRefValue(ref, {
-      config: {
-        secrets: {
-          providers: {
-            filemain: createFileProviderConfig(filePath),
-          },
-        },
-      },
-    }).catch((caught: unknown) => caught);
+    const error = await resolveSecretRefValue(
+      ref,
+      providerOptions("filemain", createFileProviderConfig(filePath)),
+    ).catch((caught: unknown) => caught);
 
     expect(isMissingSecretRefResolutionError({ ref, error })).toBe(true);
   });
@@ -282,21 +238,16 @@ describe("secret ref resolver", () => {
     "classifies omitted and NOT_FOUND exec ids as missing but keeps other errors fail-closed",
     async () => {
       const ref = { source: "exec", provider: "execmain", id: "openai/api-key" } as const;
-      const configFor = (command: string): OpenClawConfig => ({
-        secrets: {
-          providers: {
-            execmain: createExecProviderConfig(command),
-          },
-        },
-      });
+      const configFor = (command: string): OpenClawConfig =>
+        providerOptions("execmain", createExecProviderConfig(command)).config;
       const omittedError = await resolveSecretRefValue(ref, {
-        config: configFor(execMissingIdScriptPath),
+        config: configFor(execScript("missing")),
       }).catch((error: unknown) => error);
       const missingError = await resolveSecretRefValue(ref, {
-        config: configFor(execProviderErrorScriptPath),
+        config: configFor(execScript("error")),
       }).catch((error: unknown) => error);
       const providerError = await resolveSecretRefValue(ref, {
-        config: configFor(execUnsafeProviderErrorScriptPath),
+        config: configFor(execScript("unsafe")),
       }).catch((error: unknown) => error);
 
       expect(isMissingSecretRefResolutionError({ ref, error: omittedError })).toBe(true);
@@ -314,7 +265,7 @@ describe("secret ref resolver", () => {
   itPosix("clamps oversized exec provider timeouts", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-    const value = await resolveExecSecret(execProtocolV1ScriptPath, {
+    const value = await resolveExecSecret(execScript("v1"), {
       timeoutMs: Number.MAX_SAFE_INTEGER,
       noOutputTimeoutMs: Number.MAX_SAFE_INTEGER,
     });
@@ -370,9 +321,6 @@ describe("secret ref resolver", () => {
         const error = await withinTest(resultErrorPromise, signal);
 
         expect(isProviderScopedSecretResolutionError(error)).toBe(true);
-        if (!isProviderScopedSecretResolutionError(error)) {
-          throw new Error("expected a provider-scoped no-output error");
-        }
         expect(error).toMatchObject({
           code: "SECRET_PROVIDER_UNAVAILABLE",
           source: "exec",
@@ -396,7 +344,7 @@ describe("secret ref resolver", () => {
   );
 
   itPosix("supports non-JSON single-value exec output when jsonOnly is false", async () => {
-    const value = await resolveExecSecret(execPlainScriptPath, { jsonOnly: false });
+    const value = await resolveExecSecret(execScript("plain"), { jsonOnly: false });
     expect(value).toBe("plain-secret");
   });
 
@@ -409,18 +357,10 @@ describe("secret ref resolver", () => {
         id: `openai/${String(index).padStart(3, "0")}/${"x".repeat(240)}`,
       }));
       await expect(
-        resolveSecretRefValues(refs, {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: execFastExitScriptPath,
-                },
-              },
-            },
-          },
-        }),
+        resolveSecretRefValues(
+          refs,
+          providerOptions("execmain", { source: "exec", command: execFastExitScriptPath }),
+        ),
       ).rejects.toThrow('Exec provider "execmain" returned empty stdout.');
     },
   );
@@ -440,7 +380,7 @@ describe("secret ref resolver", () => {
   itPosix("rejects symlinks before trusted-directory evaluation", async () => {
     const root = await createCaseDir("exec-link-trusted");
     const symlinkPath = path.join(root, "resolver-link.mjs");
-    await fs.symlink(execPlainScriptPath, symlinkPath);
+    await fs.symlink(execScript("plain"), symlinkPath);
 
     await expect(
       resolveExecSecret(symlinkPath, {
@@ -452,47 +392,23 @@ describe("secret ref resolver", () => {
   });
 
   itPosix("rejects exec refs when protocolVersion is not 1", async () => {
-    await expect(resolveExecSecret(execProtocolV2ScriptPath)).rejects.toThrow(
-      "protocolVersion must be 1",
-    );
+    await expect(resolveExecSecret(execScript("v2"))).rejects.toThrow("protocolVersion must be 1");
   });
 
   itPosix("rejects exec refs when missing response id is inherited", async () => {
-    await expect(
-      resolveSecretRefValue(
-        { source: "exec", provider: "execmain", id: "toString" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: createExecProviderConfig(execMissingIdScriptPath),
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow('response missing id "toString"');
+    await expect(resolveExecSecret(execScript("missing"), {}, "toString")).rejects.toThrow(
+      'response missing id "toString"',
+    );
   });
 
   itPosix("ignores inherited exec response errors", async () => {
-    await expect(
-      resolveSecretRefValue(
-        { source: "exec", provider: "execmain", id: "toString" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: createExecProviderConfig(execInheritedErrorScriptPath),
-              },
-            },
-          },
-        },
-      ),
-    ).resolves.toBe("resolved");
+    await expect(resolveExecSecret(execScript("inherited"), {}, "toString")).resolves.toBe(
+      "resolved",
+    );
   });
 
   itPosix("rejects exec refs with invalid JSON when jsonOnly is true", async () => {
-    await expect(resolveExecSecret(execInvalidJsonScriptPath, { jsonOnly: true })).rejects.toThrow(
+    await expect(resolveExecSecret(execScript("invalid"), { jsonOnly: true })).rejects.toThrow(
       "returned invalid JSON",
     );
   });
@@ -500,16 +416,7 @@ describe("secret ref resolver", () => {
   itPosix("times out file provider reads when timeoutMs elapses", async () => {
     const root = await createCaseDir("file-timeout");
     const filePath = path.join(root, "secrets.json");
-    await writeSecureFile(
-      filePath,
-      JSON.stringify({
-        providers: {
-          openai: {
-            apiKey: "sk-file-value", // pragma: allowlist secret
-          },
-        },
-      }),
-    );
+    await writeSecureFile(filePath, filePayload);
 
     const sampleHandle = await fs.open(filePath, "r");
     const fileHandlePrototype = Object.getPrototypeOf(sampleHandle) as {
@@ -521,22 +428,9 @@ describe("secret ref resolver", () => {
       .mockImplementation(() => new Promise(() => {}) as never);
 
     try {
-      await expect(
-        resolveSecretRefString(
-          { source: "file", provider: "filemain", id: "/providers/openai/apiKey" },
-          {
-            config: {
-              secrets: {
-                providers: {
-                  filemain: createFileProviderConfig(filePath, {
-                    timeoutMs: 5,
-                  }),
-                },
-              },
-            },
-          },
-        ),
-      ).rejects.toThrow('File provider "filemain" timed out');
+      await expect(resolveFileSecret(filePath, { timeoutMs: 5 })).rejects.toThrow(
+        'File provider "filemain" timed out',
+      );
     } finally {
       readSpy.mockRestore();
     }
@@ -546,17 +440,7 @@ describe("secret ref resolver", () => {
     await expect(
       resolveSecretRefValue(
         { source: "exec", provider: "default", id: "abc" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                default: {
-                  source: "env",
-                },
-              },
-            },
-          },
-        },
+        providerOptions("default", { source: "env" }),
       ),
     ).rejects.toThrow('has source "env" but ref requests "exec"');
   });
@@ -564,41 +448,27 @@ describe("secret ref resolver", () => {
   it("rejects invalid exec ids before provider resolution", async () => {
     for (const id of INVALID_EXEC_SECRET_REF_IDS) {
       await expect(
-        resolveSecretRefValue(
-          { source: "exec", provider: "vault", id },
-          {
-            config: {},
-          },
-        ),
+        resolveSecretRefValue({ source: "exec", provider: "vault", id }, { config: {} }),
       ).rejects.toThrow(/Exec secret reference id must match|Secret reference id is empty/);
     }
   });
 
   it("rejects invalid env, file, and provider refs before provider resolution", async () => {
     await expect(
-      resolveSecretRefValue(
-        { source: "env", provider: "default", id: "bad id" },
-        {
-          config: {},
-        },
-      ),
+      resolveSecretRefValue({ source: "env", provider: "default", id: "bad id" }, { config: {} }),
     ).rejects.toThrow("Env secret reference id must match");
 
     await expect(
       resolveSecretRefValue(
         { source: "file", provider: "default", id: "providers/openai/apiKey" },
-        {
-          config: {},
-        },
+        { config: {} },
       ),
     ).rejects.toThrow("File secret reference id must be an absolute JSON pointer");
 
     await expect(
       resolveSecretRefValue(
         { source: "env", provider: "Default", id: "OPENAI_API_KEY" },
-        {
-          config: {},
-        },
+        { config: {} },
       ),
     ).rejects.toThrow("Secret reference provider must match");
   });
@@ -609,18 +479,7 @@ describe("secret ref resolver", () => {
     const bom = "\uFEFF";
     await writeSecureFile(filePath, `${bom}my-secret-value\n`);
 
-    const value = await resolveSecretRefString(
-      { source: "file", provider: "filemain", id: "value" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              filemain: createFileProviderConfig(filePath, { mode: "singleValue" }),
-            },
-          },
-        },
-      },
-    );
+    const value = await resolveFileSecret(filePath, { mode: "singleValue" }, "value");
     expect(value).toBe("my-secret-value");
   });
 
@@ -632,31 +491,10 @@ describe("secret ref resolver", () => {
         const filePath = path.join(dir, "secrets.json");
         await writeSecureFile(filePath, '{"token":"abc123"}');
 
-        const error = await resolveSecretRefString(
-          { source: "file", provider: "filemain", id: "/token" },
-          {
-            config: {
-              secrets: {
-                providers: {
-                  filemain: createFileProviderConfig(filePath),
-                },
-              },
-            },
-          },
-        ).catch((caught: unknown) => caught);
-
-        expect(isProviderScopedSecretResolutionError(error)).toBe(true);
-        if (!isProviderScopedSecretResolutionError(error)) {
-          return;
-        }
-        expect(error.code).toBe("SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE");
-        expect(describeSecretResolutionError(error)).toBe("secret provider failed");
-        expect(describeSecretResolutionOperatorDiagnostic(error)).toBe(
-          "Windows path security could not be verified",
+        const error = await resolveFileSecret(filePath, {}, "/token").catch(
+          (caught: unknown) => caught,
         );
-        expect(describeSecretResolutionOperatorRecovery(error)).toBe(
-          "Restore Windows path security verification, or use an existing secret file whose owner and ACLs OpenClaw can verify",
-        );
+        expectWindowsProviderError(error, "file");
       },
     );
   });
@@ -676,38 +514,10 @@ describe("secret ref resolver", () => {
 
         const error = await resolveExecSecret(commandPath).catch((caught: unknown) => caught);
 
-        expect(isProviderScopedSecretResolutionError(error)).toBe(true);
-        if (!isProviderScopedSecretResolutionError(error)) {
-          return;
-        }
-        expect(error.code).toBe("SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE");
-        expect(describeSecretResolutionError(error)).toBe("secret provider failed");
-        expect(describeSecretResolutionOperatorDiagnostic(error)).toBe(
-          "Windows path security could not be verified",
-        );
-        expect(describeSecretResolutionOperatorRecovery(error)).toBe(
-          "Restore Windows path security verification, or use an existing provider command whose owner and ACLs OpenClaw can verify",
-        );
+        expectWindowsProviderError(error, "exec");
         await expect(fs.access(markerPath)).rejects.toThrow();
       },
     );
-  });
-
-  it("keeps a missing Windows exec provider path as a generic failure", async () => {
-    await withMockedWindowsPlatform(async () => {
-      const dir = await createCaseDir("win-exec-missing");
-      const commandPath = path.join(dir, "missing-resolver");
-      const error = await resolveExecSecret(commandPath).catch((caught: unknown) => caught);
-
-      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
-      if (!isProviderScopedSecretResolutionError(error)) {
-        return;
-      }
-      expect(error.code).toBe("SECRET_PROVIDER_UNAVAILABLE");
-      expect(describeSecretResolutionError(error)).toBe("secret provider failed");
-      expect(describeSecretResolutionOperatorDiagnostic(error)).toBeUndefined();
-      expect(describeSecretResolutionOperatorRecovery(error)).toBeUndefined();
-    });
   });
 
   it("keeps a failed Windows exec permission restat as a generic failure", async () => {
@@ -734,10 +544,7 @@ describe("secret ref resolver", () => {
 
         expect(commandPathStats).toBe(2);
         expect(isProviderScopedSecretResolutionError(error)).toBe(true);
-        if (!isProviderScopedSecretResolutionError(error)) {
-          return;
-        }
-        expect(error.code).toBe("SECRET_PROVIDER_UNAVAILABLE");
+        expect(error).toHaveProperty("code", "SECRET_PROVIDER_UNAVAILABLE");
         expect(describeSecretResolutionError(error)).toBe("secret provider failed");
         expect(describeSecretResolutionOperatorDiagnostic(error)).toBeUndefined();
         expect(describeSecretResolutionOperatorRecovery(error)).toBeUndefined();

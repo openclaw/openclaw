@@ -32,16 +32,35 @@ async function nextFrame(page: Page) {
   );
 }
 
-// The same performUpdate boundary used by the campaign's browser-init census.
-// Counting all tags also exposes work transferred from a host into its children.
+// Lit updates retain timing data; pane connections also count the Solid host.
 async function installRenderProbe(page: Page) {
   await page.addInitScript(() => {
     const counts = new Map<string, RenderCount>();
     window.chatBootRenderCounts = counts;
     const patched = new WeakSet<object>();
     const instances = new WeakSet<object>();
+    const recordInstance = (element: HTMLElement) => {
+      const count = counts.get(element.localName) ?? {
+        updates: 0,
+        milliseconds: 0,
+        instances: 0,
+      };
+      if (!instances.has(element)) {
+        instances.add(element);
+        count.instances += 1;
+      }
+      counts.set(element.localName, count);
+      return count;
+    };
     const define = customElements.define.bind(customElements);
     customElements.define = (name, constructor, options) => {
+      if (name === "openclaw-chat-pane") {
+        const connected = constructor.prototype.connectedCallback;
+        constructor.prototype.connectedCallback = function (this: HTMLElement) {
+          recordInstance(this);
+          return connected.call(this);
+        };
+      }
       let prototype = constructor.prototype;
       while (prototype && !Object.hasOwn(prototype, "performUpdate")) {
         prototype = Object.getPrototypeOf(prototype);
@@ -50,21 +69,13 @@ async function installRenderProbe(page: Page) {
         patched.add(prototype);
         const update = prototype.performUpdate;
         prototype.performUpdate = function (this: HTMLElement) {
-          const count = counts.get(this.localName) ?? {
-            updates: 0,
-            milliseconds: 0,
-            instances: 0,
-          };
+          const count = recordInstance(this);
           const start = performance.now();
           try {
             return update.call(this);
           } finally {
             count.updates += 1;
             count.milliseconds += performance.now() - start;
-            if (!instances.has(this)) {
-              instances.add(this);
-              count.instances += 1;
-            }
             counts.set(this.localName, count);
           }
         };
@@ -75,7 +86,7 @@ async function installRenderProbe(page: Page) {
 }
 
 suite.define(() => {
-  it("keeps closed menus unbuilt through a busy cold load and preserves the draft when opened", async () => {
+  it("prewarms session actions after a busy cold load without building unrelated menus or losing the draft", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 1000 } },
       async ({ page }) => {
@@ -251,16 +262,25 @@ suite.define(() => {
         await nextFrame(page);
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         expect(pageErrors).toEqual([]);
+        await expect
+          .poll(() => pane.locator('openclaw-chat-header-session-menu [role^="menuitem"]').count())
+          .toBeGreaterThan(0);
+        expect(await pane.locator('[role="menu"][popover]:popover-open').count()).toBe(0);
         const measurement = await page.evaluate(() => ({
           tags: Object.fromEntries(window.chatBootRenderCounts),
           closedMenuItems: document.querySelectorAll(
-            "openclaw-chat-pane wa-dropdown:not([open]) wa-dropdown-item",
+            'openclaw-chat-pane [role="menu"][popover]:not(:popover-open) [role^="menuitem"]',
           ).length,
+          unrelatedClosedMenuItems: Array.from(
+            document.querySelectorAll(
+              'openclaw-chat-pane [role="menu"][popover]:not(:popover-open) [role^="menuitem"]',
+            ),
+          ).filter((item) => !item.closest("openclaw-chat-header-session-menu")).length,
           closedMenuHosts: Array.from(
             document.querySelectorAll(
-              "openclaw-chat-pane wa-dropdown:not([open]) wa-dropdown-item",
+              'openclaw-chat-pane [role="menu"][popover]:not(:popover-open) [role^="menuitem"]',
             ),
-            (item) => item.closest("wa-dropdown")?.className,
+            (item) => item.closest('[role="menu"][popover]')?.className,
           ),
         }));
         await writeFile(
@@ -270,7 +290,7 @@ suite.define(() => {
         console.log("CHAT_BOOT_RENDER_COUNTS", JSON.stringify(measurement));
         await page.screenshot({ path: path.join(suite.artifactDir, "chat-boot-closed-menus.png") });
         expect(measurement.tags["openclaw-chat-pane"]?.instances).toBe(1);
-        expect(measurement.closedMenuItems).toBe(0);
+        expect(measurement.unrelatedClosedMenuItems).toBe(0);
 
         const composer = pane.getByRole("textbox", { name: "Chat composer" });
         await composer.fill("Keep this draft while the menus open.");
@@ -287,7 +307,7 @@ suite.define(() => {
           .getByRole("menu", { name: `Actions for ${label}` })
           .waitFor({ state: "visible" });
         expect(
-          await pane.locator("openclaw-chat-header-session-menu wa-dropdown-item").count(),
+          await pane.locator('openclaw-chat-header-session-menu [role^="menuitem"]').count(),
         ).toBeGreaterThan(10);
         await page.keyboard.press("Escape");
         await pane.getByRole("button", { name: "Session sharing", exact: true }).click();
@@ -295,8 +315,28 @@ suite.define(() => {
           .locator(".chat-pane__sharing-menu")
           .getByText("Members", { exact: true })
           .waitFor();
+        const sharing = pane.locator(".chat-pane__sharing-menu");
+        const search = sharing.getByRole("searchbox", { name: "Search people and agents…" });
+        await search.fill("Person 109");
+        await nextFrame(page);
+        await page.keyboard.press("ArrowDown");
+        expect(await sharing.locator(".chat-pane__sharing-member").count()).toBe(1);
+        expect(
+          await sharing
+            .locator('[data-value="member:person-109"]')
+            .evaluate((element) => element === document.activeElement),
+        ).toBe(true);
+        await page.keyboard.press("ArrowUp");
+        expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
+        await page.keyboard.press("Escape");
+        expect(await search.inputValue()).toBe("");
         await page.screenshot({ path: path.join(suite.artifactDir, "chat-boot-sharing-open.png") });
         await page.keyboard.press("Escape");
+        expect(
+          await sharing
+            .locator(".chat-pane__sharing-trigger")
+            .evaluate((element) => element === document.activeElement),
+        ).toBe(true);
         expect(await composer.inputValue()).toBe("Keep this draft while the menus open.");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       },

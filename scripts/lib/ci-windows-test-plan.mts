@@ -16,7 +16,6 @@ export type WindowsTestShard = {
 // Census timings: run 36437664939, Windows jobs 108980729190/108980729152.
 const fileSeconds: Readonly<Record<string, number>> = {
   "extensions/acpx/src/runtime-argv.process.test.ts": 16.2,
-  "extensions/canvas/scripts/pnpm-runner.test.ts": 1.5,
   "extensions/lobster/src/lobster-runner.test.ts": 6.4,
   "extensions/memory-core/src/memory-extra-file-path.windows.test.ts": 11,
   "extensions/memory-wiki/src/obsidian.discovery.test.ts": 1.6,

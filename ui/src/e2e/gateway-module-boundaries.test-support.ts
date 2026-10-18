@@ -20,7 +20,7 @@ export function defineGatewayModuleBoundaryTests(
           },
           async ({ page }) => {
             let blockedSidebarRequests = 0;
-            await page.route(moduleRequest("ui/src/components/app-sidebar.ts"), async (route) => {
+            await page.route(moduleRequest("ui/src/components/app-sidebar.tsx"), async (route) => {
               blockedSidebarRequests += 1;
               await route.abort("failed");
             });
@@ -44,7 +44,11 @@ export function defineGatewayModuleBoundaryTests(
             expect(await page.locator(".sidebar-identity-card").isVisible()).toBe(false);
 
             await gateway.setOnline(false);
-            const connectionStatus = page.locator(".shell-connection-status");
+            const connectionStatus = page.locator(
+              width === 390
+                ? ".mobile-connection-status .gateway-status:visible"
+                : ".sidebar-shell__footer .gateway-status:visible",
+            );
             await connectionStatus
               .locator(".gateway-status__label")
               .getByText("Reconnecting…", { exact: true })
@@ -54,7 +58,7 @@ export function defineGatewayModuleBoundaryTests(
             await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
             await gateway.setOnline(true);
             await waitForControlUiGatewayReady(page);
-            await expect.poll(() => connectionStatus.count()).toBe(0);
+            await connectionStatus.waitFor({ state: "detached" });
           },
         );
       },

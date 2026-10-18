@@ -21,8 +21,7 @@ import type {
 } from "./host-hook-cleanup.types.js";
 import {
   cleanupPluginSessionSchedulerJobs,
-  withPluginRunContextCleanup,
-  preparePluginRunContextCleanup,
+  clearPluginRunContext,
   makePluginSessionSchedulerJobKey,
 } from "./host-hook-runtime.js";
 import type { PluginHostCleanupReason } from "./host-hooks.js";
@@ -151,43 +150,41 @@ export async function runPluginHostLifecycleCleanup(params: {
   runId?: string;
   shouldCleanup?: () => boolean;
 }): Promise<PluginHostCleanupResult> {
-  return withPluginRunContextCleanup(params, async () => {
-    const failures: PluginHostCleanupFailure[] = [];
-    let cleanupCount = 0;
-    const context = { reason: params.reason, sessionKey: params.sessionKey };
-    // Session extensions release state before runtime teardown; one failed hook must not skip its siblings.
-    const cleanups = [
-      ...params.registry.sessionExtensions.map(({ pluginId, extension }) => ({
-        pluginId,
-        hookId: `session:${extension.namespace}`,
-        cleanup: extension.cleanup,
-        context,
-      })),
-      ...params.registry.runtimeLifecycles.map(({ pluginId, lifecycle }) => ({
-        pluginId,
-        hookId: `runtime:${lifecycle.id}`,
-        cleanup: lifecycle.cleanup,
-        context: { ...context, runId: params.runId },
-      })),
-    ];
-    for (const { pluginId, hookId, cleanup, context: cleanupContext } of cleanups) {
-      if (params.shouldCleanup?.() === false) {
-        break;
-      }
-      if (!cleanup || !shouldCleanPlugin(pluginId, params.pluginId)) {
-        continue;
-      }
-      try {
-        await withPluginHostCleanupTimeout(hookId, () =>
-          runPluginCleanup(cleanup, () => cleanup(cleanupContext)),
-        );
-        cleanupCount += 1;
-      } catch (error) {
-        failures.push({ pluginId, hookId, error });
-      }
+  const failures: PluginHostCleanupFailure[] = [];
+  let cleanupCount = 0;
+  const context = { reason: params.reason, sessionKey: params.sessionKey };
+  // Session extensions release state before runtime teardown; one failed hook must not skip its siblings.
+  const cleanups = [
+    ...params.registry.sessionExtensions.map(({ pluginId, extension }) => ({
+      pluginId,
+      hookId: `session:${extension.namespace}`,
+      cleanup: extension.cleanup,
+      context,
+    })),
+    ...params.registry.runtimeLifecycles.map(({ pluginId, lifecycle }) => ({
+      pluginId,
+      hookId: `runtime:${lifecycle.id}`,
+      cleanup: lifecycle.cleanup,
+      context: { ...context, runId: params.runId },
+    })),
+  ];
+  for (const { pluginId, hookId, cleanup, context: cleanupContext } of cleanups) {
+    if (params.shouldCleanup?.() === false) {
+      break;
     }
-    return { cleanupCount, failures };
-  });
+    if (!cleanup || !shouldCleanPlugin(pluginId, params.pluginId)) {
+      continue;
+    }
+    try {
+      await withPluginHostCleanupTimeout(hookId, () =>
+        runPluginCleanup(cleanup, () => cleanup(cleanupContext)),
+      );
+      cleanupCount += 1;
+    } catch (error) {
+      failures.push({ pluginId, hookId, error });
+    }
+  }
+  return { cleanupCount, failures };
 }
 
 /** Runs persistent and in-memory cleanup for a plugin, session, or host lifecycle event. */
@@ -211,7 +208,7 @@ export async function runPluginHostCleanup(params: {
   if (!shouldCleanup()) {
     return { cleanupCount: 0, failures };
   }
-  return withPluginRunContextCleanup(params, async (clearRunContext) => {
+  const result = await (async () => {
     const registry = params.registry;
     const cleanupRegistry = registry ?? getActivePluginRegistry();
     const sessionEntrySlotKeys = collectSessionEntrySlotKeys(cleanupRegistry, params.pluginId);
@@ -288,10 +285,19 @@ export async function runPluginHostCleanup(params: {
       (params.pluginId || params.runId) &&
       (params.reason !== "restart" || params.runId)
     ) {
-      clearRunContext();
+      clearPluginRunContext(params);
     }
     return { cleanupCount, failures };
-  });
+  })();
+  if (params.reason === "reset" || params.reason === "delete") {
+    for (const { pluginId, hookId, error } of result.failures) {
+      log.warn(
+        `Plugin host cleanup failed during session ${params.reason}; check the reported cleanup error and retry.`,
+        { pluginId, hookId, error: String(error) },
+      );
+    }
+  }
+  return result;
 }
 
 function collectHostHookPluginIds(registry: PluginRegistry): string[] {
@@ -368,7 +374,6 @@ export function createPluginHostRegistryRetirement(params: {
     getRuntimeConfigSnapshot() ??
     undefined;
   const readConfig = captureRuntimeConfigAsyncReader();
-  const runContextCleanup = preparePluginRunContextCleanup();
   const nextPluginIds = params.nextRegistry
     ? collectLoadedPluginIds(params.nextRegistry)
     : new Set();
@@ -399,34 +404,33 @@ export function createPluginHostRegistryRetirement(params: {
     const restarted = params.skipPersistentSessionState || nextPluginIds.has(pluginId);
     let result: PluginHostCleanupResult = { cleanupCount: 0, failures: [] };
     const cleanup = hostPluginIds.has(pluginId)
-      ? () =>
-          runContextCleanup(async () => {
-            result = await runPluginHostCleanup({
-              cfg: params.skipPersistentSessionState ? cfg : (cfg ?? (await readConfig())),
-              registry: previousRegistry,
-              pluginId,
-              reason: restarted ? "restart" : "disable",
-              preserveSchedulerJobIds: restarted
-                ? collectSchedulerJobIds(params.nextRegistry, pluginId)
-                : undefined,
-              shouldCleanup,
-              restartPromotedSessionEntrySlotKeys: restarted
-                ? collectRestartPromotedSessionEntrySlotKeys(
-                    previousRegistry,
-                    params.nextRegistry,
-                    pluginId,
-                  )
-                : undefined,
-              preserveSchedulerOwnerRegistry: restarted ? params.nextRegistry : undefined,
-              resolveSessionStoreTargets,
-              skipPersistentSessionState: params.skipPersistentSessionState,
-            });
-            for (const failure of result.failures) {
-              log.warn(
-                `Plugin ${failure.pluginId} cleanup failed (${failure.hookId}): ${formatErrorMessage(failure.error)}`,
-              );
-            }
-          })
+      ? async () => {
+          result = await runPluginHostCleanup({
+            cfg: params.skipPersistentSessionState ? cfg : (cfg ?? (await readConfig())),
+            registry: previousRegistry,
+            pluginId,
+            reason: restarted ? "restart" : "disable",
+            preserveSchedulerJobIds: restarted
+              ? collectSchedulerJobIds(params.nextRegistry, pluginId)
+              : undefined,
+            shouldCleanup,
+            restartPromotedSessionEntrySlotKeys: restarted
+              ? collectRestartPromotedSessionEntrySlotKeys(
+                  previousRegistry,
+                  params.nextRegistry,
+                  pluginId,
+                )
+              : undefined,
+            preserveSchedulerOwnerRegistry: restarted ? params.nextRegistry : undefined,
+            resolveSessionStoreTargets,
+            skipPersistentSessionState: params.skipPersistentSessionState,
+          });
+          for (const failure of result.failures) {
+            log.warn(
+              `Plugin ${failure.pluginId} cleanup failed (${failure.hookId}): ${formatErrorMessage(failure.error)}`,
+            );
+          }
+        }
       : undefined;
     // Instance disposal retains its real completion even when this caller receives a self-ack.
     // Rollback may already have started the exact instance disposal before registry retirement.

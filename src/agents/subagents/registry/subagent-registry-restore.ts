@@ -189,10 +189,14 @@ export function createSubagentRegistryRestorer(config: {
         assertCurrent();
       }
       const selected = getCurrentSubagentRunOwner(runs, snapshot);
+      // Recovery and cancellation prepare their own session reads.
       if (
         !selected ||
         selected.runId !== runId ||
-        resolveSubagentChildAuthority(selected).status === "mismatch"
+        resolveSubagentChildAuthority(selected).status === "mismatch" ||
+        selected.execution.restartRecovery ||
+        selected.killIntent ||
+        selected.killReconciliation
       ) {
         continue;
       }

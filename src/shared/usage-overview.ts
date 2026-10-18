@@ -1,20 +1,14 @@
-import { createSessionCostSummaryAccumulator } from "../infra/session-cost-usage-rollup.js";
 import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../infra/session-cost-usage-totals.js";
-import type {
-  CostUsageTotals,
-  SessionCostSummary,
-  UsageDailyBucket,
-} from "../infra/session-cost-usage.types.js";
+import type { CostUsageTotals, UsageDailyBucket } from "../infra/session-cost-usage.types.js";
 import { createUsageAggregateAccumulator } from "./usage-aggregates.js";
 import { filterSessionsByQuery } from "./usage-query.js";
 import type {
   SessionUsageEntry,
   SessionsUsageOverview,
   UsageOverviewOptions,
-  UsageOverviewSession,
   UsageOverviewSlice,
 } from "./usage-types.js";
 
@@ -169,21 +163,18 @@ function touchesHours(session: SessionUsageEntry, hours: Set<number>, calendar: 
   return touches;
 }
 
-function sessionRowTotals(session: SessionUsageEntry, days: ReadonlySet<string>) {
+function sessionRowTotals(session: SessionUsageEntry, days: ReadonlySet<string>): CostUsageTotals {
   const usage = session.usage;
-  let tokens = usage?.totalTokens ?? 0;
-  let cost = usage?.totalCost ?? 0;
-  if (days.size && usage?.dailyBreakdown?.length) {
-    tokens = 0;
-    cost = 0;
-    for (const day of usage.dailyBreakdown) {
-      if (days.has(day.date)) {
-        tokens += day.tokens;
-        cost += day.cost;
-      }
+  if (!days.size || !usage?.dailyBreakdown?.length) {
+    return usage ?? createEmptyCostUsageTotals();
+  }
+  const totals = createEmptyCostUsageTotals();
+  for (const day of usage.dailyBreakdown) {
+    if (days.has(day.date)) {
+      addCostUsageTotals(totals, { ...day, totalTokens: day.tokens, totalCost: day.cost });
     }
   }
-  return { tokens, cost };
+  return totals;
 }
 
 function compareUsageOverviewSessions(options: UsageOverviewOptions) {
@@ -205,9 +196,9 @@ function compareUsageOverviewSessions(options: UsageOverviewOptions) {
   const value = (entry: SessionUsageEntry) => {
     switch (options.sort) {
       case "tokens":
-        return totals(entry).tokens;
+        return totals(entry).totalTokens;
       case "cost":
-        return totals(entry).cost;
+        return totals(entry).totalCost;
       case "messages":
         return entry.usage?.messageCounts?.total ?? 0;
       case "errors":
@@ -229,7 +220,11 @@ function compactSession(session: SessionUsageEntry, days: ReadonlySet<string>): 
     return session;
   }
   const row = sessionRowTotals(session, days);
-  const usage = { ...session.usage, totalTokens: row.tokens, totalCost: row.cost };
+  const usage = {
+    ...session.usage,
+    ...row,
+    usageReport: row.usageReport,
+  };
   for (const field of [
     "dailyBreakdown",
     "dailyMessageCounts",
@@ -245,46 +240,59 @@ function compactSession(session: SessionUsageEntry, days: ReadonlySet<string>): 
   return { ...session, usage };
 }
 
-export function buildUsageOverview(
-  params: (
-    | { sessions: UsageOverviewSession[]; summaries: Array<SessionCostSummary | null> }
-    | { rows: SessionUsageEntry[] }
-  ) & {
-    options: UsageOverviewOptions;
-    dayBucket: UsageDailyBucket;
-    compact?: boolean;
-  },
-): UsageOverviewSlice {
-  const { options } = params;
+function selectUsageOverviewSessions(
+  sessions: SessionUsageEntry[],
+  options: UsageOverviewOptions,
+  calendar: Calendar,
+) {
+  const days = new Set(options.selectedDays);
+  const hours = new Set(options.selectedHours);
+  const queried = filterSessionsByQuery(
+    sessions.filter((session) => touchesHours(session, hours, calendar)),
+    options.query ?? "",
+  );
+  const matched = queried.sessions.filter(
+    (session) =>
+      !days.size ||
+      (session.usage?.activityDates?.length
+        ? session.usage.activityDates.some((day) => days.has(day))
+        : Boolean(session.updatedAt && days.has(calendar.at(session.updatedAt).date))),
+  );
+  const selected = new Set(options.selectedSessions);
+  const scoped = selected.size ? matched.filter((session) => selected.has(session.key)) : matched;
+  const recent = options.recentKeys === undefined ? undefined : new Set(options.recentKeys);
+  const roster = recent ? matched.filter((session) => recent.has(session.key)) : matched;
+  return { days, queried, matched, selected, scoped, roster };
+}
+
+function usageOverviewPage(roster: SessionUsageEntry[], options: UsageOverviewOptions) {
+  return roster
+    .toSorted(compareUsageOverviewSessions(options))
+    .slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? PAGE_SIZE));
+}
+
+/** Selects rows for context hydration without calculating the full report twice. */
+export function selectUsageOverviewPage(params: {
+  rows: SessionUsageEntry[];
+  options: UsageOverviewOptions;
+  dayBucket: UsageDailyBucket;
+}): SessionUsageEntry[] {
+  const { roster } = selectUsageOverviewSessions(
+    params.rows,
+    params.options,
+    createCalendar(params.dayBucket),
+  );
+  return usageOverviewPage(roster, params.options);
+}
+
+export function buildUsageOverview(params: {
+  rows: SessionUsageEntry[];
+  options: UsageOverviewOptions;
+  dayBucket: UsageDailyBucket;
+  compact?: boolean;
+}): UsageOverviewSlice {
+  const { options, rows: sessions } = params;
   const calendar = createCalendar(params.dayBucket);
-  let index = 0;
-  const sessions =
-    "rows" in params
-      ? params.rows
-      : params.sessions.map(({ instances, ...entry }): SessionUsageEntry => {
-          if (instances.length === 1) {
-            const usage = params.summaries[index++] ?? null;
-            return { ...entry, usage, ...(!usage ? { computing: true } : {}) };
-          }
-          const accumulator = createSessionCostSummaryAccumulator({
-            sessionId: entry.sessionId,
-            sessionFile: instances[0]?.sessionFile,
-          });
-          let present = false;
-          for (const [offset] of instances.entries()) {
-            const summary = params.summaries[index + offset];
-            if (summary) {
-              accumulator.add(summary);
-              present = true;
-            }
-          }
-          index += instances.length;
-          return {
-            ...entry,
-            usage: present ? accumulator.finish() : null,
-            ...(!present ? { computing: true } : {}),
-          };
-        });
   const filters = {
     agent: new Set<string>(),
     channel: new Set<string>(),
@@ -323,34 +331,38 @@ export function buildUsageOverview(
       filters.tool.add(tool.name);
     }
   }
-  const days = new Set(options.selectedDays);
-  const hours = new Set(options.selectedHours);
-  const queried = filterSessionsByQuery(
-    sessions.filter((session) => touchesHours(session, hours, calendar)),
-    options.query ?? "",
+  const { days, queried, matched, selected, scoped, roster } = selectUsageOverviewSessions(
+    sessions,
+    options,
+    calendar,
   );
-  const matched = queried.sessions.filter(
-    (session) =>
-      !days.size ||
-      (session.usage?.activityDates?.length
-        ? session.usage.activityDates.some((day) => days.has(day))
-        : Boolean(session.updatedAt && days.has(calendar.at(session.updatedAt).date))),
+  const selectedSources = new Map(
+    sessions
+      .filter((session) => selected.has(session.key))
+      .map((session) => [session.key, session]),
   );
-  const selected = new Set(options.selectedSessions);
-  const scoped = selected.size ? matched.filter((session) => selected.has(session.key)) : matched;
+  const selectedUsageComplete = selected.size
+    ? selectedSources.size === selected.size &&
+      [...selectedSources.values()].every(
+        (session) =>
+          session.usage &&
+          !session.computing &&
+          session.usage.staleSince === undefined &&
+          !session.usage.refreshing,
+      )
+    : undefined;
   const selectedRows = new Map(
     selected.size ? scoped.map((session) => [session.key, session]) : [],
   );
   const toRow = (session: SessionUsageEntry) =>
     params.compact === false ? session : compactSession(session, days);
-  const recent = options.recentKeys === undefined ? undefined : new Set(options.recentKeys);
-  const roster = recent ? matched.filter((session) => recent.has(session.key)) : matched;
   const accumulator = createUsageAggregateAccumulator();
   const overview: SessionsUsageOverview = {
     total: roster.length,
     unfilteredSessionCount: sessions.length,
     selectedSessionCount: 0,
     selectedRowCount: scoped.length,
+    selectedUsageComplete,
     selectedRows: [...selected].flatMap((key) => {
       const session = selectedRows.get(key);
       return session ? [toRow(session)] : [];
@@ -377,8 +389,11 @@ export function buildUsageOverview(
   };
   for (const session of matched) {
     const row = sessionRowTotals(session, days);
-    overview.tableTotals.tokens += row.tokens;
-    overview.tableTotals.cost += row.cost;
+    overview.tableTotals.tokens += row.totalTokens;
+    overview.tableTotals.cost += row.totalCost;
+    if (row.usageReport?.state === "unavailable") {
+      overview.tableTotals.usageReport = row.usageReport;
+    }
     overview.tableTotals.errors += session.usage?.messageCounts?.errors ?? 0;
   }
   for (const session of scoped) {
@@ -432,6 +447,7 @@ export function buildUsageOverview(
       }
     }
   }
+  overview.usageReport = accumulator.totals.usageReport;
   const aggregates = accumulator.finish();
   overview.selectedSessionCount = aggregates.sessionCount ?? 0;
   let totals = accumulator.totals;
@@ -471,10 +487,7 @@ export function buildUsageOverview(
     }
   }
   return {
-    sessions: roster
-      .toSorted(compareUsageOverviewSessions(options))
-      .slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? PAGE_SIZE))
-      .map(toRow),
+    sessions: usageOverviewPage(roster, options).map(toRow),
     totals,
     aggregates,
     overview,

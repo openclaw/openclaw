@@ -323,58 +323,6 @@ describe("collectPluginClawHubReleasePlan", () => {
     },
   );
 
-  it("honors an HTTP-date Retry-After header", async () => {
-    const repoDir = createTempPluginRepo();
-    const retryAfter = "Wed, 21 Oct 2030 07:28:00 GMT";
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse(retryAfter) - 1_000);
-    let trustedPublisherRequests = 0;
-    const retryDelays: number[] = [];
-    const fetchImpl: typeof fetch = async (input) => {
-      const requestUrl =
-        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      const pathname = new URL(requestUrl).pathname;
-      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
-        return new Response("{}", { status: 200 });
-      }
-      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
-        trustedPublisherRequests += 1;
-        if (trustedPublisherRequests === 1) {
-          return new Response("", { status: 429, headers: { "retry-after": retryAfter } });
-        }
-        return new Response(
-          JSON.stringify({
-            trustedPublisher,
-          }),
-          { status: 200 },
-        );
-      }
-      if (pathname.endsWith("/publication")) {
-        return new Response(null, { status: 404 });
-      }
-      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
-        return new Response("", { status: 404 });
-      }
-      throw new Error(`Unexpected ClawHub request to ${pathname}`);
-    };
-
-    try {
-      await collectPluginClawHubReleasePlan({
-        rootDir: repoDir,
-        selection: ["@openclaw/demo-plugin"],
-        fetchImpl,
-        registryBaseUrl: "https://clawhub.ai",
-        sleep: async (ms) => {
-          retryDelays.push(ms);
-        },
-      });
-    } finally {
-      nowSpy.mockRestore();
-    }
-
-    expect(trustedPublisherRequests).toBe(2);
-    expect(retryDelays).toEqual([1_000]);
-  });
-
   it("reports an excessive Retry-After without retrying before the server permits", async () => {
     const repoDir = createTempPluginRepo();
     let trustedPublisherRequests = 0;

@@ -8,21 +8,30 @@ import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import { NewSessionComposerTextareaController } from "./composer-controller.ts";
+import {
+  createNewSessionComposerTextarea,
+  type NewSessionComposerTextarea,
+} from "./composer-textarea.ts";
 import { NewSessionComposer, type NewSessionComposerOptions } from "./composer.tsx";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
-const textareaControllers: NewSessionComposerTextareaController[] = [];
+const composerTextareas: NewSessionComposerTextarea[] = [];
 
 export function composerContext(
   snapshot: Partial<ApplicationGatewaySnapshot> & { client: GatewayBrowserClient | null },
 ) {
   return {
-    gateway: { snapshot, connection: { gatewayUrl: "ws://gateway.test" }, connectionRevision: 0 },
-    config: { current: {} },
-    sessions: { state: { result: null } },
+    gateway: {
+      snapshot,
+      connection: { gatewayUrl: "ws://gateway.test" },
+      connectionRevision: 0,
+      subscribe: () => () => {},
+    },
+    agents: { subscribe: () => () => {} },
+    config: { current: {}, subscribe: () => () => {} },
+    sessions: { state: { result: null }, subscribe: () => () => {} },
     theme: {
       branding: resolveThemeBranding(undefined),
       settings: { lobsterPetVisits: true, lobsterPetSounds: false },
@@ -55,7 +64,7 @@ export function renderComposer(
     onInput?: (message: string) => void;
     onSubmit?: () => void;
     onBackgroundSubmit?: () => void;
-    textareaController?: NewSessionComposerTextareaController;
+    composerTextarea?: NewSessionComposerTextarea;
   } = {},
 ) {
   onTestFinished(installChatComposerPickerDismissal(document));
@@ -65,10 +74,9 @@ export function renderComposer(
     () => undefined,
   );
   attachmentDrafts.push(attachmentDraft);
-  const textareaController =
-    overrides.textareaController ?? new NewSessionComposerTextareaController();
-  if (!textareaControllers.includes(textareaController)) {
-    textareaControllers.push(textareaController);
+  const composerTextarea = overrides.composerTextarea ?? createNewSessionComposerTextarea();
+  if (!composerTextareas.includes(composerTextarea)) {
+    composerTextareas.push(composerTextarea);
   }
   let message = overrides.message ?? "";
   let agentId = overrides.agentId ?? "main";
@@ -86,7 +94,7 @@ export function renderComposer(
     toolOverrides: overrides.toolOverrides,
     modelControl: new NewSessionModelControl(() => undefined),
     requiresModifier: overrides.requiresModifier ?? false,
-    requestUpdate: renderCurrent,
+    onChange: renderCurrent,
     submitDisabledReason: overrides.submitDisabledReason,
     blockedSubmitNotice: overrides.blockedSubmitNotice,
     dictationActive: overrides.dictationActive,
@@ -95,7 +103,7 @@ export function renderComposer(
     nativeTerminal: overrides.nativeTerminal,
     onUnsupportedAttachment: overrides.onUnsupportedAttachment,
     submitting: overrides.submitting ?? false,
-    textareaController,
+    composerTextarea,
     messageLocked: overrides.messageLocked,
     onInput: (next) => {
       message = next;
@@ -116,8 +124,9 @@ export function renderComposer(
     attachmentDraft,
     composer,
     container,
-    textareaController,
+    composerTextarea,
     rerender: renderCurrent,
+    unmount: mounted.unmount,
     rerenderWithMessage: (nextMessage: string) => {
       message = nextMessage;
       renderCurrent();
@@ -139,10 +148,10 @@ export function resetComposerTestFixtures() {
     attachmentDraft.reset();
   }
   attachmentDrafts.length = 0;
-  for (const textareaController of textareaControllers) {
-    textareaController.disconnect();
+  for (const composerTextarea of composerTextareas) {
+    composerTextarea.disconnect();
   }
-  textareaControllers.length = 0;
+  composerTextareas.length = 0;
 }
 
 export function mountNewSessionComposer(

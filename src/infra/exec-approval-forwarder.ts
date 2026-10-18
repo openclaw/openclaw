@@ -51,13 +51,6 @@ import type {
 // Approval forwarding mirrors foreground approvals into chat targets, then sends
 // resolution/expiry notices to the same targets.
 const log = createSubsystemLogger("gateway/exec-approvals");
-type DeliverApprovalPayloads =
-  typeof import("../channels/message/runtime.js").sendDurableMessageBatchCore;
-type MaybePromise<T> = T | Promise<T>;
-type ResolveSessionTargetFn = (params: {
-  cfg: OpenClawConfig;
-  request: ExecApprovalRequest;
-}) => MaybePromise<ExecApprovalForwardTarget | null>;
 
 type ForwardTarget = ExecApprovalForwardTarget & { source: "session" | "target" };
 
@@ -107,10 +100,6 @@ export type ExecApprovalForwarder = {
 };
 
 type ExecApprovalForwarderDeps = {
-  getConfig?: () => OpenClawConfig;
-  deliver?: DeliverApprovalPayloads;
-  nowMs?: () => number;
-  resolveSessionTarget?: ResolveSessionTargetFn;
   /** The owning Gateway's coordinator, where its channel accounts register native handlers. */
   getNativeApprovalRouteCoordinator?: () => ApprovalNativeRouteCoordinator | undefined;
 };
@@ -289,7 +278,6 @@ async function deliverToTargets(params: {
   cfg: OpenClawConfig;
   targets: ForwardTarget[];
   buildPayload: (target: ForwardTarget) => ReplyPayload;
-  deliver: DeliverApprovalPayloads;
   beforeDeliver?: (target: ForwardTarget, payload: ReplyPayload) => Promise<void> | void;
   shouldSend?: () => boolean;
 }) {
@@ -304,7 +292,8 @@ async function deliverToTargets(params: {
     try {
       const payload = params.buildPayload(target);
       await params.beforeDeliver?.(target, payload);
-      const send = await params.deliver({
+      const { sendDurableMessageBatchCore } = await import("./exec-approval-forwarder.runtime.js");
+      const send = await sendDurableMessageBatchCore({
         cfg: params.cfg,
         channel,
         to: target.to,
@@ -327,7 +316,6 @@ async function resolveForwardTargets(params: {
   config?: ExecApprovalForwardingConfig;
   approvalKind: ChannelApprovalKind;
   routeRequest: ApprovalRouteRequest;
-  resolveSessionTarget: ResolveSessionTargetFn;
 }): Promise<ForwardTarget[]> {
   const mode = params.config?.mode ?? "session";
   const targets: ForwardTarget[] = [];
@@ -341,7 +329,7 @@ async function resolveForwardTargets(params: {
         params.approvalKind,
       ),
     };
-    const sessionTarget = await params.resolveSessionTarget({
+    const sessionTarget = await defaultResolveSessionTarget({
       cfg: params.cfg,
       request: buildSyntheticApprovalRequest(sessionRouteRequest),
     });
@@ -412,7 +400,6 @@ function createApprovalHandlers<
     const targets = await resolveForwardTargets({
       ...paramsForRoute,
       approvalKind: params.strategy.kind,
-      resolveSessionTarget: params.resolveSessionTarget,
     });
     const nativeRouteCoordinator = params.getNativeApprovalRouteCoordinator();
     const selected = await Promise.all(
@@ -432,7 +419,7 @@ function createApprovalHandlers<
   };
 
   const deliverResolved = async (resolved: TResolved, entry?: PendingApproval): Promise<void> => {
-    const cfg = params.getConfig();
+    const cfg = getRuntimeConfig();
     const routeRequest = entry?.routeRequest ?? extractApprovalRouteRequest(resolved.request);
     const targets =
       entry?.targets ??
@@ -460,12 +447,11 @@ function createApprovalHandlers<
           resolved,
           target,
         }),
-      deliver: params.deliver,
     });
   };
 
   const handleRequested = async (request: TRequest): Promise<boolean> => {
-    const cfg = params.getConfig();
+    const cfg = getRuntimeConfig();
     const config = params.strategy.config(cfg);
     const requestId = request.id;
     const routeRequest = extractApprovalRouteRequest(request.request) ?? {};
@@ -491,14 +477,13 @@ function createApprovalHandlers<
     pendingEntry.value = { routeRequest, targets: filteredTargets };
     const buildExpiredText = params.strategy.buildExpiredText;
     if (buildExpiredText) {
-      const expiresInMs = Math.max(0, request.expiresAtMs - params.nowMs());
+      const expiresInMs = Math.max(0, request.expiresAtMs - Date.now());
       pending.scheduleExpiry(pendingEntry, expiresInMs, (expired) =>
         trackDelivery(() =>
           deliverToTargets({
             cfg,
             targets: expired.value.targets,
             buildPayload: () => ({ text: buildExpiredText(request) }),
-            deliver: params.deliver,
           }),
         ).catch((err: unknown) => {
           log.error(
@@ -517,7 +502,7 @@ function createApprovalHandlers<
             cfg,
             request,
             target,
-            nowMs: params.nowMs(),
+            nowMs: Date.now(),
           }),
         beforeDeliver: async (target, payload) => {
           const channel = normalizeMessageChannel(target.channel) ?? target.channel;
@@ -534,7 +519,6 @@ function createApprovalHandlers<
             },
           });
         },
-        deliver: params.deliver,
         shouldSend: () => pending.isCurrent(pendingEntry),
       }).then(() => pending.completeDelivery(pendingEntry, pendingEntry.value)),
     ).catch((err: unknown) => {
@@ -612,35 +596,19 @@ const systemAgentApprovalStrategy = {
 export function createExecApprovalForwarder(
   deps: ExecApprovalForwarderDeps = {},
 ): ExecApprovalForwarder {
-  const getConfig = deps.getConfig ?? getRuntimeConfig;
-  const deliver =
-    deps.deliver ??
-    (async (params) => {
-      const { sendDurableMessageBatchCore } = await import("./exec-approval-forwarder.runtime.js");
-      return sendDurableMessageBatchCore(params);
-    });
-  const nowMs = deps.nowMs ?? Date.now;
-  const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;
   const getNativeApprovalRouteCoordinator =
     deps.getNativeApprovalRouteCoordinator ?? (() => undefined);
 
-  const handlerDeps = {
-    getConfig,
-    deliver,
-    nowMs,
-    resolveSessionTarget,
-    getNativeApprovalRouteCoordinator,
-  };
   const execHandlers = createApprovalHandlers({
-    ...handlerDeps,
+    getNativeApprovalRouteCoordinator,
     strategy: execApprovalStrategy,
   });
   const pluginHandlers = createApprovalHandlers({
-    ...handlerDeps,
+    getNativeApprovalRouteCoordinator,
     strategy: pluginApprovalStrategy,
   });
   const systemAgentHandlers = createApprovalHandlers({
-    ...handlerDeps,
+    getNativeApprovalRouteCoordinator,
     strategy: systemAgentApprovalStrategy,
   });
 

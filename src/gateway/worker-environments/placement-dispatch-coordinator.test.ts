@@ -323,6 +323,7 @@ describe("worker placement dispatch coordinator", () => {
       expect.any(Function),
       expect.any(Function),
       undefined,
+      undefined,
     );
     expect(sessionCurrent).toHaveBeenCalledOnce();
     expect(authorize).toHaveBeenCalledOnce();

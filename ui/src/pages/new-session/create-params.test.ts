@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
-import { NewSessionCapabilityController } from "./capability-controller.ts";
+import { NewSessionCapabilities } from "./capabilities.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 
 describe("create-as-draft availability", () => {
-  const capabilities = new NewSessionCapabilityController(
+  const capabilities = new NewSessionCapabilities(
     () => {},
     () => {},
   );
@@ -43,6 +43,30 @@ describe("create-as-draft availability", () => {
 });
 
 describe("buildDraftSessionCreateParams", () => {
+  it("creates a device folder without leaking another workspace source", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "Work here",
+        deferInitialTurn: true,
+        deviceFolder: { deviceId: "runner", path: " /srv/existing project " },
+        worktree: true,
+        worktreeSource: "empty",
+        projectId: "old",
+        projectGitUrl: "https://github.com/example/project.git",
+        repository: { url: "https://github.com/example/project.git" },
+        cwd: "/gateway/old",
+        workspace: "/gateway/workspace",
+        baseRef: "main",
+        worktreeName: "old",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "",
+      titleSource: "Work here",
+      deviceFolder: { deviceId: "runner", path: "/srv/existing project" },
+    });
+  });
   it("creates an empty workspace without carrying a previous checkout source", () => {
     expect(
       buildDraftSessionCreateParams({

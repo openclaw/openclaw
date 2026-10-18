@@ -26,6 +26,7 @@ import { createVitestCacheSlots, resolveVitestCacheRoot } from "./lib/vitest-cac
 import {
   hasNonRunVitestSubcommand,
   collectVitestFileFilters,
+  replaceVitestFileFilters,
   resolveBooleanModeFlag,
   resolveExplicitVitestMode,
   vitestOptionConsumesNextArg,
@@ -64,6 +65,7 @@ import {
   stripVitestAnsi,
   writeVitestUnhandledErrorSummary,
 } from "./lib/vitest-unhandled-errors.mts";
+import { getVitestWorkerDescriptor } from "./lib/vitest-worker-descriptor.mts";
 import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
@@ -212,8 +214,11 @@ export function resolveBoundedVitestInvocations(
       `--shard=${index + 1}/${E2E_TEST_PROCESS_COUNT}`,
     ]);
   }
-  const chunks = options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd);
-  return chunks.length > 1 ? chunks.map((targets) => insertVitestTargets(argv, targets)) : [argv];
+  const chunks =
+    options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd, argv, env);
+  return chunks.length > 1
+    ? chunks.map((targets) => replaceVitestFileFilters(argv, targets))
+    : [argv];
 }
 
 /**
@@ -863,6 +868,8 @@ export function spawnWatchedVitestProcess({
   const testCommand = nativeBunFiles
     ? resolveNativeBunTestCommand(
         validateNativeBunTestFiles(nativeBunFiles, spawnParams.cwd ?? process.cwd()),
+        undefined,
+        env,
       )
     : directNodeArgs
       ? resolveVitestTestCommand(directNodeArgs, env)
@@ -1092,10 +1099,6 @@ export async function runVitest(
     : config === null && !sourceMode && process.cwd() === repoRoot
       ? "vitest.config.ts"
       : "";
-  const invocationEnv =
-    invocations.length > 1 && relativeConfig === E2E_VITEST_CONFIG
-      ? { ...env, ...(await prepareE2eVitestRuntime(env)) }
-      : env;
   // Canonical configs have known project scopes. Custom roots/projects keep
   // their own setup; never infer their runtime selection from a config name.
   const canonicalSelection =
@@ -1104,6 +1107,12 @@ export async function runVitest(
     !hasExplicitVitestProjectArg(vitestArgs) &&
     !hasNonRunVitestSubcommand(vitestArgs) &&
     !hasExplicitDisabledRunFlag(vitestArgs);
+  // E2E global setup must precede shared asset preparation, including a single
+  // invocation; otherwise it can replace dist after UI readiness was checked.
+  const invocationEnv =
+    canonicalSelection && relativeConfig === E2E_VITEST_CONFIG
+      ? { ...env, ...(await prepareE2eVitestRuntime(env)) }
+      : env;
   if (canonicalSelection && relativeConfig) {
     const code = await prepareVitestRuntime(
       invocations.flatMap((cliArgs) =>
@@ -1118,7 +1127,7 @@ export async function runVitest(
   }
   const workers = sourceMode
     ? undefined
-    : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv));
+    : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv), getVitestWorkerDescriptor());
   const withCacheSlot = createVitestCacheSlots();
   let interrupted: NodeJS.Signals | undefined;
   let preparingWorkers = false;
@@ -1206,7 +1215,7 @@ export async function runVitest(
     process.exitCode = failedExitCode;
   } finally {
     try {
-      await workers?.dispose().catch((error: unknown) => {
+      await workers?.dispose({ interrupted: Boolean(interrupted) }).catch((error: unknown) => {
         process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
         console.error(error);
       });

@@ -27,7 +27,9 @@ it("reloads a stale document onto the current build when an unvisited lazy route
   const rootB = path.join(fixture, "build-b");
   // Real production chunks and routing exercise Vite's preload errors as well as
   // browser import rejection; a synthetic import cannot prove this recovery path.
-  await buildProductionControlUiE2e(rootA, buildA);
+  // Build identity alone preserves asset hashes; use an older chunk layout so
+  // replacing the bundle actually retires the unvisited Activity import.
+  await buildProductionControlUiE2e(rootA, buildA, { includeBootGroups: false });
   await buildProductionControlUiE2e(rootB, buildB);
   const activityAssetA = (await readdir(path.join(rootA, "assets"))).find((file) =>
     /^activity-page-.*\.js$/u.test(file),

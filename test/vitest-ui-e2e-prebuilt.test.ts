@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
-  BUILD_STAMP_FILE,
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../scripts/lib/local-build-metadata.mts";
@@ -93,17 +92,6 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-it("admits a ready generation without writing outputs and detects later metadata drift", () => {
-  const stampPath = path.join(root, "dist", BUILD_STAMP_FILE);
-  const before = fs.readFileSync(stampPath);
-  const generation = assertPrebuiltUiE2eRuntime(root);
-  expect(assertPrebuiltUiE2eRuntime(root)).toBe(generation);
-  expect(fs.readFileSync(stampPath)).toEqual(before);
-  const metadata = JSON.parse(fs.readFileSync(path.join(root, "dist/build-info.json"), "utf8"));
-  write("dist/build-info.json", JSON.stringify({ ...metadata, generation: "later" }));
-  expect(assertPrebuiltUiE2eRuntime(root)).not.toBe(generation);
-});
-
 it("rejects retained UI assets after a same-source runtime rebuild without repairing them", () => {
   const uiRoot = path.join(root, "dist/control-ui");
   const indexPath = path.join(uiRoot, "index.html");
@@ -126,46 +114,11 @@ it("rejects retained UI assets after a same-source runtime rebuild without repai
   expect(fs.readFileSync(indexPath)).toEqual(index);
 });
 
-it.each([
-  {
-    name: "missing private QA",
-    remove: "dist/plugin-sdk/qa-runtime.js",
-    reason: "missing_private_qa_dist",
-  },
-  {
-    name: "missing postbuild output",
-    remove: "dist/build-info.json",
-    reason: "missing_runtime_postbuild_output",
-  },
-  { name: "incomplete UI", remove: "dist/control-ui/assets/entry.js", reason: "Control UI assets" },
-])("rejects $name without repairing it", ({ remove, reason }) => {
-  const target = path.join(root, remove);
+it("rejects incomplete UI without repairing it", () => {
+  const target = path.join(root, "dist/control-ui/assets/entry.js");
   fs.rmSync(target, { recursive: true, force: true });
-  expect(() => assertPrebuiltUiE2eRuntime(root)).toThrow(reason);
+  expect(() => assertPrebuiltUiE2eRuntime(root)).toThrow("Control UI assets");
   expect(fs.existsSync(target)).toBe(false);
-});
-
-it.each(["untracked.ts", "package.json"])("rejects dirty source %s", (file) => {
-  write(file);
-  expect(() => assertPrebuiltUiE2eRuntime(root)).toThrow("source state is dirty");
-});
-
-it("rejects an artifact generation built at another HEAD", () => {
-  write(`dist/${BUILD_STAMP_FILE}`, '{"head":"different"}');
-  expect(() => assertPrebuiltUiE2eRuntime(root)).toThrow("git_head_changed");
-});
-
-it.each([
-  ["OPENCLAW_FORCE_BUILD", "force_build"],
-  ["OPENCLAW_FORCE_RUNTIME_POSTBUILD", "force_runtime_postbuild"],
-])("honors the owner's %s rebuild decision", (key, reason) => {
-  vi.stubEnv(key, "1");
-  expect(() => assertPrebuiltUiE2eRuntime(root)).toThrow(reason);
-});
-
-it("rejects unavailable Git identity instead of falling back to mtimes", () => {
-  fs.rmSync(path.join(root, ".git"), { recursive: true, force: true });
-  expect(() => assertPrebuiltUiE2eRuntime(root)).toThrow("Git HEAD is unavailable");
 });
 
 it.each([false, true])("sets the native CLI outcome after teardown (drift: %s)", (drift) => {

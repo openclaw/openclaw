@@ -31,3 +31,8 @@ export {
   type QaGatewayChild,
 } from "./src/gateway-child.js";
 export { runQaSuite } from "./src/suite-launch.runtime.js";
+export {
+  buildQaScorecardGapReport,
+  renderQaScorecardGapMarkdownReport,
+  type QaScorecardGapReport,
+} from "./src/scorecard-gap-report.js";

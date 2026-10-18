@@ -5,10 +5,8 @@ import { withGatewayServiceOperationLock } from "../../daemon/service-operation-
 import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
-import {
-  readUpdateStateSchemaVersions,
-  resolveUpdateStateContentVersion,
-} from "../../infra/update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import { resolveUpdateStateContentVersion } from "../../infra/update-candidate-state.versions.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   getUpdateRun,
@@ -38,10 +36,14 @@ import {
   assertOriginalServiceStateCompatible,
   revalidateOriginalManagedServiceRuntime,
 } from "./update-command-original-service.js";
-import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
+import {
+  observeUpdateGatewayReadiness,
+  verifyPreviousGatewayForUpdate,
+} from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   isPackageManagerUpdateMode,
+  GatewayRestartHealthError,
   restartRetainedUpdateGatewayService,
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
@@ -67,6 +69,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   service: GatewayService;
   port: number;
   timeoutMs?: number;
+  onProgress?: (stage: string, reason: string) => void;
   expectedVersion?: string;
   expectedBuildId?: string;
   env?: NodeJS.ProcessEnv;
@@ -76,6 +79,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
 }> {
   const executor = params.updateRun?.executorFence;
   const assertCurrent = () => {
+    params.updateRun?.deadline?.signal.throwIfAborted();
     executor?.assertCurrent();
     params.assertCurrent?.();
   };
@@ -96,6 +100,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
       const recovery = await recoverInstalledLaunchAgentAfterUpdate({
         onGatewayStartAttempted: params.onGatewayStartAttempted,
         service: params.service,
+        deadline: params.updateRun?.deadline,
         env: params.env,
         assertCurrent: assertRecovery,
       });
@@ -131,13 +136,18 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   const health = await waitForGatewayHealthyRestart({
     service: params.service,
     port: params.port,
-    timeoutMs: params.timeoutMs,
+    timeoutMs: params.updateRun?.deadline?.remainingMs() ?? params.timeoutMs,
+    deadline: params.updateRun?.deadline,
+    signal: params.updateRun?.deadline?.signal,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     requirePluginHealth: false,
+    requireChannelHealth: false,
     env: params.env,
+    onObservation: params.onProgress
+      ? (snapshot) => params.onProgress?.("recovery", renderRestartDiagnostics(snapshot).join("; "))
+      : undefined,
     supervisorKeepsAlive: true,
-    settle: { probes: 12 },
   });
   assertCurrent();
   return { health, launchAgentRecovery };
@@ -185,7 +195,11 @@ export function refuseUnsettledDoctorRecovery(
       settlement.cwd !== root)
   ) {
     assertCurrent();
-    result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    result.recovery = {
+      serviceRestartSafe: false,
+      reason: "runtime-verification-failed",
+      dataAtRisk: "active-mutation",
+    };
     return true;
   }
   return false;
@@ -224,12 +238,16 @@ export async function admitInstalledGatewayRecovery(
     settlement !== undefined;
   if (
     (!currentCore && result.reason !== "state-migrated-no-rollback") ||
-    (params.coreAlreadyCurrent && result.recovery?.serviceRestartSafe === false) ||
+    (result.recovery?.serviceRestartSafe === false &&
+      result.recovery.dataAtRisk &&
+      result.recovery.dataAtRisk !== "state-migrated-no-rollback") ||
     params.originalManagedServiceRuntime ||
     !params.shouldRestart ||
     !params.preManagedServiceStop?.stopped ||
     databaseRollback?.exitCode === 0 ||
-    (!settlement && !databaseRollback) ||
+    // Normal Doctor completion needs no settlement receipt. The candidate's
+    // schema inspection below can still admit forward recovery after migration.
+    (!settlement && !databaseRollback && !params.candidateSchemaVersions) ||
     (result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "source-rollback-failed")
   ) {
@@ -328,13 +346,21 @@ export async function admitInstalledGatewayRecovery(
       }
       assertCurrent();
       const message = `Run \`${formatCliCommand("openclaw doctor --fix", env)}\`, then \`${formatCliCommand("openclaw gateway start", env)}\`. Gateway migration recovery did not finish: ${formatErrorMessage(error)}.`;
-      result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+      result.recovery = {
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+        dataAtRisk: "incomplete-migration",
+      };
       recordMigrationRecovery(1, message);
       defaultRuntime.error(message);
       return false;
     }
   }
   // Preserve later writes; the installed candidate's native startup still owns state admission.
+  // Forward admission settles the migration risk, but Doctor maintenance still failed.
+  if (result.reason === "state-migrated-no-rollback") {
+    result.reason = "post-update-failed";
+  }
   result.recovery = { serviceRestartSafe: true, version, ...(buildId ? { buildId } : {}) };
   if (params.opts.run) {
     recordUpdateRunDiagnostics(
@@ -349,6 +375,8 @@ export async function admitInstalledGatewayRecovery(
 
 export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   onGatewayStartAttempted?: () => void;
+  /** Final recovery continues cold-start observation and records restart errors itself. */
+  finalRecovery?: boolean;
   updateRun?: UpdateCommandOptions["run"];
   preManagedServiceStop: PreManagedServiceStop | undefined;
   recovery?: UpdateRunResult["recovery"];
@@ -366,6 +394,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
         "Service recovery lost its original update executor.",
       );
     }
+    params.updateRun?.deadline?.signal.throwIfAborted();
     executor?.assertCurrent();
   };
   const before = params.preManagedServiceStop;
@@ -488,18 +517,26 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
           assertCurrent,
         },
         "restart",
-      );
+      ).catch((error: unknown) => {
+        if (!params.finalRecovery || !(error instanceof GatewayRestartHealthError)) {
+          throw error;
+        }
+        // Native restart waits 60s; final recovery owns the longer update budget.
+      });
     }
     assertCurrent();
-    const health = await waitForGatewayHealthyRestart({
-      service,
-      port,
-      env: current.env,
+    const { health } = await observeUpdateGatewayReadiness({
+      serviceEnv: current.env,
+      gatewayPort: port,
       timeoutMs: params.timeoutMs,
+      deadline: run?.deadline,
       expectedVersion: original?.version ?? packageRecovery?.version,
       expectedBuildId: original?.buildId ?? packageRecovery?.buildId,
       requireRunningService: true,
-      settle: { probes: 12 },
+      healthOnly: true,
+      assertCurrent,
+      onProgress: (stage, reason) =>
+        defaultRuntime[params.jsonMode ? "error" : "log"](`Gateway recovery (${stage}): ${reason}`),
     });
     assertCurrent();
     if (!health.healthy || health.runtime.status !== "running") {
@@ -548,9 +585,11 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     if (err instanceof UpdateCommandRecoveryPendingError) {
       throw err;
     }
-    defaultRuntime.error(
-      `Failed to restart managed gateway service after failed update: ${String(err)}. Run \`openclaw gateway status --deep\` before restarting it manually.`,
-    );
+    const message = `Failed to restart managed gateway service after failed update: ${String(err)}. Run \`openclaw update repair\` and \`openclaw gateway status --deep\`.`;
+    if (params.finalRecovery) {
+      throw new Error(message, { cause: err });
+    }
+    defaultRuntime.error(message);
     return "failed";
   }
 }

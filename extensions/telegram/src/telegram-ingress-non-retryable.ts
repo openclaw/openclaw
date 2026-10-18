@@ -18,6 +18,7 @@ type TelegramIngressNonRetryableFailure = {
     | "invalid-event"
     | "missing-agent-harness"
     | "dispatch-dedupe-rollback-failed"
+    | "session-archived"
     | "recipient-unreachable";
   message: string;
 };
@@ -38,6 +39,17 @@ export function resolveTelegramIngressNonRetryableFailure(
       // A committed dispatch key that cannot be rolled back makes retry unsafe:
       // the next replay can be duplicate-suppressed and then deleted.
       return { reason: "dispatch-dedupe-rollback-failed", message };
+    }
+    if (
+      typeof candidate === "object" &&
+      candidate !== null &&
+      "reason" in candidate &&
+      "retryable" in candidate &&
+      readErrorName(candidate) === "SessionWorkStartError" &&
+      candidate.reason === "archived" &&
+      candidate.retryable === false
+    ) {
+      return { reason: "session-archived", message };
     }
     if (TELEGRAM_UNREACHABLE_RECIPIENT_RE.test(message)) {
       return { reason: "recipient-unreachable", message };

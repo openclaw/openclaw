@@ -1,17 +1,54 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { diagnosticReadOperations } from "../infra/sqlite-audit-record.kernel.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
+import { sessionUpstreamReadOperations } from "../sessions/session-upstream-links.kernel.js";
 import {
   createWorkerOperationRegistry,
   type WorkerOperationsFromLoaders,
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  worktrees: async () => {
+    const [
+      { worktreeReadOperations },
+      { worktreeTemplateReadOperations },
+      { pendingWorktreeReadOperations },
+    ] = await Promise.all([
+      import("../agents/worktrees/registry-read.kernel.js"),
+      import("../agents/worktrees/template-registry.worker.js"),
+      import("../agents/worktrees/pending-slots.worker.js"),
+    ]);
+    return {
+      ...worktreeReadOperations,
+      ...worktreeTemplateReadOperations,
+      ...pendingWorktreeReadOperations,
+    };
+  },
+  agentProvenance: () =>
+    import("./agent-provenance.kernel.js").then((m) => m.agentProvenanceReadOperations),
+  managedImages: () =>
+    import("../gateway/managed-image-record-store.kernel.js").then(
+      (m) => m.managedImageRecordReadOperations,
+    ),
+  githubPublications: () =>
+    import("./github-publication.read.worker.js").then((m) => m.publicationReadOperations),
+  userGitHubConnections: () =>
+    import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionReadOperations),
+  deviceIdentity: () =>
+    import("../infra/device-identity.read.worker.js").then((m) => m.deviceIdentityReadOperations),
+  stateBootstrap: () =>
+    import("./state-bootstrap-read.worker.js").then((m) => m.stateBootstrapReadOperations),
+  machineState: () =>
+    import("./config-machine-state.read.worker.js").then((m) => m.machineStateReadOperations),
+  projects: () =>
+    import("../projects/project-registry.kernel.js").then((m) => m.projectRegistryReadOperations),
   agentDeletion: () =>
     import("../agents/agent-delete-session-store-safety.kernel.js").then(
       (m) => m.agentDeletionSessionStoreReadOperations,
     ),
   agentLifecycle: () =>
-    import("./agent-lifecycle-read.kernel.js").then((m) => m.agentLifecycleReadOperations),
+    import("./agent-lifecycle-read.worker.js").then((m) => m.agentLifecycleReadOperations),
   agentRecovery: () =>
     import("./agent-deletion-recovery.worker.js").then((m) => m.agentRecoveryReadOperations),
   legacySessionMigration: () =>
@@ -26,10 +63,14 @@ const loaders = {
     ),
   config: () =>
     import("../config/io.health-state.kernel.js").then((m) => m.configHealthReadOperations),
-  plugins: () =>
-    import("../infra/deferred-plugin-migrations.js").then(
-      (m) => m.deferredPluginMigrationReadOperations,
-    ),
+  plugins: async () => {
+    const { deferredPluginMigrationReadOperations } =
+      await import("../infra/deferred-plugin-migrations.js");
+    return {
+      ...deferredPluginMigrationReadOperations,
+      ...pluginMetadataReadOperations,
+    };
+  },
   generatedHtmlProvenance: () =>
     import("../media/generated-html-provenance.worker.js").then(
       (m) => m.generatedHtmlProvenanceReadOperations,
@@ -46,12 +87,12 @@ const loaders = {
     import("../sessions/session-state-events.read.worker.js").then(
       (m) => m.sessionStateReadOperations,
     ),
-  sessionUpstream: () =>
-    import("../sessions/session-upstream-links.kernel.js").then(
-      (m) => m.sessionUpstreamReadOperations,
-    ),
-  diagnostic: () =>
-    import("../infra/sqlite-audit-record.kernel.js").then((m) => m.diagnosticReadOperations),
+  // Session-state handlers also require this kernel in the read-worker graph.
+  sessionUpstream: async () => sessionUpstreamReadOperations,
+  // Schema readers already require this kernel in the read-worker graph.
+  diagnostic: async () => diagnosticReadOperations,
+  restartLifecycle: () =>
+    import("../infra/restart-handoff.read.worker.js").then((m) => m.restartHandoffReadOperations),
   restartSentinel: () =>
     import("../infra/restart-sentinel.read.worker.js").then((m) => m.restartSentinelReadOperations),
 };
@@ -60,4 +101,6 @@ type Operations = WorkerOperationsFromLoaders<typeof loaders>;
 export type RegisteredStateReadCommand = SqliteWorkerCommand<Operations>;
 export type RegisteredStateReadResult = Operations[keyof Operations]["output"];
 
-export const stateReadRegistry = createWorkerOperationRegistry<Operations, DatabaseSync>(loaders);
+export const stateReadRegistry = createWorkerOperationRegistry<Operations, EngineConnection>(
+  loaders,
+);

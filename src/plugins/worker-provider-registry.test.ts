@@ -60,22 +60,25 @@ describe("worker provider registry", () => {
     );
   });
 
-  it.each(["renew"] as const)("rejects a non-function optional %s hook", (method) => {
-    const pluginRegistry = createTestRegistry();
-    const provider = {
-      ...createWorkerProvider("static-ssh"),
-      [method]: "later",
-    } as unknown as WorkerProvider;
+  it.each(["renew", "runSetupCommand"] as const)(
+    "rejects a non-function optional %s hook",
+    (method) => {
+      const pluginRegistry = createTestRegistry();
+      const provider = {
+        ...createWorkerProvider("static-ssh"),
+        [method]: "later",
+      } as unknown as WorkerProvider;
 
-    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+      pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
 
-    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
-    expect(pluginRegistry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        message: `worker provider registration ${method} must be a function`,
-      }),
-    );
-  });
+      expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+      expect(pluginRegistry.registry.diagnostics).toContainEqual(
+        expect.objectContaining({
+          message: `worker provider registration ${method} must be a function`,
+        }),
+      );
+    },
+  );
 
   it("rejects a non-boolean provision-before-installation declaration", () => {
     const pluginRegistry = createTestRegistry();

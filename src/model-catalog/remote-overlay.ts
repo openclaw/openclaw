@@ -21,7 +21,7 @@ import {
   isRemoteCatalogSourceActive,
   isRemoteModelCatalogRefreshEnabled,
 } from "./remote-config.js";
-import { readRemoteModelCatalog, readRemoteModelCatalogAsync } from "./remote-store.js";
+import { readRemoteModelCatalogAsync } from "./remote-store.js";
 
 export type RemoteCatalogPublicationResult = "published" | "unchanged" | "superseded";
 
@@ -33,6 +33,7 @@ type RemoteModelCatalogMetadata = {
 export type ActiveRemoteModelCatalog = RemoteModelCatalogMetadata & {
   revision: string;
   providers: RemoteModelCatalogOverlay;
+  recommendations: Readonly<Record<string, readonly string[]>>;
   pricing: Readonly<Record<string, RemoteModelCatalogPrice>>;
   upstreamPricing: Readonly<Record<string, RemoteModelCatalogUpstreamPrice>>;
 };
@@ -43,10 +44,7 @@ const remoteCatalogScope = resolveGlobalSingleton(
   () => new AsyncLocalStorage<{ catalog: ActiveRemoteModelCatalog | null }>(),
 );
 
-function isCompatible(bundle: RemoteModelCatalogWireBundle, bundledGeneratedAt: number): boolean {
-  if (bundle.generatedAt <= bundledGeneratedAt) {
-    return false;
-  }
+function isCompatible(bundle: RemoteModelCatalogWireBundle): boolean {
   if (!bundle.minVersion) {
     return true;
   }
@@ -55,21 +53,34 @@ function isCompatible(bundle: RemoteModelCatalogWireBundle, bundledGeneratedAt: 
 }
 
 function selectCompatibleRemoteModelCatalog(
-  stored: ReturnType<typeof readRemoteModelCatalog>,
+  stored: Awaited<ReturnType<typeof readRemoteModelCatalogAsync>>,
   bundledGeneratedAt: number,
 ): ActiveRemoteModelCatalog | null {
   if (!stored) {
     return null;
   }
   const bundle = parseRemoteModelCatalogWireBundle(JSON.parse(stored.bundle_json));
-  if (!isCompatible(bundle, bundledGeneratedAt)) {
+  if (!isCompatible(bundle)) {
     return null;
   }
+  const recommendations = Object.fromEntries(
+    Object.entries(bundle.providers).map(([provider, catalog]) => [
+      provider,
+      catalog.recommendedModels ?? [],
+    ]),
+  );
+  // Bundled rows and prices supersede older downloads, but do not contain the
+  // hosted recommendations. Rank only currently served rows against those IDs.
+  const overlay =
+    bundle.generatedAt > bundledGeneratedAt
+      ? projectRemoteModelCatalog(bundle)
+      : { providers: {}, pricing: {}, upstreamPricing: {} };
   return freezeJsonSnapshot({
     sourceUrl: stored.source_url,
     generatedAt: bundle.generatedAt,
     revision: createHash("sha256").update(stored.bundle_json).digest("hex"),
-    ...projectRemoteModelCatalog(bundle),
+    recommendations,
+    ...overlay,
   });
 }
 
@@ -92,22 +103,9 @@ function publishRemoteModelCatalogStartupSnapshot(
   return snapshot;
 }
 
+/** Read the already-published startup pair without loading persistent state. */
 export function captureRemoteModelCatalogStartupSnapshot(): ActiveRemoteModelCatalog | null {
-  const inherited = inheritedRemoteModelCatalogStartupSnapshot();
-  if (inherited !== undefined) {
-    return inherited.catalog;
-  }
-  let snapshot: ActiveRemoteModelCatalog | null;
-  try {
-    const bundledGeneratedAt = bundledCatalogGeneratedAt();
-    snapshot =
-      bundledGeneratedAt === undefined
-        ? null
-        : selectCompatibleRemoteModelCatalog(readRemoteModelCatalog(), bundledGeneratedAt);
-  } catch {
-    snapshot = null;
-  }
-  return publishRemoteModelCatalogStartupSnapshot(snapshot);
+  return inheritedRemoteModelCatalogStartupSnapshot()?.catalog ?? null;
 }
 
 /** Prepare the same first-winner startup pair without host-thread SQLite reads. */
@@ -118,12 +116,7 @@ export async function prepareRemoteModelCatalogStartupSnapshot(
   if (inherited !== undefined) {
     return inherited.catalog;
   }
-  let bundledGeneratedAt: number | undefined;
-  try {
-    bundledGeneratedAt = bundledCatalogGeneratedAt();
-  } catch {
-    return publishRemoteModelCatalogStartupSnapshot(null);
-  }
+  const bundledGeneratedAt = bundledCatalogGeneratedAt();
   if (bundledGeneratedAt === undefined) {
     return publishRemoteModelCatalogStartupSnapshot(null);
   }
@@ -177,7 +170,11 @@ export async function readRemoteModelCatalogUpdate(
     bundledGeneratedAt,
   );
   context.admission.assertCurrent();
-  return snapshot && isRemoteCatalogSourceActive(config, snapshot.sourceUrl) ? snapshot : undefined;
+  return snapshot &&
+    snapshot.generatedAt > bundledGeneratedAt &&
+    isRemoteCatalogSourceActive(config, snapshot.sourceUrl)
+    ? snapshot
+    : undefined;
 }
 
 /** The prepared catalog owner commits this pair in the same turn as its rows. */
@@ -194,18 +191,13 @@ export function publishRemoteModelCatalogSnapshot(
 
 export function getActiveRemoteModelCatalog(
   config: OpenClawConfig,
-  captureStartup = true,
 ): ActiveRemoteModelCatalog | undefined {
   if (!isRemoteModelCatalogRefreshEnabled(config)) {
     return undefined;
   }
   const scoped = remoteCatalogScope.getStore();
   const snapshot =
-    scoped !== undefined
-      ? scoped.catalog
-      : captureStartup
-        ? captureRemoteModelCatalogStartupSnapshot()
-        : inheritedRemoteModelCatalogStartupSnapshot()?.catalog;
+    scoped !== undefined ? scoped.catalog : captureRemoteModelCatalogStartupSnapshot();
   return snapshot && isRemoteCatalogSourceActive(config, snapshot.sourceUrl) ? snapshot : undefined;
 }
 
@@ -215,4 +207,12 @@ export function getRemoteModelCatalogProviderOverlay(
 ): ModelCatalogProvider | undefined {
   const providerId = normalizeProviderId(provider);
   return providerId ? getActiveRemoteModelCatalog(config)?.providers[providerId] : undefined;
+}
+
+export function getRemoteModelCatalogProviderRecommendations(
+  config: OpenClawConfig,
+  provider: string,
+): readonly string[] | undefined {
+  const providerId = normalizeProviderId(provider);
+  return providerId ? getActiveRemoteModelCatalog(config)?.recommendations[providerId] : undefined;
 }

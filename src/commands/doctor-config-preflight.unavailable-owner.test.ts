@@ -5,13 +5,14 @@ import { readConfigFileSnapshot } from "../config/io.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import {
   readDeferredPluginMigrations,
-  readDeferredPluginMigrationCompletionsAsync,
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createDoctorPluginMigrationPreparation } from "./doctor-config-preflight-plugin-migrations.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
@@ -178,7 +179,12 @@ describe("unavailable plugin migration owners", () => {
           status: "superseded",
           report: { reason: expect.stringContaining('Superseded by plugin "openclaw-qqbot"') },
         });
-        expect(await readDeferredPluginMigrationCompletionsAsync()).toContainEqual({
+        expect(
+          await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+            type: "plugins.deferredMigrations.completions.read",
+            input: undefined,
+          }),
+        ).toContainEqual({
           pluginId: "qqbot",
           completedAtMs: expect.any(Number),
         });

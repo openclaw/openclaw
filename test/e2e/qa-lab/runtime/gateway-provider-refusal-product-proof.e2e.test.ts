@@ -10,14 +10,16 @@ const FALLBACK_MODEL = "anthropic/claude-sonnet-4-6";
 const REFUSAL_EXPLANATION = "Service unavailable. Try again.";
 const REFUSAL_TEXT =
   "The provider refused this request (category: reasoning_extraction). Revise the request and try again.";
+const REFUSAL_NOTICE = `Your request couldn't be completed: ${REFUSAL_TEXT}`;
 
 type GatewayRun = {
   runId?: unknown;
   status?: unknown;
+  error?: unknown;
 };
 
 type GatewayHistory = {
-  messages?: Array<{ role?: unknown; content?: unknown }>;
+  messages?: Array<{ role?: unknown; content?: unknown; customType?: unknown }>;
 };
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -159,21 +161,30 @@ describe("Gateway provider refusal product proof", () => {
       { sessionKey, limit: 20 },
       { timeoutMs: 10_000 },
     )) as GatewayHistory;
-    const refusal = history.messages?.find(
-      (message) => message.role === "assistant" && messageText(message.content) === REFUSAL_TEXT,
-    );
+    const refusals =
+      history.messages?.filter(
+        (message) => message.role === "custom" && message.customType === "run-failed-before-reply",
+      ) ?? [];
     const proof = {
       requestCount: provider.requests.length,
       requestModels: provider.requests.map((body) => (body as { model?: unknown }).model),
       terminalStatus: terminal.status,
-      refusalText: refusal ? messageText(refusal.content) : undefined,
+      terminalError: terminal.error,
+      refusalNotices: refusals.length,
+      refusalText: refusals[0] ? messageText(refusals[0].content) : undefined,
     };
     console.log(`[gateway provider-refusal proof] ${JSON.stringify(proof)}`);
     expect(proof).toMatchObject({
       requestCount: 1,
       requestModels: ["claude-opus-4-8"],
       terminalStatus: "error",
-      refusalText: REFUSAL_TEXT,
+      terminalError: REFUSAL_TEXT,
+      refusalNotices: 1,
+      refusalText: REFUSAL_NOTICE,
+    });
+    expect(refusals[0]).toMatchObject({
+      display: true,
+      openclawRunError: { runId: started.runId, summary: REFUSAL_NOTICE },
     });
     expect(JSON.stringify({ terminal, history })).not.toContain(REFUSAL_EXPLANATION);
   }, 60_000);

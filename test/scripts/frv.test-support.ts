@@ -78,27 +78,19 @@ export function executionPlanArtifact({
   children?: ReturnType<typeof requiredChildren>;
   evidenceReuse?: Record<string, unknown>;
 } = {}) {
+  const identity = plan(children);
   const built = buildReleaseExecutionPlan({
+    ...identity,
     children: Object.fromEntries(
-      children.map((entry) => [
-        entry.key,
-        {
-          result: "success",
-          runAttempt: entry.runAttempt,
-          runId: entry.runId,
-          url: entry.url,
-        },
+      children.map(({ key, runAttempt, runId, url }) => [
+        key,
+        { result: "success", runAttempt, runId, url },
       ]),
     ),
     dockerPreflightResult: "success",
     evidenceReuse: evidenceReuse.requested === true,
-    parentRunAttempt: 1,
-    parentRunId: "77",
     candidateBindingResult: "success",
-    rerunGroup: "all",
     resolveTargetResult: "success",
-    workflowRef: SOURCE_REF,
-    workflowSha: SHA,
   });
   const candidateRequest = buildFullReleaseCandidateRequest({
     repository: REPOSITORY,
@@ -107,8 +99,6 @@ export function executionPlanArtifact({
     releaseProfile: "beta",
     releaseSoak: false,
     upgradeSurvivorBaseline: "openclaw@latest",
-    upgradeSurvivorBaselines: "",
-    upgradeSurvivorScenarios: "",
     allowFrozenTargetScenarioOmissions: false,
     allowUnreleasedChangelog: false,
     packagePublished: false,
@@ -116,8 +106,7 @@ export function executionPlanArtifact({
   });
   const selectedKeys = new Set(children.map((entry) => entry.key));
   return buildReleaseExecutionPlanArtifact({
-    attemptEvidenceVersion: 2,
-    candidate: null,
+    ...identity,
     children: built.children.map((entry) =>
       selectedKeys.has(entry.key)
         ? entry
@@ -133,18 +122,11 @@ export function executionPlanArtifact({
     ),
     evidenceReuse,
     expected: {
+      ...identity,
       candidateRequest,
-      parentRunAttempt: 1,
-      parentRunId: "77",
       repository: REPOSITORY,
-      targetSha: TARGET_SHA,
-      workflowRef: SOURCE_REF,
-      workflowSha: SHA,
     },
     gates: built.gates,
-    releaseProfile: "beta",
-    rerunGroup: "all",
-    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: SHA },
   });
 }
 
@@ -168,18 +150,13 @@ export function runFor(
   status = conclusion === null ? "in_progress" : "completed",
 ) {
   return {
-    actor: { login: "github-actions[bot]" },
-    conclusion,
+    ...rootRun(attempt, conclusion, status),
     display_title: entry.displayTitle,
-    event: "workflow_dispatch",
     head_branch: entry.workflowRef,
     head_sha: entry.workflowSha,
     html_url: entry.url,
     id: Number(entry.runId),
     path: `.github/workflows/${entry.workflow}`,
-    repository: { full_name: REPOSITORY },
-    run_attempt: attempt,
-    status,
     triggering_actor: {
       login: attempt === entry.runAttempt ? "github-actions[bot]" : "release-operator",
     },

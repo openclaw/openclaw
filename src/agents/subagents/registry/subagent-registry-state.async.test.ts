@@ -9,6 +9,7 @@ import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "../../../state/openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -230,7 +231,7 @@ it("omits optional hints only for a settled unavailable read without caching an 
 it("rejects newer schema admission before optional compact hints can be omitted", async () => {
   saveSubagentRegistryToSqlite(runs("retained"));
   const { db } = openOpenClawStateDatabase();
-  const version = readSqliteUserVersion(db);
+  const version = readSqliteUserVersion(requireNativeSqliteDatabase(db));
   db.exec("PRAGMA user_version = 2147483647");
   try {
     await expect(prepareOptionalSubagentSessionListReadCache()).rejects.toThrow(

@@ -13,7 +13,7 @@ import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { readUserProfileAliases } from "../state/user-profile-list.js";
+import { readResidentUserProfileAliases } from "../state/user-profile-list.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   authorizeCurrentOperatorRoleScopes,
@@ -74,7 +74,7 @@ function prepareQuestionSharing(
   return prepareSessionSharing(
     { cfg, client },
     {
-      aliases: identity ? readUserProfileAliases(identity.id) : new Set(),
+      aliases: identity ? readResidentUserProfileAliases(identity.id) : new Set(),
       sessionCap: operatorSessionCap(client, cfg),
       isMember,
     },

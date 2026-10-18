@@ -30,14 +30,12 @@ import {
 } from "../session-row-projection-access.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
-import { loadCachedSessionSharingSnapshot } from "../session-sharing-snapshot-cache.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
-  invalidate: vi.fn(),
   loadRow: vi.fn(),
   rowLabel: "first",
 }));
@@ -50,16 +48,6 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
       const logger = actual.createSubsystemLogger(...args);
       return args[0] === "gateway/session-events" ? { ...logger, warn: mocks.warn } : logger;
     },
-  };
-});
-
-vi.mock("../session-sharing.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-sharing.js")>();
-  return {
-    ...actual,
-    invalidateSessionSharingSnapshot: mocks.invalidate.mockImplementation(
-      actual.invalidateSessionSharingSnapshot,
-    ),
   };
 });
 
@@ -92,10 +80,7 @@ function createContext(
       return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
     },
     ensureMaterialized: async () => {},
-    withPreparedExactRows: async (_queries: unknown, consume: () => unknown) => ({
-      kind: "complete",
-      value: consume(),
-    }),
+    withPreparedExactRows: async (_queries: unknown, consume: () => unknown) => consume(),
     snapshot: ({ key }: { key: string }) => ({ row: mocks.loadRow(key) }),
   };
   return {
@@ -106,6 +91,36 @@ function createContext(
     getSessionEventSubscriberConnIds: () => receivers,
     mentionInbox: { invalidateAsync: vi.fn() },
   } as unknown as GatewayRequestContext;
+}
+
+function broadcasts(context: GatewayRequestContext) {
+  return vi.mocked(context.broadcastToConnIds).mock.calls;
+}
+
+function activeRun(
+  sessionKey: string,
+  sessionId: string,
+  agentId?: string,
+): ChatAbortControllerEntry {
+  return {
+    ...(agentId ? { agentId } : {}),
+    sessionKey,
+    sessionId,
+    controller: new AbortController(),
+    expiresAtMs: 60_000,
+    startedAtMs: 0,
+  };
+}
+
+function fixedStoreConfig(retired = false): OpenClawConfig {
+  return {
+    session: { scope: "global", store: "/stores/shared.sqlite" },
+    agents: {
+      ownership: "explicit",
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: retired ? { research: {} } : { ops: {}, research: {} },
+    },
+  };
 }
 
 function activePlacement(
@@ -170,16 +185,13 @@ function preparePlacementProjection(
   return { update };
 }
 
-let restorePerformanceClock: () => void;
-
 beforeEach((context) => {
   vi.useFakeTimers();
   // Publication budgets must advance on the same clock as debounce timers.
   const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-  restorePerformanceClock = () => clock.mockRestore();
-  context.onTestFinished(restorePerformanceClock);
-  mocks.invalidate();
-  mocks.invalidate.mockClear();
+  context.onTestFinished(() => {
+    clock.mockRestore();
+  });
   mocks.loadRow.mockReset().mockImplementation((key: string) => ({
     key,
     label: mocks.rowLabel,
@@ -205,7 +217,6 @@ describe("sessions.changed coalescing", () => {
     await emitAndSettleLeading(context, { reason: "groups" }, { catalogOnly: true });
 
     expect(changed).not.toHaveBeenCalled();
-    expect(mocks.invalidate).not.toHaveBeenCalled();
     expect(context.mentionInbox?.invalidateAsync).not.toHaveBeenCalled();
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
@@ -218,7 +229,6 @@ describe("sessions.changed coalescing", () => {
     // Rename/delete use the same public reason but can change member rows.
     await emitAndSettleLeading(context, { reason: "groups" });
     expect(changed).toHaveBeenCalledWith({ all: true, scope: "sessions" });
-    expect(mocks.invalidate).toHaveBeenCalledOnce();
     expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 1);
   });
@@ -320,12 +330,12 @@ describe("sessions.changed coalescing", () => {
   it.each(["before", "during"])(
     "publishes a 20-session burst when its producer drains %s preparation",
     async (when) => {
+      vi.useRealTimers();
       mocks.warn.mockClear();
       const context = createContext();
-      const cfg = context.getRuntimeConfig();
       const keys = Array.from({ length: 20 }, (_, index) => `agent:main:burst-${index}`);
       const projection = createSessionRowProjectionFixture({
-        cfg,
+        cfg: context.getRuntimeConfig(),
         store: Object.fromEntries(
           keys.map((key) => [key, { sessionId: key, updatedAt: 1, label: "committed" }]),
         ),
@@ -367,14 +377,10 @@ describe("sessions.changed coalescing", () => {
         }
         await producer.drain();
         release.resolve();
-        const drain = flushPendingSessionsChangedEvents(context);
-        await vi.runAllTimersAsync();
-        await drain;
+        await flushPendingSessionsChangedEvents(context);
         expect(mocks.warn).not.toHaveBeenCalled();
         expect(preparationBindings).toEqual(new Set(["publisher"]));
-        expect(
-          vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
-        ).toEqual(
+        expect(broadcasts(context).map(([, payload]) => payload)).toEqual(
           keys.map((sessionKey) =>
             expect.objectContaining({
               sessionKey,
@@ -384,9 +390,7 @@ describe("sessions.changed coalescing", () => {
         );
       } finally {
         release.resolve();
-        const drain = flushPendingSessionsChangedEvents(context);
-        await vi.runAllTimersAsync();
-        await drain;
+        await flushPendingSessionsChangedEvents(context);
         placement.dispose();
         projection.dispose();
       }
@@ -402,18 +406,15 @@ describe("sessions.changed coalescing", () => {
     const sessionKey = "agent:main:ready";
     try {
       await emitAndSettleLeading(context, { reason: "patch", sessionKey });
-      expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-        "sessions.changed",
-        expect.objectContaining({
-          session: expect.objectContaining({
-            key: sessionKey,
-            sessionId: `${sessionKey}-id`,
-            label: "first",
-          }),
-        }),
-        new Set(["conn-1"]),
-        expect.objectContaining({ sessionKeys: [sessionKey] }),
-      );
+      expect(broadcasts(context)).toMatchObject([
+        [
+          "sessions.changed",
+          { session: { key: sessionKey, sessionId: `${sessionKey}-id`, label: "first" } },
+          new Set(["conn-1"]),
+          { sessionKeys: [sessionKey] },
+        ],
+      ]);
+      expect(broadcasts(context)[0]?.[2]).toEqual(new Set(["conn-1"]));
       expect(bulk).toHaveBeenCalledOnce();
     } finally {
       unrelated.resolve();
@@ -440,9 +441,7 @@ describe("sessions.changed coalescing", () => {
     mocks.rowLabel = "committed-latest";
     prepared.resolve();
     await drain;
-    expect(
-      vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
-    ).toMatchObject([
+    expect(broadcasts(context).map(([, payload]) => payload)).toMatchObject([
       { reason: "first", session: { label: "committed-latest" } },
       { reason: "latest", session: { label: "committed-latest" } },
     ]);
@@ -469,16 +468,52 @@ describe("sessions.changed coalescing", () => {
       sessionId: "removed",
     });
     await vi.advanceTimersByTimeAsync(0);
-    const earlyPublications = vi.mocked(context.broadcastToConnIds).mock.calls.length;
+    const earlyPublications = broadcasts(context).length;
     prepared.resolve();
     await flushPendingSessionsChangedEvents(context);
     expect(earlyPublications).toBe(0);
-    expect(
-      vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
-    ).toMatchObject([
-      { reason: "patch", sessionId: "removed" },
-      { reason: "delete", sessionId: "removed" },
+    expect(broadcasts(context).map(([event, payload]) => [event, payload])).toMatchObject([
+      ["sessions.changed", { reason: "patch", sessionId: "removed" }],
+      ["socket.drain", { reason: "delete", sessionId: "removed" }],
+      ["sessions.changed", { reason: "delete", sessionId: "removed" }],
     ]);
+  });
+
+  it.each([
+    { key: "main", agentId: "main", subscriptionKey: "agent:main:main" },
+    { key: "global", agentId: "work", subscriptionKey: "agent:work:global" },
+  ])(
+    "routes $key teardown to message-only subscribers for $agentId",
+    async ({ key, agentId, subscriptionKey }) => {
+      const context = createContext(new Set(), {
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+      });
+      context.getSessionMessageSubscriberConnIds = vi.fn(
+        (requestedKey) => new Set(requestedKey === subscriptionKey ? ["message-reader"] : []),
+      );
+
+      await emitAndSettleLeading(context, { reason: "reset", sessionKey: key, agentId });
+      await flushPendingSessionsChangedEvents(context);
+
+      expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "socket.drain",
+        expect.objectContaining({ sessionKey: key, agentId, reason: "reset" }),
+        new Set(["message-reader"]),
+        expect.objectContaining({ agentId, dropIfSlow: false }),
+      );
+    },
+  );
+
+  it("sends one drain notice to the union of list and message subscribers", async () => {
+    const context = createContext(new Set(["list-reader", "both"]));
+    context.getSessionMessageSubscriberConnIds = () => new Set(["message-reader", "both"]);
+
+    await emitAndSettleLeading(context, { reason: "reset", sessionKey: "agent:main:main" });
+    await flushPendingSessionsChangedEvents(context);
+
+    const drains = broadcasts(context).filter(([event]) => event === "socket.drain");
+    expect(drains).toHaveLength(1);
+    expect(drains[0]?.[2]).toEqual(new Set(["list-reader", "message-reader", "both"]));
   });
 
   it("joins a different session admitted while shutdown is draining", async () => {
@@ -523,39 +558,24 @@ describe("sessions.changed coalescing", () => {
 
     expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
     expect(mocks.loadRow).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(context.broadcastToConnIds).mock.calls[1]?.[1]).toMatchObject({
+    expect(broadcasts(context)[1]?.[1]).toMatchObject({
       label: "latest",
       reason: "send",
       catalogChanged: true,
     });
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 3);
-    expect(mocks.invalidate).toHaveBeenCalledTimes(3);
     await emitAndSettleLeading(context, { reason: "patch", sessionKey: "agent:main:chat" });
-    expect(vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1]).not.toHaveProperty(
-      "catalogChanged",
-    );
+    expect(broadcasts(context).at(-1)?.[1]).not.toHaveProperty("catalogChanged");
   });
 
   it("refreshes metadata projections without expiring access when nobody receives events", async () => {
     const context = createContext(new Set());
     const sessionKey = "agent:main:metadata";
     const initialAccessRevision = readGatewayAccessRevision();
-    const resolve = vi.fn(() => ({
-      canonicalKey: sessionKey,
-      snapshot: { incognito: false, visibility: "shared" as const },
-    }));
-    loadCachedSessionSharingSnapshot({ sessionKey, resolve });
-
     await emitAndSettleLeading(context, { reason: "patch", sessionKey }, { accessChanged: false });
 
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
-    expect(mocks.invalidate).toHaveBeenCalledOnce();
     expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
-    expect(mocks.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(context.mentionInbox!.invalidateAsync).mock.invocationCallOrder[0]!,
-    );
-    loadCachedSessionSharingSnapshot({ sessionKey, resolve });
-    expect(resolve).toHaveBeenCalledTimes(2);
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
     expect(mocks.loadRow).not.toHaveBeenCalled();
   });
@@ -577,7 +597,7 @@ describe("sessions.changed coalescing", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(context.broadcastToConnIds).mock.calls[1]?.[1]).toMatchObject({
+    expect(broadcasts(context)[1]?.[1]).toMatchObject({
       label: "state-5",
       reason: "update-5",
     });
@@ -594,18 +614,7 @@ describe("sessions.changed coalescing", () => {
     const context = createContext(
       new Set(["conn-1"]),
       config,
-      new Map([
-        [
-          "compat-owner-run",
-          {
-            controller: new AbortController(),
-            expiresAtMs: 60_000,
-            sessionId,
-            sessionKey: "legacy-unscoped",
-            startedAtMs: 0,
-          } satisfies ChatAbortControllerEntry,
-        ],
-      ]),
+      new Map([["compat-owner-run", activeRun("legacy-unscoped", sessionId)]]),
     );
 
     await emitAndSettleLeading(context, {
@@ -622,60 +631,28 @@ describe("sessions.changed coalescing", () => {
   });
 
   it("projects active bare-global runs through the persisted fixed-store owner", async () => {
-    const config = {
-      session: { scope: "global", store: "/stores/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } satisfies OpenClawConfig;
+    const config = fixedStoreConfig();
     const context = createContext(
       new Set(["conn-1"]),
       config,
-      new Map([
-        [
-          "ops-global-run",
-          {
-            agentId: "ops",
-            controller: new AbortController(),
-            expiresAtMs: 60_000,
-            sessionId: "global-id",
-            sessionKey: "global",
-            startedAtMs: 0,
-          } satisfies ChatAbortControllerEntry,
-        ],
-      ]),
+      new Map([["ops-global-run", activeRun("global", "global-id", "ops")]]),
     );
 
     await emitAndSettleLeading(context, { reason: "update", sessionKey: "global" });
 
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
-      expect.objectContaining({
-        activeRunIds: ["ops-global-run"],
-        hasActiveRun: true,
-      }),
+      expect.objectContaining({ activeRunIds: ["ops-global-run"], hasActiveRun: true }),
       expect.anything(),
-      expect.objectContaining({
-        agentId: "ops",
-        sessionKeys: ["global"],
-      }),
+      expect.objectContaining({ agentId: "ops", sessionKeys: ["global"] }),
     );
-    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+    const payload = broadcasts(context)[0]?.[1];
     expect(payload).not.toHaveProperty("agentId");
     expect(payload).not.toHaveProperty("goal");
   });
 
   it("keeps a retired fixed-store owner private after the mutation commits", async () => {
-    const config = {
-      session: { scope: "global", store: "/stores/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { research: {} },
-      },
-    } satisfies OpenClawConfig;
+    const config = fixedStoreConfig(true);
     const context = createContext(new Set(["conn-1"]), config);
 
     await emitAndSettleLeading(context, { reason: "update", sessionKey: "global" });
@@ -689,9 +666,10 @@ describe("sessions.changed coalescing", () => {
         agentId: "ops",
         dropIfSlow: true,
         sessionKeys: ["agent:ops:global"],
+        sessionEventSubscriptionKeys: ["agent:ops:global"],
       },
     );
-    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+    const payload = broadcasts(context)[0]?.[1];
     for (const field of [
       "agentId",
       "key",
@@ -710,22 +688,12 @@ describe("sessions.changed coalescing", () => {
     const sessionKey = "agent:main:projected";
     const sessionId = `${sessionKey}-id`;
     const chatAbortControllers = new Map([
-      [
-        "direct-run",
-        {
-          agentId: "main",
-          controller: new AbortController(),
-          expiresAtMs: 60_000,
-          sessionId,
-          sessionKey,
-          startedAtMs: 0,
-        } satisfies ChatAbortControllerEntry,
-      ],
+      ["direct-run", activeRun(sessionKey, sessionId, "main")],
     ]);
     const context = createContext(new Set(["conn-1"]), {}, chatAbortControllers);
 
     await emitAndSettleLeading(context, { reason: "update", sessionKey });
-    expect(vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1]).toMatchObject({
+    expect(broadcasts(context)[0]?.[1]).toMatchObject({
       hasActiveRun: true,
       activeRunIds: ["direct-run"],
     });
@@ -740,7 +708,7 @@ describe("sessions.changed coalescing", () => {
       await emitAndSettleLeading(context, { reason: "update", sessionKey });
       await flushPendingSessionsChangedEvents(context);
 
-      const payload = vi.mocked(context.broadcastToConnIds).mock.calls[1]?.[1];
+      const payload = broadcasts(context)[1]?.[1];
       expect(payload).toMatchObject({ hasActiveRun: true });
       expect(payload).toHaveProperty("activeRunIds", null);
     } finally {

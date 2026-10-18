@@ -7,7 +7,7 @@ import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+import { type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackSendIdentity } from "../send.js";
 import {
@@ -216,6 +216,67 @@ describe("Slack relay source", () => {
         resolve();
       });
     });
+  });
+
+  it("settles durable acceptance before recovering from a websocket error", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>((resolve) => {
+      server.once("listening", resolve);
+    });
+    const connected = deferred<WebSocket>();
+    const socketClosed = deferred<void>();
+    server.once("connection", (socket) => {
+      socket.once("close", () => socketClosed.resolve());
+      connected.resolve(socket);
+      socket.send(
+        JSON.stringify({
+          type: "slack_event",
+          delivery_id: "pending-on-error",
+          route: { kind: "channel_default", key: "T1:C1" },
+          payload: { event: { type: "message", channel: "C1", ts: "1.000001" } },
+        }),
+      );
+    });
+    const acceptStarted = deferred<void>();
+    const acceptDone = deferred<void>();
+    const statuses: Array<Record<string, unknown>> = [];
+    const abortController = new AbortController();
+    const monitor = monitorSlackRelaySource({
+      config: {
+        url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/gateway/ws`,
+        authToken: "relay-secret",
+        gatewayId: "pash",
+      },
+      acceptRelayEvent: async () => {
+        acceptStarted.resolve();
+        await acceptDone.promise;
+      },
+      runtime: { error: vi.fn(), log: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      identityHealth: { lifecycle: "ready", lastError: null },
+      setStatus: (status) => statuses.push(status),
+    });
+    const stopped = monitor.catch((error: unknown) => error);
+    try {
+      await acceptStarted.promise;
+      const socket = await connected.promise;
+      socket.send(Buffer.alloc(SLACK_RELAY_MAX_PAYLOAD_BYTES + 1));
+      await socketClosed.promise;
+      expect(statuses.filter((status) => status.lifecycle === "recovering")).toEqual([]);
+      abortController.abort();
+      acceptDone.resolve();
+      await expect(stopped).resolves.toBeUndefined();
+    } finally {
+      abortController.abort();
+      acceptDone.resolve();
+      await stopped;
+      for (const client of server.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 
   describe("parseRelayFrame", () => {

@@ -9,6 +9,41 @@ import {
 afterEach(() => vi.useRealTimers());
 
 describe("followup lifecycle heartbeat", () => {
+  it.each(["absent", "completed"] as const)(
+    "preserves a steer error with an %s lifecycle",
+    (kind) => {
+      const failure = new Error("steer notification failed");
+      const lifecycle = { onAdopted() {}, onSettled: vi.fn() };
+      if (kind === "completed") {
+        completeFollowupRunLifecycle({ turnAdoptionLifecycle: lifecycle });
+      }
+      expect(() =>
+        completeFollowupRunLifecycle({
+          turnAdoptionLifecycle: kind === "absent" ? undefined : lifecycle,
+          steerPending: {
+            phase: "waiting",
+            predecessor: Promise.resolve(true),
+            settle() {
+              throw failure;
+            },
+          },
+        }),
+      ).toThrow(failure);
+      expect(lifecycle.onSettled).toHaveBeenCalledTimes(kind === "completed" ? 1 : 0);
+    },
+  );
+
+  it("keeps the public deferral callback free of internal observation arguments", () => {
+    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn() };
+    const run = { turnAdoptionLifecycle: lifecycle };
+    try {
+      expect(markFollowupRunEnqueued(run)).toBe(true);
+      expect(lifecycle.onDeferred).toHaveBeenCalledExactlyOnceWith();
+    } finally {
+      completeFollowupRunLifecycle(run);
+    }
+  });
+
   it("preserves a steer error while joining the already-started admission before settlement", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();

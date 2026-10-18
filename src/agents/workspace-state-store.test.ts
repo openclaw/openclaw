@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -15,7 +16,10 @@ import {
   retireWorkspaceFileCache,
   writeWorkspaceFileCache,
 } from "./workspace-file-cache.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
+import {
+  createWorkspaceStateIdentity,
+  resolveWorkspaceStateIdentity,
+} from "./workspace-state-identity.js";
 import { workspaceStateFactKey, workspaceStatePublication } from "./workspace-state-publication.js";
 import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
@@ -26,6 +30,7 @@ import {
   replaceWorkspaceAttestation,
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
 } from "./workspace-state-store.js";
+import { registerWorkspaceStateAliasIdentitiesInTransaction } from "./workspace-state-store.kernel.js";
 
 let testState: OpenClawTestState | undefined;
 
@@ -70,6 +75,61 @@ function insertPersistedAttestationHash(filename: string, sha256: string): void 
 }
 
 describe("workspace state store", () => {
+  it("registers alias batches once and rolls back conflicts without publishing partial aliases", () => {
+    const identity = resolveWorkspaceStateIdentity(workspaceDir());
+    const aliases = Array.from({ length: 70 }, (_, index) =>
+      createWorkspaceStateIdentity(testState!.path(`alias-${index}`)),
+    );
+    const observed = new Map<string, unknown>();
+    const unsubscribe = workspaceStatePublication.subscribeFacts((change) => {
+      if (change.kind === "committed") {
+        for (const [key, fact] of change.receipt.facts) {
+          observed.set(key, fact);
+        }
+      }
+    });
+    const register = (entries: typeof aliases, updatedAtMs: number, target = identity) =>
+      runOpenClawStateWriteTransaction((database) =>
+        registerWorkspaceStateAliasIdentitiesInTransaction({
+          database,
+          identity: target,
+          aliases: entries,
+          updatedAtMs,
+        }),
+      );
+    try {
+      register([...aliases, aliases[0]!], 1000);
+      register(aliases, 2000);
+      const database = openOpenClawStateDatabase();
+      expect(
+        database.db.prepare("SELECT COUNT(*) AS count FROM workspace_path_aliases").get(),
+      ).toEqual({ count: 70 });
+      for (const alias of aliases) {
+        expect(observed.get(workspaceStateFactKey("alias", alias.workspaceKey))).toMatchObject({
+          kind: "postimage",
+          value: { row: { alias_key: alias.workspaceKey, updated_at_ms: 1000 } },
+        });
+      }
+      const missing = Array.from({ length: 65 }, (_, index) =>
+        createWorkspaceStateIdentity(testState!.path(`rollback-${index}`)),
+      );
+      observed.clear();
+      expect(() =>
+        register(
+          [...missing, aliases[0]!],
+          3000,
+          createWorkspaceStateIdentity(testState!.path("other")),
+        ),
+      ).toThrow("workspace path alias conflicts with canonical state");
+      expect(observed.size).toBe(0);
+      expect(
+        database.db.prepare("SELECT COUNT(*) AS count FROM workspace_path_aliases").get(),
+      ).toEqual({ count: 70 });
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("publishes complete hash replacement and exact alias/setup/attestation tombstones", async () => {
     const dir = workspaceDir();
     const identity = resolveWorkspaceStateIdentity(dir);

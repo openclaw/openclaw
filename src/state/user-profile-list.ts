@@ -1,6 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { ok, type Result } from "@openclaw/normalization-core/result";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deferSqlitePostCommitPublication,
   stageSqliteTransactionState,
@@ -10,9 +11,9 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
 } from "./openclaw-state-db-cache.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { readUserProfileCatalogSnapshot } from "./user-profile-catalog-read.js";
 import {
   captureUserProfileAuthorityRead,
   emitUserProfilesChanged,
@@ -24,6 +25,7 @@ import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
 import {
   profileCatalogPath,
   projectHasMultipleSessionSharingIdentities,
+  readCatalogUserProfileAuthority,
   resolveUserProfileReferenceInCatalog,
 } from "./user-profile-identity.read.js";
 import type { UserProfileEmailBindingChange } from "./user-profile-mutation.js";
@@ -31,8 +33,10 @@ import {
   applyUserProfileEmailBinding,
   bindPreparedUserProfileIdentity,
   projectUserProfileDisplay,
+  projectUserProfileSnapshot,
   projectCatalogUserProfileIdentity,
   resolveCatalogProfile,
+  toUserProfile,
 } from "./user-profiles-internal.js";
 import { UserProfileNotFoundError } from "./user-profiles-schema.js";
 import type {
@@ -44,6 +48,7 @@ import type {
 
 export { projectUserProfileDisplay } from "./user-profiles-internal.js";
 
+/** Read the Gateway catalog installed by admission and committed profile writes. */
 export const hasMultipleSessionSharingIdentities = (options: OpenClawStateDatabaseOptions = {}) =>
   readProfileCatalog(options, projectHasMultipleSessionSharingIdentities) ?? false;
 
@@ -64,16 +69,34 @@ export const readUserProfileAliases = (
 ): ReadonlySet<string> =>
   new Set([profileId, ...(readUserProfileIdentity(profileId, options)?.aliases ?? [])]);
 
+function requireResidentProfileCatalog(options: OpenClawStateDatabaseOptions) {
+  const catalog = profileCatalogs.get(profileCatalogPath(options));
+  if (!catalog?.valid) {
+    throw new Error("User profile catalog is not ready");
+  }
+  return catalog.rows;
+}
+
+/** Gateway policy consumes the catalog installed by profile admission and committed writes. */
+export function readResidentUserProfileIdentity(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  return projectCatalogUserProfileIdentity(requireResidentProfileCatalog(options), profileId);
+}
+
+export function hasMultipleResidentSessionSharingIdentities(
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  return projectHasMultipleSessionSharingIdentities(requireResidentProfileCatalog(options));
+}
+
 /** Gateway readers already retain this catalog with their session projection. */
 export function readResidentUserProfileId(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): string | undefined {
-  const catalog = profileCatalogs.get(profileCatalogPath(options));
-  if (!catalog?.valid) {
-    throw new Error("User profile catalog is not ready");
-  }
-  return resolveCatalogProfile(catalog.rows, profileId)?.id;
+  return resolveCatalogProfile(requireResidentProfileCatalog(options), profileId)?.id;
 }
 
 /** Participant recording consumes the Gateway's prepared aliases without opening storage. */
@@ -81,11 +104,7 @@ export function readResidentUserProfileAliases(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): ReadonlySet<string> {
-  const catalog = profileCatalogs.get(profileCatalogPath(options));
-  if (!catalog?.valid) {
-    throw new Error("User profile catalog is not ready");
-  }
-  const identity = projectCatalogUserProfileIdentity(catalog.rows, profileId);
+  const identity = readResidentUserProfileIdentity(profileId, options);
   return new Set([profileId, ...(identity?.aliases ?? [])]);
 }
 
@@ -134,6 +153,32 @@ export function readResidentUserProfileRevision(profileId: string, pathname: str
   return catalog?.valid ? resolveCatalogProfile(catalog.rows, profileId) : undefined;
 }
 
+/** Catalog hydration and committed receipts retain the exact owner binding with its raw row. */
+export function readResidentGatewayOwnerProfile(pathname: string) {
+  const catalog = profileCatalogs.get(pathname);
+  const owner = catalog?.valid ? catalog.rows.get(GATEWAY_OWNER_PROFILE_ID) : undefined;
+  if (!owner || owner.merged_into || owner.gatewayOwnerCreatedAt === undefined) {
+    return undefined;
+  }
+  return toUserProfile({ ...owner, created_at: owner.gatewayOwnerCreatedAt });
+}
+
+/** Existing authenticated email bindings use the same write-through catalog as role checks. */
+export function readResidentUserProfileForEmail(email: string, pathname: string) {
+  const catalog = profileCatalogs.get(pathname);
+  const binding = catalog?.valid && profileBindings.get(catalog.rows)?.byEmail.get(email);
+  if (!binding) {
+    return undefined;
+  }
+  catalog.assertCurrent?.(binding.profileId);
+  const profile = resolveCatalogProfile(catalog.rows, binding.profileId);
+  if (profile) {
+    catalog.assertCurrent?.(profile.id);
+    return toUserProfile(profile);
+  }
+  return undefined;
+}
+
 /** Sharing pickers consume the session projection's committed display catalog. */
 export function listResidentUserProfileDisplayFacts(options: OpenClawStateDatabaseOptions = {}) {
   const catalog = profileCatalogs.get(profileCatalogPath(options));
@@ -155,9 +200,9 @@ export function listResidentUserProfileDisplayFacts(options: OpenClawStateDataba
   }));
 }
 
-/** Projection readiness follows physical admission; warm checks never inspect SQLite. */
-export function isUserProfileCatalogReady(options: OpenClawStateDatabaseOptions = {}): boolean {
-  const catalog = profileCatalogs.get(profileCatalogPath(options));
+/** Pass the prepared absolute database path for allocation-free checks of live owner state. */
+export function isUserProfileCatalogReady(pathname = profileCatalogPath({})): boolean {
+  const catalog = profileCatalogs.get(pathname);
   return Boolean(catalog?.valid && profileBindings.has(catalog.rows));
 }
 type ProfileCatalog = {
@@ -190,7 +235,7 @@ type ProfileMutationPublication = {
 const profileMutationPublications = new Set<ProfileMutationPublication>();
 let stopCatalogEvents: (() => void) | undefined;
 let stopBindingEvents: (() => void) | undefined;
-let profileCatalogHandles = new WeakMap<DatabaseSync, Map<string, ProfileDisplayRow>>();
+let profileCatalogHandles = new WeakMap<EngineConnection, Map<string, ProfileDisplayRow>>();
 const profileBindings = new WeakMap<Map<string, ProfileDisplayRow>, UserProfileEmailBindingIndex>();
 
 function supersedeBindingPublications(
@@ -495,10 +540,9 @@ async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions =
   ) {
     const profileRevision = readUserProfileVersion();
     const bindingRevision = readUserProfileEmailBindingRevision();
-    const reply = await executeExistingOpenClawStateRead(
+    const reply = await readUserProfileCatalogSnapshot(
       { ...options, path: pathname },
-      { type: "userProfiles.catalog" },
-      { current: true },
+      { identityKey: context.admission.identity.key, profileRevision, bindingRevision },
     );
     context.admission.assertCurrent();
     if (
@@ -596,6 +640,9 @@ async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions =
 export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}) {
   const catalog = await acquireUserProfileCatalog(options);
   return {
+    hasMultipleSessionSharingIdentities(this: void) {
+      return projectHasMultipleSessionSharingIdentities(catalog.rows);
+    },
     readCurrentIdentity(this: void, profileId: string) {
       catalog.assertCurrent(profileId);
       const profile = projectCatalogUserProfileIdentity(catalog.rows, profileId);
@@ -604,8 +651,27 @@ export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOp
       }
       return profile;
     },
+    readCurrentAuthority(this: void, profileId: string, includeProfile = false) {
+      return readCatalogUserProfileAuthority(catalog, profileId, includeProfile);
+    },
     release: catalog.release,
   };
+}
+
+/** Lists share committed profile facts rather than reserving the shared-state writer. */
+export async function readUserProfileSnapshot(
+  githubAccountIds?: readonly number[],
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const catalog = await acquireUserProfileCatalog(options);
+  try {
+    for (const row of catalog.rows.values()) {
+      catalog.assertCurrent(row.id);
+    }
+    return projectUserProfileSnapshot(catalog.rows, catalog.bindings, githubAccountIds);
+  } finally {
+    catalog.release();
+  }
 }
 
 /** Prepare once off-thread; execution reads only committed facts retained by this owner. */
@@ -623,7 +689,7 @@ export async function prepareUserProfileIdentity(
 }
 
 /** Stage exact changed keys before commit so observers always see the whole committed catalog. */
-export function stageUserProfileCatalogChange(db: DatabaseSync, profileIds: string[]): void {
+export function stageUserProfileCatalogChange(db: EngineConnection, profileIds: string[]): void {
   const catalog = profileCatalogHandles.get(db);
   if (catalog) {
     const rows = selectProfileAccessEntries(db, profileIds);
@@ -642,7 +708,7 @@ export function stageUserProfileCatalogChange(db: DatabaseSync, profileIds: stri
   }
 }
 
-export function publishUserProfilesChange(db: DatabaseSync, ...profileIds: string[]): void {
+export function publishUserProfilesChange(db: EngineConnection, ...profileIds: string[]): void {
   stageUserProfileCatalogChange(db, profileIds);
   deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
 }
@@ -655,6 +721,17 @@ export function getUserProfileDisplay(
   const profile = readProfileCatalog(options, (resident) =>
     resolveCatalogProfile(resident, profileId),
   );
+  if (!profile) {
+    throw new UserProfileNotFoundError(profileId);
+  }
+  return projectUserProfileDisplay(profile);
+}
+
+export function getResidentUserProfileDisplay(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const profile = resolveCatalogProfile(requireResidentProfileCatalog(options), profileId);
   if (!profile) {
     throw new UserProfileNotFoundError(profileId);
   }

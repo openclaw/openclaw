@@ -14,6 +14,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import {
   emitSessionsChanged,
   flushPendingSessionsChangedEvents,
@@ -42,7 +43,7 @@ afterEach(() => vi.restoreAllMocks());
 it.each(["sessions.list", "sessions.subscribe"])(
   "%s restores ordinary ancestor delivery across reads and recap-only events",
   async (method) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
       const root = "agent:main:root";
       const child = "agent:main:child";
@@ -109,8 +110,19 @@ it.each(["sessions.list", "sessions.subscribe"])(
       try {
         publish("activity-summary");
         expect(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
+        expect(payloadFor(peers[1]!)).toEqual(payloadFor(peers[0]!));
         publish();
         expect.soft(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
+        publish();
+        expect(payloadFor(peers[0]!).ancestorSessionRefs).toHaveLength(1);
+        // Non-opted-in sockets preserve their existing reference behavior after a drop.
+        peers[0]!.client.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+        connection.broadcast(
+          "sessions.changed",
+          { sessionKey: child, agentId: "main", reason: "send" },
+          { dropIfSlow: true },
+        );
+        peers[0]!.client.socket.bufferedAmount = 0;
         publish();
         expect(payloadFor(peers[0]!).ancestorSessionRefs).toHaveLength(1);
         const ensure = projection.ensureMaterialized;
@@ -172,7 +184,7 @@ it.each(["sessions.list", "sessions.subscribe"])(
 );
 
 it("publishes fresh ancestor rows through private intermediates with list visibility and no duplicates", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const profiles = [
@@ -409,7 +421,8 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
       } finally {
         serialization.mockRestore();
       }
-      expect(normalizations).toBe(3);
+      // A new connection gets full rows without reencoding unchanged immutable presentations.
+      expect(normalizations).toBe(0);
       expectFull(newcomer, [parent, root]);
       expect(payloadFor(peers[0]!).ancestorSessions).toEqual([]);
       await assertListParity(newcomer);

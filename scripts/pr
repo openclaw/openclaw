@@ -70,7 +70,7 @@ pr_subcommand_classification() {
     ls | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
+    gc | lock-recover | tooling-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -187,6 +187,11 @@ const gitBinary = process.env.OPENCLAW_PR_GIT;
 const git = (root, args) => execFileSync(gitBinary, ["-C", root, ...args], {
   encoding: "utf8", timeout: 300_000, stdio: ["ignore", "pipe", "pipe"],
 }).trim();
+// Refresh steps stream instead: a far-behind root's fetch or fast-forward output
+// can overflow the capture buffer after Git has already changed the checkout.
+const gitStreamed = (root, args) => execFileSync(gitBinary, ["-C", root, ...args], {
+  timeout: 300_000, stdio: ["ignore", 2, 2],
+});
 function config(root, key, type = "--path") {
   const result = spawnSync(gitBinary, ["-C", root, "config", type, "--get", key], {
     encoding: "utf8", timeout: 300_000,
@@ -239,10 +244,10 @@ try {
     };
     requireCleanMain();
     console.error(`Refreshing scripts/pr tooling root ${root} (main): fetch origin main, merge --ff-only origin/main, pnpm install --frozen-lockfile.`);
-    git(root, ["fetch", "origin", "main"]);
+    gitStreamed(root, ["fetch", "origin", "main"]);
     // Fetch may run hooks; reread the checkout before changing files.
     requireCleanMain();
-    git(root, ["merge", "--ff-only", "refs/remotes/origin/main"]);
+    gitStreamed(root, ["merge", "--ff-only", "--no-stat", "refs/remotes/origin/main"]);
     // Package-manager Git children must use the same preflighted binary too.
     const bin = join(dirname(destination), ".pr-tooling-bin");
     mkdirSync(bin);
@@ -467,7 +472,7 @@ readonly canonical_repo_root
 
 is_main_only_pr_command() {
   case "$1" in
-    prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
+    prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -481,7 +486,13 @@ is_supervised_pr_process() {
 # The supervisor changes cwd to the canonical repo. Resolve explicit body and
 # evidence paths relative to the operator's caller before crossing that
 # boundary; do not read them.
-if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ] || [ "${1-}" = prepare-baseline-refresh ] || [ "${1-}" = prepare-baseline-successor ]; then
+if [ "${1-}" = tooling-recover ]; then
+  [ "$#" -ge 3 ] || { echo "tooling-recover requires a PR and plan" >&2; exit 2; }
+  recovery_plan=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$3") || exit 1
+  set -- "$1" "$2" "$recovery_plan" "${@:4}"
+fi
+
+if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ] || [ "${1-}" = prepare-baseline-refresh ] || [ "${1-}" = prepare-baseline-successor ] || [ "${1-}" = prepare-baseline-signing-request ] || [ "${1-}" = prepare-baseline-signing-continue ]; then
   merge_cli_args=() merge_cli_body_next=false
   for merge_cli_arg in "$@"; do
     if [ "$merge_cli_body_next" = true ] && [ -n "$merge_cli_arg" ]; then
@@ -489,7 +500,7 @@ if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ] || [ "${1-}" = prepare
     fi
     merge_cli_args+=("$merge_cli_arg")
     merge_cli_body_next=false
-    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ] || [ "$merge_cli_arg" = --admin-evidence ] || [ "$merge_cli_arg" = --resolutions ]; then merge_cli_body_next=true; fi
+    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ] || [ "$merge_cli_arg" = --admin-evidence ] || [ "$merge_cli_arg" = --resolutions ] || [ "$merge_cli_arg" = --signed-commit ]; then merge_cli_body_next=true; fi
   done
   set -- "${merge_cli_args[@]}"
 fi
@@ -518,6 +529,7 @@ Usage:
   scripts/pr ls
   scripts/pr gc [--pr <number>] [--dry-run]
   scripts/pr lock-recover <PR> <OWNER_OID> --confirmed-no-running-tools
+  scripts/pr tooling-recover <PR> <plan> --plan-sha256 <SHA256> --confirmed-quiescent
   scripts/pr review-init <PR>
   scripts/pr review-checkout-main <PR>
   scripts/pr review-checkout-pr <PR>
@@ -528,9 +540,12 @@ Usage:
   scripts/pr review-tests <PR> <test-file> [<test-file> ...]
   scripts/pr prepare-init <PR>
   scripts/pr prepare-correction-init <PR>
+  scripts/pr prepare-correction-continue <PR> --expected-head <SHA> --expected-tree <OID> --incoming-head <SHA> --incoming-review <OID> --publication-receipt <push|sync> --publication-oid <OID>
   scripts/pr prepare-correction-review-init <PR>
   scripts/pr prepare-baseline-refresh <PR> --expected-head <SHA> --baseline <SHA> [--resolutions <file>]
   scripts/pr prepare-baseline-successor <PR> --expected-head <SHA> --expected-tree <OID> --expected-review <OID> --predecessor-head <SHA> --predecessor-binding <OID> --baseline <SHA> [--resolutions <file>]
+  scripts/pr prepare-baseline-signing-request <PR> --expected-head <SHA> --baseline <SHA> --signer <fingerprint> [--resolutions <file>] [successor identity options]
+  scripts/pr prepare-baseline-signing-continue <PR> --request <OID> --signed-commit <file>
   scripts/pr prepare-validate-commit <PR>
   scripts/pr prepare-gates <PR>
   scripts/pr prepare-push <PR> [--resume-crabbox-run <Actions run ID>]
@@ -672,6 +687,10 @@ main() {
         esac
       done
       ;;
+    tooling-recover)
+      [ "$#" -eq 5 ] && is_canonical_pr_number "$1" && [ "$3" = --plan-sha256 ] &&
+        [[ "$4" =~ ^[0-9a-f]{64}$ ]] && [ "$5" = --confirmed-quiescent ] || { usage; exit 2; }
+      ;;
     review-tests)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       ;;
@@ -779,7 +798,7 @@ main() {
     ci-dispatch)
       [ "$#" -eq 1 ] || { [ "$#" -eq 3 ] && [ "$2" = --backend ] && [ "$3" = crabbox ]; } || { usage; exit 2; }
       ;;
-    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-validate-commit | prepare-gates | prepare-sync-head | prepare-run | merge-verify)
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-sync-head | prepare-run | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }
       ;;
     *)
@@ -822,6 +841,11 @@ main() {
   fi
 
   case "$cmd" in
+    tooling-recover)
+      mark_pr_operation_side_effects_started
+      node "$script_parent_dir/pr-lib/materialize-dependencies.mjs" --recover "$1" "$2" "$4" \
+        "$(repo_root)" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
+      ;;
     ls)
       list_pr_worktrees
       ;;
@@ -878,6 +902,15 @@ main() {
       ;;
     prepare-baseline-successor)
       prepare_baseline_successor "$@"
+      ;;
+    prepare-baseline-signing-request)
+      prepare_baseline_signing_request "$@"
+      ;;
+    prepare-baseline-signing-continue)
+      prepare_baseline_signing_continue "$@"
+      ;;
+    prepare-correction-continue)
+      prepare_correction_continue "$@"
       ;;
     prepare-correction-review-init)
       [ "$#" -eq 1 ] || { usage; exit 2; }

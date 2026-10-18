@@ -187,32 +187,23 @@ export function createHooksRequestHandler(
     const pending = Promise.resolve()
       .then(dispatch)
       .then((result) => {
-        const current = hookReplayCache.get(key);
-        if (current?.state === "pending" && current.dispatch === pending) {
-          if (result.ok) {
-            const active = { state: "active", dispatch: result } as const;
-            hookReplayCache.set(key, active);
-            const settle = () => {
-              if (hookReplayCache.get(key) !== active) {
-                return;
-              }
-              const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
-              hookReplayCache.delete(key);
-              hookReplayCache.set(key, terminal);
-              pruneHookReplayCache(terminal.ts);
-            };
-            void result.completion.then(settle, settle);
-          } else {
+        // Pending/active entries cannot be pruned or replaced by another request.
+        if (result.ok) {
+          hookReplayCache.set(key, { state: "active", dispatch: result });
+          const settle = () => {
+            const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
             hookReplayCache.delete(key);
-          }
+            hookReplayCache.set(key, terminal);
+            pruneHookReplayCache(terminal.ts);
+          };
+          void result.completion.then(settle, settle);
+        } else {
+          hookReplayCache.delete(key);
         }
         return result;
       })
       .catch((err: unknown) => {
-        const current = hookReplayCache.get(key);
-        if (current?.state === "pending" && current.dispatch === pending) {
-          hookReplayCache.delete(key);
-        }
+        hookReplayCache.delete(key);
         throw err;
       });
     hookReplayCache.set(key, { state: "pending", dispatch: pending });

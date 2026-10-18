@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
@@ -21,7 +22,6 @@ import {
   isOpenClawAgentDatabaseOpen,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
@@ -128,7 +128,8 @@ it.runIf(typeof DatabaseSync.prototype.deserialize === "function")(
     closeOpenClawAgentDatabaseByPath(original.path);
     const { database } = retain(original.path);
     const prepared = readOpenClawAgentDatabaseIdentity(database);
-    const nativeLocation = database.db.location();
+    const db = requireNativeSqliteDatabase(database.db);
+    const nativeLocation = db.location();
     const replacement = new DatabaseSync(":memory:");
     try {
       replacement.exec(
@@ -139,16 +140,16 @@ it.runIf(typeof DatabaseSync.prototype.deserialize === "function")(
       database.db.exec("BEGIN");
       try {
         database.db.prepare("SELECT role FROM schema_meta").get();
-        expect(() => database.db.deserialize(bytes)).toThrow();
-        expect(database.db.location()).toBe(nativeLocation);
+        expect(() => db.deserialize(bytes)).toThrow();
+        expect(db.location()).toBe(nativeLocation);
         expect(isOpenClawAgentDatabasePathCurrent(database)).toBe(true);
       } finally {
         database.db.exec("ROLLBACK");
       }
 
-      database.db.deserialize(bytes);
+      db.deserialize(bytes);
       expect(database.db.prepare("SELECT value FROM replacement_value").get()?.value).toBe(42);
-      expect(database.db.location()).toBeNull();
+      expect(db.location()).toBeNull();
       expect(fs.existsSync(original.path)).toBe(true);
       expect(readOpenClawAgentDatabaseIdentity(database)).toBe(prepared);
       expect(isOpenClawAgentDatabasePathCurrent(database)).toBe(false);
@@ -171,10 +172,8 @@ it("releases only one warm claim while revoking its retained copies", () => {
   expect(database.db.isOpen).toBe(true);
 });
 
-it.each([false, true])("does not reuse a reopened connection claim, incognito=%s", (incognito) => {
-  const databasePath = incognito
-    ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env })
-    : path.join(directory, "agent.sqlite");
+it("does not reuse a reopened connection claim", () => {
+  const databasePath = path.join(directory, "agent.sqlite");
   expect(retainOpenClawAgentDatabaseReadOnly({ agentId: "main", env, path: databasePath })).toEqual(
     {
       found: false,
@@ -189,11 +188,5 @@ it.each([false, true])("does not reuse a reopened connection claim, incognito=%s
   expect(claim.incarnation).not.toBe(replacement.incarnation);
   expect(claim.isCurrent()).toBe(false);
   expect(replacement.isCurrent()).toBe(true);
-  if (incognito) {
-    expect(claim.identity).not.toBe(replacement.identity);
-    expect(fs.existsSync(databasePath)).toBe(false);
-    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
-  } else {
-    expect(claim.identity).toBe(replacement.identity);
-  }
+  expect(claim.identity).toBe(replacement.identity);
 });

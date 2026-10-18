@@ -16,6 +16,7 @@ describe("worker process protocol", () => {
   it.each([
     { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 },
     { status: "failed", reason: "turn-failed", transcriptLeafId: "leaf", transcriptNextSeq: 2 },
+    { status: "failed", reason: "node-lost", transcriptLeafId: "leaf", transcriptNextSeq: 2 },
     { status: "fenced", reason: "credential-replaced" },
     { status: "not-started", reason: "admission-deadline", errorText: "admission timed out" },
   ])("only retains workers after started $status results", (result) => {
@@ -24,12 +25,12 @@ describe("worker process protocol", () => {
     expect(parseWorkerProcessMessage(frame)).toStrictEqual(frame);
     const retained = { ...frame, retainWorker: true };
     expect(parseWorkerProcessMessage(retained)).toStrictEqual(
-      result.status === "completed" || result.status === "failed" ? retained : null,
+      result.status === "completed" || result.reason === "turn-failed" ? retained : null,
     );
     for (const retention of ["background", "idle"]) {
       const negotiated = { ...retained, retention };
       expect(parseWorkerProcessMessage(negotiated)).toStrictEqual(
-        result.status === "completed" || result.status === "failed" ? negotiated : null,
+        result.status === "completed" || result.reason === "turn-failed" ? negotiated : null,
       );
       expect(parseWorkerProcessMessage({ ...frame, retention })).toBeNull();
     }

@@ -1,6 +1,7 @@
 // Control UI tests cover Automations form select display state.
 import { writeFileSync } from "node:fs";
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -16,6 +17,37 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
+const gardenMessage = "Summarize the fictional garden inventory.";
+function gardenJob(overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id: "garden-keyboard",
+    name: "Garden keyboard task",
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    configRevision: "garden-revision",
+    schedule: { kind: "every", everyMs: 1_800_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: gardenMessage },
+    state: {},
+    ...overrides,
+  };
+}
+
+function cronResponses(jobs: CronJob[], snapshotRevision: string, enabled = true, compact = true) {
+  const pagination = { total: 0, offset: 0, limit: 50, hasMore: false, nextOffset: null };
+  const list = { ...pagination, jobs, total: jobs.length, snapshotRevision };
+  return {
+    "cron.list": compact ? cronListResponseFixture(list) : list,
+    "cron.runs": { ...pagination, entries: [] },
+    "cron.status": { enabled, jobs: jobs.length, nextWakeAtMs: null },
+  };
+}
+
+const scrollPadding = (page: Page) =>
+  page.locator(".content").evaluate((element) => getComputedStyle(element).scrollPaddingBlockEnd);
+
 suite.define(() => {
   it.each([
     { mode: "create", enabled: true, keyboardName: true, narrow: false },
@@ -28,46 +60,13 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1416, height: 707 } },
         async ({ page }) => {
-          const job: CronJob = {
-            id: "garden-keyboard",
-            name: "Garden keyboard task",
-            enabled: true,
-            createdAtMs: 0,
-            updatedAtMs: 0,
-            configRevision: "garden-revision",
-            schedule: { kind: "every", everyMs: 1_800_000 },
-            sessionTarget: "isolated",
-            wakeMode: "next-heartbeat",
-            payload: { kind: "agentTurn", message: "Summarize the fictional garden inventory." },
-            state: {},
-          };
+          const job = gardenJob();
           const gateway = await installMockGateway(page, {
-            methodResponses: {
-              "cron.list": cronListResponseFixture({
-                jobs: [job],
-                snapshotRevision: "focus-clearance",
-                total: 1,
-                offset: 0,
-                limit: 50,
-                hasMore: false,
-                nextOffset: null,
-              }),
-              "cron.runs": {
-                entries: [],
-                total: 0,
-                offset: 0,
-                limit: 50,
-                hasMore: false,
-                nextOffset: null,
-              },
-              "cron.status": { enabled, jobs: 1, nextWakeAtMs: null },
-            },
+            methodResponses: cronResponses([job], "focus-clearance", enabled),
           });
           await page.goto(`${suite.server.baseUrl}cron`);
           const scroller = page.locator(".content");
-          const initialPadding = await scroller.evaluate(
-            (element) => getComputedStyle(element).scrollPaddingBlockEnd,
-          );
+          const initialPadding = await scrollPadding(page);
           await page
             .locator(
               mode === "edit"
@@ -102,9 +101,7 @@ suite.define(() => {
               }),
             )
             .toBe(true);
-          await page
-            .locator("#cron-payload-text")
-            .fill("Summarize the fictional garden inventory.");
+          await page.locator("#cron-payload-text").fill(gardenMessage);
           if (keyboardName) {
             for (let field = 0; field < 4; field++) {
               await page.keyboard.press("Tab");
@@ -167,27 +164,15 @@ suite.define(() => {
             .locator(".cron-editor-actions")
             .getByRole("button", { name: "Cancel", exact: true })
             .click();
-          await expect
-            .poll(() =>
-              scroller.evaluate((element) => getComputedStyle(element).scrollPaddingBlockEnd),
-            )
-            .toBe(initialPadding);
+          await expect.poll(() => scrollPadding(page)).toBe(initialPadding);
           await page.locator('[data-test-id="cron-new-task"]').click();
-          await expect
-            .poll(() =>
-              scroller.evaluate((element) => getComputedStyle(element).scrollPaddingBlockEnd),
-            )
-            .not.toBe(initialPadding);
+          await expect.poll(() => scrollPadding(page)).not.toBe(initialPadding);
           if (narrow) {
             await page.setViewportSize({ width: 1416, height: 707 });
           }
           const pages = await openSidebarPages(page);
           await pages.getByRole("link", { name: "Agents", exact: true }).click();
-          await expect
-            .poll(() =>
-              scroller.evaluate((element) => getComputedStyle(element).scrollPaddingBlockEnd),
-            )
-            .toBe(initialPadding);
+          await expect.poll(() => scrollPadding(page)).toBe(initialPadding);
         },
       );
     },
@@ -197,41 +182,16 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 1000 } },
       async ({ page }) => {
-        const job: CronJob = {
+        const job = gardenJob({
           id: "garden-legacy-delivery",
           name: "Garden summary",
-          enabled: true,
-          createdAtMs: 0,
-          updatedAtMs: 0,
           configRevision: "garden-legacy-revision",
-          schedule: { kind: "every", everyMs: 1_800_000 },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "Summarize the fictional garden inventory." },
           delivery: { mode: "announce", channel: "telegram", to: "garden-room" },
-          state: {},
-        };
+        });
         Reflect.deleteProperty(job.delivery!, "mode");
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "cron.list": cronListResponseFixture({
-              jobs: [job],
-              snapshotRevision: "garden-legacy-list",
-              total: 1,
-              offset: 0,
-              limit: 50,
-              hasMore: false,
-              nextOffset: null,
-            }),
-            "cron.runs": {
-              entries: [],
-              total: 0,
-              offset: 0,
-              limit: 50,
-              hasMore: false,
-              nextOffset: null,
-            },
-            "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+            ...cronResponses([job], "garden-legacy-list"),
             "cron.update": {
               ...job,
               name: "Renamed garden summary",
@@ -285,44 +245,27 @@ suite.define(() => {
       },
       async ({ page }) => {
         await installMockGateway(page, {
-          methodResponses: {
-            "cron.list": {
-              jobs: [],
-              snapshotRevision: "cron-select-values-fixture",
-              total: 0,
-              offset: 0,
-              limit: 50,
-              hasMore: false,
-              nextOffset: null,
-            },
-            "cron.runs": {
-              entries: [],
-              total: 0,
-              offset: 0,
-              limit: 50,
-              hasMore: false,
-              nextOffset: null,
-            },
-            "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
-          },
+          methodResponses: cronResponses([], "cron-select-values-fixture", true, false),
         });
 
         const response = await page.goto(`${suite.server.baseUrl}cron`);
         expect(response?.status()).toBe(200);
         await page.locator('[data-test-id="cron-list-tab-activity"]').click();
-        const sortMenu = page.locator("wa-dropdown", { has: page.locator(".cron-run-sort") });
+        const sortMenu = page.locator(".cron-filter-dropdown__details", {
+          has: page.locator(".cron-run-sort"),
+        });
         const sort = page.getByRole("button", { name: "Sort Newest first", exact: true });
         await sort.waitFor({ state: "visible" });
         await sort.click();
-        await sortMenu.locator('wa-dropdown-item[value="asc"]').click();
+        await sortMenu.locator('[data-value="asc"]').click();
         await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
         // Switching tabs recreates the dropdown with the persisted non-first value.
         await page.locator('[data-test-id="cron-tab-all"]').click();
         await page.locator('[data-test-id="cron-list-tab-activity"]').click();
         await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
-        expect(
-          await sortMenu.locator('wa-dropdown-item[value="asc"]').getAttribute("aria-current"),
-        ).toBe("true");
+        expect(await sortMenu.locator('[data-value="asc"]').getAttribute("aria-current")).toBe(
+          "true",
+        );
         await page.locator('[data-test-id="cron-new-task"]').click();
 
         const pickerValue = (selector: string) =>

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
@@ -8,6 +7,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import {
   CONTENT_VERSION_KEY,
@@ -37,7 +37,7 @@ export function prepareAcpSessionMetadataRead(
   let firstCohort: AcpSessionRow[] | undefined;
   let failed: { error: unknown } | undefined;
   return {
-    readContentVersionRow(this: void, db: DatabaseSync) {
+    readContentVersionRow(this: void, db: EngineConnection) {
       try {
         const database = getNodeSqliteKysely<Pick<DB, "acp_sessions" | "config_machine_state">>(db);
         const rows = executeSqliteQuerySync(
@@ -91,7 +91,7 @@ export function prepareAcpSessionMetadataRead(
         return readStateSchemaContentVersionRow(db);
       }
     },
-    read(db: DatabaseSync) {
+    read(db: EngineConnection) {
       if (failed) {
         throw failed.error;
       }
@@ -101,7 +101,7 @@ export function prepareAcpSessionMetadataRead(
 }
 
 function selectAcpResumeSessions(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: Extract<AcpSessionReadCommand, { type: "acpSessions.resume" }>,
 ): AcpResumeSessionRow[] {
   const rows = executeSqliteQuerySync(
@@ -148,7 +148,7 @@ function selectAcpResumeSessions(
 }
 
 export function readAcpSessionCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: AcpSessionReadCommand,
   firstCohort?: readonly AcpSessionRow[],
 ): AcpSessionReadResult {

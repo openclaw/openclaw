@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
 import { evaluateSessionFreshness, type SessionFreshness } from "../../config/sessions.js";
@@ -31,8 +30,7 @@ import { resolveSessionStoreKey } from "../session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import {
   normalizeTrustedGroupMetadata,
-  requestGroupMatchesTrusted,
-  resolveTrustedGroupMetadata,
+  resolveAgentSessionGroup,
   type TrustedGroupMetadata,
 } from "./agent-subagent-registration.js";
 
@@ -204,36 +202,13 @@ export async function buildAgentSessionPatch(
       }
     }
   }
-  const trustedGroup = resolveTrustedGroupMetadata({
+  const nextGroup = resolveAgentSessionGroup({
     sessionKey: params.canonicalSessionKey,
     spawnedBy: freshSpawnedBy,
     stored: storedGroup,
     inherited: inheritedGroup,
+    requested: params.normalizedSpawned,
   });
-  const validatedGroup = trustedGroup.groupId
-    ? resolveTrustedGroupId({
-        groupId: trustedGroup.groupId,
-        sessionKey: params.canonicalSessionKey,
-        spawnedBy: freshSpawnedBy,
-      })
-    : undefined;
-  const trustRequestSelectors =
-    Boolean(trustedGroup.groupId) &&
-    requestGroupMatchesTrusted({
-      requestGroupId: params.normalizedSpawned.groupId,
-      trustedGroupId: trustedGroup.groupId,
-    });
-  const nextGroup = validatedGroup?.dropped
-    ? { groupId: undefined, groupChannel: undefined, groupSpace: undefined }
-    : {
-        groupId: trustedGroup.groupId,
-        groupChannel:
-          trustedGroup.groupChannel ??
-          (trustRequestSelectors ? params.normalizedSpawned.groupChannel : undefined),
-        groupSpace:
-          trustedGroup.groupSpace ??
-          (trustRequestSelectors ? params.normalizedSpawned.groupSpace : undefined),
-      };
 
   const effectiveDelivery = mergeDeliveryContext(
     deliveryContextFromSession(params.freshEntry),

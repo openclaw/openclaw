@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveMemorySearchStaleness,
+  readMemorySearchManagerStatus,
   type MemoryCliSearchParams,
   type MemoryCliSearchResult,
   type MemorySearchResult,
@@ -25,7 +26,7 @@ export async function searchMemoryForCli(
   let readRebuildWarning: () => string | undefined = () => undefined;
   let results: MemorySearchResult[];
   try {
-    readRebuildWarning = captureMemoryRebuildNotice(manager.status());
+    readRebuildWarning = captureMemoryRebuildNotice(await readMemorySearchManagerStatus(manager));
     results = await manager.search(query, {
       maxResults: params.maxResults,
       minScore: params.minScore,
@@ -45,9 +46,9 @@ export async function searchMemoryForCli(
     );
   }
   assertCurrent?.();
-  const status = manager.status();
+  const status = await readMemorySearchManagerStatus(manager);
   const staleness = resolveMemorySearchStaleness(status, agentId);
-  const warning = [staleness?.warning, readRebuildWarning()].filter(Boolean).join(" ");
+  let warning = [staleness?.warning, readRebuildWarning()].filter(Boolean).join(" ");
   const pluginConfig = asNullableRecord(cfg.plugins?.entries?.["memory-core"]?.config) ?? {};
   if (resolveMemoryDreamingConfig({ cfg, pluginConfig }).enabled) {
     const dreaming = resolveMemoryDeepDreamingConfig({ cfg, pluginConfig });
@@ -66,7 +67,11 @@ export async function searchMemoryForCli(
             withMemoryMutationAuthority(assertCurrent, record),
           )
         : record()
-    ).catch(() => {});
+    ).catch((error: unknown) => {
+      warning = [warning, `Memory recall recording failed: ${formatErrorMessage(error)}`]
+        .filter(Boolean)
+        .join(" ");
+    });
   }
   assertCurrent?.();
   return { results, ...staleness, ...(warning ? { warning } : {}) };

@@ -1,8 +1,11 @@
-import { html } from "lit";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { i18n } from "../i18n/index.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { showConfirmDialog } from "../components/confirm-dialog.ts";
 import "../styles.css";
+import { i18n } from "../i18n/index.ts";
+import { waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { showToast, type ToastOptions } from "./toast.ts";
+import "./toast-host.ts";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
@@ -22,17 +25,102 @@ async function showArchiveToast(options: Partial<ToastOptions> = {}) {
     durationMs: 60_000,
     ...options,
   });
-  await host.updateComplete;
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => expect(host.querySelector(".app-toast")).not.toBeNull());
   return host;
 }
 
 describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
+  it("shows the selected agent avatar at notification size without crowding the action", async () => {
+    const { page } = await import("vitest/browser");
+    await useViewport(390, 844);
+    const options = {
+      message: "Garden plan: Done",
+      actionLabel: "Open session",
+      onAction: vi.fn(),
+      durationMs: 60_000,
+    };
+    const host = await showArchiveToast(options);
+    const notice = host.querySelector<HTMLElement>(".app-toast")!;
+    await page
+      .elementLocator(notice)
+      .screenshot({ path: "../../../.vitest/attachments/background-toast-before.png" });
+    const avatar =
+      "data:image/svg+xml," +
+      encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="#ff9138"/><circle cx="38" cy="40" r="5"/><circle cx="62" cy="40" r="5"/><path d="M40 62 Q50 72 60 62" fill="none" stroke="#000" stroke-width="4"/></svg>',
+      );
+    showToast({ ...options, avatar: { id: "gardener", name: "Garden keeper", avatar } });
+    await waitForSolid(() =>
+      expect(
+        host.querySelector<HTMLImageElement>(".app-toast__avatar img")?.naturalWidth,
+      ).toBeGreaterThan(0),
+    );
+    const image = host.querySelector<HTMLImageElement>(".app-toast__avatar img")!;
+    expect(image.getAttribute("src")).toBe(avatar);
+    const avatarBounds = image.getBoundingClientRect();
+    expect(avatarBounds.width).toBe(28);
+    expect(avatarBounds.height).toBe(28);
+    const action = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
+    expect(action.getBoundingClientRect().right).toBeLessThanOrEqual(390);
+    await page
+      .elementLocator(notice)
+      .screenshot({ path: "../../../.vitest/attachments/background-toast-after.png" });
+    action.click();
+    expect(options.onAction).toHaveBeenCalledOnce();
+  });
+
   beforeEach(async () => {
     await i18n.setLocale("en");
   });
 
   afterEach(() => {
     document.body.replaceChildren();
+  });
+
+  it("keeps a toast usable inside a native modal and returns it to the shell on dismissal", async () => {
+    const shell = document.createElement("div");
+    shell.className = "shell";
+    const host = document.createElement("openclaw-toast-host");
+    shell.append(host);
+    document.body.append(shell);
+    const controller = new AbortController();
+    const confirmation = showConfirmDialog({
+      message: "Keep synthetic changes?",
+      signal: controller.signal,
+    });
+    try {
+      const { modal, dialog } = await waitForRenderedModalDialog(document.body);
+      const action = vi.fn();
+      showToast({
+        message: "Synthetic change saved",
+        actionLabel: "Undo",
+        onAction: action,
+        durationMs: 60_000,
+      });
+      await vi.dynamicImportSettled();
+      await waitForSolid(() => expect(host.querySelector(".app-toast")).not.toBeNull());
+      expect(host.parentElement).toBe(modal.getOverlayContainer());
+      const undo = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
+      undo.focus();
+      expect(document.activeElement).toBe(undo);
+      expect(dialog.open).toBe(true);
+      // Hit testing proves the notice is above the modal rather than behind its backdrop.
+      const bounds = undo.getBoundingClientRect();
+      expect(
+        document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2),
+      ).toBe(undo);
+      modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+      await confirmation;
+      await host.updateComplete;
+      expect(host.parentElement).toBe(shell);
+      expect(host.textContent).toContain("Synthetic change saved");
+      host.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
+      expect(action).toHaveBeenCalledOnce();
+    } finally {
+      controller.abort();
+      await confirmation;
+    }
   });
 
   it("keeps mobile actions trailing while the desktop toast stays compact", async () => {
@@ -142,10 +230,17 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
         anchor.style.cssText =
           `position: fixed; top: 100px; left: 0; width: ` + width + "px; height: 100px";
         document.body.append(anchor);
+        const recovery = document.createDocumentFragment();
+        const recoveryLink = document.createElement("a");
+        recoveryLink.href = "#settings";
+        recoveryLink.textContent = "Gateway settings";
+        recovery.append(
+          "Your changes could not be saved because the connection was interrupted. Keep this tab open, check ",
+          recoveryLink,
+          ", and try again when the connection is restored.",
+        );
         const host = await showArchiveToast({
-          message: html`Your changes could not be saved because the connection was interrupted. Keep
-            this tab open, check <a href="#settings">Gateway settings</a>, and try again when the
-            connection is restored.`,
+          message: recovery,
           actionLabel: "Discard unsaved changes and reload",
           ...(placement === "anchored" ? { anchor } : { placement }),
         });
@@ -176,10 +271,30 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
         expect(
           messageBounds.right <= actionBounds.left || messageBounds.bottom <= actionBounds.top,
         ).toBe(true);
-        const link = message.querySelector("a")!;
+        const link = recoveryLink;
+        expect(message.querySelector("a")).toBe(link);
         link.focus();
         expect(document.activeElement).toBe(link);
+        host.toast = { ...host.toast! };
+        await waitForSolid(() => expect(host.querySelector(".app-toast__message a")).toBe(link));
+        expect(document.activeElement).toBe(link);
         expect(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(width < 768 ? 44 : 32);
+        const replacement = document.createDocumentFragment();
+        const replacementLink = document.createElement("a");
+        replacementLink.href = "#sidebar";
+        replacementLink.textContent = "Sidebar settings";
+        replacement.append("Another section hidden. ", replacementLink);
+        showToast({ ...host.toast!, message: replacement });
+        await waitForSolid(() => expect(replacementLink.isConnected).toBe(true));
+        expect(link.isConnected).toBe(false);
+        expect(message.textContent).toBe("Another section hidden. Sidebar settings");
+        expect(message.querySelector("a")).toBe(replacementLink);
+        replacementLink.focus();
+        host.toast = { ...host.toast! };
+        await waitForSolid(() =>
+          expect(host.querySelector(".app-toast__message a")).toBe(replacementLink),
+        );
+        expect(document.activeElement).toBe(replacementLink);
         host.remove();
         anchor.remove();
       }

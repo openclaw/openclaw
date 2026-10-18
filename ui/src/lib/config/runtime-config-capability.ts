@@ -4,7 +4,7 @@ import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { showToast } from "../toast.ts";
-import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
+import { createAppliedConfigRefreshOwner } from "./applied-refresh.ts";
 import { clearConfigDraftTracking } from "./config-draft-model.ts";
 import {
   loadConfig,
@@ -23,8 +23,14 @@ import {
 } from "./config-state-model.ts";
 import { createConfigWriteCoordinator } from "./config-write-coordinator.ts";
 
-export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
-  const state = createInitialConfigState(gateway.snapshot);
+export function createRuntimeConfigCapability(
+  gateway: RuntimeConfigGateway,
+  bootstrap?: {
+    current: () => Record<string, unknown> | null;
+    subscribe: (listener: () => void) => () => void;
+  },
+) {
+  const state = createInitialConfigState(gateway.snapshot, bootstrap?.current);
   // Raw edits never autosave; form edits and outstanding writes also remain
   // owned by this capability when a worker update or reconnect wants to reload.
   const stopReloadGuard = registerControlUiReloadGuard(
@@ -61,6 +67,7 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
       listener(state);
     }
   };
+  const stopBootstrap = bootstrap?.subscribe(publish);
   const run = async <T>(task: () => Promise<T>, loadKey?: "config" | "schema"): Promise<T> => {
     let result: Promise<T> | undefined;
     try {
@@ -94,7 +101,7 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
     await (loads.get(key) ?? run(task, key));
   };
 
-  const appliedRefresh = createAppliedConfigRefreshController({
+  const appliedRefresh = createAppliedConfigRefreshOwner({
     shouldRefresh: () =>
       !disposed &&
       state.connected &&
@@ -219,6 +226,7 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
       return registerListener(listeners, listener);
     },
     dispose() {
+      stopBootstrap?.();
       stopReloadGuard();
       disposed = true;
       writes.dispose();

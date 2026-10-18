@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import {
@@ -48,6 +49,7 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
     "/scripts/ios-screenshot-evidence.mjs",
     "/scripts/lib/direct-run.mjs",
     "/scripts/ci-static-step.sh",
+    "/scripts/ci-collect-checks.sh",
     ...(linux
       ? [
           "/scripts/lib/release-upgrade-baseline.mjs",
@@ -68,8 +70,64 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
           "/scripts/lib/swift-toolchain.sh",
           "/scripts/lib/ci-ios-smoke-plan.mjs",
           "/scripts/ci-xcodebuild.py",
+          "/scripts/swift-build-cache-metadata.py",
         ]),
   ];
+}
+
+// Workflow consumers define the required files; the real Git fixture below
+// checks both index exports and sparse fetches against the owner, not a copied list.
+const harnessReferences = new Map<string, Map<string, string>>();
+const workflowDefinition = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as {
+  jobs: Record<
+    string,
+    {
+      "runs-on"?: unknown;
+      steps?: {
+        env?: Record<string, string>;
+        with?: { path?: string; "sparse-checkout"?: string };
+      }[];
+    }
+  >;
+};
+for (const [jobId, job] of Object.entries(workflowDefinition.jobs)) {
+  const checkout = job.steps?.find((step) => step.env?.CHECKOUT_REPO);
+  const kind =
+    checkout?.env?.CHECKOUT_KIND ??
+    (/(?:macos|windows|xcode)-/u.test(JSON.stringify(job["runs-on"])) ? "platform" : "linux-node");
+  const references = new Map<string, string>();
+  for (const step of job.steps ?? []) {
+    for (const match of JSON.stringify(step).matchAll(/\.ci-harness\/([\w./-]+)/gu)) {
+      references.set(expectDefined(match[1], "harness reference"), jobId);
+    }
+  }
+  if (references.size === 0) {
+    continue;
+  }
+  const sparse = job.steps?.find((step) => step.with?.path === ".ci-harness");
+  if (sparse) {
+    it(`exports every harness reference for ${jobId}'s sparse checkout`, () => {
+      const paths = (sparse.with?.["sparse-checkout"] ?? "")
+        .split(/\s+/u)
+        .filter(Boolean)
+        .map((entry) => entry.replace(/^\/|\/$/gu, ""));
+      for (const reference of references.keys()) {
+        expect(
+          paths.some((entry) => reference === entry || reference.startsWith(`${entry}/`)),
+          `${jobId}: .ci-harness/${reference}`,
+        ).toBe(true);
+      }
+    });
+    // Preflight uses the owner's index export when workflow and target match.
+    if (kind !== "preflight") {
+      continue;
+    }
+  }
+  const required = harnessReferences.get(kind) ?? new Map<string, string>();
+  for (const [reference, consumer] of references) {
+    required.set(reference, consumer);
+  }
+  harnessReferences.set(kind, required);
 }
 
 // Execute both workflow policies against the same owned tree fixture. A leader's
@@ -408,6 +466,7 @@ it.concurrent.for([
       "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
       "scripts/ci-static-step.sh": "workflow static-step script\n",
+      "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",
     };
     const nodeSetupScripts = {
       "scripts/lib/pnpm-lockfile-documents.mjs": readFileSync(
@@ -437,6 +496,13 @@ it.concurrent.for([
         "scripts/lib/upgrade-survivor-policy.mjs",
         "scripts/lib/upgrade-survivor-scenarios.json",
       ].map((name) => [name, readFileSync(name, "utf8")]),
+    );
+    const references = harnessReferences.get(kind) ?? new Map<string, string>();
+    const referencedFiles = Object.fromEntries(
+      [...references.keys()].map((reference) => {
+        const file = statSync(reference).isDirectory() ? `${reference}/action.yml` : reference;
+        return [file, readFileSync(file, "utf8")];
+      }),
     );
     const candidateFiles = {
       "candidate-only.txt": "candidate stays intact\n",
@@ -499,6 +565,7 @@ it.concurrent.for([
           }).trim();
         run("init");
         for (const [name, contents] of Object.entries({
+          ...referencedFiles,
           ...files,
           ...evidenceScripts,
           ...nodeSetupScripts,
@@ -651,6 +718,12 @@ it.concurrent.for([
           // A different workflow revision stays with the pinned Actions checkout.
           expect(existsSync(harness)).toBe(false);
           return;
+        }
+        for (const [reference, consumer] of references) {
+          expect(
+            existsSync(path.join(harness, reference)),
+            `${consumer} (${kind}, workflow=${workflow}): .ci-harness/${reference}`,
+          ).toBe(true);
         }
         const sourceStatus = expectDefined(readSourceStatus, "native source status");
         expect(sourceStatus()).toEqual([]);

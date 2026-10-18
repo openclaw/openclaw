@@ -14,10 +14,8 @@ import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
-import {
-  resolveSessionMutationAuthorization,
-  SessionMutationAuthorizationChangedError,
-} from "./session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
+import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -271,12 +269,13 @@ test("sessions.create revalidates parent participation before committing a fork 
     parentSessionKey,
     fork: true,
   };
-  const authorization = resolveSessionMutationAuthorization({
+  const authorization = await resolveSessionMutationAuthorizationAsync({
     client,
     method: "sessions.create",
     requestParams,
     context: { getRuntimeConfig } as never,
   });
+  using _ = { [Symbol.dispose]: () => authorization.authorization?.release?.() };
   expect(authorization.error).toBeNull();
   const assertCurrent = authorization.authorization?.assertCurrent;
   if (!assertCurrent) {

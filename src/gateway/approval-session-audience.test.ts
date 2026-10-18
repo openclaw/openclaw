@@ -1,192 +1,208 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   resolveApprovalSessionAudienceWithFallback,
   resolveApprovalSourceStreamKey,
 } from "./approval-session-audience.js";
 
 type GraphNode = {
-  registry?: {
-    controllerSessionKey?: string | null;
-    requesterSessionKey?: string | null;
-  };
-  stored?: {
-    parentSessionKey?: string;
-    spawnedBy?: string;
-  };
+  registry?: Partial<Record<"controllerSessionKey" | "requesterSessionKey", string | null>>;
+  stored?: Partial<Record<"parentSessionKey" | "spawnedBy", string>>;
 };
 
-let graph: Record<string, GraphNode> = {};
-const getRuntimeConfigMock = vi.fn(() => ({}) as object);
-const getLatestSubagentRunMock = vi.fn((sessionKey: string) => graph[sessionKey]?.registry);
-const loadSessionEntryMock = vi.fn(
-  (scope: { sessionKey: string }) => graph[scope.sessionKey]?.stored,
-);
-const buildLatestSubagentSessionListReadIndexMock = vi.fn(() => ({
-  getLatestSubagentRun: getLatestSubagentRunMock,
-}));
-const prepareRegistryMock = vi.fn(async () => true);
-const registrySnapshot = {};
-const registrySnapshotMock = vi.fn<() => object | undefined>(() => registrySnapshot);
+const scoped = (...keys: string[]) =>
+  keys.map((key) => (key.startsWith("agent:") ? key : `agent:work:${key}`));
+const stored = (parentSessionKey: string): GraphNode => ({ stored: { parentSessionKey } });
+const registered = (
+  controllerSessionKey: string | null,
+  requesterSessionKey: string | null,
+  entry?: GraphNode["stored"],
+): GraphNode => ({ registry: { controllerSessionKey, requesterSessionKey }, stored: entry });
+const audience = (source: string) => resolveApprovalSessionAudienceWithFallback(source, "work");
+async function expectAudience(source: string, ...keys: string[]) {
+  expect(await audience(source), source).toEqual(scoped(...keys));
+}
 
-vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: () => getRuntimeConfigMock(),
-}));
+let graph: Record<string, GraphNode> = {};
+const readConfig = vi.fn(() => ({}) as object);
+const readRun = vi.fn((sessionKey: string) => graph[sessionKey]?.registry);
+const entryFor = (scope: { sessionKey: string }) => graph[scope.sessionKey]?.stored;
+const readEntry = vi.fn(entryFor);
+const readIndex = vi.fn(() => ({ getLatestSubagentRun: readRun }));
+const prepareRegistry = vi.fn(async () => true);
+const registrySnapshot = {};
+const readSnapshot = vi.fn<() => object | undefined>(() => registrySnapshot);
+
+// mock-isolation: Resolve audience scope from fixture configuration, not operator state.
+vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => readConfig() }));
+// mock-isolation: Traverse the fixture-owned run graph without loading the live registry.
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => ({
-  buildLatestSubagentSessionListReadIndex: () => buildLatestSubagentSessionListReadIndexMock(),
-  getLatestLiveSubagentRunByChildSessionKey: (key: string) => getLatestSubagentRunMock(key),
+  buildLatestSubagentSessionListReadIndex: () => readIndex(),
+  getLatestLiveSubagentRunByChildSessionKey: (key: string) => readRun(key),
 }));
+// mock-isolation: Control registry publication and preparation for each lineage scenario.
 vi.mock("../agents/subagents/registry/subagent-registry-state.js", () => ({
-  prepareOptionalSubagentSessionListReadCache: () => prepareRegistryMock(),
-  getSubagentSessionListReadSnapshotIdentity: () => registrySnapshotMock(),
+  prepareOptionalSubagentSessionListReadCache: () => prepareRegistry(),
+  getSubagentSessionListReadSnapshotIdentity: () => readSnapshot(),
 }));
 // mock-isolation: Audience tests compare fixture-owned persisted rows with the synthetic run registry.
 vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
-  readSessionEntryReadOnlyInWorker: async (scope: { sessionKey: string }) =>
-    loadSessionEntryMock(scope),
+  readSessionEntryReadOnlyInWorker: async (scope: { sessionKey: string }) => readEntry(scope),
 }));
 
 beforeEach(() => {
   graph = {};
-  getRuntimeConfigMock.mockReset().mockReturnValue({});
-  getLatestSubagentRunMock
-    .mockReset()
-    .mockImplementation((sessionKey: string) => graph[sessionKey]?.registry);
-  loadSessionEntryMock
-    .mockReset()
-    .mockImplementation((scope: { sessionKey: string }) => graph[scope.sessionKey]?.stored);
-  buildLatestSubagentSessionListReadIndexMock.mockReset().mockReturnValue({
-    getLatestSubagentRun: getLatestSubagentRunMock,
-  });
-  prepareRegistryMock.mockReset().mockResolvedValue(true);
-  registrySnapshotMock.mockReset().mockReturnValue(registrySnapshot);
+  readConfig.mockReset().mockReturnValue({});
+  readRun.mockClear();
+  readEntry.mockReset().mockImplementation(entryFor);
+  readIndex.mockClear();
+  prepareRegistry.mockReset().mockResolvedValue(true);
+  readSnapshot.mockReset().mockReturnValue(registrySnapshot);
 });
 
-describe("resolveApprovalSessionAudienceWithFallback", () => {
-  it("canonicalizes and bounds the breadth-first audience using current lineage", async () => {
-    const cases: { source: string; nodes: Record<string, GraphNode>; expected: string[] }[] = [
-      { source: " Child ", nodes: {}, expected: ["agent:work:child"] },
-      {
-        source: "child",
-        nodes: {
-          "agent:work:child": {
-            registry: { controllerSessionKey: "controller", requesterSessionKey: "requester" },
-            stored: { parentSessionKey: "stale-parent" },
-          },
-          "agent:work:controller": { stored: { parentSessionKey: "controller-root" } },
-          "agent:work:requester": { stored: { parentSessionKey: "requester-root" } },
-        },
-        expected: [
-          "agent:work:child",
-          "agent:work:controller",
-          "agent:work:requester",
-          "agent:work:controller-root",
-          "agent:work:requester-root",
-        ],
-      },
-      {
-        source: "child",
-        nodes: {
-          "agent:work:child": {
-            registry: { controllerSessionKey: " ", requesterSessionKey: null },
-            stored: { parentSessionKey: "dashboard-parent", spawnedBy: "spawn-parent" },
-          },
-          "agent:work:dashboard-parent": { stored: { spawnedBy: "root" } },
-        },
-        expected: ["agent:work:child", "agent:work:dashboard-parent", "agent:work:root"],
-      },
-      {
-        source: "agent:work:child",
-        nodes: {
-          "agent:work:child": {
-            registry: { controllerSessionKey: "main", requesterSessionKey: "agent:ops:main" },
-          },
-        },
-        expected: ["agent:work:child", "agent:work:main", "agent:ops:main"],
-      },
-      {
-        source: "child",
-        nodes: {
-          "agent:work:child": {
-            registry: { controllerSessionKey: "parent", requesterSessionKey: "child" },
-          },
-          "agent:work:parent": { stored: { parentSessionKey: "child" } },
-        },
-        expected: ["agent:work:child", "agent:work:parent"],
-      },
-      {
-        source: "session-0",
-        nodes: Object.fromEntries(
-          Array.from({ length: 70 }, (_, index) => [
-            `agent:work:session-${index}`,
-            { stored: { parentSessionKey: `session-${index + 1}` } },
-          ]),
-        ),
-        expected: Array.from({ length: 64 }, (_, index) => `agent:work:session-${index}`),
-      },
-    ];
-    for (const { source, nodes, expected } of cases) {
-      graph = nodes;
-      expect(await resolveApprovalSessionAudienceWithFallback(source, "work"), source).toEqual(
-        expected,
-      );
-    }
-  });
+afterEach(() => {
+  memorySessionActorOwners.reset();
+  vi.unstubAllEnvs();
+});
 
-  it.each([
-    { failure: "lineage", source: "main", expected: "agent:work:boss" },
-    { failure: "config", source: "child", expected: "agent:work:child" },
-  ])("scopes the source after $failure lookup fails", async ({ failure, source, expected }) => {
-    getRuntimeConfigMock.mockReturnValue({ session: { mainKey: "boss" } });
-    const fail = () => {
-      throw new Error(`${failure} unavailable`);
+it("reads current memory lineage without creating a missing owner and refuses a closed source", async () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/approval-memory");
+  const sessionKey = "agent:work:dashboard:incognito-child";
+  const location = {
+    agentId: "work",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "work" }),
+  };
+  await expectAudience(sessionKey, "dashboard:incognito-child");
+  expect(memorySessionActorOwners.read(location)).toBeUndefined();
+  const owner = memorySessionActorOwners.get(location);
+  const actor = await owner.acquire(
+    { sessionKey, database: owner.identity },
+    { assertCurrent() {}, assertReadable() {} },
+  );
+  const authority = { assertCurrent() {}, authorize() {} };
+  const mutate = async (operation: Parameters<NonNullable<typeof actor.storage>["mutate"]>[0]) =>
+    expect((await actor.storage!.mutate(operation, authority)).kind).toBe("committed");
+  try {
+    const entry: InternalSessionEntry = {
+      sessionId: "private-child",
+      updatedAt: 1,
+      incognito: true,
+      parentSessionKey: "parent",
     };
-    if (failure === "lineage") {
-      loadSessionEntryMock.mockImplementationOnce(fail);
-    } else {
-      getRuntimeConfigMock.mockImplementation(fail);
-    }
-    expect(await resolveApprovalSessionAudienceWithFallback(source, "work")).toEqual([expected]);
-  });
+    await mutate({ type: "session.entry.create", input: { entry } });
+    graph = { "agent:work:parent": stored("root") };
+    await expectAudience(sessionKey, "dashboard:incognito-child", "parent", "root");
+    await mutate({
+      type: "session.entry.patch",
+      input: { operation: { kind: "fields", patch: { parentSessionKey: "next-parent" } } },
+    });
+    await expectAudience(sessionKey, "dashboard:incognito-child", "next-parent");
+    prepareRegistry.mockImplementationOnce(async () => {
+      memorySessionActorOwners.closeDatabase(location);
+      return true;
+    });
+    await expect(audience(sessionKey)).rejects.toThrow();
+  } finally {
+    await actor.release();
+  }
+});
 
-  it("retains live and stored ancestors when the optional registry query is unavailable", async () => {
-    prepareRegistryMock.mockResolvedValue(false);
-    graph = {
-      "agent:work:child": { registry: { requesterSessionKey: "parent" } },
-      "agent:work:parent": { stored: { parentSessionKey: "root" } },
-    };
-
-    expect(await resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
+it("canonicalizes and bounds the breadth-first audience using current lineage", async () => {
+  const chain = Array.from({ length: 70 }, (_, index) => `session-${index}`);
+  const cases: [string, Record<string, GraphNode>, string[]][] = [
+    [" Child ", {}, ["child"]],
+    [
+      "child",
+      {
+        child: registered("controller", "requester", { parentSessionKey: "stale-parent" }),
+        controller: stored("controller-root"),
+        requester: stored("requester-root"),
+      },
+      ["child", "controller", "requester", "controller-root", "requester-root"],
+    ],
+    [
+      "child",
+      {
+        child: registered(" ", null, {
+          parentSessionKey: "dashboard-parent",
+          spawnedBy: "spawn-parent",
+        }),
+        "dashboard-parent": { stored: { spawnedBy: "root" } },
+      },
+      ["child", "dashboard-parent", "root"],
+    ],
+    [
       "agent:work:child",
-      "agent:work:parent",
-      "agent:work:root",
-    ]);
-    expect(buildLatestSubagentSessionListReadIndexMock).not.toHaveBeenCalled();
-  });
+      { child: registered("main", "agent:ops:main") },
+      ["child", "main", "agent:ops:main"],
+    ],
+    [
+      "child",
+      { child: registered("parent", "child"), parent: stored("child") },
+      ["child", "parent"],
+    ],
+    [
+      "session-0",
+      Object.fromEntries(chain.map((key, index) => [key, stored(`session-${index + 1}`)])),
+      chain.slice(0, 64),
+    ],
+  ];
+  for (const [source, nodes, expected] of cases) {
+    graph = Object.fromEntries(Object.entries(nodes).map(([key, node]) => [scoped(key)[0], node]));
+    await expectAudience(source, ...expected);
+  }
+});
 
-  it("rechecks registry readiness and current aliases after preparation settles", async () => {
-    getRuntimeConfigMock.mockReturnValue({ session: { mainKey: "old" } });
-    registrySnapshotMock.mockReturnValueOnce(undefined);
-    prepareRegistryMock
-      .mockImplementationOnce(async () => true)
-      .mockImplementationOnce(async () => {
-        getRuntimeConfigMock.mockReturnValue({ session: { mainKey: "current" } });
-        return true;
-      });
+it.each([
+  { failure: "lineage", source: "main", expected: "agent:work:boss" },
+  { failure: "config", source: "child", expected: "agent:work:child" },
+])("scopes the source after $failure lookup fails", async ({ failure, source, expected }) => {
+  readConfig.mockReturnValue({ session: { mainKey: "boss" } });
+  const fail = () => {
+    throw new Error(`${failure} unavailable`);
+  };
+  if (failure === "lineage") {
+    readEntry.mockImplementationOnce(fail);
+  } else {
+    readConfig.mockImplementation(fail);
+  }
+  expect(await audience(source)).toEqual([expected]);
+});
 
-    expect(await resolveApprovalSessionAudienceWithFallback("main", "work")).toEqual([
-      "agent:work:current",
-    ]);
-  });
+it("retains live and stored ancestors when the optional registry query is unavailable", async () => {
+  prepareRegistry.mockResolvedValue(false);
+  graph = {
+    "agent:work:child": { registry: { requesterSessionKey: "parent" } },
+    "agent:work:parent": stored("root"),
+  };
 
-  it.each([
-    new Error("registry admission retired"),
-    new AggregateError([new Error("query"), new Error("cleanup")], "read cleanup failed"),
-  ])("does not hide preparation failure: %s", async (error) => {
-    prepareRegistryMock.mockRejectedValue(error);
+  await expectAudience("child", "child", "parent", "root");
+  expect(readIndex).not.toHaveBeenCalled();
+});
 
-    await expect(resolveApprovalSessionAudienceWithFallback("child", "work")).rejects.toBe(error);
-    expect(loadSessionEntryMock).not.toHaveBeenCalled();
-  });
+it("rechecks registry readiness and current aliases after preparation settles", async () => {
+  readConfig.mockReturnValue({ session: { mainKey: "old" } });
+  readSnapshot.mockReturnValueOnce(undefined);
+  prepareRegistry
+    .mockImplementationOnce(async () => true)
+    .mockImplementationOnce(async () => {
+      readConfig.mockReturnValue({ session: { mainKey: "current" } });
+      return true;
+    });
+
+  await expectAudience("main", "current");
+});
+
+it.each([
+  new Error("registry admission retired"),
+  new AggregateError([new Error("query"), new Error("cleanup")], "read cleanup failed"),
+])("does not hide preparation failure: %s", async (error) => {
+  prepareRegistry.mockRejectedValue(error);
+
+  await expect(audience("child")).rejects.toBe(error);
+  expect(readEntry).not.toHaveBeenCalled();
 });
 
 it("scopes raw fallback aliases without changing explicit, unknown, or agent-less keys", () => {

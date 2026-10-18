@@ -6,6 +6,9 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { createNativeSessionCommitFinalizer } from "../../agents/harness/native-session/deletion-participant.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { capturePluginStateNativeBindingFacts } from "../../plugin-state/plugin-state-native-binding-facts.js";
+import { createPluginStateKeyedStoreV2 } from "../../plugin-state/plugin-state-store.js";
+import { capturePluginStateNativeBindingStore } from "../../plugin-state/plugin-state-store.native-binding.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { withNativeBindingFixture } from "./session-native-binding.test-support.js";
@@ -13,36 +16,41 @@ import { withNativeBindingFixture } from "./session-native-binding.test-support.
 const delivery = vi.hoisted(() => ({ afterExecution: undefined as (() => void) | undefined }));
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
+  const withDelivery = (
+    owner: ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution>,
+  ): typeof owner => {
+    return {
+      ...owner,
+      get fileIdentity() {
+        return owner.fileIdentity;
+      },
+      runExisting: (source, operation, options) =>
+        owner.runExisting(
+          source,
+          (worker) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                try {
+                  return await worker.execute(command, commandOptions);
+                } finally {
+                  if (command.type === "session.nativeBindings.delete") {
+                    delivery.afterExecution?.();
+                  }
+                }
+              },
+            }),
+          options,
+        ),
+    };
+  };
   return {
     ...actual,
     captureOpenClawAgentDatabaseExecution: (
       ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
-      return {
-        ...owner,
-        get fileIdentity() {
-          return owner.fileIdentity;
-        },
-        runExisting: (source, operation, options) =>
-          owner.runExisting(
-            source,
-            (worker) =>
-              operation({
-                execute: async (command, commandOptions) => {
-                  try {
-                    return await worker.execute(command, commandOptions);
-                  } finally {
-                    if (command.type === "session.nativeBindings.delete") {
-                      delivery.afterExecution?.();
-                    }
-                  }
-                },
-              }),
-            options,
-          ),
-      };
-    },
+    ) => withDelivery(actual.captureOpenClawAgentDatabaseExecution(...args)),
+    captureOpenClawAgentDatabasePreparationExecution: (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
+    ) => withDelivery(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
   };
 });
 
@@ -336,6 +344,22 @@ it.each([false, true])(
         authFingerprint: "3c26b68488ce497a69d2c9fce9ee19c461fa67a3d959b0dc3bafe5718c56119d",
       };
       fixture.bindingStore.register(fixture.bindingKey, legacy);
+      const store = createPluginStateKeyedStoreV2(
+        "agentsapi",
+        {
+          namespace: "agentsapi-sessions",
+          maxEntries: 100_000,
+          overflowPolicy: "reject-new",
+          env: fixture.scope.env,
+        },
+        { assertCurrent() {} },
+      );
+      const authority = await capturePluginStateNativeBindingFacts(
+        capturePluginStateNativeBindingStore(store)!,
+        fixture.bindingKey,
+        true,
+      );
+      expect(authority.read()).toEqual(legacy);
       const before = fixture.readEntry();
       const failure = new Error("synthetic legacy deletion COMMIT refusal");
       let commitSeen = false;
@@ -343,6 +367,7 @@ it.each([false, true])(
         if (request.stage === "commit" && facts.kind === "session-native-binding") {
           commitSeen = true;
           expect(fixture.readBinding()).toBeUndefined();
+          expect(() => authority.read()).toThrow("authority is unavailable");
           if (rollback) {
             throw failure;
           }
@@ -357,9 +382,11 @@ it.each([false, true])(
         }
         expect(commitSeen).toBe(true);
         expect(bindingWrites(sql.queries)).toEqual([]);
+        expect(authority.read()).toEqual(rollback ? legacy : undefined);
         expect(fixture.readBinding()).toEqual(rollback ? legacy : undefined);
         expect(fixture.readEntry()).toEqual(rollback ? before : undefined);
       } finally {
+        authority.release();
         sql.restore();
       }
     });

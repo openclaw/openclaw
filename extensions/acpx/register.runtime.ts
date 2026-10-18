@@ -133,7 +133,6 @@ function createDeferredRuntime(
   return deferredRuntime;
 }
 
-/** Creates the plugin service that registers ACPX as an ACP runtime backend. */
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService & {

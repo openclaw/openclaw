@@ -77,7 +77,7 @@ function hasRemoteWorkspace(workspaceDir: string): boolean {
   }
 }
 
-/** @deprecated Await prepareSkillCommandsForWorkspace; removed at the next Plugin SDK major. */
+/** @deprecated Await prepareSkillCommandsForWorkspace; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function listSkillCommandsForWorkspace(
   params: WorkspaceSkillCommandParams,
 ): SkillCommandSpec[] {
@@ -223,7 +223,7 @@ function appendSkillCommands(
   }
 }
 
-/** @deprecated Await prepareSkillCommandsForAgents; removed at the next Plugin SDK major. */
+/** @deprecated Await prepareSkillCommandsForAgents; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function listSkillCommandsForAgents(params: AgentSkillCommandParams): SkillCommandSpec[] {
   warnPluginSdkDeprecation({
     family: "skill-command-discovery",

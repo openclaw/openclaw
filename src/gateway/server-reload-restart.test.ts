@@ -1,19 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import * as restartModule from "../infra/restart.js";
 import {
   resetGatewayWorkAdmission,
-  tryBeginGatewaySuspendAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
-import { nextGatewayReloadGeneration } from "./server-reload-generation.js";
+import { beginGatewayReloadLifecycle } from "./server-reload-generation.js";
 import { createGatewayRestartCoordinator } from "./server-reload-restart.js";
 
 const getTotalQueueSize = vi.hoisted(() => vi.fn(() => 0));
@@ -68,7 +64,7 @@ function createCoordinator(
 ) {
   return createGatewayRestartCoordinator({
     params: { logReload: { info: vi.fn(), warn: vi.fn() }, ...params, scheduler },
-    myGeneration: options.myGeneration ?? nextGatewayReloadGeneration(),
+    reloadSignal: options.reloadSignal ?? beginGatewayReloadLifecycle(),
     restartRecoveryAvailable: true,
     getActiveCounts: () => zeroActiveCounts,
     formatActiveDetails: () => [],
@@ -90,108 +86,29 @@ afterEach(() => {
 });
 
 describe("gateway restart readiness preflight", () => {
-  it("catches up one restart retry and permits its emitter to stop the owner", async () => {
-    vi.useFakeTimers();
-    const clock = createGatewaySchedulerClock(Date.now());
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const requestRecoveryRestart = vi
-      .fn<NonNullable<CoordinatorOptions["params"]["requestRecoveryRestart"]>>()
-      .mockReturnValueOnce({ status: "failed" })
-      .mockImplementationOnce(() => {
-        coordinator.stopRestartRetries();
-        return { status: "failed" };
-      });
-    const coordinator = createCoordinator({ scheduler, requestRecoveryRestart });
+  it("distinguishes candidate preparation from an outstanding restart request", () => {
+    const coordinator = createCoordinator({
+      requestRecoveryRestart: vi.fn(() => ({ status: "emitted" as const })),
+    });
     try {
-      coordinator.requestGatewayRestart(restartPlan, {});
-      await clock.advanceBy(60_000);
-      expect(requestRecoveryRestart).toHaveBeenCalledTimes(2);
-      await clock.advanceBy(60_000);
-      expect(requestRecoveryRestart).toHaveBeenCalledTimes(2);
+      const lifecycle = coordinator.beginGatewayRestartLifecycle();
+      expect(coordinator.hasOutstandingGatewayRestart()).toBe(false);
+      lifecycle.settle("committed");
+      expect(coordinator.hasOutstandingGatewayRestart()).toBe(false);
+
+      coordinator.pauseGatewayRestartForConfigCandidate();
+      expect(coordinator.hasOutstandingGatewayRestart()).toBe(false);
+
+      expect(coordinator.requestGatewayRestart(restartPlan, {}).status).toBe("accepted");
+      expect(coordinator.hasOutstandingGatewayRestart()).toBe(true);
+      coordinator.stopRestartRetries();
+      expect(coordinator.hasOutstandingGatewayRestart()).toBe(false);
     } finally {
       coordinator.stopRestartRetries();
-      await scheduler.stop();
     }
   });
 
-  it.each(["owner", "scheduler"] as const)(
-    "does not emit a prepared retry after its %s stops",
-    async (boundary) => {
-      vi.useFakeTimers();
-      const clock = createGatewaySchedulerClock(Date.now());
-      const scheduler = createTestGatewayScheduler(clock.clock);
-      const preparing = createDeferred();
-      const prepared = createDeferred<OpenClawConfig>();
-      const requestRecoveryRestart = vi
-        .fn<NonNullable<CoordinatorOptions["params"]["requestRecoveryRestart"]>>()
-        .mockReturnValue({ status: "failed" });
-      const prepareRuntimeConfig = vi
-        .fn<() => Promise<OpenClawConfig>>()
-        .mockResolvedValueOnce({})
-        .mockImplementationOnce(() => {
-          preparing.resolve();
-          return prepared.promise;
-        });
-      const coordinator = createCoordinator({ scheduler, requestRecoveryRestart });
-      let waking: ReturnType<typeof clock.advanceBy> = undefined;
-      try {
-        coordinator.requestGatewayRestart(restartPlan, {}, { prepareRuntimeConfig });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(requestRecoveryRestart).toHaveBeenCalledOnce();
-        waking = clock.advanceBy(1_000);
-        await preparing.promise;
-        // Close after preflight's continuation, before its caller resumes emission.
-        const closing = prepared.promise.then(() => {
-          if (boundary === "owner") {
-            coordinator.stopRestartRetries();
-          } else {
-            scheduler.beginClose();
-          }
-        });
-        prepared.resolve({});
-        await Promise.all([waking, closing]);
-        expect(requestRecoveryRestart).toHaveBeenCalledOnce();
-      } finally {
-        prepared.resolve({});
-        coordinator.stopRestartRetries();
-        await scheduler.stop();
-        await waking;
-      }
-    },
-  );
-
-  it.each(["owner", "scheduler"] as const)(
-    "settles a retry parked by suspension when its %s stops",
-    async (boundary) => {
-      vi.useFakeTimers();
-      const clock = createGatewaySchedulerClock(Date.now());
-      const scheduler = createTestGatewayScheduler(clock.clock);
-      const requestRecoveryRestart = vi
-        .fn<NonNullable<CoordinatorOptions["params"]["requestRecoveryRestart"]>>()
-        .mockReturnValue({ status: "failed" });
-      const coordinator = createCoordinator({ scheduler, requestRecoveryRestart });
-      coordinator.requestGatewayRestart(restartPlan, {});
-      const suspension = tryBeginGatewaySuspendAdmission(() => {});
-      expect(suspension?.commit()).toBe(true);
-      const waking = clock.advanceBy(1_000);
-      try {
-        if (boundary === "owner") {
-          coordinator.stopRestartRetries();
-        } else {
-          await scheduler.stop();
-        }
-        await waking;
-        expect(requestRecoveryRestart).toHaveBeenCalledTimes(1);
-      } finally {
-        suspension?.release();
-        coordinator.stopRestartRetries();
-        await scheduler.stop();
-        await waking;
-      }
-    },
-  );
-
-  it("keeps the current lifecycle serving until successor state is restart-ready", async () => {
+  it("keeps the current lifecycle serving until an explicit request is restart-ready", async () => {
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     const assertRestartReady = vi
       .fn<() => Promise<void> | void>()
@@ -220,9 +137,82 @@ describe("gateway restart readiness preflight", () => {
 
       await vi.advanceTimersByTimeAsync(1_000);
 
+      expect(assertRestartReady).toHaveBeenCalledOnce();
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(logReload.info).not.toHaveBeenCalledWith(
+        "all operations and replies completed; restarting gateway now",
+      );
+
+      coordinator.requestGatewayRestart(restartPlan, {}, { prepareRuntimeConfig });
+      await vi.advanceTimersByTimeAsync(0);
+
       expect(assertRestartReady).toHaveBeenCalledTimes(2);
       expect(prepareRuntimeConfig).toHaveBeenCalledOnce();
       expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+    } finally {
+      coordinator.stopRestartRetries();
+    }
+  });
+
+  it("prepares outside the restart-signal fence so lease holders can finish", async () => {
+    vi.useFakeTimers();
+    // A config reload holds the plugin lifecycle lease and needs root admission
+    // before it can release it; restart preparation waits for that lease.
+    const holderGate = Promise.withResolvers<void>();
+    const lease = Promise.withResolvers<void>();
+    void holderGate.promise.then(() =>
+      runWithGatewayIndependentRootWorkAdmission(async () => {}, "reload:config").then(
+        lease.resolve,
+      ),
+    );
+    const prepareRuntimeConfig = vi.fn(async () => {
+      holderGate.resolve();
+      await lease.promise;
+      return {} as OpenClawConfig;
+    });
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const coordinator = createCoordinator({
+      assertRestartReady: vi.fn(),
+      logReload,
+      requestRecoveryRestart,
+    });
+
+    try {
+      coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig, {
+        prepareRuntimeConfig,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(prepareRuntimeConfig).toHaveBeenCalledOnce();
+      expect(requestRecoveryRestart).toHaveBeenCalledExactlyOnceWith(
+        "config reload: gateway.port",
+        undefined,
+      );
+      expect(logReload.warn).not.toHaveBeenCalledWith(expect.stringContaining("failed"));
+    } finally {
+      coordinator.stopRestartRetries();
+    }
+  });
+
+  it("reports a pending restart preparation instead of waiting silently", async () => {
+    vi.useFakeTimers();
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const coordinator = createCoordinator({ logReload, requestRecoveryRestart });
+
+    try {
+      coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig, {
+        prepareRuntimeConfig: () => new Promise<OpenClawConfig>(() => {}),
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(logReload.warn).toHaveBeenLastCalledWith(
+        expect.stringMatching(
+          /^restart still deferred after \d+ms with restart preparation pending; no active work$/,
+        ),
+      );
     } finally {
       coordinator.stopRestartRetries();
     }
@@ -271,11 +261,11 @@ describe("gateway restart readiness preflight", () => {
     const queueSize = getTotalQueueSize.mockReturnValue(1);
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     const logReload = { info: vi.fn(), warn: vi.fn() };
-    const myGeneration = nextGatewayReloadGeneration();
-    const tracker = createGatewayActiveWorkTracker({ params: { logReload }, myGeneration });
+    const reloadSignal = beginGatewayReloadLifecycle();
+    const tracker = createGatewayActiveWorkTracker({ params: { logReload }, reloadSignal });
     const coordinator = createCoordinator(
       { logReload, requestRecoveryRestart },
-      { myGeneration, ...tracker },
+      { reloadSignal, ...tracker },
     );
     try {
       expect(coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig).status).toBe(

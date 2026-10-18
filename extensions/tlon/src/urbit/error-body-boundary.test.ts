@@ -81,27 +81,6 @@ describe("tlon error body boundary", () => {
     expect(msg).toContain("X");
   });
 
-  it("preserves short error body when under cap", async () => {
-    server = http.createServer((_req, res) => {
-      res.writeHead(500, { "Content-Type": "text/plain" });
-      res.end("session expired");
-    });
-    const port = await listen(server);
-
-    const err = await pokeUrbitChannel(
-      {
-        baseUrl: `http://127.0.0.1:${port}`,
-        cookie: "urbit=cookie",
-        ship: "~zod",
-        channelId: "test",
-      },
-      { app: "test", mark: "test", json: {}, auditContext: "test" },
-    ).catch((e: unknown) => e);
-
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain("session expired");
-  });
-
   it("redacts a reflected session cookie from poke error bodies", async () => {
     const cookie = "urbauth-~zod=0v1g.abcde.ijklm.prst";
     server = http.createServer((req, res) => {

@@ -2,9 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { runCommandBuffered } from "../../process/exec.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
+import {
+  bindSandboxInputStager,
+  createSandboxInputStager,
+  getSandboxInputStager,
+} from "./input-staging.js";
 import { bindLocalSandboxWorkspace } from "./local-workspace.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 
@@ -14,6 +20,7 @@ it.runIf(process.platform !== "win32")(
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bound-local-bridge-"));
     let revoked = false;
     let revokeDuringBuild = false;
+    let waitForAdmission: Promise<void> | undefined;
     const checkpoint = vi.fn(async () => {});
     const finalized = vi.fn(async () => {});
     const backend: SandboxBackendHandle = {
@@ -46,7 +53,13 @@ it.runIf(process.platform !== "win32")(
     const sandbox = createSandboxTestContext({
       overrides: { workspaceDir: root, agentWorkspaceDir: root, containerWorkdir: root, backend },
     });
+    const assertCurrent = () => {
+      if (revoked) {
+        throw new Error("revoked");
+      }
+    };
     const bridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
+    bindSandboxInputStager(bridge, createSandboxInputStager({ root, bridge, assertCurrent }));
     sandbox.fsBridge = bridge;
     try {
       bindLocalSandboxWorkspace(sandbox, {
@@ -54,7 +67,14 @@ it.runIf(process.platform !== "win32")(
         workspaceDir: root,
         workspaceCwd: root,
         checkpoint,
-        provision: async (run) => await run(),
+        retain: () => {
+          assertCurrent();
+          return () => {};
+        },
+        provision: async (run) => {
+          await waitForAdmission;
+          return await run();
+        },
         assertCurrent: () => {
           if (revoked) {
             throw new Error("revoked");
@@ -80,8 +100,19 @@ it.runIf(process.platform !== "win32")(
         code: "ENOENT",
       });
       revoked = false;
-      await backend.finalizeExec?.({ status: "completed", exitCode: 0, timedOut: false });
+      await backend.finalizeExec?.({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: spec.finalizeToken,
+      });
       expect(finalized).toHaveBeenCalledOnce();
+      expect(finalized).toHaveBeenCalledWith({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: "prepared",
+      });
       expect(checkpoint).toHaveBeenCalledTimes(2);
       revokeDuringBuild = true;
       await expect(
@@ -94,6 +125,42 @@ it.runIf(process.platform !== "win32")(
         token: "prepared",
       });
       expect(checkpoint).toHaveBeenCalledTimes(2);
+      revokeDuringBuild = false;
+      revoked = false;
+      const admission = createDeferred();
+      waitForAdmission = admission.promise;
+      const shell = backend.runShellCommand({ script: `touch "${root}/blocked.txt"` });
+      const exec = backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      revoked = true;
+      admission.resolve();
+      await expect(shell).rejects.toThrow("revoked");
+      await expect(exec).rejects.toThrow("revoked");
+      await expect(fs.stat(path.join(root, "blocked.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      revoked = false;
+      waitForAdmission = undefined;
+      const stageInput = getSandboxInputStager(bridge)!;
+      const checkpointsBeforeInput = checkpoint.mock.calls.length;
+      const staged = await stageInput({
+        prefix: "fetched-input",
+        content: "trusted input",
+        assertCurrent: () => {},
+      });
+      expect(await fs.readFile(staged, "utf8")).toBe("trusted input");
+      expect(checkpoint).toHaveBeenCalledTimes(checkpointsBeforeInput + 1);
+      const inputAdmission = createDeferred();
+      waitForAdmission = inputAdmission.promise;
+      const before = await fs.readdir(path.dirname(path.dirname(staged)));
+      const pendingInput = stageInput({
+        prefix: "late-input",
+        content: "blocked",
+        assertCurrent: () => {},
+      });
+      revoked = true;
+      inputAdmission.resolve();
+      await expect(pendingInput).rejects.toThrow("revoked");
+      expect(await fs.readdir(path.dirname(path.dirname(staged)))).toEqual(before);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -135,17 +202,22 @@ it.runIf(process.platform !== "win32")(
       overrides: { workspaceDir: root, agentWorkspaceDir: root, containerWorkdir: root, backend },
     });
     sandbox.fsBridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("revoked during preparation");
+      }
+    };
     bindLocalSandboxWorkspace(sandbox, {
       [Symbol.dispose]() {},
       workspaceDir: root,
       workspaceCwd: root,
       provision: async (run) => await run(),
       checkpoint: async () => {},
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("revoked during preparation");
-        }
+      retain: () => {
+        assertCurrent();
+        return () => {};
       },
+      assertCurrent,
     });
     try {
       await expect(

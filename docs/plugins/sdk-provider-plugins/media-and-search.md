@@ -18,6 +18,14 @@ the private `openclaw/plugin-sdk/concurrency-runtime` subpath. It returns
 `promise`, `resolve`, and `reject` without loading logging or provider auth;
 the adapter retains responsibility for cancellation and terminal settlement.
 
+Speech providers can use `createSpeechDirectiveParser` from the lightweight
+`openclaw/plugin-sdk/speech-provider` subpath. Map each override field to its
+policy key and accepted token aliases; optional field callbacks retain vendor
+validation and warning text. The shared parser handles alias dispatch and policy
+gating and returns an override patch. The host merges these patches into the
+provider's accumulated overrides; callbacks use `currentOverrides` only when
+merging a nested value such as voice settings.
+
 ## Media and search capabilities
 
 <Tabs>
@@ -61,6 +69,17 @@ the adapter retains responsibility for cancellation and terminal settlement.
     The shared factory always supplies the client's `model` and the original
     `input` array after those fields, preserving response-count validation.
 
+    Clients returned by `resolveRemoteEmbeddingClient` resolve OAuth authorization
+    through the auth-profile owner before each HTTP request. API keys and explicit
+    authorization headers remain static. Pass the client's optional
+    `resolveRequestHeaders` callback through batch helpers too: it receives
+    `{ forceRefresh, signal }` and returns request headers. `withRemoteHttpResponse`
+    applies those headers before guarded dispatch and supplies the actual headers
+    as the second `onResponse` argument for error redaction. If that handler throws
+    a provider HTTP error for `401 token_expired`, the helper releases the response,
+    resolves headers once with `forceRefresh: true`, and retries only that request.
+    Uploads must use a replayable body such as the batch helper's `FormData`.
+
     Embedding adapters can use `resolveEmbeddingProviderSsrFPolicy` from
     `openclaw/plugin-sdk/memory-core-host-engine-embeddings` to apply the shared model
     provider network policy. Pass the embedding provider ID, API, effective base URL,
@@ -103,6 +122,16 @@ the adapter retains responsibility for cancellation and terminal settlement.
 
   </Tab>
   <Tab title="Image and video generation">
+    OpenAI-compatible image adapters can use `createOpenAiCompatibleImageGenerationProvider`
+    from `openclaw/plugin-sdk/image-generation`. Adapters with custom request handling can
+    use `inlineOpenAiCompatibleImageUrls` before `parseOpenAiCompatibleImageResponse`.
+    The URL helper bounds downloads by `maxDownloads`, `maxBytes`, and the remaining
+    operation budget returned by `timeoutMs`. It trusts only `providerUrl`'s origin
+    automatically, checks every redirect, and never forwards provider HTTP credentials.
+    Pass only explicit operator permission as `allowPrivateNetwork`; an inferred local
+    endpoint allowance must not authorize other private hosts. TLS and hostname
+    overrides in `dispatcherPolicy` stay confined to the provider origin.
+
     Image and video capabilities use a **mode-aware** shape. Image
     providers declare required `generate` and `edit` capability blocks;
     video providers declare `generate`, `imageToVideo`, and
@@ -111,10 +140,12 @@ the adapter retains responsibility for cancellation and terminal settlement.
     transform-mode support or disabled modes cleanly. Music generation
     follows the same `generate` / `edit` pattern.
 
-    Bundled providers can use `selectSupportedVideoDuration` from the private
-    `openclaw/plugin-sdk/video-generation` subpath to select the nearest value
-    from a nonempty list, preferring the longer duration on ties. Keep input
-    validation, rounding, bounds, and default durations in the provider.
+    Bundled providers can use `normalizeVideoGenerationDuration({ durationSeconds })`
+    from the private `openclaw/plugin-sdk/video-generation` subpath to round an
+    optional duration and reject values outside 1–9007199254740991 seconds after
+    rounding. Omission returns `undefined`; provider defaults remain provider-owned.
+    `selectSupportedVideoDuration` selects the nearest value from a nonempty list,
+    preferring the longer duration on ties. Keep provider-specific bounds in the provider.
 
     ```typescript
     api.registerImageGenerationProvider({

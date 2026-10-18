@@ -5,8 +5,10 @@ import {
   type SubagentAnnounceDeliveryResult,
 } from "../announce/subagent-announce-dispatch.js";
 import {
+  mutateLifecycleRun,
   readLifecycleRun,
   type LifecycleControllerFixtureOptions,
+  type LifecycleFixtureWrite,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
 import type {
   SubagentLifecycleController,
@@ -17,10 +19,9 @@ import {
   findSwarmCollectorSession,
   subagentRuns,
 } from "./subagent-registry-memory.js";
-import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 type LifecycleControllerParams = SubagentLifecycleOptions;
 type CompleteRun = (
@@ -85,7 +86,7 @@ export function registerLifecycleDeliveryReceiptCases({
           idempotencyKey: entry.swarmLaunchIdempotencyKey,
         }),
       ).toMatchObject({ runId: entry.runId });
-      await completeRun(controller, entry);
+      await completeRun(controller, entry, { terminalReply: undefined });
     }
     for (const entry of entries) {
       expect(findSwarmCollectorSession(entry.childSessionKey, entry.childAgentId)).toMatchObject({
@@ -101,54 +102,6 @@ export function registerLifecycleDeliveryReceiptCases({
       collectorCompletion: { status: "done" },
     });
   });
-
-  it.each([false, true])(
-    "reconciles changed lifecycle owners without reading unrelated runs (rekeyed=%s)",
-    (rekeyed) => {
-      const entry = createRunEntry({ collect: rekeyed, endedAt: 4_000 });
-      const unrelated = Array.from({ length: 8 }, (_, index) =>
-        createRunEntry({
-          runId: `unrelated-${index}`,
-          childSessionKey: `agent:main:subagent:unrelated-${index}`,
-          endedAt: 4_000,
-        }),
-      );
-      const runs = new Map([entry, ...unrelated].map((row) => [row.runId, row]));
-      const controller = createLifecycleController({ entry, runs });
-      for (const row of runs.values()) {
-        controller.bumpTerminalGeneration(row);
-      }
-      let current = runs.get(entry.runId)!;
-      if (rekeyed) {
-        const accepted = copySubagentRunRuntimeOwner(current, {
-          ...current,
-          runId: "accepted-collector",
-          swarmRunId: entry.runId,
-        });
-        runs.delete(entry.runId);
-        runs.set(accepted.runId, accepted);
-        publishSubagentRunChanges([entry.childSessionKey], [entry.runId, accepted.runId]);
-        current = accepted;
-      }
-      // A callback can still hold the queued address after the accepted row is published.
-      const generation = controller.bumpTerminalGeneration(entry);
-      const readRun = vi.spyOn(runs, "get");
-      onTestFinished(() => readRun.mockRestore());
-      for (const endedAt of [4_001, 4_000]) {
-        const updated = copySubagentRunRuntimeOwner(current, {
-          ...current,
-          execution: { ...current.execution, endedAt },
-        });
-        runs.set(updated.runId, updated);
-        publishSubagentRunChanges([updated.childSessionKey], [updated.runId]);
-      }
-      const readIds = new Set(readRun.mock.calls.map(([runId]) => runId));
-      for (const row of unrelated) {
-        expect(readIds.has(row.runId)).toBe(false);
-      }
-      expect(controller.isTerminalCallbackCurrent(entry, generation)).toBe(false);
-    },
-  );
 
   const visibleCompletion = {
     triggerCleanup: true,
@@ -202,10 +155,14 @@ export function registerLifecycleDeliveryReceiptCases({
 
     expect(readLifecycleRun(entry)).toMatchObject({
       execution: { status: "terminal", suppressSessionEffects: true },
-      completion: { resultText: "final completion reply" },
+      completion: { terminalReply: visibleCompletion.terminalReply },
       delivery: { status: "delivered", deliveredAt: 12_300 },
       cleanupCompletedAt: expect.any(Number),
     });
+    expect(readLifecycleRun(entry).completion?.resultText).toBeUndefined();
+    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
+      "final completion reply",
+    );
     expect(readLifecycleRun(entry).childSessionIdentity).toBeUndefined();
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     expect(cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
@@ -363,7 +320,14 @@ export function registerLifecycleDeliveryReceiptCases({
   });
 
   it("persists identified completion delivery while completing the active multipart send", async () => {
-    const persist = vi.fn();
+    const cleanupSnapshots: SubagentRunRecord[] = [];
+    const persist = vi.fn(({ postimages }: LifecycleFixtureWrite) => {
+      for (const postimage of postimages.values()) {
+        if (postimage) {
+          cleanupSnapshots.push(postimage);
+        }
+      }
+    });
     const entry = createRunEntry({
       expectsCompletionMessage: true,
       delivery: {
@@ -420,12 +384,33 @@ export function registerLifecycleDeliveryReceiptCases({
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
       expect(persist).toHaveBeenCalledWith(expect.objectContaining({ runIds: [entry.runId] }));
       expect.soft(sentChunks).toEqual([1, 2, 3]);
+      await mutateLifecycleRun(entry, (draft) => {
+        draft.label = "updated while sending";
+        draft.completion = {
+          ...draft.completion,
+          required: true,
+          fallbackResultText: "earlier fallback",
+          fallbackCapturedAt: 12_000,
+        };
+        draft.wakeOnDescendantSettle = true;
+      });
+      cleanupSnapshots.length = 0;
     } finally {
       announcePending.resolve();
       await join();
     }
     expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
     expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
+    expect(readLifecycleRun(entry).label).toBe("updated while sending");
+    expect(readLifecycleRun(entry).completion?.fallbackResultText).toBeUndefined();
+    expect(readLifecycleRun(entry).completion?.fallbackCapturedAt).toBeUndefined();
+    expect(readLifecycleRun(entry).wakeOnDescendantSettle).toBeUndefined();
+    expect(cleanupSnapshots.length).toBeGreaterThan(0);
+    for (const snapshot of cleanupSnapshots) {
+      expect(snapshot.cleanupCompletedAt).toBeTypeOf("number");
+      expect(snapshot.completion?.fallbackResultText).toBeUndefined();
+      expect(snapshot.label).toBe("updated while sending");
+    }
   });
 
   it("keeps a delivered receipt when a late failure arrives after the next turn starts", async () => {

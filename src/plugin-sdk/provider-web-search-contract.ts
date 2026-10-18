@@ -1,5 +1,3 @@
-// Public contract-safe web-search registration helpers for provider plugins.
-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WebSearchProviderPlugin, WebSearchProviderToolDefinition } from "../plugins/types.js";
 import { enablePluginInConfig } from "./provider-enable-config.js";

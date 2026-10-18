@@ -1,17 +1,16 @@
+import type { SubagentCompletionDeliveryState } from "../registry/subagent-registry-read.types.js";
+
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
-type SubagentAnnounceDeliveryDisposition =
-  | "delivered"
-  | "session_queued"
-  | "intentional_non_delivery"
-  | "retryable"
-  | "ambiguous"
-  | "permanent_failure";
+type SubagentAnnounceDeliveryDisposition = NonNullable<
+  SubagentCompletionDeliveryState["disposition"]
+>;
 type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
   | "completion_handoff_unavailable"
   | "delivery_suppressed"
   | "generated_media_missing"
   | "message_tool_delivery_missing"
+  | "operator_authority_unavailable"
   | "requester_abandoned"
   | "requester_turn_pending"
   | "source_owner_changed"

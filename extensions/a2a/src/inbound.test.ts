@@ -1,5 +1,12 @@
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
+import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { a2aChannelPlugin } from "./channel.js";
 import { dispatchA2aInbound } from "./inbound.js";
 import { A2aTaskStore } from "./task-store.js";
 import type { ResolvedA2aChannelAccount } from "./types.js";
@@ -62,39 +69,89 @@ describe("A2A channel inbound dispatch", () => {
 
   it("ignores non-final replies and supplemental notices before completing with the answer", async () => {
     const fixture = createA2aInboundFixture();
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => {
-      expect(turn.ctxPayload).toMatchObject({
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "a2a", plugin: a2aChannelPlugin, source: "test" }]),
+    );
+    vi.mocked(
+      fixture.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    ).mockImplementation(async (turn) => {
+      expect(turn.ctx).toMatchObject({
         BodyForAgent: fixture.params.text,
         CommandAuthorized: false,
         CommandInterpretationSuppressed: true,
       });
-      await turn.delivery.deliver({ text: "preview" }, { kind: "block" });
-      await turn.delivery.deliver(
-        { text: "fallback notice", isFallbackNotice: true },
-        { kind: "final" },
+      const dispatcher = createReplyDispatcher(turn.dispatcherOptions);
+      dispatcher.sendBlockReply({ text: "preview" });
+      dispatcher.sendFinalReply({ text: "fallback notice", isFallbackNotice: true });
+      dispatcher.sendFinalReply({ text: "thinking level clamped", isStatusNotice: true });
+      dispatcher.sendFinalReply(
+        setReplyPayloadMetadata({ text: "Gateway restarting" }, { hostNotice: true }),
       );
+      await dispatcher.waitForIdle();
       expect(fixture.store.get(fixture.task.id)?.status.state).toBe("TASK_STATE_WORKING");
-      await turn.delivery.deliver({ text: "agent answer" }, { kind: "final" });
+      dispatcher.sendFinalReply({ text: "agent answer" });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
       return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: turn.ctxPayload,
-        routeSessionKey: turn.route.sessionKey,
-        dispatchResult: createA2aDispatchResult(),
+        queuedFinal: true,
+        counts: dispatcher.getQueuedCounts(),
       };
     });
 
-    await dispatchA2aInbound(fixture.params);
+    try {
+      await dispatchA2aInbound(fixture.params);
 
-    expect(fixture.store.get(fixture.task.id)).toEqual(
-      expect.objectContaining({
-        contextId: "ctx-inbound",
-        status: expect.objectContaining({ state: "TASK_STATE_COMPLETED" }),
-        artifacts: [expect.objectContaining({ parts: [{ text: "agent answer" }] })],
-      }),
-    );
-    fixture.store.stop();
+      expect(fixture.store.get(fixture.task.id)).toEqual(
+        expect.objectContaining({
+          contextId: "ctx-inbound",
+          status: expect.objectContaining({ state: "TASK_STATE_COMPLETED" }),
+          artifacts: [expect.objectContaining({ parts: [{ text: "agent answer" }] })],
+        }),
+      );
+    } finally {
+      fixture.store.stop();
+      setActivePluginRegistry(createTestRegistry());
+    }
   });
+
+  it.each([false, true])(
+    "records a prompt-free task failure without sending an error message (queued: %s)",
+    async (queued) => {
+      const fixture = createA2aInboundFixture();
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "a2a", plugin: a2aChannelPlugin, source: "test" }]),
+      );
+      vi.mocked(
+        fixture.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+      ).mockImplementation(async (turn) => {
+        if (queued) {
+          return { ...createA2aDispatchResult(false), deferredToActiveRun: "followup" };
+        }
+        turn.replyOptions?.onAgentRunTerminalOutcome?.("failed");
+        const dispatcher = createReplyDispatcher(turn.dispatcherOptions);
+        dispatcher.sendFinalReply({ text: "private prompt in provider error", isError: true });
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+        return createA2aDispatchResult(false);
+      });
+      try {
+        await dispatchA2aInbound(fixture.params);
+        if (queued) {
+          expect(fixture.task.status.state).toBe("TASK_STATE_WORKING");
+          const turn = vi.mocked(fixture.runtime.channel.inbound.dispatch).mock.calls[0]![0];
+          turn.replyOptions?.onAgentRunTerminalOutcome?.("failed");
+        }
+        expect(fixture.task.status).toMatchObject({
+          state: "TASK_STATE_FAILED",
+          message: { parts: [{ text: "Agent run failed" }] },
+        });
+        expect(fixture.task.artifacts).toEqual([]);
+      } finally {
+        fixture.store.stop();
+        setActivePluginRegistry(createTestRegistry());
+      }
+    },
+  );
 
   it("matches interleaved same-context replies to their originating tasks", async () => {
     const fixture = createA2aInboundFixture();
@@ -122,39 +179,15 @@ describe("A2A channel inbound dispatch", () => {
     }
   });
 
-  it("settles a dispatched turn that ends without a final reply", async () => {
+  it("propagates dispatch failures to the HTTP task owner", async () => {
     const fixture = createA2aInboundFixture();
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => ({
-      admission: { kind: "dispatch" },
-      dispatched: true,
-      ctxPayload: turn.ctxPayload,
-      routeSessionKey: turn.route.sessionKey,
-      dispatchResult: createA2aDispatchResult(false),
-    }));
+    const failure = new Error("provider unavailable");
+    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockRejectedValue(failure);
     try {
-      await dispatchA2aInbound(fixture.params);
-      expect(fixture.task.status.state).toBe("TASK_STATE_COMPLETED");
-      expect(fixture.task.artifacts).toEqual([]);
+      await expect(dispatchA2aInbound(fixture.params)).rejects.toBe(failure);
     } finally {
       fixture.store.stop();
     }
-  });
-
-  it("records dispatch failures on their task", async () => {
-    const fixture = createA2aInboundFixture();
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockRejectedValue(
-      new Error("provider unavailable"),
-    );
-
-    await dispatchA2aInbound(fixture.params);
-
-    expect(fixture.store.get(fixture.task.id)?.status).toEqual(
-      expect.objectContaining({
-        state: "TASK_STATE_FAILED",
-        message: expect.objectContaining({ parts: [{ text: "provider unavailable" }] }),
-      }),
-    );
-    fixture.store.stop();
   });
 
   it("isolates route sessions and replies when distinct peers reuse one context ID", async () => {
@@ -262,6 +295,8 @@ describe("A2A channel inbound dispatch", () => {
         "agent:a2a_restricted:a2a:default:direct:hermes:ctx-inbound",
         "agent:a2a_context:a2a:default:direct:hermes:ctx-exact",
       ]);
+      expect(fixture.task.status.state).toBe("TASK_STATE_COMPLETED");
+      expect(fixture.task.artifacts).toEqual([]);
     } finally {
       fixture.store.stop();
     }

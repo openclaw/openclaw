@@ -270,6 +270,7 @@ async function main() {
   if (options.run && command) {
     const child = spawnSync("pnpm", args, {
       stdio: options.json ? ["inherit", 2, 2] : "inherit",
+      env: { ...process.env, OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1" },
     });
     if (child.error) {
       throw child.error;

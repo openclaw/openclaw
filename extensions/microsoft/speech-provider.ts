@@ -26,10 +26,7 @@ const DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS = 30_000;
 
 function normalizeMicrosoftProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const rawEdge = asOptionalRecord(rawConfig.edge);
-  const rawMicrosoft = asOptionalRecord(rawConfig.microsoft);
-  const rawProviderMicrosoft = asOptionalRecord(providers?.microsoft);
-  const raw = { ...rawEdge, ...rawMicrosoft, ...rawProviderMicrosoft };
+  const raw = asOptionalRecord(providers?.microsoft) ?? {};
   return readMicrosoftProviderConfig({
     ...raw,
     outputFormatConfigured: Boolean(trimToUndefined(raw.outputFormat)),
@@ -101,9 +98,6 @@ async function listMicrosoftVoices(
   const { assertOkOrThrowProviderError, readProviderJsonResponse } =
     await import("openclaw/plugin-sdk/provider-http");
   const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
-  // The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
-  const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
-    proxyCaptureSdk;
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
   const url =
@@ -122,8 +116,8 @@ async function listMicrosoftVoices(
   try {
     if (!proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled()) {
       // Finalization retains capture failures; observe the Promise returned by the SDK view.
-      void captureHost
-        .captureHttpExchangeAsync?.({
+      void proxyCaptureSdk
+        .captureHttpExchangeAsync({
           url,
           method: "GET",
           requestHeaders: headers,
@@ -167,6 +161,8 @@ async function listMicrosoftVoices(
 }
 
 export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    readMicrosoftProviderConfig(providerConfig).enabled;
   return {
     id: "microsoft",
     label: "Microsoft",
@@ -201,7 +197,9 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
       return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);
     },
-    isConfigured: ({ providerConfig }) => readMicrosoftProviderConfig(providerConfig).enabled,
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig);
       const { isVoiceMessageCompatibleAudio } = await import("openclaw/plugin-sdk/media-runtime");

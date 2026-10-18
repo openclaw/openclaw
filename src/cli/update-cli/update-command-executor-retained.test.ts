@@ -15,25 +15,31 @@ import {
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
-import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { runUtf8CommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import { updateExecutorEntrypoints } from "../cli-entrypoint.test-support.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
-  captureUpdateCommandExecutorAuthority,
-  requiresRetainedUpdateCommandOwner,
-  withUpdateCommandExecutor,
-  withUpdateCommandExecutorChild,
+  captureUpdateCommandExecutorAuthority as authorityOf,
+  requiresRetainedUpdateCommandOwner as requiresRetainedOwner,
+  withUpdateCommandExecutor as withExecutor,
+  withUpdateCommandExecutorChild as withChild,
 } from "./update-command-executor.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
 let serviceRoot: string;
 let candidateRoot: string;
+let receipt: string;
+let proceed: string;
+let output: string;
 beforeEach(() => {
   const base = fs.realpathSync(dirs.make("retained-update-owner-"));
   root = path.join(base, "package-B");
   serviceRoot = path.join(base, "service-A");
   candidateRoot = path.join(base, "candidate-C");
+  receipt = path.join(root, "receipt");
+  proceed = path.join(root, "proceed");
+  output = path.join(root, "effect");
   const control = path.join(base, "control");
   for (const directory of [root, serviceRoot, candidateRoot, control]) {
     fs.mkdirSync(directory, { mode: 0o700 });
@@ -79,6 +85,15 @@ const program = `
   });
 `;
 
+function receiver(input: Record<string, unknown>, options: CommandOptions) {
+  return runUtf8CommandWithTimeout([process.execPath, "--input-type=module", "-e", program], {
+    input: JSON.stringify({ receipt, proceed, output, ...input }),
+    killProcessTree: true,
+    requireProcessTreeExtinction: true,
+    ...options,
+  });
+}
+
 it.each([
   { destination: "C", revoke: "none" },
   { destination: "C", revoke: "B" },
@@ -91,37 +106,26 @@ it.each([
   "checks retained A authority through nested B->$destination, revoke $revoke",
   async ({ destination, revoke }) => {
     const leafRoot = destination === "C" ? candidateRoot : destination === "A" ? serviceRoot : root;
-    const receipt = path.join(root, "receipt");
-    const proceed = path.join(root, "proceed");
-    const output = path.join(root, "effect");
     const ready = createDeferred();
     let revokedKey: string | undefined;
-    const work = withUpdateCommandExecutor(randomUUID(), async (executor) => {
+    const work = withExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(root, { serviceRoot });
-      expect(requiresRetainedUpdateCommandOwner(fence)).toBe(true);
-      const authority = captureUpdateCommandExecutorAuthority(fence);
+      expect(requiresRetainedOwner(fence)).toBe(true);
+      const authority = authorityOf(fence);
       publishedPackageFixture(authority);
-      const pending = withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
-        runUtf8CommandWithTimeout([process.execPath, "--input-type=module", "-e", program], {
-          input: JSON.stringify({
-            grant,
-            authority,
-            nextRoot: leafRoot,
-            receipt,
-            proceed,
-            output,
-            program,
-          }),
-          beforeInput,
-          timeoutMs: 30000,
-          killProcessTree: true,
-          requireProcessTreeExtinction: true,
-          onOutputChunk: (chunk) => {
-            if (chunk.toString().includes("admitted-leaf")) {
-              ready.resolve();
-            }
+      const pending = withChild(fence, root, (grant, beforeInput) =>
+        receiver(
+          { grant, authority, nextRoot: leafRoot, program },
+          {
+            beforeInput,
+            timeoutMs: 30000,
+            onOutputChunk: (chunk) => {
+              if (chunk.toString().includes("admitted-leaf")) {
+                ready.resolve();
+              }
+            },
           },
-        }),
+        ),
       );
       if (destination === "A") {
         const result = await pending;
@@ -151,23 +155,17 @@ it.each([
           expect(store.acquire(key, "contender", { kind: "update" }).kind).toBe("busy");
         }
         if (revoke !== "none") {
-          revokedKey =
-            revoke === "B"
-              ? root
-              : revoke === "A"
-                ? serviceRoot
-                : revoke === "C"
-                  ? candidateRoot
-                  : observed.retainedChild;
-          const db = new DatabaseSync(authority.databasePath);
-          try {
-            db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
-              "replacement",
-              revokedKey,
-            );
-          } finally {
-            db.close();
-          }
+          revokedKey = {
+            B: root,
+            A: serviceRoot,
+            C: candidateRoot,
+            "A-child": observed.retainedChild,
+          }[revoke];
+          using db = new DatabaseSync(authority.databasePath);
+          db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
+            "replacement",
+            revokedKey,
+          );
         }
       } finally {
         fs.writeFileSync(proceed, "continue");
@@ -204,83 +202,65 @@ it.each([
   "wrong-generation",
   "wrong-start",
 ] as const)("refuses retained grant tampering before receiver effects: %s", async (tamper) => {
-  const output = path.join(root, "effect");
-  const proceed = path.join(root, "proceed");
   fs.writeFileSync(proceed, "continue");
-  await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+  await withExecutor(randomUUID(), async (executor) => {
     const fence = await executor.enter(root, { serviceRoot });
-    const authority = captureUpdateCommandExecutorAuthority(fence);
-    const result = await withUpdateCommandExecutorChild(
-      fence,
-      candidateRoot,
-      (grant, beforeInput) => {
-        const changed: Record<string, unknown> = { ...grant };
-        if (tamper === "parent-only" || tamper === "both" || tamper === "legacy-digest") {
-          delete changed.retainedParent;
-        }
-        if (tamper === "key-only" || tamper === "both" || tamper === "legacy-digest") {
-          delete changed.retainedChildKey;
-        }
-        if (tamper === "wrong-key") {
-          changed.retainedChildKey = grant.originalChildKey;
-        }
-        if (tamper === "wrong-generation") {
-          changed.retainedParent = {
-            ...grant.retainedParent,
-            updatedAt: grant.retainedParent!.updatedAt + 1,
-          };
-        }
-        if (tamper === "wrong-start") {
-          changed.retainedParent = {
-            ...grant.retainedParent,
-            executor: { ...grant.retainedParent!.executor, startIdentity: "wrong-start" },
-          };
-        }
-        if (tamper === "legacy-digest") {
-          const database = grant.databaseIdentity!;
-          const digest = createHash("sha256")
-            .update(
-              JSON.stringify([
-                database.databasePath,
-                database.databaseIdentity,
-                database.parentIdentity,
-                [grant.originalParent!, grant.spawner!, grant.parent].map((lease) => [
-                  lease.key,
-                  lease.owner,
-                  lease.payload,
-                  lease.updatedAt,
-                ]),
+    const authority = authorityOf(fence);
+    const result = await withChild(fence, candidateRoot, (grant, beforeInput) => {
+      const changed: Record<string, unknown> = { ...grant };
+      if (tamper === "parent-only" || tamper === "both" || tamper === "legacy-digest") {
+        delete changed.retainedParent;
+      }
+      if (tamper === "key-only" || tamper === "both" || tamper === "legacy-digest") {
+        delete changed.retainedChildKey;
+      }
+      if (tamper === "wrong-key") {
+        changed.retainedChildKey = grant.originalChildKey;
+      }
+      if (tamper === "wrong-generation") {
+        changed.retainedParent = {
+          ...grant.retainedParent,
+          updatedAt: grant.retainedParent!.updatedAt + 1,
+        };
+      }
+      if (tamper === "wrong-start") {
+        changed.retainedParent = {
+          ...grant.retainedParent,
+          executor: { ...grant.retainedParent!.executor, startIdentity: "wrong-start" },
+        };
+      }
+      if (tamper === "legacy-digest") {
+        const database = grant.databaseIdentity!;
+        const digest = createHash("sha256")
+          .update(
+            JSON.stringify([
+              database.databasePath,
+              database.databaseIdentity,
+              database.parentIdentity,
+              [grant.originalParent!, grant.spawner!, grant.parent].map((lease) => [
+                lease.key,
+                lease.owner,
+                lease.payload,
+                lease.updatedAt,
               ]),
-            )
-            .digest("hex");
-          changed.childKey = grant.childKey.replace(/lineage-[a-f0-9]{64}$/, `lineage-${digest}`);
-          changed.originalChildKey = grant.originalChildKey!.replace(
-            /lineage-[a-f0-9]{64}$/,
-            `lineage-${digest}`,
-          );
-        }
-        return runUtf8CommandWithTimeout([process.execPath, "--input-type=module", "-e", program], {
-          input: JSON.stringify({
-            grant: changed,
-            authority,
-            proceed,
-            output,
-            receipt: path.join(root, "receipt"),
-          }),
-          beforeInput,
-          timeoutMs: 15000,
-          killProcessTree: true,
-          requireProcessTreeExtinction: true,
-        });
-      },
-    );
+            ]),
+          )
+          .digest("hex");
+        changed.childKey = grant.childKey.replace(/lineage-[a-f0-9]{64}$/, `lineage-${digest}`);
+        changed.originalChildKey = grant.originalChildKey!.replace(
+          /lineage-[a-f0-9]{64}$/,
+          `lineage-${digest}`,
+        );
+      }
+      return receiver({ grant: changed, authority }, { beforeInput, timeoutMs: 15000 });
+    });
     expect(result.code).not.toBe(0);
     if (["both", "wrong-key", "wrong-generation"].includes(tamper)) {
       expect(result.stderr).toContain("Candidate executor lineage is missing or invalid.");
     } else {
       expect(result.stderr).toMatch(/retained owner pair|does not match its parent/);
     }
-    expect(fs.existsSync(path.join(root, "receipt"))).toBe(false);
+    expect(fs.existsSync(receipt)).toBe(false);
     expect(fs.existsSync(output)).toBe(false);
     fence.assertCurrent();
   });
@@ -288,9 +268,7 @@ it.each([
 
 // Exercise the actual package continuation consumer against a valid private
 // journal whose authority comes from this live admission, not a guessed owner.
-function publishedPackageFixture(
-  authority: ReturnType<typeof captureUpdateCommandExecutorAuthority>,
-) {
+function publishedPackageFixture(authority: ReturnType<typeof authorityOf>) {
   const anchor = resolvePackageActivationAnchor(authority.installKey);
   fs.mkdirSync(anchor, { mode: 0o700 });
   const control = resolvePackageActivationControl(anchor);
@@ -299,7 +277,7 @@ function publishedPackageFixture(
   const helper = resolvePackageActivationHelper(anchor);
   const helperSource = "// Inert published-journal fixture, never executed.\n";
   fs.writeFileSync(helper, helperSource, { mode: 0o600 });
-  const db = new DatabaseSync(journal);
+  using db = new DatabaseSync(journal);
   fs.chmodSync(journal, 0o600);
   const identity = (file: string) => {
     const stat = fs.lstatSync(file, { bigint: true });
@@ -310,47 +288,43 @@ function publishedPackageFixture(
     identity: identity(root),
     version: "2026.9.4",
   };
-  try {
-    db.exec(
-      "PRAGMA journal_mode=DELETE; CREATE TABLE package_activation (slot INTEGER PRIMARY KEY, revision INTEGER, phase TEXT, descriptor_json TEXT, intent_json TEXT, publications_json TEXT)",
-    );
-    db.prepare(
-      "INSERT INTO package_activation VALUES (1,0,'publication-complete',?,'null','[]')",
-    ).run(
-      JSON.stringify({
-        layout: "external-helper",
-        version: 1,
-        operationId: randomUUID(),
-        authority,
-        anchorIdentity: identity(anchor),
-        journalIdentity: identity(journal),
-        journalParentIdentity: identity(control),
-        parentIdentity: identity(path.dirname(anchor)),
-        binDir: root,
-        binIdentity: identity(root),
-        originalStageRoot: candidateRoot,
-        previous: fingerprint,
-        candidate: { ...fingerprint, identity: identity(candidateRoot) },
-        launcherRootIdentity: identity(root),
-        previousLauncherRootIdentity: null,
-        helperIdentity: identity(helper),
-        recoveryNodePath: fs.realpathSync(process.execPath),
-        preparation: [
-          { name: "anchor" as const, source: anchor },
-          { name: "helper" as const, source: helper },
-          { name: "candidate" as const, source: candidateRoot },
-          { name: "launchers" as const, source: root },
-        ].map(({ name, source }) => ({
-          name,
-          source,
-          sourceParentIdentity: identity(path.dirname(source)),
-          identity: identity(source),
-        })),
-        helperDigest: createHash("sha256").update(helperSource).digest("hex"),
-        launchers: [],
-      } satisfies PackageActivationDescriptor),
-    );
-  } finally {
-    db.close();
-  }
+  db.exec(
+    "PRAGMA journal_mode=DELETE; CREATE TABLE package_activation (slot INTEGER PRIMARY KEY, revision INTEGER, phase TEXT, descriptor_json TEXT, intent_json TEXT, publications_json TEXT)",
+  );
+  db.prepare(
+    "INSERT INTO package_activation VALUES (1,0,'publication-complete',?,'null','[]')",
+  ).run(
+    JSON.stringify({
+      layout: "external-helper",
+      version: 1,
+      operationId: randomUUID(),
+      authority,
+      anchorIdentity: identity(anchor),
+      journalIdentity: identity(journal),
+      journalParentIdentity: identity(control),
+      parentIdentity: identity(path.dirname(anchor)),
+      binDir: root,
+      binIdentity: identity(root),
+      originalStageRoot: candidateRoot,
+      previous: fingerprint,
+      candidate: { ...fingerprint, identity: identity(candidateRoot) },
+      launcherRootIdentity: identity(root),
+      previousLauncherRootIdentity: null,
+      helperIdentity: identity(helper),
+      recoveryNodePath: fs.realpathSync(process.execPath),
+      preparation: [
+        { name: "anchor" as const, source: anchor },
+        { name: "helper" as const, source: helper },
+        { name: "candidate" as const, source: candidateRoot },
+        { name: "launchers" as const, source: root },
+      ].map(({ name, source }) => ({
+        name,
+        source,
+        sourceParentIdentity: identity(path.dirname(source)),
+        identity: identity(source),
+      })),
+      helperDigest: createHash("sha256").update(helperSource).digest("hex"),
+      launchers: [],
+    } satisfies PackageActivationDescriptor),
+  );
 }

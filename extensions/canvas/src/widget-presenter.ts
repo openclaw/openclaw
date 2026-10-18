@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { selectDefaultNodeFromList } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -13,6 +12,7 @@ type WidgetPresenter = Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[
 async function selectCanvasNode(
   nodesRuntime: PluginRuntime["nodes"],
 ): Promise<CanvasRuntimeNode | null> {
+  const { selectDefaultNodeFromList } = await import("openclaw/plugin-sdk/agent-harness-runtime");
   const { nodes } = await nodesRuntime.list({ connected: true });
   return selectDefaultNodeFromList(nodes.filter(isEligibleCanvasNode), {
     capability: "canvas",

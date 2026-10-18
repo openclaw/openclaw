@@ -75,6 +75,8 @@ A change on either side uses the full reconciliation path, including conflict ha
 
 Completed cloud turns preserve eligible, size-bounded workspace files before the turn claim is released. Repository-only sessions accept a cumulative immutable checkpoint in the Gateway's bare artifact repository. Gateway-source sessions apply those changes to their managed worktree. Worker-turn uses its terminal worker event to create the durable pending-result fence. Remote-exec waits for workspace quiescence and enters the same reconciliation flow after the local Codex attempt. Before applying the result, the Gateway stages complete authenticated base/current manifests plus each changed resulting blob as a Git ref under `refs/openclaw/worker-results/`; deletions are represented by the manifests and need no blob. This keeps the cloud delta recoverable even if the Gateway stops during the apply without duplicating unchanged baseline content. Workspace results use Git file semantics: regular files, executable bits, symlinks, additions, changes, and deletions are retained, while empty directories and other directory modes are not. Gateway-source changes remain in the managed worktree for normal review and commit; repository-only changes remain on the node and in the accepted checkpoint.
 
+At the checkout root, `.cache/vitest/`, `.cache/openclaw/bun/`, `.cache/ms-playwright/`, and `.local/share/pnpm/store/` are derived caches, `.artifacts/vitest-workers/` contains generated compiler outputs, and `.artifacts/dist-artifacts.lock/` contains runtime ownership files. Workspace capture, transfer, and reconciliation exclude these exact roots. Recovery applies the same rule to previously retained results without changing their authenticated receipts. Other files under `.cache/`, `.local/`, and `.artifacts/`, nested paths, and explicit staged inputs remain subject to the normal workspace eligibility and size limits; genuine concurrent source edits still produce conflicts.
+
 ### Retain idle workers
 
 OpenClaw worker-turn sessions may keep a settled worker process idle for up to
@@ -124,6 +126,8 @@ Each recovery attempt binds the current session store once and keeps that source
 
 ## Move a session
 
+Right-click an eligible session in the sidebar or Sessions page, or open its chat-header menu. Choose **Move to cloud…** for an idle local workspace or **Move session…** for an active worker. While a completed worker reply is still saving its workspace, ordinary Move is temporarily disabled with **Finalizing worker workspace**; it becomes available after settlement. The explicit, destructive offline-device recovery described below remains separate.
+
 To continue the same session somewhere else, open the **Runs on Cloud** chip and choose **Move session…**. An operator with `operator.write` can select the Gateway or an eligible paired device; selecting a configured cloud profile requires `operator.admin`. Profiles may also offer operating systems and machine classes, with the machine list filtered to the selected system. Moving to the current profile with a different effective operating system or class replaces its worker; it is not an in-place resize, and native size overrides may take precedence over classes. The Gateway closes new admission, interrupts any active turn, reconciles the source workspace, destroys the old environment, and then activates the destination. An interrupted turn is never replayed: partial output may disappear, and you send the next turn again after the move. The exact target, including operating-system and machine overrides, and bounded errors are durable, so the Control UI shows **Moving to…** or the recovery error after a reconnect. If the Gateway restarts before the destination becomes active, request-bound authority is lost: recovery finishes safe source cleanup, marks the placement failed with a retry message, and does not provision the destination. Reconnect, then choose **Move session…** again.
 
 An active paired-device placement stays `active` when its runner disconnects.
@@ -171,7 +175,7 @@ When a single-session Delete or Archive is blocked by unsynced work on an offlin
 
 ### Reclaim through the API
 
-For a broken or runaway cloud environment, an administrator can call the admin-only `environments.destroy` method with `{ "force": true }` as a last resort. Forced teardown durably marks the placement failed and abandons any unreconciled remote result before destroying the environment. For an unreachable paired device, forced destroy succeeds without waiting for reconnection and discards unsynced device changes.
+For a broken or runaway cloud environment, an administrator can call the admin-only `environments.destroy` method with `{ "force": true }` as a last resort. Forced teardown durably marks the placement failed and abandons any unreconciled remote result before destroying the environment. Delayed cleanup remains bound to the placement and turn claim captured for abandonment; it preserves a replacement owner and its pending workspace result. For an unreachable paired device, forced destroy succeeds without waiting for reconnection and discards unsynced device changes.
 
 The equivalent write-scoped session RPC is:
 
@@ -195,6 +199,8 @@ The result placement is `reclaimed` after an active worker is safely stopped. Re
 
 Crabbox lease teardown reserves time for the CLI's full bounded release attempts, retries, cleanup observation, and process settlement. Inspection keeps its shorter timeout. Failed node enrollment also reserves time for diagnostics before teardown; optional image capture has its own additional budget.
 
+On a dedicated cloud machine, each desktop cleanup phase gets up to one minute to finish in-flight computer actions and close the driver. If it fails or times out, OpenClaw logs a warning and continues provider teardown, including forced destruction. Check the provider's lease status and retry Stop if the machine remains running. Shared or unknown hosts still require confirmation that their specific worker stopped.
+
 If provider teardown fails or times out during stop or move, the request reports the bounded, redacted provider cause even if recovery subsequently finishes cleanup. Retrying Stop on a failed placement reports that cleanup attempt's cause, which can differ from the original session failure. Follow the reported recovery guidance and check the current placement before retrying. A dedicated cloud worker can remain recorded as attached while destruction is uncertain, but its closed authority cannot resume remote workspace processes.
 
 While cleanup remains pending, the placement keeps the original failure and the latest cleanup cause. Repeated recovery checks do not append another copy of the same error, and long diagnostics retain the final provider cause.
@@ -210,6 +216,8 @@ openclaw gateway call sessions.move \
   --timeout 1500000 \
   --params '{"key":"agent:main:big-refactor","expected":{"generation":5,"environmentId":"worker:source","ownerEpoch":2},"target":{"kind":"gateway"}}'
 ```
+
+A failed Move projects its original request facts in `placementMove.retry`: `expected`, `target`, and `abandonSource: true` when the original decision abandoned its source. For a failed move still in `draining`, retry by adding the session `key` and optional `agentId` to that descriptor. Do not substitute the draining placement's newer generation or choose a different target for the outstanding Move. The descriptor grants no authority: the Gateway still validates session access, the exact source, and current policy. Recovery may finish before the retry arrives; refresh the placement after a refusal.
 
 Worker targets use `{"kind":"profile","profileId":"aws","os":"linux","machineClass":"tiny"}` or `{"kind":"device","deviceId":"paired-device-id"}`. Omit `os` or `machineClass` to use the corresponding profile default. Moving to the same profile with a different operating system or class replaces the worker. A stale source is rejected rather than moving a newer placement. Successful results end in `local` for the Gateway target or `active` for a worker target.
 
@@ -235,7 +243,11 @@ Reconciliation compares files with the last synchronized workspace, not the work
 
 An active worker turn keeps the session store selected when the Gateway admitted it. Changing session routing does not redirect that turn's transcript, live diagnostics, or auth-profile updates to another store. A replaced session or closed turn loses write authority; reconnecting a worker does not select a new store for the old turn.
 
-The Gateway owns the stored session transcript in both modes. Worker-turn commits each complete user, assistant, and tool-result message before the worker's session write settles; remote-exec uses the normal local harness transcript path because the Codex app-server stays on the Gateway. If a native worker disappears mid-message while the Gateway remains running, the Gateway saves its uncommitted assistant text as an interrupted reply before releasing the turn. This save is best effort; tool progress and text not yet received by the Gateway can still be lost. The failed turn remains visible, and the failed placement records a bounded terminal reason above the composer.
+The Gateway owns the stored session transcript in both modes. Worker-turn commits each complete user, assistant, and tool-result message before the worker's session write settles; remote-exec uses the normal local harness transcript path because the Codex app-server stays on the Gateway. If a native worker disappears mid-message while the Gateway remains running, the Gateway saves its uncommitted assistant text as an interrupted reply before releasing the turn. Text and tool progress not yet received by the Gateway can still be lost.
+
+For chat turns using OpenClaw worker-turn mode, the Gateway also records an error result for each unfinished tool call when the node is lost: the node disconnected, its outcome is unknown, and the model must verify state before retrying actions with side effects. OpenClaw never replays the interrupted tool call. A non-idempotent command may already have completed before the node died; the model must check files, processes, or other affected state, just as a human operator would.
+
+The Gateway records interrupted workspace recovery and waits for the node within the normal two-minute worker admission window. Once the worker becomes available and workspace recovery settles, an admitted chat turn whose transcript was saved hands off one automatic follow-up through its own reply owner. It continues the same session from that transcript, before newer queued input. A second node loss during this follow-up does not schedule another continuation. If the worker remains unavailable, saving fails, recovery cannot finish safely, or this execution has no matching continuation owner, the error states that this turn will not be continued automatically. The session remains available for another message after its normal placement recovery.
 
 Worker-turn transcript commits validate the session in their existing database worker, avoiding a separate session-entry read before each commit. The captured session revision is checked again before writing and retained through publication. Final replies follow durable transcript completion; workspace reconciliation and its separate conflict or recovery notices finish in the background. This optimization needs only a Gateway update; transcript storage and the worker protocol are unchanged.
 

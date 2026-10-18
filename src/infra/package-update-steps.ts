@@ -390,7 +390,12 @@ export async function runGlobalPackageUpdateSteps(params: {
     steps.push(updateStep);
     let finalInstallStep = updateStep;
     if (updateStep.exitCode !== 0) {
-      if (updateStep.failureFacts?.some((fact) => fact.code === UPDATE_GLOBAL_PERMISSION_REASON)) {
+      if (
+        updateStep.failureFacts?.some((fact) => fact.code === UPDATE_GLOBAL_PERMISSION_REASON) ||
+        [updateStep.stdoutTail, updateStep.stderrTail].some((output) =>
+          output?.includes("[update-schema-bump-unfenced]"),
+        )
+      ) {
         return await packageUpdateFailure(updateStep, steps);
       }
       const cleanupFailure = await cleanupStage();

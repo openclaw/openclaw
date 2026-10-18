@@ -1,18 +1,18 @@
+import { useAttachmentTestTransport } from "./transport.test-support.js";
+const installAttachmentTestTransport = useAttachmentTestTransport();
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setMSTeamsRuntime } from "../runtime.js";
+import { saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getMSTeamsRuntime, setMSTeamsRuntime } from "../runtime.js";
 import {
   downloadMSTeamsBotFrameworkAttachments as downloadAttachments,
   isBotFrameworkPersonalChatId,
 } from "./bot-framework.js";
 import type { MSTeamsAccessTokenProvider } from "./types.js";
 
-vi.mock("node:dns/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:dns/promises")>()),
-  lookup: async () => ({ address: "93.184.216.34" }),
-}));
-
-afterEach(() => vi.unstubAllGlobals());
+beforeEach(() => {
+  installAttachmentTestTransport({ resolveFn: async () => ({ address: "93.184.216.34" }) });
+});
 
 function downloadMSTeamsBotFrameworkAttachments({
   fetchFn,
@@ -314,11 +314,12 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       {
         name: "attachment view content-length is invalid",
         init: { status: 200, headers: { "content-length": "0x3" } },
-        warning: "msteams botFramework attachmentView invalid content-length",
+        warning: "msteams botFramework attachmentView save failed",
       },
       {
         name: "attachment view exceeds maxBytes",
         init: { status: 200, headers: { "content-length": "11" } },
+        warning: "msteams botFramework attachmentView save failed",
       },
     ] as const)("preserves the stable outcome when $name cleanup rejects", async (scenario) => {
       const unhandledRejections: unknown[] = [];
@@ -347,6 +348,9 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         );
       });
       process.on("unhandledRejection", onUnhandledRejection);
+      const save = vi
+        .spyOn(getMSTeamsRuntime().channel.media, "saveResponseMedia")
+        .mockImplementation(saveResponseMedia);
 
       try {
         const media = await downloadMSTeamsBotFrameworkAttachment({
@@ -358,16 +362,13 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         expectUnavailableMedia(media, "att-1");
         expect(runtime.saveCalls).toHaveLength(0);
         expect(cancel).toHaveBeenCalledOnce();
-        if (scenario.warning) {
-          expect(warn).toHaveBeenCalledWith(scenario.warning, expect.any(Object));
-        } else {
-          expect(warn).not.toHaveBeenCalled();
-        }
+        expect(warn).toHaveBeenCalledWith(scenario.warning, expect.any(Object));
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
         expect(unhandledRejections).toStrictEqual([]);
       } finally {
+        save.mockRestore();
         process.off("unhandledRejection", onUnhandledRejection);
         expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
       }

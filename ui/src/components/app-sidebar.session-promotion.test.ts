@@ -15,7 +15,7 @@ import {
 import { createModalDialogTestFixture, submitInputDialog } from "../test-helpers/modal-dialog.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 function drag(
   target: Element,

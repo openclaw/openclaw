@@ -276,6 +276,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       const admitted = new Set(leases.all(agentPath).map((row) => row.lease_id));
 
       const entries = await listSessionTranscriptCorpusEntriesForAgent("main", {
+        config: { session: { store: storePath } },
         includeContentRevision: true,
       });
 

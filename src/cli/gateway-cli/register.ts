@@ -33,7 +33,7 @@ import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
 const loadWideAreaDnsModule = createLazyPromise(() => import("../../infra/widearea-dns.js"));
-const loadUsageFormatModule = createLazyPromise(() => import("../../utils/usage-format.js"));
+const loadCostUsageRenderer = createLazyPromise(() => import("./usage-cost-renderer.js"));
 const loadStabilityBundleModule = createLazyPromise(
   () => import("../../logging/diagnostic-stability-bundle.js"),
 );
@@ -127,39 +127,6 @@ async function printGatewayResult(
   }
 }
 
-async function renderCostUsageSummaryAsync(
-  summary: CostUsageSummary,
-  days: number,
-  rich: boolean,
-): Promise<string[]> {
-  const { formatMissingCostEntries } = await import("../../infra/session-cost-usage-totals.js");
-  const { formatCostUsageCachePrefix, formatTokenCount, formatUsd } = await loadUsageFormatModule();
-  const totalCost = formatUsd(summary.totals.totalCost) ?? "$0.00";
-  const totalTokens = formatTokenCount(summary.totals.totalTokens) ?? "0";
-  const cachePrefix = formatCostUsageCachePrefix(summary.cacheStatus);
-  const lines = [
-    colorize(rich, theme.heading, `Usage cost (${days} days)`),
-    `${cachePrefix}${colorize(rich, theme.muted, "Total:")} ${totalCost} · ${totalTokens} tokens`,
-  ];
-
-  if (summary.totals.missingCostEntries > 0) {
-    lines.push(
-      `${colorize(rich, theme.muted, "Missing cost:")} ${formatMissingCostEntries(summary.totals)}`,
-    );
-  }
-
-  const latest = summary.daily.at(-1);
-  if (latest) {
-    const latestCost = formatUsd(latest.totalCost) ?? "$0.00";
-    const latestTokens = formatTokenCount(latest.totalTokens) ?? "0";
-    lines.push(
-      `${colorize(rich, theme.muted, "Latest day:")} ${latest.date} · ${latestCost} · ${latestTokens} tokens`,
-    );
-  }
-
-  return lines;
-}
-
 function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boolean): string[] {
   const lines = [
     colorize(rich, theme.heading, "Gateway Stability"),
@@ -222,6 +189,9 @@ function renderStabilityBundleSummary(params: {
   const { bundle, path, rich, snapshot } = params;
   const processDetails = [
     `pid=${bundle.process.pid}`,
+    ...(bundle.process.openclawVersion ? [`openclaw=${bundle.process.openclawVersion}`] : []),
+    ...(bundle.process.buildId ? [`build=${bundle.process.buildId}`] : []),
+    ...(bundle.process.commit ? [`commit=${bundle.process.commit}`] : []),
     `node=${bundle.process.node}`,
     `${bundle.process.platform}/${bundle.process.arch}`,
     `uptime=${Math.round(bundle.process.uptimeMs / 1000)}s`,
@@ -483,8 +453,8 @@ export function registerGatewayCli(program: Command) {
             ...(agentId ? { agentId } : {}),
             ...(opts.allAgents ? { agentScope: "all" } : {}),
           })) as CostUsageSummary;
-          await printGatewayResult(rpcOpts.json, summary, (rich) =>
-            renderCostUsageSummaryAsync(summary, days, rich),
+          await printGatewayResult(rpcOpts.json, summary, async (rich) =>
+            (await loadCostUsageRenderer()).renderGatewayCostUsageSummary(summary, days, rich),
           );
         }, "Gateway usage cost failed"),
       ),
@@ -770,4 +740,3 @@ export function registerGatewayCli(program: Command) {
       }, "gateway discover failed"),
     );
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -13,7 +13,6 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   captureNativeSessionWorkerDeletion,
-  preparedSessionDeletionRequiresNativeTransaction,
   runSqliteSessionDeletionTransaction,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
@@ -109,7 +108,7 @@ export async function purgeDeletedAgentSessionEntries(
       resolved,
       entries,
       async (assertSourceCurrent) => {
-        const native = !execution || preparedSessionDeletionRequiresNativeTransaction();
+        const native = !execution;
         const preservation = await prepareSessionMaintenancePreservation(params.storePath, {
           native,
         });

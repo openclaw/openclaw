@@ -290,7 +290,6 @@ class SubagentRunManager extends SubagentLaunchManager {
         mutateSubagentRuns(
           [...runIds],
           (rows) => {
-            assertSelectedCurrent();
             updated = 0;
             entriesByChildSessionKey.clear();
             queuedCollectorRunIds.length = 0;
@@ -319,7 +318,6 @@ class SubagentRunManager extends SubagentLaunchManager {
                 // it receives the same reconciliation tombstone as a direct kill.
                 continue;
               }
-              assertCurrent();
               const wasYielded = entry.pauseReason === "sessions_yield";
               const wasQueuedCollector = entry.collect && entry.execution.status === "queued";
               const collectorLaunchInFlight =

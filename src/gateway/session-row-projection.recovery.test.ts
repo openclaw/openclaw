@@ -34,7 +34,10 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
-import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
+import {
+  clearStoredSessionRowTranscriptForTest,
+  observeSessionRowBackfill,
+} from "./session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
@@ -161,6 +164,7 @@ it("keeps projection reads outside borrowed startup admission and admits complet
         await projection.ensureMaterialized();
         expect(projection.snapshot(query).row).toBeNull();
         expect(listOpenClawAgentDatabasesForTest().some((db) => db.path === path)).toBe(false);
+        projection.snapshot(unaffected);
         beforeRecovery = projection.materializedCount;
       });
       await projection.ensureMaterialized();
@@ -195,6 +199,7 @@ it("refreshes previews after reconciliation without metadata mutation or clean-r
       touchSessionEntry: false,
     });
     await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
+    clearStoredSessionRowTranscriptForTest(scope);
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
     const events = database.db.prepare(
       "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",

@@ -10,40 +10,18 @@ const projectionError = new SessionTranscriptProjectionUnavailableError("sess-ma
 
 describe("accepted chat-send retry classification", () => {
   it.each([
-    {
-      name: "pre-ACK projection unavailability",
-      params: { error: projectionError, phase: "pre-ack" as const },
-      expected: "client-retry",
-    },
-    {
-      name: "post-ACK projection unavailability before execution",
-      params: { error: projectionError, phase: "post-ack" as const },
-      expected: "retry",
-    },
-    {
-      name: "an unclassified dispatch failure",
-      params: { error: new Error("dispatch failed"), phase: "post-ack" as const },
-      expected: "terminal",
-    },
-    {
-      name: "an unclassified failure after model start",
-      params: {
-        error: new Error("dispatch failed"),
-        phase: "post-ack" as const,
-        executionStarted: true,
-      },
-      expected: "reconcile",
-    },
-    {
-      name: "an unclassified failure after observable side effects",
-      params: {
-        error: new Error("dispatch failed"),
-        phase: "post-ack" as const,
-        sideEffectsObserved: true,
-      },
-      expected: "reconcile",
-    },
-  ])("classifies $name as $expected", ({ params, expected }) => {
+    [{ error: projectionError, phase: "pre-ack" }, "client-retry"],
+    [{ error: projectionError, phase: "post-ack" }, "retry"],
+    [{ error: new Error("dispatch failed"), phase: "post-ack" }, "terminal"],
+    [
+      { error: new Error("dispatch failed"), phase: "post-ack", executionStarted: true },
+      "reconcile",
+    ],
+    [
+      { error: new Error("dispatch failed"), phase: "post-ack", sideEffectsObserved: true },
+      "reconcile",
+    ],
+  ] as const)("classifies %j as %s", (params, expected) => {
     expect(classifyAcceptedChatSendFailure(params)).toBe(expected);
   });
 

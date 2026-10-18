@@ -259,7 +259,7 @@ describe("package scripts", () => {
 
   it.for([
     { platform: "windows", parts: [1, 2] },
-    { platform: "macos", parts: [1, 2, 3] },
+    { platform: "macos", parts: [1, 2] },
   ])(
     "partitions $platform CI coverage into disjoint explicit test lists",
     ({ platform, parts }) => {

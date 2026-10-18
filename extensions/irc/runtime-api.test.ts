@@ -14,7 +14,7 @@ process.stdout.write(JSON.stringify({
   runtime: { keys: Object.keys(runtime).sort(), type: typeof runtime.setIrcRuntime },
 }));`,
     );
-  }, 45_000);
+  });
 
   it("loads narrow public api modules in direct smoke", () => {
     expect(directSmokeStdout).toBe(

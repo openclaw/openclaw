@@ -93,6 +93,9 @@ describe("export html tool output lines", () => {
           systemPrompt: "",
           tools: [],
         });
+        if (name !== "bashExecution") {
+          expect(document.querySelector('.tree-node[data-id="1"]')).toBeNull();
+        }
         const outputs = document.querySelectorAll(".tool-execution > .tool-output");
         const output = requireElement(outputs.item(outputs.length - 1), "tool output missing");
         const expanded = lineCount > maxLines;

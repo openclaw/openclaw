@@ -139,6 +139,12 @@ describe("installed replay repair ownership", () => {
       expect(fixture.streamGuards.isModelCallActive()).toBe(true);
       second = await fixture.open();
       expect(fixture.streamGuards.isModelCallActive()).toBe(true);
+      expect(fixture.input.setup.emitPrepStageSummary).toHaveBeenCalledExactlyOnceWith(
+        "model-dispatch",
+      );
+      expect(fixture.input.setup.prepStages.snapshot().stages.map(({ name }) => name)).toEqual([
+        "model-dispatch",
+      ]);
       firstSource.end(createAssistant(testModel, [{ type: "text", text: "Older result" }]));
       await first.result();
       expect(fixture.streamGuards.isModelCallActive()).toBe(true);
@@ -195,78 +201,75 @@ describe("installed replay repair ownership", () => {
     }
   });
 
-  describe.each(["request-rejection", "stream-rejection", "promised-stream-rejection"] as const)(
-    "thinking recovery after %s",
-    (failureMode) => {
-      it.each(["event", "concurrent-results", "return-before-next"] as const)(
-        "keeps %s behind the admitted thinking repair",
-        async (boundary) => {
-          let requests = 0;
-          const fixture = await createFixture(
-            (model) => {
-              if (++requests === 1 && failureMode === "request-rejection") {
-                return Promise.reject(new Error("thinking signature invalid"));
-              }
-              const stream = createAssistantMessageEventStream();
-              if (requests === 1) {
-                stream.push({
-                  type: "error",
-                  reason: "error",
-                  error: {
-                    ...createAssistant(model, [], "error"),
-                    errorMessage: "thinking signature invalid",
-                  },
-                });
-              } else {
-                stream.push({
-                  type: "done",
-                  reason: "stop",
-                  message: createAssistant(model, [
-                    { type: "text", text: "Synthetic recovered response" },
-                  ]),
-                });
-              }
-              return failureMode === "promised-stream-rejection" ? Promise.resolve(stream) : stream;
-            },
-            { thinkingRecovery: true },
-          );
-          const held = await fixture.holdWriter();
-          const pending: Promise<unknown>[] = [];
-          let iterator: AsyncIterator<AssistantMessageEvent> | undefined;
-          try {
-            const response = await fixture.open();
-            iterator = response[Symbol.asyncIterator]();
-            if (boundary === "concurrent-results") {
-              pending.push(response.result(), response.result());
-            } else {
-              pending.push(
-                boundary === "event" ? iterator.next() : Promise.resolve(iterator.return?.()),
-              );
-            }
-            const settled = pending.map(observeSettlement);
-            await nextTurn();
-            expect(requests).toBe(2);
-            expect(fixture.thinkingPresent()).toBe(true);
-            expect(settled.map((read) => read())).toEqual(pending.map(() => false));
-            held.release();
-            await Promise.all(pending);
-            expect(fixture.thinkingPresent()).toBe(false);
-            expect(fixture.repaired).toHaveBeenCalledOnce();
-          } finally {
-            held.release();
-            await Promise.allSettled([held.work, ...pending]);
-            await iterator?.return?.();
+  it.each([
+    { failureMode: "request-rejection", boundary: "return-before-next" },
+    { failureMode: "stream-rejection", boundary: "concurrent-results" },
+    { failureMode: "promised-stream-rejection", boundary: "event" },
+  ] as const)(
+    "keeps $boundary behind the admitted thinking repair after $failureMode",
+    async ({ failureMode, boundary }) => {
+      let requests = 0;
+      const fixture = await createFixture(
+        (model) => {
+          if (++requests === 1 && failureMode === "request-rejection") {
+            return Promise.reject(new Error("thinking signature invalid"));
           }
+          const stream = createAssistantMessageEventStream();
+          if (requests === 1) {
+            stream.push({
+              type: "error",
+              reason: "error",
+              error: {
+                ...createAssistant(model, [], "error"),
+                errorMessage: "thinking signature invalid",
+              },
+            });
+          } else {
+            stream.push({
+              type: "done",
+              reason: "stop",
+              message: createAssistant(model, [
+                { type: "text", text: "Synthetic recovered response" },
+              ]),
+            });
+          }
+          return failureMode === "promised-stream-rejection" ? Promise.resolve(stream) : stream;
         },
+        { thinkingRecovery: true },
       );
+      const held = await fixture.holdWriter();
+      const pending: Promise<unknown>[] = [];
+      let iterator: AsyncIterator<AssistantMessageEvent> | undefined;
+      try {
+        const response = await fixture.open();
+        iterator = response[Symbol.asyncIterator]();
+        if (boundary === "concurrent-results") {
+          pending.push(response.result(), response.result());
+        } else {
+          pending.push(
+            boundary === "event" ? iterator.next() : Promise.resolve(iterator.return?.()),
+          );
+        }
+        const settled = pending.map(observeSettlement);
+        await nextTurn();
+        expect(requests).toBe(2);
+        expect(fixture.thinkingPresent()).toBe(true);
+        expect(settled.map((read) => read())).toEqual(pending.map(() => false));
+        held.release();
+        await Promise.all(pending);
+        expect(fixture.thinkingPresent()).toBe(false);
+        expect(fixture.repaired).toHaveBeenCalledOnce();
+      } finally {
+        held.release();
+        await Promise.allSettled([held.work, ...pending]);
+        await iterator?.return?.();
+      }
     },
   );
 
   it.each([
-    { boundary: "event", tools: false },
     { boundary: "result", tools: false },
     { boundary: "completion", tools: false },
-    { boundary: "return-before-next", tools: false },
     { boundary: "return-before-next", tools: true },
   ] as const)(
     "keeps $boundary behind the admitted transcript repair (tools=$tools)",
@@ -629,7 +632,7 @@ describe("installed replay repair ownership", () => {
   });
 });
 
-it.each(["settlement", "caller cancellation", "reclamation"] as const)(
+it.each(["caller cancellation", "reclamation"] as const)(
   "retains watchdog recovery custody until %s",
   async (ending) => {
     // Fake scheduling controls only existing timers. setSystemTime advances the

@@ -20,8 +20,6 @@ import {
   type FallbackRunnerParams,
 } from "./agent-runner-execution.test-support.js";
 
-vi.mock("../../gateway/session-utils.js", () => ({ loadSessionEntry: vi.fn() }));
-
 const state = await setupAgentRunnerExecutionTestState();
 
 it("settles the turn's attribution before model-routing hooks run", async () => {

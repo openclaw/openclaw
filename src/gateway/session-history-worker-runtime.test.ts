@@ -40,6 +40,10 @@ vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
       assertCurrent() {},
     }),
 }));
+// mock-isolation: Scheduler deadlines exclude the process-owned directory observer lifecycle.
+vi.mock("../infra/owned-directory-observation.js", () => ({
+  observeOwnedDirectory: () => ({ close() {} }),
+}));
 // mock-isolation: Cold restoration has its own owner tests; this fixture controls read callbacks.
 vi.mock("../config/sessions/session-cold-storage-read.js", () => ({
   readRestoredSessionTranscript: async (_scope: unknown, read: () => unknown) => {
@@ -218,28 +222,21 @@ function historyTarget() {
   };
 }
 
+function deltaRequest(
+  limits: Extract<SessionHistoryWorkerRequest, { kind: "delta" }>["params"]["limits"] = {},
+): Extract<SessionHistoryWorkerRequest, { kind: "delta" }> {
+  return {
+    kind: "delta",
+    params: { target: { ...historyTarget(), sessionEntry: request().params.entry }, limits },
+  };
+}
+
 function page(text: string): Extract<SessionHistoryWorkerResult, { kind: "rpc" }> {
   return {
     kind: "rpc",
     page: { messages: [{ role: "assistant", content: [{ type: "text", text }] }] },
   };
 }
-
-it("treats an empty exact archive path as an ordinary recent-history request", async () => {
-  const result = { messages: [], totalMessages: 0 };
-  runWorker.mockImplementationOnce(async (prepare: () => SessionTranscriptHistoryWorkerInput) => {
-    const input = prepare();
-    expect(input.request.kind).toBe("recent-page");
-    expect(input.request.params).not.toHaveProperty("exactArchivePath");
-    return { kind: "recent-page", result };
-  });
-  await expect(
-    readSessionHistoryPageInWorker({
-      kind: "recent-page",
-      params: { target: historyTarget(), exactArchivePath: "", options: { maxMessages: 10 } },
-    }),
-  ).resolves.toEqual(result);
-});
 
 function httpPage(): SessionHistoryWorkerResult {
   return {
@@ -300,16 +297,10 @@ it.each(["rpc", "http", "delta", "inline-visibility"] as const)(
   async (kind) => {
     const failure = new Error("Auxiliary registry changed during discovery");
     vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSourcesAsync").mockRejectedValue(failure);
-    const rpc = request();
-    const target = {
-      agentId: rpc.params.sessionAgentId,
-      sessionId: rpc.params.sessionId,
-      sessionKey: rpc.params.canonicalKey,
-      storePath: rpc.params.storePath,
-    };
+    const target = historyTarget();
     const pending =
       kind === "rpc"
-        ? readSessionHistoryPageInWorker(rpc)
+        ? readSessionHistoryPageInWorker(request())
         : kind === "http"
           ? readSessionHistoryPageInWorker({ kind, params: { target, maxChars: 8000, limit: 10 } })
           : kind === "inline-visibility"
@@ -341,10 +332,7 @@ it.each(["rpc", "http"] as const)(
             kind: "http",
             params: {
               target: {
-                agentId: rpc.params.sessionAgentId,
-                sessionId: rpc.params.sessionId,
-                sessionKey: rpc.params.canonicalKey,
-                storePath: rpc.params.storePath,
+                ...historyTarget(),
                 sessionEntry: rpc.params.entry,
                 env: {
                   OPENCLAW_STATE_DIR: "/tmp/http-history-captured-state",
@@ -560,22 +548,9 @@ it.each([false, true])(
         return { ...bound, admission: { ...bound.admission, assertCurrent } };
       });
     try {
-      const rpc = request().params;
-      const deltaRequest: Extract<SessionHistoryWorkerRequest, { kind: "delta" }> = {
-        kind: "delta",
-        params: {
-          target: {
-            agentId: rpc.sessionAgentId,
-            sessionId: rpc.sessionId,
-            sessionKey: rpc.canonicalKey,
-            sessionEntry: rpc.entry,
-            storePath: rpc.storePath,
-          },
-          limits: { maxEvents: 200, maxBytes: 1_000_000 },
-        },
-      };
-      const first = readSessionHistoryPageInWorker(deltaRequest);
-      const second = readSessionHistoryPageInWorker(deltaRequest);
+      const input = deltaRequest({ maxEvents: 200, maxBytes: 1_000_000 });
+      const first = readSessionHistoryPageInWorker(input);
+      const second = readSessionHistoryPageInWorker(input);
       await waitForReaderAdmission(2);
       expect(queued).toHaveLength(1);
       const partial: SessionHistoryDelta = {
@@ -603,17 +578,7 @@ it.each([false, true])(
 );
 
 it("does not recover partial delta facts when worker retirement fails", async () => {
-  const rpc = request().params;
-  const pending = readSessionHistoryPageInWorker({
-    kind: "delta",
-    params: {
-      target: {
-        ...historyTarget(),
-        sessionEntry: rpc.entry,
-      },
-      limits: {},
-    },
-  });
+  const pending = readSessionHistoryPageInWorker(deltaRequest());
   const failure = sessionHistoryCleanupError(
     new SessionHistoryDeltaPreparationError({
       delta: { kind: "missing" },
@@ -666,7 +631,7 @@ it("shares queued equivalent pages but starts a fresh read after dispatch", asyn
   ]);
 });
 
-it.each(["rpc limit", "rpc store", "http cursor"] as const)(
+it.each(["rpc limit", "rpc store", "rpc deflate", "http cursor"] as const)(
   "keeps distinct %s selectors separate in coalescing and byte admission",
   async (selector) => {
     const makeRequest = (different: boolean): SessionHistoryWorkerRequest =>
@@ -684,7 +649,9 @@ it.each(["rpc limit", "rpc store", "http cursor"] as const)(
             different
               ? selector === "rpc limit"
                 ? { max: 2 }
-                : { storePath: "/tmp/another-history-worker-fixture/sessions.json" }
+                : selector === "rpc deflate"
+                  ? { deflateResponse: true }
+                  : { storePath: "/tmp/another-history-worker-fixture/sessions.json" }
               : {},
           );
     const first = readSessionHistoryPageInWorker(makeRequest(false));
@@ -752,6 +719,7 @@ it.each([
     try {
       const reply = page("shared result");
       const bytes = new TextEncoder().encode(JSON.stringify(reply.page.messages));
+      const deflated = new Uint8Array([0, 0, 255, 255]);
       if (encoded) {
         reply.page.messages = [];
         reply.page.encodedResponse = {
@@ -760,6 +728,7 @@ it.each([
           responseHistoryBytes: 1024,
           omission: { omittedCount: 1, normalizedBytes: 2048 },
         };
+        reply.page.encodedMessagesDeflate = deflated;
       }
       queued[0]!.result.resolve(reply);
       const results = await settled;
@@ -776,6 +745,7 @@ it.each([
         for (const result of pages) {
           // A coalesced page transfers its immutable wire buffer only once.
           expect(result.encodedResponse?.messages).toBe(bytes);
+          expect(result.encodedMessagesDeflate).toBe(deflated);
         }
         pages[0]!.encodedResponse!.omission!.omittedCount = 9;
         expect(pages[1]!.encodedResponse!.omission!.omittedCount).toBe(1);
@@ -801,39 +771,5 @@ it.each([
         messages: [{ role: "assistant", content: [{ type: "text", text: "capacity released" }] }],
       });
     }
-  },
-);
-
-it.each([
-  {
-    entry: { sessionId: "history-worker", updatedAt: 1 },
-    key: "agent:main:history-worker",
-    validate: false,
-  },
-  { entry: undefined, key: "", validate: false },
-  { entry: undefined, key: "agent:main:history-worker", validate: true },
-  {
-    entry: { sessionId: "successor", updatedAt: 1 },
-    key: "agent:main:history-worker",
-    validate: true,
-  },
-])(
-  "carries conditional validation without reading or retargeting on enqueue: %j",
-  async ({ entry, key, validate }) => {
-    const pending = readSessionHistoryPageInWorker(request({ entry, canonicalKey: key }));
-    await waitForReaderAdmission(1);
-    expect(queued).toHaveLength(1);
-    const input = queued[0]!.prepare();
-    expect(input.target.transcript.sessionId).toBe("history-worker");
-    expect(input.target.entryValidationKey).toBe(validate ? key : undefined);
-    expect(input.database).toEqual({
-      agentId: "main",
-      path: expect.stringMatching(/openclaw-agent\.sqlite$/),
-    });
-    expect(input.target).not.toHaveProperty("database");
-    expect(input.target).not.toHaveProperty("env");
-    expect(runWorker.mock.calls[0]![1]).toBe(JSON.stringify(input).length * 2);
-    queued[0]!.result.resolve(page("requested transcript"));
-    await pending;
   },
 );

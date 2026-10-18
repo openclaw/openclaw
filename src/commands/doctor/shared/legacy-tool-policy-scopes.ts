@@ -1,5 +1,3 @@
-// Shared tool-policy scope identification for doctor config migrations.
-
 /**
  * Core-owned config roots only. plugins.entries.*.config is opaque plugin-owned
  * data; repairing tool policies there belongs to the owning plugin's doctor

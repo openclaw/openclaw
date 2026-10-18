@@ -1,6 +1,6 @@
 /** Polls watched adopted sessions for direct upstream human activity. */
 import { createHash } from "node:crypto";
-import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
+import { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { allowsProcessHomeSessionScan } from "../config/paths.js";
 import type { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";

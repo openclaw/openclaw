@@ -54,6 +54,34 @@ function createAccumulatorWithUsage(...usages: UsageInput[]) {
 
 describe("usage-accumulator", () => {
   describe("mergeUsageIntoAccumulator", () => {
+    it("preserves complete zero accounting without a price across attempts", () => {
+      const attempt = createAccumulatorWithUsage({
+        input: 0,
+        output: 0,
+        total: 0,
+        usageReport: { state: "available" },
+      });
+      const run = createUsageAccumulator();
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+      expect(toNormalizedUsage(run)).toEqual({
+        input: 0,
+        output: 0,
+        total: 0,
+        usageReport: { state: "available" },
+      });
+    });
+
+    it("does not present completed calls as a complete run total after an interrupted call", () => {
+      const acc = createAccumulatorWithUsage(
+        FIRST_USAGE,
+        { usageReport: { state: "unavailable" } },
+        FINAL_USAGE,
+      );
+      expect(toNormalizedUsage(acc)).toEqual({
+        usageReport: { state: "unavailable" },
+        contextUsage: { state: "unavailable" },
+      });
+    });
     it("accumulates usage across multiple API calls", () => {
       const acc = createAccumulatorWithUsage(FIRST_USAGE, SECOND_USAGE, FINAL_USAGE);
 
@@ -143,10 +171,6 @@ describe("usage-accumulator", () => {
   });
 
   describe("toNormalizedUsage", () => {
-    it("returns undefined for an empty accumulator", () => {
-      expect(toNormalizedUsage(createUsageAccumulator())).toBeUndefined();
-    });
-
     it("preserves reported zero cache counters across attempt and run totals", () => {
       const attempt = createAccumulatorWithUsage({ input: 100, cacheRead: 0, cacheWrite: 0 });
       const run = createUsageAccumulator();

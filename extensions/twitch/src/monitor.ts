@@ -1,7 +1,6 @@
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { checkTwitchAccessControl } from "./access-control.js";
@@ -49,13 +48,7 @@ export async function monitorTwitchProvider(options: TwitchMonitorOptions) {
 
   const clientManager = getOrCreateClientManager(accountId, logger, statusSink);
 
-  try {
-    await clientManager.getClient(account, config, accountId);
-  } catch (error) {
-    const errorMsg = formatErrorMessage(error);
-    runtime.error?.(`Failed to connect: ${errorMsg}`);
-    throw error;
-  }
+  await clientManager.getClient(account, config, accountId);
 
   const ingress = createTwitchIngress({
     accountId,
@@ -227,7 +220,7 @@ export async function monitorTwitchProvider(options: TwitchMonitorOptions) {
   });
   ingress.start();
 
-  const unregisterHandler = clientManager.onMessage(account, (message) => {
+  const unregisterHandler = clientManager.onMessage((message) => {
     if (stopped) {
       return;
     }

@@ -3,6 +3,7 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -56,7 +57,7 @@ export function readSessionStoreSummaryReadOnly(
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, options.continuation, () =>
-        withSqlitePostCommitPublications(database.db, () =>
+        withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
           runSqliteDeferredTransactionSync(database.db, () => {
             assertCanonicalSqliteSessionKeysCurrent(database);
             const db = getSessionKysely(database.db);

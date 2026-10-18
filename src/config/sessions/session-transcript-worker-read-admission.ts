@@ -1,7 +1,7 @@
+import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import { hasSqliteDatabaseSchemaAdmissionForPath } from "../../infra/sqlite-database-admission.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   armDatabaseWorkerIdleRetirement,
   historyClearTimeout,
@@ -69,15 +69,14 @@ export async function withSessionHistoryReadAdmission<T>(
         );
         timer.unref?.();
         try {
-          return await runOpenClawAgentWriteAdmission(
-            options,
+          return await runWithSqliteDatabaseAdmissionTurn(
+            [options.path],
             () => {
               // The pool owns dispatch and host-response budgets after admission.
               clearTimeout(timer);
               return start(signal);
             },
-            true,
-            undefined,
+            [],
             signal,
           );
         } finally {
@@ -85,8 +84,7 @@ export async function withSessionHistoryReadAdmission<T>(
           request.aborters.delete(abort);
         }
       };
-      // Cold reads and first creation share admission, so no reader opens a
-      // half-created schema. Release the reservation before consumer effects.
+      // First creation shares schema admission; pure reads never reserve the writer.
       return cold ? dispatchCold() : start(request.signal);
     };
     return await run(admit, lane);

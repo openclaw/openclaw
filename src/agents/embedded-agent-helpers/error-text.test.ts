@@ -52,6 +52,17 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     },
   );
 
+  it("preserves repetition-stop guidance instead of provider diagnostics", () => {
+    expect(
+      formatUserFacingAssistantErrorText({
+        ...makeAssistantError("HTTP 503 temporary failure"),
+        errorCode: "openclaw_repetitive_output",
+      }),
+    ).toBe(
+      "Repetitive output stopped. Try a larger model or shorten your request before retrying.",
+    );
+  });
+
   it.each(["request timed out", "LLM request timed out."])(
     "preserves safe user-facing timeout copy for provider error %j",
     (errorMessage) => {

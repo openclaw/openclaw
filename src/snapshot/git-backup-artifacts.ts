@@ -30,6 +30,14 @@ export type GitBackupRepositoryState = {
 };
 
 export function gitBackupArtifactFiles(manifest: GitBackupManifest): string[] {
+  if (manifest.schemaVersion === 2) {
+    return [
+      GIT_BACKUP_MANIFEST,
+      ...["manifest.json", "anchor.sqlite", "database.sqlite"].map((name) =>
+        path.join("postgres", name),
+      ),
+    ];
+  }
   return [
     GIT_BACKUP_MANIFEST,
     GIT_BACKUP_SCHEMA,
@@ -82,7 +90,7 @@ export async function readGitBackupRepositoryState(
       ? (
           await requireGit(
             repositoryPath,
-            ["ls-tree", "-r", "-z", head.stdout.trim(), "--", "global", "agents"],
+            ["ls-tree", "-r", "-z", head.stdout.trim(), "--", "global", "agents", "stores"],
             {
               env,
             },
@@ -166,7 +174,11 @@ export async function prepareScopeUpdate(
   env?: NodeJS.ProcessEnv,
 ): Promise<GitBackupScopeUpdate | undefined> {
   if (relative !== "global") {
-    await assertBackupDirectory(repositoryPath, "agents", state);
+    await assertBackupDirectory(
+      repositoryPath,
+      relative.startsWith("stores") ? "stores" : "agents",
+      state,
+    );
   }
   const scopePath = path.join(repositoryPath, relative);
   await assertBackupDirectory(repositoryPath, relative, state);
@@ -175,6 +187,9 @@ export async function prepareScopeUpdate(
     return undefined;
   }
   await assertBackupDirectory(repositoryPath, path.join(relative, GIT_BACKUP_TABLES), state);
+  if (manifest?.schemaVersion === 2 || previous?.schemaVersion === 2) {
+    await assertBackupDirectory(repositoryPath, path.join(relative, "postgres"), state);
+  }
   const previousFiles = previous ? gitBackupArtifactFiles(previous) : [];
   const files = manifest ? gitBackupArtifactFiles(manifest) : [];
   const owned = new Set(previousFiles);
@@ -195,35 +210,32 @@ export async function prepareScopeUpdate(
   return { relative, previousFiles, files };
 }
 
-export async function prepareStaleAgentUpdates(
+export async function prepareStaleScopeUpdates(
   repositoryPath: string,
   retainedScopes: Set<string>,
   state: GitBackupRepositoryState,
   env?: NodeJS.ProcessEnv,
 ): Promise<GitBackupScopeUpdate[]> {
-  const agentsPath = path.join(repositoryPath, "agents");
-  const stat = await lstatIfPresent(agentsPath);
-  if (stat && !stat.isDirectory()) {
-    return [];
-  }
   const scopes = new Set<string>();
-  if (stat) {
-    for (const entry of await fs.readdir(agentsPath, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        scopes.add(path.join("agents", entry.name));
+  for (const root of ["agents", "stores"]) {
+    const rootPath = path.join(repositoryPath, root);
+    const stat = await lstatIfPresent(rootPath);
+    if (stat && !stat.isDirectory()) {
+      continue;
+    }
+    if (stat) {
+      for (const entry of await fs.readdir(rootPath, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          scopes.add(path.join(root, entry.name));
+        }
       }
     }
-  }
-  for (const file of state.headFiles.keys()) {
-    const parts = file.split("/");
-    const agentId = parts[1];
-    if (
-      parts.length === 3 &&
-      parts[0] === "agents" &&
-      parts[2] === GIT_BACKUP_MANIFEST &&
-      agentId
-    ) {
-      scopes.add(path.join("agents", agentId));
+    for (const file of state.headFiles.keys()) {
+      const parts = file.split("/");
+      const id = parts[1];
+      if (parts.length === 3 && parts[0] === root && parts[2] === GIT_BACKUP_MANIFEST && id) {
+        scopes.add(path.join(root, id));
+      }
     }
   }
   const updates: GitBackupScopeUpdate[] = [];
@@ -253,6 +265,7 @@ export async function applyScopeUpdate(
     await fs.rm(path.join(scopePath, file), { force: true });
   }
   for (const file of update.files) {
+    await fs.mkdir(path.dirname(path.join(scopePath, file)), { recursive: true, mode: 0o700 });
     await fs.cp(path.join(stagingRoot, update.relative, file), path.join(scopePath, file), {
       force: false,
       errorOnExist: true,

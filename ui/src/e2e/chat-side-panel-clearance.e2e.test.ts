@@ -396,7 +396,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps the page title centered beside the collapsed-navigation controls", async () => {
+  it("keeps stacked page tabs clear of the collapsed navigation rail", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -415,22 +415,26 @@ suite.define(() => {
           const box = await tabs.boundingBox();
           return box ? box.y + box.height / 2 : -1;
         };
-        // The toolbar row sits at the top of the content column in both states.
-        await expect.poll(rowCenter).toBe(24);
+        const expandedCenter = await rowCenter();
+        expect(expandedCenter).toBeGreaterThan(24);
         await capturePanel(page, "page-toolbar-expanded");
 
         await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-collapsed");
-        await expect.poll(rowCenter).toBe(24);
-        const controls = page.locator(".shell-chrome-controls button:visible");
+        await expect.poll(rowCenter).toBeGreaterThanOrEqual(expandedCenter);
+        const controls = page.locator(".sidebar-rail [data-navigation-view]");
         const controlBoxes = await controls.evaluateAll((buttons) =>
           buttons.map((button) => button.getBoundingClientRect()),
         );
-        expect(controlBoxes.length).toBeGreaterThan(0);
+        expect(controlBoxes).toHaveLength(3);
         const tabsBox = (await tabs.boundingBox())!;
         for (const box of controlBoxes) {
-          expect(box.top + box.height / 2).toBe(24);
+          expect(box.width).toBeGreaterThan(0);
+          expect(box.height).toBeGreaterThan(0);
           expect(box.right).toBeLessThan(tabsBox.x);
+        }
+        for (let index = 0; index < controlBoxes.length; index += 1) {
+          await controls.nth(index).click({ trial: true });
         }
         await capturePanel(page, "page-toolbar-collapsed");
       },
@@ -455,7 +459,7 @@ suite.define(() => {
       home: false,
       deviceLess: false,
       direction: "ltr",
-      expectedControl: ".shell-chrome-controls__search",
+      expectedControl: ".sidebar-brand__search",
       name: "collapsed navigation",
       navCollapsed: true,
       operatorScopes: undefined,

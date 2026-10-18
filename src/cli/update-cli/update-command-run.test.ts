@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import * as crypto from "node:crypto";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -26,6 +27,8 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { confirmUpdateDowngrade } from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
+import { resultFixture, stepFixture } from "./update-command-fixtures.test-support.js";
 import { failUpdateCommandRun } from "./update-command-result.js";
 import {
   registerUpdateRunReceiptTests,
@@ -52,7 +55,6 @@ vi.mock("node:crypto", async () => {
   const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
   return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
 });
-afterEach(() => vi.mocked(crypto.randomUUID).mockReset());
 
 const sourceImportArgs = resolveRuntimeWorkerUrl(
   updateExecutorNativeEntrypoints.commandRun,
@@ -62,15 +64,24 @@ const sourceImportArgs = resolveRuntimeWorkerUrl(
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
+function createRun(prefix: string, extraEnv: NodeJS.ProcessEnv = {}) {
+  const env = { OPENCLAW_STATE_DIR: dirs.make(prefix), ...extraEnv };
+  return { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+}
+
+const updateResult = (overrides: Parameters<typeof resultFixture>[1]) =>
+  resultFixture(undefined, { status: "error", durationMs: 1, ...overrides });
+
 afterEach(async () => {
+  vi.mocked(crypto.randomUUID).mockReset();
   await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
 it("persists fingerprint warnings before closing a rolled-back run", async () => {
-  const env = { OPENCLAW_STATE_DIR: dirs.make("rollback-fingerprint-warning-") };
-  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+  const run = createRun("rollback-fingerprint-warning-");
+  const { env } = run;
   const warnings = [
     "baseline package fingerprint incomplete after 30 s; rollback will be verified by the retained package copy",
     "Package fingerprint verification unavailable; rollback verified by the retained package copy's directory identity and version.",
@@ -78,9 +89,7 @@ it("persists fingerprint warnings before closing a rolled-back run", async () =>
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   const result = await publishUpdateCommandTerminalResult(
     { opts: { json: true, run }, ownedManagedUpdateEnv: env },
-    {
-      status: "error",
-      mode: "npm",
+    updateResult({
       reason: "doctor-failed",
       before: { version: "1.0.0" },
       after: { version: "1.0.0" },
@@ -92,17 +101,16 @@ it("persists fingerprint warnings before closing a rolled-back run", async () =>
       },
       durationMs: 50,
       steps: [
-        {
-          name: "global install rollback",
+        stepFixture("global install rollback", {
           command: "restore",
           cwd: env.OPENCLAW_STATE_DIR,
           durationMs: 1,
           exitCode: 0,
           advisory: { kind: "recoverable-maintenance", message: warnings.join("\n") },
           warnings,
-        },
+        }),
       ],
-    },
+    }),
     { rolledBack: true, downtimeMs: 25 },
   );
   expect(result).toMatchObject({ status: "error", reason: "doctor-failed" });
@@ -124,39 +132,30 @@ it("persists fingerprint warnings before closing a rolled-back run", async () =>
 
 registerUpdateRunReceiptTests(dirs);
 
-it.each([true])(
-  "keeps restored-generation completion with its helper across CLI unwind (handoff=%s)",
-  (handoff) => {
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", handoff ? "1" : undefined);
-    const env = { OPENCLAW_STATE_DIR: dirs.make("update-rollback-owner-") };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-    const result = {
-      status: "error" as const,
-      mode: "npm" as const,
-      durationMs: 1,
-      steps: [],
-      reason: "restart-unhealthy",
-      before: { version: "2026.9.1" },
-      after: { version: "2026.9.1" },
-      recovery: {
-        serviceRestartSafe: true as const,
-        packageRollbackVerified: true as const,
-        version: "2026.9.1",
-      },
-    };
-    completeUpdateCommandRun(result, run);
-    completeUpdateCommandRun(result, run);
-    expect(getUpdateRun(run.runId, { env })).toMatchObject({
-      status: handoff ? "running" : "failed",
-      after: { version: "2026.9.1" },
-    });
-    if (handoff) {
-      finishUpdateRun(run.runId, { status: "rolled-back", reason: result.reason }, { env });
-      completeUpdateCommandRun(result, run);
-      expect(getUpdateRun(run.runId, { env })?.status).toBe("rolled-back");
-    }
-  },
-);
+it("keeps restored-generation completion with its helper across CLI unwind", () => {
+  vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
+  const run = createRun("update-rollback-owner-");
+  const { env } = run;
+  const result = updateResult({
+    reason: "restart-unhealthy",
+    before: { version: "2026.9.1" },
+    after: { version: "2026.9.1" },
+    recovery: {
+      serviceRestartSafe: true,
+      packageRollbackVerified: true,
+      version: "2026.9.1",
+    },
+  });
+  completeUpdateCommandRun(result, run);
+  completeUpdateCommandRun(result, run);
+  expect(getUpdateRun(run.runId, { env })).toMatchObject({
+    status: "running",
+    after: { version: "2026.9.1" },
+  });
+  finishUpdateRun(run.runId, { status: "rolled-back", reason: result.reason }, { env });
+  completeUpdateCommandRun(result, run);
+  expect(getUpdateRun(run.runId, { env })?.status).toBe("rolled-back");
+});
 
 function pendingRecovery() {
   const root = dirs.make("update-admission-recovery-");
@@ -172,42 +171,20 @@ function pendingRecovery() {
     { env },
   );
   closeOpenClawStateDatabaseForTest();
-  const snapshot = () =>
-    fs
-      .readdirSync(root, { recursive: true })
-      .map(String)
-      .toSorted()
-      .map((name) => {
-        const filename = path.join(root, name);
-        const stat = fs.statSync(filename);
-        return {
-          name,
-          ino: stat.ino,
-          mtime: stat.mtimeMs,
-          mode: stat.mode,
-          sha256: stat.isFile()
-            ? createHash("sha256").update(fs.readFileSync(filename)).digest("hex")
-            : null,
-        };
-      });
+  const snapshot = () => snapshotUpdateFixtureTree(root);
   return { root, run, record, snapshot };
 }
 
-it.each([{ dryRun: false, reuseRunId: true }])(
-  "refuses interrupted update admission without touching SQLite ($dryRun, $reuseRunId)",
-  async ({ dryRun, reuseRunId }) => {
-    const { root, run, record, snapshot } = pendingRecovery();
-    if (reuseRunId) {
-      vi.stubEnv(UPDATE_RUN_ID_ENV, run.runId);
-    }
-    const before = snapshot();
-    await expect(
-      admitUpdateCommandRun({ opts: { dryRun }, root }).then(() => "admitted"),
-    ).rejects.toBeInstanceOf(UpdateRecoveryRequiredError);
-    expect(snapshot()).toEqual(before);
-    expect(loadUpdateRecovery(run.runId, { env: run.env })).toEqual(record);
-  },
-);
+it("refuses interrupted update admission without touching SQLite when reusing its run ID", async () => {
+  const { root, run, record, snapshot } = pendingRecovery();
+  vi.stubEnv(UPDATE_RUN_ID_ENV, run.runId);
+  const before = snapshot();
+  await expect(admitUpdateCommandRun({ opts: { dryRun: false }, root })).rejects.toBeInstanceOf(
+    UpdateRecoveryRequiredError,
+  );
+  expect(snapshot()).toEqual(before);
+  expect(loadUpdateRecovery(run.runId, { env: run.env })).toEqual(record);
+});
 
 it.each(["displaced", "replacement", "both", "unreadable"] as const)(
   "blocks admission when publication has no canonical DB (%s)",
@@ -226,7 +203,7 @@ it.each(["displaced", "replacement", "both", "unreadable"] as const)(
       fs.writeFileSync(path.join(family, "displaced"), "incomplete database");
     }
     const before = snapshot();
-    await expect(admitUpdateCommandRun({ opts: {}, root }).then(() => "admitted")).rejects.toThrow(
+    await expect(admitUpdateCommandRun({ opts: {}, root })).rejects.toThrow(
       "Interrupted shared-database publication is read-only while full-state recovery is deferred",
     );
     expect(fs.existsSync(file)).toBe(false);
@@ -234,189 +211,140 @@ it.each(["displaced", "replacement", "both", "unreadable"] as const)(
   },
 );
 
-it.each(["ok"] as const)(
-  "does not complete an operationally pending update from diagnostic %s",
-  (status) => {
-    const { run, record, snapshot } = pendingRecovery();
-    const before = snapshot();
-    const result = {
-      status,
-      mode: "npm" as const,
-      durationMs: 1,
-      steps: [],
-    };
-    const completed = completeUpdateCommandRun(result, run);
-    expect(completed.status).toBe("error");
-    expect(completed.reason).toBe("update-recovery-pending");
-    failUpdateCommandRun(new Error("outer unwind"), run);
-    expect(snapshot()).toEqual(before);
-    expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
-    expect(loadUpdateRecovery(run.runId, { env: run.env })).toEqual(record);
-  },
-);
+it("does not complete an operationally pending update from diagnostic success", () => {
+  const { run, record, snapshot } = pendingRecovery();
+  const before = snapshot();
+  const result = updateResult({ status: "ok" });
+  const completed = completeUpdateCommandRun(result, run);
+  expect(completed).toMatchObject({ status: "error", reason: "update-recovery-pending" });
+  failUpdateCommandRun(new Error("outer unwind"), run);
+  expect(snapshot()).toEqual(before);
+  expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
+  expect(loadUpdateRecovery(run.runId, { env: run.env })).toEqual(record);
+});
 
-it.each([{ json: true, diagnosticsWriteFails: true }])(
-  "prints an unexpected update failure after settlement with an existing report (json=$json, diagnosticsWriteFails=$diagnosticsWriteFails)",
-  async ({ json, diagnosticsWriteFails }) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("update-unexpected-failure-") };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-    const primaryFailure = new Error("Candidate validation unexpectedly stopped.");
-    const warn = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    if (diagnosticsWriteFails) {
-      vi.spyOn(
-        existingStateWrite,
-        "runExistingOpenClawStateWriteTransaction",
-      ).mockImplementationOnce(() => {
-        throw new Error("fixture diagnostics write refused");
+it("prints an unexpected JSON update failure after settlement even if diagnostics cannot be written", async () => {
+  const run = createRun("update-unexpected-failure-");
+  const { env } = run;
+  const primaryFailure = new Error("Candidate validation unexpectedly stopped.");
+  const warn = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  vi.spyOn(existingStateWrite, "runExistingOpenClawStateWriteTransaction").mockImplementationOnce(
+    () => {
+      throw new Error("fixture diagnostics write refused");
+    },
+  );
+  const reportPath = path.join(env.OPENCLAW_STATE_DIR, "update-reports", `${run.runId}.md`);
+  let savedAtPublication: string | undefined;
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {
+    savedAtPublication = fs.readFileSync(reportPath, "utf8");
+  });
+  let beforeSettlement: { status?: string; output: number } | undefined;
+  const outcome = await withUpdateCommandTerminalResult(
+    (registerRun) => {
+      registerRun(run);
+      return withUpdateCommandRecoveryUnwind(
+        { json: true, run },
+        { triageTarget: { env } },
+        async () => {
+          throw primaryFailure;
+        },
+      ).finally(() => {
+        beforeSettlement = {
+          status: getUpdateRun(run.runId, { env })?.status,
+          output: log.mock.calls.length + output.mock.calls.length,
+        };
       });
-    }
-    const reportPath = path.join(env.OPENCLAW_STATE_DIR, "update-reports", `${run.runId}.md`);
-    let savedAtPublication: string | undefined;
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation((value) => {
-      if (String(value).includes("OpenClaw update failed")) {
-        savedAtPublication = fs.readFileSync(reportPath, "utf8");
-      }
-    });
-    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {
-      savedAtPublication = fs.readFileSync(reportPath, "utf8");
-    });
-    let beforeSettlement: { status?: string; output: number } | undefined;
-    const outcome = await withUpdateCommandTerminalResult(
-      (registerRun) => {
-        registerRun(run);
-        return withUpdateCommandRecoveryUnwind(
-          { json, run },
-          { triageTarget: { env } },
-          async () => {
-            throw primaryFailure;
-          },
-        ).finally(() => {
-          beforeSettlement = {
-            status: getUpdateRun(run.runId, { env })?.status,
-            output: log.mock.calls.length + output.mock.calls.length,
-          };
-        });
-      },
-      { json },
-    ).catch((error: unknown) => error);
-    expect(outcome).toMatchObject({
-      name: "UpdateCommandFailure",
-      exitCode: 1,
-      result: { status: "error", reason: "update-failed" },
-    });
-    expect(collectNestedErrorCandidates(outcome)).toContain(primaryFailure);
-    expect(beforeSettlement).toEqual({ status: "running", output: 0 });
-    expect(getUpdateRun(run.runId, { env })).toMatchObject({
-      status: "failed",
-      reason: "update-failed",
-      verification: { rollbackOutcome: { status: "not-needed" } },
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          step: "requested",
-          status: "failed",
-          failureFacts: [expect.objectContaining({ message: primaryFailure.message })],
-        }),
-      ]),
-    });
-    if (diagnosticsWriteFails) {
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("fixture diagnostics write refused"),
-      );
-    }
-    expect(savedAtPublication).toContain("Candidate validation unexpectedly stopped.");
-    expect(savedAtPublication).toContain("OpenClaw update failed");
-    if (json) {
-      expect(output).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ status: "error", runId: run.runId, reportPath }),
-      );
-      expect(JSON.stringify(output.mock.calls[0]?.[0])).toContain(
-        "Candidate validation unexpectedly stopped.",
-      );
-    } else {
-      const text = log.mock.calls.flat().join("\n");
-      expect(text).toContain("OpenClaw update failed");
-      expect(text).toContain("Candidate validation unexpectedly stopped.");
-      expect(text).toContain(`Report: ${reportPath}`);
-    }
-  },
-);
-
-it.each(["error"] as const)(
-  "saves the complete %s diagnostics before printing the Markdown path",
-  async (status) => {
-    const secret = "sk-synthetic-terminal-" + "x".repeat(48);
-    const env = {
-      OPENCLAW_STATE_DIR: dirs.make("update-terminal-report-"),
-      OPENAI_API_KEY: secret,
-    };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-    const reportPath = path.join(env.OPENCLAW_STATE_DIR, "update-reports", `${run.runId}.md`);
-    let savedAtPublication: { markdown: string; failure?: string; inventory?: string } | undefined;
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation((value) => {
-      if (String(value) === `Report: ${reportPath}`) {
-        const markdown = fs.readFileSync(reportPath, "utf8");
-        let failure: string | undefined;
-        let inventory: string | undefined;
-        if (status === "error") {
-          const diagnosticLink = /^Bounded diagnostic JSON: ([^\r\n]+)$/mu.exec(markdown)?.[1];
-          if (!diagnosticLink) {
-            throw new Error("Published failure report is missing its diagnostic JSON link.");
-          }
-          failure = fs.readFileSync(path.resolve(path.dirname(reportPath), diagnosticLink), "utf8");
-          expect(Buffer.byteLength(failure)).toBeLessThanOrEqual(8 * 1024);
-          const inventoryPath = JSON.parse(failure)
-            .error.split("Complete Doctor lint inventory: ")[1]
-            .split(" Doctor lint receipt: ")[0]
-            .replace("$OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-          inventory = fs.readFileSync(inventoryPath, "utf8");
-        }
-        savedAtPublication = { markdown, ...(failure ? { failure, inventory } : {}) };
-      }
-    });
-    const doctorLintFindings: UpdateDoctorLintFinding[] = Array.from(
-      { length: 40 },
-      (_, index) => ({
-        checkId: `fixture/check-${index}`,
-        severity: index === 0 && status === "error" ? "error" : "warning",
-        message: `Finding ${index}: ${secret}`,
+    },
+    { json: true },
+  ).catch((error: unknown) => error);
+  expect(outcome).toMatchObject({
+    name: "UpdateCommandFailure",
+    exitCode: 1,
+    result: { status: "error", reason: "update-failed" },
+  });
+  expect(collectNestedErrorCandidates(outcome)).toContain(primaryFailure);
+  expect(beforeSettlement).toEqual({ status: "running", output: 0 });
+  expect(getUpdateRun(run.runId, { env })).toMatchObject({
+    status: "failed",
+    reason: "update-failed",
+    verification: { rollbackOutcome: { status: "not-needed" } },
+    steps: expect.arrayContaining([
+      expect.objectContaining({
+        step: "requested",
+        status: "failed",
+        failureFacts: [expect.objectContaining({ message: primaryFailure.message })],
       }),
-    );
-    // A valid UUID with a numeric tail must remain a readable diagnostic link.
-    vi.mocked(crypto.randomUUID).mockReturnValue("00000000-0000-4000-8000-123456789012");
-    await publishUpdateCommandTerminalResult(
-      { opts: { run } },
-      {
-        status,
-        mode: "npm",
-        reason: status === "error" ? "doctor-failed" : undefined,
-        durationMs: 1,
-        steps: [
-          {
-            name: "candidate doctor lint",
-            command: "doctor --lint --json",
-            cwd: "/fixture",
-            durationMs: 1,
-            exitCode: status === "error" ? 1 : 0,
-            doctorLintFindings,
-          },
-        ],
-      },
-      { rolledBack: false },
-    );
-    expect(log.mock.calls.flat().join("\n")).toContain(`Report: ${reportPath}`);
-    expect(savedAtPublication).toBeDefined();
-    for (const finding of doctorLintFindings) {
-      expect(savedAtPublication?.markdown).toContain(finding.checkId);
-      if (status === "error") {
-        expect(savedAtPublication?.inventory).toContain(finding.checkId);
+    ]),
+  });
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining("fixture diagnostics write refused"));
+  expect(savedAtPublication).toContain("Candidate validation unexpectedly stopped.");
+  expect(savedAtPublication).toContain("OpenClaw update failed");
+  expect(output).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ status: "error", runId: run.runId, reportPath }),
+  );
+  expect(JSON.stringify(output.mock.calls[0]?.[0])).toContain(
+    "Candidate validation unexpectedly stopped.",
+  );
+});
+
+it("saves the complete error diagnostics before printing the Markdown path", async () => {
+  const secret = "sk-synthetic-terminal-" + "x".repeat(48);
+  const run = createRun("update-terminal-report-", { OPENAI_API_KEY: secret });
+  const { env } = run;
+  const reportPath = path.join(env.OPENCLAW_STATE_DIR, "update-reports", `${run.runId}.md`);
+  let savedAtPublication: { markdown: string; failure: string; inventory: string } | undefined;
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation((value) => {
+    if (String(value) === `Report: ${reportPath}`) {
+      const markdown = fs.readFileSync(reportPath, "utf8");
+      const diagnosticLink = /^Bounded diagnostic JSON: ([^\r\n]+)$/mu.exec(markdown)?.[1];
+      if (!diagnosticLink) {
+        throw new Error("Published failure report is missing its diagnostic JSON link.");
       }
+      const failure = fs.readFileSync(
+        path.resolve(path.dirname(reportPath), diagnosticLink),
+        "utf8",
+      );
+      expect(Buffer.byteLength(failure)).toBeLessThanOrEqual(8 * 1024);
+      const inventoryPath = JSON.parse(failure)
+        .error.split("Complete Doctor lint inventory: ")[1]
+        .split(" Doctor lint receipt: ")[0]
+        .replace("$OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+      const inventory = fs.readFileSync(inventoryPath, "utf8");
+      savedAtPublication = { markdown, failure, inventory };
     }
-    expect(JSON.stringify(savedAtPublication)).not.toContain(secret);
-    expect(savedAtPublication?.markdown).toContain(
-      status === "error" ? "doctor-failed" : "OpenClaw updated",
-    );
-  },
-);
+  });
+  const doctorLintFindings: UpdateDoctorLintFinding[] = Array.from({ length: 40 }, (_, index) => ({
+    checkId: `fixture/check-${index}`,
+    severity: index === 0 ? "error" : "warning",
+    message: `Finding ${index}: ${secret}`,
+  }));
+  // A valid UUID with a numeric tail must remain a readable diagnostic link.
+  vi.mocked(crypto.randomUUID).mockReturnValue("00000000-0000-4000-8000-123456789012");
+  await publishUpdateCommandTerminalResult(
+    { opts: { run } },
+    updateResult({
+      reason: "doctor-failed",
+      steps: [
+        stepFixture("candidate doctor lint", {
+          command: "doctor --lint --json",
+          cwd: "/fixture",
+          durationMs: 1,
+          doctorLintFindings,
+        }),
+      ],
+    }),
+    { rolledBack: false },
+  );
+  expect(log.mock.calls.flat().join("\n")).toContain(`Report: ${reportPath}`);
+  expect(savedAtPublication).toBeDefined();
+  for (const finding of doctorLintFindings) {
+    expect(savedAtPublication?.markdown).toContain(finding.checkId);
+    expect(savedAtPublication?.inventory).toContain(finding.checkId);
+  }
+  expect(JSON.stringify(savedAtPublication)).not.toContain(secret);
+  expect(savedAtPublication?.markdown).toContain("doctor-failed");
+});
 
 // Real signals terminate a separate process; the parent never emits into Vitest.
 it.skipIf(process.platform === "win32").each([
@@ -585,8 +513,8 @@ it.skipIf(process.platform === "win32").each([
           status: "skipped",
           phase: "finished",
           reason: "interrupted",
+          finishedAtMs: expect.any(Number),
         });
-        expect(record?.finishedAtMs).toEqual(expect.any(Number));
         expect(record?.steps.some((step) => step.status === "in_progress")).toBe(false);
       } else {
         expect(record).toEqual(message.expected);
@@ -608,47 +536,34 @@ it.skipIf(process.platform === "win32").each([
   60_000,
 );
 
-it.each([true])(
-  "removes preview signal ownership on ordinary unwind (throws=%s)",
-  async (throws) => {
-    const root = dirs.make("update-preview-cleanup-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
-    const run = await admitUpdateCommandRun({ opts: { dryRun: true }, root });
-    const before = [process.listeners("SIGINT"), process.listeners("SIGTERM")];
-    const operation = withUpdatePreviewSignals({ dryRun: true, run }, async () => {
-      if (throws) {
-        throw new Error("preview error");
-      }
-      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, { env: run.env });
-      return 42;
-    });
-    if (throws) {
-      await expect(operation).rejects.toThrow("preview error");
-    } else {
-      await expect(operation).resolves.toBe(42);
-    }
-    expect([process.listeners("SIGINT"), process.listeners("SIGTERM")]).toEqual(before);
-  },
-);
+it("removes preview signal ownership on exceptional unwind", async () => {
+  const root = dirs.make("update-preview-cleanup-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
+  const run = await admitUpdateCommandRun({ opts: { dryRun: true }, root });
+  const before = [process.listeners("SIGINT"), process.listeners("SIGTERM")];
+  const operation = withUpdatePreviewSignals({ dryRun: true, run }, async () => {
+    throw new Error("preview error");
+  });
+  await expect(operation).rejects.toThrow("preview error");
+  expect([process.listeners("SIGINT"), process.listeners("SIGTERM")]).toEqual(before);
+});
 
 it.each([false, true])(
   "preserves reported downgrade decisions through cleanup and triage (json=%s)",
   async (json) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("update-reported-exit-") };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const run = createRun("update-reported-exit-");
+    const { env } = run;
     const opts = { json, yes: true, run };
     const triage = vi.fn(async () => ({ status: "cancelled" as const }));
     vi.spyOn(updateFailureTriage, "prepareUpdateFailureTriage").mockResolvedValue(triage);
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
     const cleaned: string[] = [];
     let reported: unknown;
     let recorded: ReturnType<typeof getUpdateRun> | undefined;
-    try {
+    await withTriageTerminal(true, async () => {
       const outcome = withUpdateFailureTriage(opts, { env }, () =>
         withUpdateCommandTerminalResult(async (registerRun) => {
           registerRun(run);
@@ -697,13 +612,7 @@ it.each([false, true])(
       });
       expect(triage).not.toHaveBeenCalled();
       expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    } finally {
-      if (stdinTty) {
-        Object.defineProperty(process.stdin, "isTTY", stdinTty);
-      } else {
-        Reflect.deleteProperty(process.stdin, "isTTY");
-      }
-    }
+    });
   },
 );
 

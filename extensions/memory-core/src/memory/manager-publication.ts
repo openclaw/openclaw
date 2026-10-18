@@ -2,9 +2,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openOpenClawAgentSqliteWorkerStoreV2,
+  captureOpenClawAgentDatabaseExecution,
+  supportsOpenClawAgentDatabaseExecution,
+  type OpenClawAgentDatabaseExecution,
   type SqliteWorkerStore,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
+import type { MemoryDatabaseAdmission } from "./manager-database-admission.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import type {
   MemoryEmbeddingCacheMutation,
@@ -43,16 +47,55 @@ export async function initializePublishedMemory(
   );
   try {
     await worker.prepare();
-    if (!schema) {
-      return undefined;
-    }
-    return await retryMemoryPublication({
-      run: () => worker.execute({ type: "schema.admit", input: schema }, assertCurrent),
-      busyTimeoutMs: 5_000,
-      prepare: async () => true,
-    });
-  } finally {
+    const admitted = schema
+      ? await retryMemoryPublication({
+          run: () => worker.execute({ type: "schema.admit", input: schema }, assertCurrent),
+          busyTimeoutMs: 5_000,
+          prepare: async () => true,
+        })
+      : undefined;
+    return { worker, admitted };
+  } catch (error) {
     await worker.close();
+    throw error;
+  }
+}
+
+export async function withPublishedMemoryExecution(
+  options: Parameters<typeof openOpenClawAgentSqliteWorkerStoreV2>[0] | undefined,
+  source: MemoryDatabaseAdmission["identity"],
+  run: () => Promise<void>,
+): Promise<void> {
+  let execution: OpenClawAgentDatabaseExecution | undefined;
+  if (options && supportsOpenClawAgentDatabaseExecution(options)) {
+    if (!source) {
+      throw new Error("Memory publication requires its live file owner");
+    }
+    // Retain across fallback preparation; a no-op generation never opens a native worker.
+    execution = captureOpenClawAgentDatabaseExecution(options, {
+      expectedIdentity: {
+        kind: "file",
+        physicalIdentity: source.identity,
+        nativeLocation: source.filename,
+        birthtime: source.birthtime,
+      },
+    });
+  }
+  const failures: unknown[] = [];
+  for (const settle of [run, () => execution?.release()]) {
+    try {
+      await settle();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, `${String(failures[0])}; Memory sync cleanup failed`, {
+      cause: failures[0],
+    });
   }
 }
 

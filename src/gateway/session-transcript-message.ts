@@ -30,7 +30,8 @@ function readTranscriptMessageSenderIsOwner(message: unknown): boolean | undefin
 export function projectSessionMessagePayload(params: {
   agentId?: string;
   historyDelta?: boolean;
-  isRunActive?: (runId: string) => boolean;
+  includePluginSteering?: boolean;
+  maxChars?: number;
   toolResultMaxChars?: number;
   message: unknown;
   messageId?: string;
@@ -51,36 +52,29 @@ export function projectSessionMessagePayload(params: {
 } {
   const idempotencyKey = readTranscriptMessageIdempotencyKey(params.message);
   const senderIsOwner = readTranscriptMessageSenderIsOwner(params.message);
+  const messageRunId = readSessionTranscriptRunId(params.message) ?? params.runId;
   const rawMessage = attachOpenClawTranscriptMeta(params.message, {
+    ...(messageRunId ? { runId: messageRunId } : {}),
     // Placement comes from the selected reader snapshot, never persisted/imported metadata.
     transcriptPosition: params.transcriptPosition,
     ...(params.messageId ? { id: params.messageId } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(params.messageSeq !== undefined ? { seq: params.messageSeq } : {}),
   });
-  const messageRunId = readSessionTranscriptRunId(rawMessage) ?? params.runId;
-  if (messageRunId && isPendingAssistantError(rawMessage) && params.isRunActive?.(messageRunId)) {
-    // A failed attempt is durable before recovery starts. Only defer its display;
-    // the terminal lifecycle refresh will expose it if this exact run really fails.
-    return {
-      deferredAssistantError: true,
-      projectionState: {
-        assistantErrorPending: true,
-        turnBoundaryPending: params.projectionState?.turnBoundaryPending ?? false,
-      },
-    };
-  }
   const historyProjection = params.historyDelta
     ? projectChatDisplayMessagesWithState([rawMessage], {
         ...params.projectionState,
+        includePluginSteering: params.includePluginSteering,
         subagentCoordination: params.subagentCoordination,
         resolveCronJobName: params.resolveCronJobName,
         includeCommentaryFallbacks: true,
+        maxChars: params.maxChars,
         toolResultMaxChars: params.toolResultMaxChars,
         activity: false,
       })
     : undefined;
   if (
+    (historyProjection && historyProjection.messages.length > 1) ||
     historyProjection?.messages.some(
       (message) => asOptionalRecord(message.openclawStreamFallback)?.source === "segment",
     )
@@ -105,6 +99,8 @@ export function projectSessionMessagePayload(params: {
             assistantErrorPending: params.projectionState.assistantErrorPending,
             turnBoundaryPending: params.projectionState.turnBoundaryPending,
             activity: false,
+            includePluginSteering: params.includePluginSteering,
+            maxChars: params.maxChars,
             toolResultMaxChars: params.toolResultMaxChars,
             subagentCoordination: params.subagentCoordination,
             resolveCronJobName: params.resolveCronJobName,
@@ -112,11 +108,12 @@ export function projectSessionMessagePayload(params: {
         : {
             messages: [
               projectChatDisplayMessage(rawMessage, {
+                includePluginSteering: params.includePluginSteering,
                 subagentCoordination: params.subagentCoordination,
                 resolveCronJobName: params.resolveCronJobName,
               }),
             ],
-            assistantErrorPending: false,
+            assistantErrorPending: isPendingAssistantError(rawMessage),
             turnBoundaryPending: false,
           };
   const projectionState = {
@@ -125,7 +122,10 @@ export function projectSessionMessagePayload(params: {
   };
   const message = projected.messages[0];
   if (!message) {
-    return { projectionState };
+    return {
+      projectionState,
+      ...(isPendingAssistantError(rawMessage) ? { deferredAssistantError: true as const } : {}),
+    };
   }
   if (readChatHistoryReplyMessageId(message)) {
     // The page owner resolves quoted originals once, with visibility and payload bounds.

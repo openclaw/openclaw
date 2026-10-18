@@ -1,7 +1,11 @@
 import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../../config/sessions/session-actor-storage-binding.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { sameSessionTranscriptStorePath } from "../../../config/sessions/transcript-store-identity.js";
 import {
   withOwnedSessionTranscriptWrites,
   SessionTranscriptWriterClaimReboundError,
@@ -230,7 +234,8 @@ export async function compactEmbeddedRunForRecovery(
     (!successor.sessionFile || successor.sessionFile === activeSession.file) &&
     (!target?.agentId || target.agentId === activeSession.target?.agentId) &&
     (!target?.sessionKey || target.sessionKey === activeSession.target?.sessionKey) &&
-    (!target?.storePath || target.storePath === activeSession.target?.storePath);
+    (!target?.storePath ||
+      sameSessionTranscriptStorePath(target.storePath, activeSession.target?.storePath));
   const reportedTokens = result.result?.tokensAfter;
   const tokensAfter =
     typeof reportedTokens === "number" && Number.isFinite(reportedTokens) && reportedTokens >= 0
@@ -288,7 +293,13 @@ export function createEmbeddedRunCompactionRuntime(input: {
   const initialTarget = sessionPromptState.sessionTarget;
   const incognito =
     !memoryManager && !detached && initialTarget
-      ? captureIncognitoSessionSource(initialTarget)
+      ? captureSessionActorStorageOwner(initialTarget, {
+          assertCurrent() {
+            abortSignal?.throwIfAborted();
+            admittedAssertion?.();
+          },
+          authorize() {},
+        })
       : undefined;
   const assertAdmittedActive = composeSessionSourceAssertion(
     [admittedAssertion],
@@ -310,13 +321,10 @@ export function createEmbeddedRunCompactionRuntime(input: {
     if (memoryManager || detached) {
       return;
     }
-    incognito?.admissionSignal?.throwIfAborted();
-    if (incognito && "kind" in incognito) {
-      incognito.assertCurrent();
-    }
     if (
       incognito &&
-      (target?.agentId !== initialTarget?.agentId || target?.storePath !== initialTarget?.storePath)
+      (target?.agentId !== initialTarget?.agentId ||
+        !sameSessionTranscriptStorePath(target?.storePath, initialTarget?.storePath))
     ) {
       throw new SessionTranscriptWriterClaimReboundError();
     }
@@ -325,8 +333,8 @@ export function createEmbeddedRunCompactionRuntime(input: {
     }
     if (incognito) {
       const entry =
-        target?.sessionKey && target.storePath && !("kind" in incognito)
-          ? incognito.actor.sessions.readSharing(target.sessionKey)?.entry
+        target?.sessionKey && target.storePath
+          ? readCapturedSessionActorEntry(incognito, target.sessionKey)
           : undefined;
       if (
         entry?.sessionId !== sessionId ||
@@ -388,7 +396,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
           sessionPromptState.sessionFile !== sessionFile ||
           current?.agentId !== target.agentId ||
           current?.sessionKey !== target.sessionKey ||
-          current?.storePath !== target.storePath
+          !sameSessionTranscriptStorePath(current?.storePath, target.storePath)
         ) {
           throw new Error("active session changed after recovery transcript preparation");
         }

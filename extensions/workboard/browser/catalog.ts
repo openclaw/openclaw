@@ -1,12 +1,9 @@
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayBrowserClient } from "./api/gateway.ts";
 import type { WorkboardCapability } from "./lib/workboard/capability.ts";
-import { loadWorkboard } from "./lib/workboard/loading.ts";
-import {
-  getWorkboardRuntime,
-  getWorkboardState,
-  hasCurrentWorkboardCards,
-  invalidateWorkboardLoads,
-} from "./lib/workboard/runtime.ts";
+import { normalizeWorkboardChange } from "./lib/workboard/change-payload.ts";
+import { normalizeCardsPayload } from "./lib/workboard/normalization.ts";
+import { getWorkboardState, invalidateWorkboardLoads } from "./lib/workboard/runtime.ts";
 import { WORKBOARD_CHANGED_EVENT, type WorkboardBoardSummary } from "./lib/workboard/types.ts";
 
 type WorkboardCatalogSnapshot = {
@@ -21,6 +18,10 @@ export class WorkboardCatalog {
   private connected = false;
   private disposed = false;
   private retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private load: Promise<boolean> | null = null;
+  private pending = false;
+  private generation = 0;
+  private lastChange: ReturnType<typeof normalizeWorkboardChange> = null;
   private snapshot: WorkboardCatalogSnapshot = { boards: [], ready: false };
 
   constructor(
@@ -34,7 +35,7 @@ export class WorkboardCatalog {
     }
     const reconnecting = connected && !this.connected && this.snapshot.ready;
     if (this.connected !== connected || this.client !== client) {
-      invalidateWorkboardLoads(this.host);
+      this.invalidate();
     }
     this.connected = connected;
     if (!connected || !client) {
@@ -50,18 +51,30 @@ export class WorkboardCatalog {
   }
 
   handleGatewayEvent(event: string, payload?: unknown): void {
-    if (
-      event === WORKBOARD_CHANGED_EVENT &&
-      this.connected &&
-      this.client &&
-      !hasCurrentWorkboardCards(this.host, payload)
-    ) {
-      this.ensureAndRecover(true);
+    if (event !== WORKBOARD_CHANGED_EVENT || !this.connected || !this.client) {
+      return;
     }
+    const change = normalizeWorkboardChange(payload);
+    if (
+      change &&
+      this.lastChange?.epoch === change.epoch &&
+      (change.revision <= this.lastChange.revision ||
+        (change.cardsRevision !== undefined &&
+          change.cardsRevision === this.lastChange.cardsRevision))
+    ) {
+      return;
+    }
+    this.lastChange = change;
+    this.ensureAndRecover(true);
+  }
+
+  refresh(): void {
+    this.invalidate();
+    this.ensureAndRecover(true);
   }
 
   removeBoard(id: string): void {
-    invalidateWorkboardLoads(this.host);
+    this.invalidate();
     const state = getWorkboardState(this.host);
     state.boards = state.boards.filter((board) => board.id !== id);
     this.publishCatalog(state.boards, this.snapshot.ready);
@@ -71,7 +84,7 @@ export class WorkboardCatalog {
   dispose(): void {
     this.disposed = true;
     this.clearRetry();
-    invalidateWorkboardLoads(this.host);
+    this.invalidate();
     this.host.clearCatalog();
   }
 
@@ -80,8 +93,9 @@ export class WorkboardCatalog {
     if (this.disposed || !client || !this.connected) {
       return;
     }
+    const generation = this.generation;
     void this.ensure(client, force).then((loaded) => {
-      if (this.disposed) {
+      if (this.disposed || generation !== this.generation) {
         return;
       }
       if (loaded) {
@@ -101,21 +115,49 @@ export class WorkboardCatalog {
   }
 
   private async ensure(client: GatewayBrowserClient, force: boolean): Promise<boolean> {
-    if (!force && (this.snapshot.ready || getWorkboardRuntime(this.host).loadPromise)) {
+    if (this.load) {
+      this.pending ||= force;
+      return this.load;
+    }
+    if (!force && this.snapshot.ready) {
       return false;
     }
-    const loaded = await loadWorkboard({
-      force: true,
-      catalogOnly: true,
-      host: this.host,
-      client,
-      requestUpdate: this.host.notify,
+    const generation = this.generation;
+    const load = Promise.resolve().then(async () => {
+      try {
+        do {
+          this.pending = false;
+          const payload = await client.request("workboard.boards.list", {});
+          if (
+            generation !== this.generation ||
+            !isRecord(payload) ||
+            !Array.isArray(payload.boards)
+          ) {
+            return false;
+          }
+          const { boards } = normalizeCardsPayload({ boards: payload.boards });
+          getWorkboardState(this.host).boards = boards;
+          this.publishCatalog(boards, true);
+        } while (this.pending);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        if (this.load === load) {
+          this.load = null;
+        }
+      }
     });
-    if (!loaded || this.disposed || !this.connected || this.client !== client) {
-      return false;
-    }
-    this.publishCatalog(getWorkboardState(this.host).boards, true);
-    return true;
+    this.load = load;
+    return load;
+  }
+
+  private invalidate(): void {
+    this.generation += 1;
+    this.load = null;
+    this.pending = false;
+    this.lastChange = null;
+    invalidateWorkboardLoads(this.host);
   }
 
   private publishCatalog(boards: WorkboardBoardSummary[], ready: boolean): void {

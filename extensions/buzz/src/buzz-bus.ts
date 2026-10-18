@@ -267,7 +267,6 @@ export async function startBuzzBus(options: {
             },
             result: () => {},
             onTimeout: reportFatalError,
-            checkAbortAfterSubscribe: true,
           });
         } catch (error) {
           signal.throwIfAborted();

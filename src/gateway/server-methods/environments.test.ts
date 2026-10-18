@@ -28,10 +28,16 @@ vi.mock("../../infra/device-pairing-store-readonly.js", async (importOriginal) =
   readDevicePairingNodeSnapshot: vi.fn(),
 }));
 
+vi.mock("../../plugins/worker-profile-suggestions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/worker-profile-suggestions.js")>()),
+  resolveSuggestedWorkerProfile: vi.fn(async () => undefined),
+}));
+
 vi.mock("../node-registry-private.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../node-registry-private.js")>()),
   collectNodeCatalogRuntimeState: vi.fn(() => ({
     sessionHostNodeIds: new Set(),
+    deviceFolderNodeIds: new Set(),
     issuesByNodeId: new Map(),
     workerSlotsByNodeId: new Map(),
     workerBundleByNodeId: new Map(),
@@ -53,6 +59,7 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   runtimeState = {
     sessionHostNodeIds: new Set(),
+    deviceFolderNodeIds: new Set(),
     issuesByNodeId: new Map(),
     workerSlotsByNodeId: new Map(),
     workerBundleByNodeId: new Map(),

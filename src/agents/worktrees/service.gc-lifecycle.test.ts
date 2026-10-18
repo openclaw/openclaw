@@ -15,6 +15,7 @@ import {
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import * as gitExec from "../../infra/git-exec.js";
 import {
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
@@ -28,14 +29,17 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { createWorktreeGitMaintenance } from "./git-maintenance.js";
 import { requireGit } from "./git.js";
 import { createManagedWorktreeOwnerPolicy } from "./owner-protection.js";
+import * as registryReads from "./registry-read.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import * as removal from "./removal-git.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
-import { ManagedWorktreeService } from "./service.js";
+import { ManagedWorktreeService, WORKTREE_GC_INTERVAL_MS } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
+  materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import * as snapshots from "./snapshot-host.js";
@@ -51,7 +55,11 @@ vi.mock("../../gateway/session-worker-placement-context.js", () => ({
         assertCurrent: () => {},
         release: () => {},
       }),
-      prepareSessionPlacement: async () => ({ current: () => undefined, release: () => {} }),
+      prepareSessionPlacement: async () => ({
+        prepareRead: () => undefined,
+        current: () => undefined,
+        release: () => {},
+      }),
     },
   }),
 }));
@@ -96,7 +104,7 @@ it("releases session mutation admission during Git while the registry claim fenc
   };
   await replaceSessionEntry({ agentId: "main", sessionKey, storePath, env }, entry);
   await fs.writeFile(path.join(record.path, "draft.txt"), "preserved draft\n");
-  const service = new ManagedWorktreeService({ env, now: () => 2 });
+  const service = new ManagedWorktreeService({ env });
   const entered = createDeferred();
   const release = createDeferred();
   const checkoutRemoved = createDeferred();
@@ -113,6 +121,7 @@ it("releases session mutation admission during Git while the registry claim fenc
     checkoutRemoved.resolve();
     await publishRemoval.promise;
   });
+  const cleanupStarted = Date.now();
   const cleanup = service.gc({
     ...createManagedWorktreeOwnerPolicy(cfg),
     signal,
@@ -181,7 +190,8 @@ it("releases session mutation admission during Git while the registry claim fenc
   expect((await cleanup).removed).toEqual([record.id]);
   expect(isSessionLifecycleMutationActive(storePath, identities)).toBe(false);
   const removed = getRegistryWorktree(env, record.id)!;
-  expect(removed.removedAt).toBe(2);
+  expect(removed.removedAt).toBeGreaterThanOrEqual(cleanupStarted);
+  expect(removed.removedAt).toBeLessThanOrEqual(Date.now());
   expect(await requireGit(repoRoot, ["show", `${removed.snapshotRef}:draft.txt`])).toBe(
     "preserved draft",
   );
@@ -221,4 +231,74 @@ it("refuses unarchive after an interrupted removal releases its process claim", 
   ).rejects.toThrow(/removal is incomplete/i);
   expect(entry.archivedAt).toBe(1);
   expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
+});
+
+it("bounds Git housekeeping without delaying orphan cleanup or newly registered repositories", async () => {
+  const root = tempDirs.make("worktree-gc-cadence-state-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+  setRuntimeConfigSnapshot({});
+  const repo = await initializeRepository(tempDirs.make("worktree-gc-cadence-"));
+  await materializeManagedWorktreeFixtures({
+    env,
+    repoRoot: repo,
+    stateDir: repo,
+    names: ["first", "second", "third"],
+    now: 1,
+  });
+  const service = new ManagedWorktreeService({ env });
+  const commands = vi.spyOn(gitExec, "executeGitCommand");
+  const maintenanceRoots = () =>
+    commands.mock.calls.flatMap(([cwd, , options]) =>
+      options?.operation === "worktree.maintenance" ? [cwd] : [],
+    );
+  await service.gc();
+  expect(maintenanceRoots().length).toBeGreaterThan(0);
+  expect(new Set(maintenanceRoots())).toEqual(new Set([repo]));
+  commands.mockClear();
+
+  const orphan = path.join(env.OPENCLAW_STATE_DIR, "worktrees", "unregistered", "empty");
+  await fs.mkdir(orphan, { recursive: true });
+  expect(await service.gc()).toMatchObject({ orphansDeleted: 1, outcome: "completed" });
+  await expect(fs.access(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(maintenanceRoots()).toEqual([]);
+
+  const otherRepo = await initializeRepository(tempDirs.make("worktree-gc-new-repo-"));
+  await materializeManagedWorktreeFixtures({
+    env,
+    repoRoot: otherRepo,
+    stateDir: otherRepo,
+    names: ["new-repo"],
+    now: Date.now(),
+  });
+  await service.gc();
+  expect(new Set(maintenanceRoots())).toEqual(new Set([otherRepo]));
+  commands.mockClear();
+
+  await service.gc({ retryDeferred: true });
+  expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
+  commands.mockClear();
+  await service.gc();
+  expect(maintenanceRoots()).toEqual([]);
+
+  // Registry preparation and native leases finish before the cadence-only clock scope.
+  const records = await registryReads.readRegistryWorktrees(env);
+  await closeOpenClawStateDatabaseAsync();
+  const inventory = vi.spyOn(registryReads, "readRegistryWorktrees").mockResolvedValue(records);
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    const maintain = createWorktreeGitMaintenance(env);
+    await maintain({});
+    expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
+    commands.mockClear();
+    now += WORKTREE_GC_INTERVAL_MS - 1;
+    await maintain({});
+    expect(maintenanceRoots()).toEqual([]);
+    now += 1;
+    await maintain({});
+    expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
+  } finally {
+    clock.mockRestore();
+    inventory.mockRestore();
+  }
 });

@@ -29,6 +29,7 @@ import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createExpectedProfileBinding } from "../expected-profile.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
+import { bindSteeringTools } from "./chat-send-authority.test-support.js";
 import {
   setClientProfile,
   setNativeIosClient,
@@ -60,9 +61,7 @@ describe("native profile-bound steering", () => {
       const fingerprint = "native-receipt-tools";
       let preparingNative = false;
       let held = false;
-      operation.bindToolAuthoritySnapshot({
-        fingerprint: () => fingerprint,
-        project: () => fingerprint,
+      bindSteeringTools(operation, fingerprint, {
         projectAsync: async () => {
           if (preparingNative && !held) {
             held = true;
@@ -72,7 +71,6 @@ describe("native profile-bound steering", () => {
           return fingerprint;
         },
       });
-      operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
       replyRunRegistry.bindSourceTurnId(operation, sourceTurnId);
       operation.setPhase("running");
       const native = createNativeSessionBindingAuthority(
@@ -175,11 +173,7 @@ describe("native profile-bound steering", () => {
       setNativeIosClient(fixture.client);
       setClientProfile(fixture.client, profile);
       const fingerprint = "native-steering-tools";
-      operation.bindToolAuthoritySnapshot({
-        fingerprint: () => fingerprint,
-        project: () => fingerprint,
-      });
-      operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
+      bindSteeringTools(operation, fingerprint);
       operation.setPhase("running");
       const entered = createDeferred();
       const release = createDeferred();
@@ -263,14 +257,12 @@ describe("native profile-bound steering", () => {
         const operation = fixture.activeRun!;
         const fingerprint = "v1-steering-tools";
         let originalOperatorAuthority: AdmittedRunOperatorAuthority | undefined;
-        operation.bindToolAuthoritySnapshot({
-          fingerprint: () => fingerprint,
+        bindSteeringTools(operation, fingerprint, {
           project: (incoming) => {
             originalOperatorAuthority = incoming.operatorAuthority;
             return fingerprint;
           },
         });
-        operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
         operation.setPhase("running");
         const write = vi.fn(async () => undefined);
         const questionCall = resolveAgentQuestionGatewayCall(write);
@@ -341,13 +333,9 @@ describe("native profile-bound steering", () => {
     },
   );
 
-  it.each(
-    (["queue", "claim", "cancel"] as const).flatMap((sink) =>
-      [false, true].map((bound) => ({ sink, bound })),
-    ),
-  )(
-    "fences deferred custom question I/O through registry $sink (bound: $bound)",
-    async ({ sink, bound }) => {
+  it.each([false, true])(
+    "fences deferred custom question cancellation after a profile merge (bound: %s)",
+    async (bound) => {
       const fixture = await createBrowserFollowupFixture();
       const entered = createDeferred();
       const release = createDeferred();
@@ -371,17 +359,6 @@ describe("native profile-bound steering", () => {
             return {};
           },
         });
-        const dispatch = async (assertCurrent: () => void, kind: "run" | "source-bound") => {
-          await questionCall(
-            "question.resolve",
-            {},
-            {},
-            {
-              dispatchAuthority: { version: 2, kind, assertCurrent },
-            },
-          );
-          return true;
-        };
         const cancelBacking = vi.fn();
         const operation = fixture.activeRun!;
         operation.setPhase("running");
@@ -393,13 +370,20 @@ describe("native profile-bound steering", () => {
           messageInjectionV2: {
             version: 2,
             isAvailable: () => true,
-            queueMessage: async (_text, _options, assertCurrent, kind) => {
-              await dispatch(assertCurrent, kind);
+            queueMessage: async () => {
+              throw new Error("Expected question cancellation, not steering");
             },
-            claimPendingUserInputAnswer: async (_text, _options, assertCurrent, kind) =>
-              dispatch(assertCurrent, kind),
-            cancelPendingUserInput: async (_resolvedBy, assertCurrent, kind) =>
-              dispatch(assertCurrent, kind),
+            cancelPendingUserInput: async (_resolvedBy, assertCurrent, kind) => {
+              await questionCall(
+                "question.resolve",
+                {},
+                {},
+                {
+                  dispatchAuthority: { version: 2, kind, assertCurrent },
+                },
+              );
+              return true;
+            },
           },
         });
         const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(
@@ -407,11 +391,9 @@ describe("native profile-bound steering", () => {
         )!;
         const attempt = await beginReplyMessageInjectionTarget(target, "answer", {
           isInboundUserMessage: true,
-          toolAuthorityFingerprint: sink === "claim" ? "other-tools" : "active-tools",
+          toolAuthorityFingerprint: "active-tools",
           pendingInputAuthorityFingerprint: "active-tools",
-          ...(sink === "cancel"
-            ? { images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }] }
-            : {}),
+          images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
           ...(bound ? { assertCurrent: binding.assertCurrent } : {}),
         });
         outcome = attempt.outcome.catch((error: unknown) => error);
@@ -431,7 +413,7 @@ describe("native profile-bound steering", () => {
             }),
           });
         } else {
-          expect(result).toMatchObject({ status: sink === "cancel" ? "rejected" : "accepted" });
+          expect(result).toMatchObject({ status: "rejected" });
         }
         expect(cancelBacking).not.toHaveBeenCalled();
         expect(operation.result).toBeNull();

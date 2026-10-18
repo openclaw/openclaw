@@ -10,7 +10,7 @@ export const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
 export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
 export const CHAT_SNAPSHOT_METADATA_STORE_NAME = "snapshotMetadata";
 export const SIDEBAR_SNAPSHOT_STORE_NAME = "sidebarSnapshots";
-const CHAT_SNAPSHOT_DB_VERSION = 7;
+const CHAT_SNAPSHOT_DB_VERSION = 8;
 
 export function isPersistableChatSnapshotKey(key: string): boolean {
   return key.startsWith("scope:[") && !isIncognitoSessionKey(key.slice(key.indexOf("\u0000") + 1));
@@ -33,6 +33,8 @@ function indexedDbFactory(): IDBFactory | null {
   }
 }
 
+// IndexedDB requests own their one-shot listeners; database listeners end when callers close it.
+// Persistence stays independent of any Solid view's lifetime.
 function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = factory.open(CHAT_SNAPSHOT_DB_NAME, CHAT_SNAPSHOT_DB_VERSION);
@@ -48,8 +50,13 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
       }
       if (event.oldVersion < 5) {
         database.createObjectStore(SIDEBAR_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
-      } else {
+      } else if (event.oldVersion < 7) {
         request.transaction?.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME).clear();
+      }
+      if (event.oldVersion >= 4 && event.oldVersion < 8) {
+        // Retire unbounded transcripts without reading them onto the main thread.
+        request.transaction?.objectStore(CHAT_SNAPSHOT_STORE_NAME).clear();
+        request.transaction?.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).clear();
       }
       // The unified projection replaces this disposable cache; retirement never gates startup.
       try {
@@ -84,41 +91,12 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
   if (!factory) {
     return null;
   }
-  let database: IDBDatabase;
   try {
-    database = await openIndexedDb(factory);
-  } catch (error) {
-    debugSnapshotStore("resetting cache after IndexedDB open failure", error);
-    if (!(await deleteIndexedDb(factory))) {
-      return null;
-    }
-    try {
-      database = await openIndexedDb(factory);
-    } catch (retryError) {
-      debugSnapshotStore("IndexedDB cache remains unavailable", retryError);
-      return null;
-    }
-  }
-  database.addEventListener("versionchange", () => database.close());
-  if (
-    database.objectStoreNames.length === 3 &&
-    database.objectStoreNames.contains(CHAT_SNAPSHOT_STORE_NAME) &&
-    database.objectStoreNames.contains(CHAT_SNAPSHOT_METADATA_STORE_NAME) &&
-    database.objectStoreNames.contains(SIDEBAR_SNAPSHOT_STORE_NAME)
-  ) {
+    const database = await openIndexedDb(factory);
+    database.addEventListener("versionchange", () => database.close());
     return database;
-  }
-  database.close();
-  debugSnapshotStore("resetting cache after IndexedDB schema mismatch");
-  if (!(await deleteIndexedDb(factory))) {
-    return null;
-  }
-  try {
-    const fresh = await openIndexedDb(factory);
-    fresh.addEventListener("versionchange", () => fresh.close());
-    return fresh;
   } catch (error) {
-    debugSnapshotStore("IndexedDB cache reset failed", error);
+    debugSnapshotStore("IndexedDB cache is unavailable", error);
     return null;
   }
 }
@@ -169,16 +147,14 @@ export async function deleteSessionSnapshotEntries(
     return;
   }
   try {
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       const names = [
         CHAT_SNAPSHOT_STORE_NAME,
         CHAT_SNAPSHOT_METADATA_STORE_NAME,
         SIDEBAR_SNAPSHOT_STORE_NAME,
       ];
       const transaction = database.transaction(names, "readwrite");
-      for (const event of ["complete", "error", "abort"]) {
-        transaction.addEventListener(event, () => resolve(), byPrefix ? { once: true } : undefined);
-      }
+      void transactionComplete(transaction).then(resolve, reject);
       for (const name of names) {
         const store = transaction.objectStore(name);
         if (!byPrefix && name !== SIDEBAR_SNAPSHOT_STORE_NAME) {
@@ -204,7 +180,7 @@ export async function deleteSessionSnapshotEntries(
       }
     });
   } catch (error) {
-    // Scope clearing reports setup failures; single-record invalidation is best effort.
+    // Scope clearing reports failures; single-record invalidation is best effort.
     if (byPrefix) {
       throw error;
     }

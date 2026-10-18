@@ -4,7 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { catalogPage, mountSessionCatalogSidebar } from "../app-sidebar.ts";
 
 export function registerCatalogPageHostTests() {
-  it("pages only cursor hosts and preserves exhausted hosts through a catalog change", async () => {
+  it("pages only cursor hosts and preserves exhausted hosts through a catalog refresh", async () => {
     vi.useFakeTimers();
     try {
       const exhaustedHost: SessionCatalogHost = {
@@ -35,7 +35,7 @@ export function registerCatalogPageHostTests() {
           catalogPage([{ threadId: "thread-2", name: "Current title" }], "page-3"),
         )
         .mockResolvedValueOnce(catalogPage([{ threadId: "thread-3", name: "Oldest" }]));
-      const { gateway, sidebar } = await mountSessionCatalogSidebar({
+      const { sidebar } = await mountSessionCatalogSidebar({
         request,
       } as unknown as GatewayBrowserClient);
 
@@ -69,7 +69,7 @@ export function registerCatalogPageHostTests() {
       expect(sidebar.textContent).toContain("Retained remote session");
       expect(retainedHost()).toEqual(exhaustedHost);
 
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(5_000);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {

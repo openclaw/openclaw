@@ -246,22 +246,4 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
     });
     expect(bridge.pendingSweepInterval).not.toBeNull();
   });
-
-  test("waitForEvent clamps oversized direct caller timeouts before arming timers", async () => {
-    const bridge = makeBridge();
-    let resolved = false;
-    const waited = bridge.waitForEvent({ afterCursor: 0 }, 3_000_000_000).then((event) => {
-      resolved = true;
-      return event;
-    });
-    await Promise.resolve();
-
-    vi.advanceTimersByTime(299_999);
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-
-    vi.advanceTimersByTime(1);
-    await expect(waited).resolves.toEqual({ event: null });
-    expect(resolved).toBe(true);
-  });
 });

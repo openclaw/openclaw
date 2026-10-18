@@ -233,7 +233,9 @@ describe("node host version mismatch guard", () => {
       try {
         await expect(
           connectReverted(gatewayVersion, "test-node-reverted-hello-failure"),
-        ).rejects.toThrow(/gateway closed during connect/i);
+        ).rejects.toThrow(
+          /gateway closed(?: during connect)? \(1011\): gateway hello delivery failed/i,
+        );
         expect(failNextHelloOk).toBe(false);
       } finally {
         sendSpy.mockRestore();

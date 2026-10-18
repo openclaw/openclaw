@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -9,14 +10,15 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { appendSqliteTrajectoryRuntimeEventsWithWriter } from "../../trajectory/runtime-store.sqlite.js";
+import { readSessionTranscriptBoundedActiveContextCore as readBoundedContext } from "./session-accessor.sqlite-active-context.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
-  readCurrentProjectionSnapshot,
+  readCurrentProjectionSnapshot as readProjection,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
   appendTranscriptEventsInTransaction,
-  rewriteSqliteTranscriptEventRowsInTransaction,
+  rewriteSqliteTranscriptEventRowsInTransaction as rewriteEvents,
 } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionActorTarget } from "./session-actor-contract.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
@@ -28,15 +30,17 @@ import {
   createSessionActorReplica,
   readSessionActorProjectionReceipt,
 } from "./session-actor-replica.js";
-import { withSessionActorTransactionState } from "./session-actor-transaction.js";
+import { withSessionActorTransactionState as withActorTransaction } from "./session-actor-transaction.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
+import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
 import {
-  markSessionTranscriptIndexDirtyInTransaction,
-  reconcileSessionTranscriptIndexInTransaction,
+  markSessionTranscriptIndexDirtyInTransaction as markIndexDirty,
+  reconcileSessionTranscriptIndexInTransaction as reconcileIndex,
 } from "./session-transcript-index.js";
-import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
+import { withSessionTranscriptProjectionReceipt as withReceipt } from "./session-transcript-projection-facts-scope.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
+import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 // mock-isolation: These owner transactions do not exercise background entry maintenance.
@@ -45,6 +49,11 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 }));
 // mock-isolation: Keep background disk-budget eviction outside the projection-receipt proof.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
+
+const expectedProjection = (rawSeq: number, state: Record<string, unknown>) => ({
+  kind: "value",
+  value: { version: { rawSeq }, state },
+});
 
 const user = {
   type: "message",
@@ -59,7 +68,7 @@ const assistant = {
   message: { role: "assistant", content: "answer" },
 };
 
-function fixture() {
+function fixture(initialEvents: TranscriptEvent[] = [user, assistant]) {
   const { database, scope: originalScope } = createSessionCompoundWorkerFixture();
   const scope = { ...originalScope, path: database.path };
   const options = { agentId: database.agentId, path: database.path };
@@ -68,11 +77,12 @@ function fixture() {
     appendTranscriptEventsInTransaction(database, scope, events, {
       scheduleProjectionReconcile: false,
     });
-  write(() => append([user, assistant]));
+  write(() => append(initialEvents));
   const identity = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity.identity !== "string") {
-    throw new Error("Projection receipt proof requires a physical database");
-  }
+  assert(
+    typeof identity.identity === "string",
+    "Projection receipt proof requires a physical database",
+  );
   const target = {
     sessionKey: scope.sessionKey,
     database: {
@@ -88,9 +98,7 @@ function fixture() {
   ];
   const token = () => {
     const value = readSqliteDatabaseScopedWriteToken(database.db, writeScopes);
-    if (value === undefined) {
-      throw new Error("Projection receipt proof requires an admitted write token");
-    }
+    assert(value !== undefined, "Projection receipt proof requires an admitted write token");
     return value;
   };
   const hydrate = () =>
@@ -99,11 +107,8 @@ function fixture() {
     state: SessionActorStoredState = hydrate(),
   ): SessionTranscriptProjectionReceipt => {
     const facts = projectSessionActorHotState(state).transcript.projection;
-    if (!facts) {
-      throw new Error("Hydrated actor did not publish projection facts");
-    }
+    assert(facts, "Hydrated actor did not publish projection facts");
     return {
-      path: database.path,
       sessionId: scope.sessionId,
       writeScopes,
       writeToken: token(),
@@ -111,8 +116,8 @@ function fixture() {
     };
   };
   const read = (facts?: SessionTranscriptProjectionReceipt) =>
-    withSessionTranscriptProjectionReceipt(facts, () =>
-      readCurrentProjectionSnapshot(database, scope, (projection) => ({
+    withReceipt(facts, () =>
+      readProjection(database, scope, (projection) => ({
         version: projection.version,
         state: projection.state,
         latestIndexedReset: projection.latestIndexedReset,
@@ -124,6 +129,18 @@ function fixture() {
       query.includes('"reset_active_position"') ? "snapshot" : null,
     );
   return { database, scope, target, identity, write, append, hydrate, receipt, read, observe };
+}
+
+function withObservedSnapshot(
+  f: ReturnType<typeof fixture>,
+  run: (observed: ReturnType<ReturnType<typeof fixture>["observe"]>) => void,
+) {
+  const observed = f.observe();
+  try {
+    run(observed);
+  } finally {
+    observed.restore();
+  }
 }
 
 it("carries a retained actor projection into the history reader and rejects it after a write", async () => {
@@ -140,30 +157,19 @@ it("carries a retained actor projection into the history reader and rejects it a
       sessionId: f.scope.sessionId,
     };
     try {
-      expect(replica.beginRead().install(f.hydrate().hot)).toBe(true);
+      expect(replica.beginRead()(f.hydrate().hot)).toBe(true);
       const receipt = readSessionActorProjectionReceipt(locator);
-      if (!receipt) {
-        throw new Error("Installed actor projection was not available to the history reader");
-      }
+      assert(receipt, "Installed actor projection was not available to the history reader");
       expect(
         readSessionActorProjectionReceipt({ ...locator, sessionId: "another-session" }),
       ).toBeUndefined();
-      const observed = f.observe();
-      try {
-        expect(f.read(receipt)).toMatchObject({
-          kind: "value",
-          value: { version: { rawSeq: 1 }, state: { activeMessageCount: 2 } },
-        });
+      withObservedSnapshot(f, (observed) => {
+        expect(f.read(receipt)).toMatchObject(expectedProjection(1, { activeMessageCount: 2 }));
         expect(observed.counts.snapshot).toBe(0);
         f.write(() => f.append([{ ...user, id: "next", parentId: "assistant" }]));
-        expect(f.read(receipt)).toMatchObject({
-          kind: "value",
-          value: { version: { rawSeq: 2 }, state: { activeMessageCount: 3 } },
-        });
+        expect(f.read(receipt)).toMatchObject(expectedProjection(2, { activeMessageCount: 3 }));
         expect(observed.counts.snapshot).toBe(1);
-      } finally {
-        observed.restore();
-      }
+      });
     } finally {
       replica.close();
     }
@@ -174,8 +180,7 @@ it("keeps transcript receipts through unrelated trajectory append and trim", asy
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     const receipt = f.receipt();
-    const observed = f.observe();
-    try {
+    withObservedSnapshot(f, (observed) => {
       for (const id of ["first", "replacement"]) {
         appendSqliteTrajectoryRuntimeEventsWithWriter(
           {
@@ -183,12 +188,10 @@ it("keeps transcript receipts through unrelated trajectory append and trim", asy
             events: [{ runId: id, ts: "2026-10-12T00:00:00Z", line: JSON.stringify({ id }) }],
             discardPrevious: true,
           },
+          f.database,
           (_label, write) => f.write(() => write(f.database)),
         );
-        expect(f.read(receipt)).toMatchObject({
-          kind: "value",
-          value: { version: { rawSeq: 1 }, state: { activeMessageCount: 2 } },
-        });
+        expect(f.read(receipt)).toMatchObject(expectedProjection(1, { activeMessageCount: 2 }));
       }
       expect(observed.counts.snapshot).toBe(0);
       expect(
@@ -197,14 +200,9 @@ it("keeps transcript receipts through unrelated trajectory append and trim", asy
           .all(f.scope.sessionId),
       ).toEqual([{ event_json: JSON.stringify({ id: "replacement" }) }]);
       f.write(() => f.append([{ ...user, id: "next", parentId: "assistant" }]));
-      expect(f.read(receipt)).toMatchObject({
-        kind: "value",
-        value: { version: { rawSeq: 2 }, state: { activeMessageCount: 3 } },
-      });
+      expect(f.read(receipt)).toMatchObject(expectedProjection(2, { activeMessageCount: 3 }));
       expect(observed.counts.snapshot).toBe(1);
-    } finally {
-      observed.restore();
-    }
+    });
   });
 });
 
@@ -213,51 +211,42 @@ it("serves committed actor postimages without projection SQL and confines facts 
     const f = fixture();
     const actor = f.hydrate();
     const initial = f.receipt(actor);
-    const observed = f.observe();
-    try {
-      expect(f.read(initial)).toMatchObject({
-        kind: "value",
-        value: {
-          version: { rawSeq: 1 },
-          state: { activeMessageCount: 2, leafEventId: "assistant" },
-        },
-      });
+    withObservedSnapshot(f, (observed) => {
+      expect(f.read(initial)).toMatchObject(
+        expectedProjection(1, { activeMessageCount: 2, leafEventId: "assistant" }),
+      );
       expect(f.read(initial)).toMatchObject({ kind: "value" });
       expect(observed.counts.snapshot).toBe(0);
 
       f.write(() =>
-        withSessionActorTransactionState(f.database, actor, () =>
+        withActorTransaction(f.database, actor, () =>
           f.append([{ ...user, id: "next", parentId: "assistant" }]),
         ),
       );
       const committed = f.receipt(actor);
       observed.counts.snapshot = 0;
-      expect(f.read(committed)).toMatchObject({
-        kind: "value",
-        value: { version: { rawSeq: 2 }, state: { activeMessageCount: 3, leafEventId: "next" } },
-      });
+      expect(f.read(committed)).toMatchObject(
+        expectedProjection(2, { activeMessageCount: 3, leafEventId: "next" }),
+      );
       expect(observed.counts.snapshot).toBe(0);
 
       expect(() =>
-        withSessionTranscriptProjectionReceipt(committed, () => {
+        withReceipt(committed, () => {
           throw new Error("request canceled");
         }),
       ).toThrow("request canceled");
       expect(f.read()).toMatchObject({ kind: "value", value: { version: { rawSeq: 2 } } });
       expect(observed.counts.snapshot).toBe(1);
-      withSessionTranscriptProjectionReceipt(committed, () => {
+      withReceipt(committed, () => {
         expect(f.read()).toMatchObject({ kind: "value" });
-        readCurrentProjectionSnapshot(f.database, f.scope, () => undefined);
+        readProjection(f.database, f.scope, () => undefined);
       });
       expect(observed.counts.snapshot).toBe(2);
-    } finally {
-      observed.restore();
-    }
+    });
   });
 });
 
 it.each([
-  { kind: "append", event: { ...user, id: "next", parentId: "assistant" }, leaf: "next" },
   {
     kind: "rewind",
     event: { type: "leaf", id: "rewind", parentId: "assistant", targetId: "user" },
@@ -289,16 +278,12 @@ it.each([
       f.write(() => f.append([event]));
       if (kind === "rewind") {
         expect(f.read(retained)).toEqual({ kind: "unavailable" });
-        f.write(() =>
-          reconcileSessionTranscriptIndexInTransaction(f.database.db, f.scope.sessionId),
-        );
+        f.write(() => reconcileIndex(f.database.db, f.scope.sessionId));
       }
-      const observed = f.observe();
-      try {
-        expect(f.read(retained)).toMatchObject({
-          kind: "value",
-          value: { version: { rawSeq: 2 }, state: { indexedSeq: 2, leafEventId: leaf } },
-        });
+      withObservedSnapshot(f, (observed) => {
+        expect(f.read(retained)).toMatchObject(
+          expectedProjection(2, { indexedSeq: 2, leafEventId: leaf }),
+        );
         expect(observed.counts.snapshot).toBe(1);
         const refreshed = f.receipt();
         expect(f.read(refreshed)).toMatchObject({
@@ -310,10 +295,20 @@ it.each([
           expect(f.read(refreshed)).toMatchObject({
             value: { latestIndexedReset: { seq: 2, active_position: 2, event_type: "reset" } },
           });
+          withReceipt(refreshed, () => {
+            readProjection(f.database, f.scope, (projection: CurrentTranscriptProjection) => {
+              projection.state.activeMessageCount = 999;
+              if (projection.latestIndexedReset) {
+                projection.latestIndexedReset.seq = 999;
+              }
+            });
+            expect(f.read(refreshed)).toMatchObject({
+              kind: "value",
+              value: { state: { activeMessageCount: 2 }, latestIndexedReset: { seq: 2 } },
+            });
+          });
         }
-      } finally {
-        observed.restore();
-      }
+      });
     });
   },
 );
@@ -323,7 +318,7 @@ it("invalidates exact rewrites and dirty/rebuilt projections even when the lates
     const f = fixture();
     const retained = f.receipt();
     f.write(() =>
-      rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
+      rewriteEvents(f.database, f.scope, [
         {
           seq: 1,
           expectedEventJson: JSON.stringify(assistant),
@@ -333,18 +328,16 @@ it("invalidates exact rewrites and dirty/rebuilt projections even when the lates
     );
     const rewritten = f.read(retained);
     expect(rewritten).toMatchObject({ kind: "value", value: { version: { rawSeq: 1 } } });
-    if (rewritten.kind !== "value") {
-      throw new Error("Exact rewrite left the projection unavailable");
-    }
-    expect(rewritten.value.version.generation).not.toBe(retained.facts.generation);
+    assert(rewritten.kind === "value", "Exact rewrite left the projection unavailable");
+    expect(rewritten.value.version.generation).not.toBe(retained.facts?.generation);
     const beforeDirty = f.receipt();
     f.write(() => {
-      markSessionTranscriptIndexDirtyInTransaction(f.database.db, f.scope.sessionId);
+      markIndexDirty(f.database.db, f.scope.sessionId);
       expect(f.read(beforeDirty)).toEqual({ kind: "unavailable" });
     });
     expect(f.read(beforeDirty)).toEqual({ kind: "unavailable" });
     const dirty = f.receipt();
-    f.write(() => reconcileSessionTranscriptIndexInTransaction(f.database.db, f.scope.sessionId));
+    f.write(() => reconcileIndex(f.database.db, f.scope.sessionId));
     expect(f.read(dirty)).toMatchObject({
       kind: "value",
       value: { state: { needsRebuild: false, activeMessageCount: 2, indexedSeq: 1 } },
@@ -388,26 +381,102 @@ it("rejects stale hot and cold receipts after archive-marker writes and restore"
   });
 });
 
-it("does not let a snapshot consumer mutate the next reader's retained facts", async () => {
+it("covers the first append after hydrating an empty actor", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture([]);
+    const actor = f.hydrate();
+    f.write(() => withActorTransaction(f.database, actor, () => f.append([user])));
+    const receipt = f.receipt(actor);
+    expect(receipt.facts?.contextMetadata).toBeUndefined();
+    expect(
+      withReceipt(receipt, () =>
+        readBoundedContext(f.scope, {
+          maxBytes: 1_000_000,
+          maxEvents: 100,
+        }),
+      ),
+    ).toMatchObject({
+      events: [user],
+      serializedBytes: Buffer.byteLength(JSON.stringify(user)) + 1,
+    });
+  });
+});
+
+it("preserves bounded context and accounting with compact committed receipts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
-    f.write(() => f.append([{ type: "reset", id: "reset", parentId: "assistant", reason: "new" }]));
-    const receipt = f.receipt();
-    withSessionTranscriptProjectionReceipt(receipt, () => {
-      readCurrentProjectionSnapshot(
-        f.database,
-        f.scope,
-        (projection: CurrentTranscriptProjection) => {
-          projection.state.activeMessageCount = 999;
-          if (projection.latestIndexedReset) {
-            projection.latestIndexedReset.seq = 999;
-          }
-        },
+    const actor = f.hydrate();
+    const readContext = (receipt?: SessionTranscriptProjectionReceipt, maxEvents = 100) =>
+      withReceipt(receipt, () => readBoundedContext(f.scope, { maxBytes: 1_000_000, maxEvents }));
+    const readAccounting = (receipt?: SessionTranscriptProjectionReceipt) =>
+      withReceipt(receipt && { ...receipt, contextOnly: true }, () =>
+        readProjection(f.database, f.scope, (projection) =>
+          readSessionTranscriptAccountingFromProjection(projection, {
+            includeByteSize: true,
+            includeUsage: true,
+            includeTurnTaint: true,
+          }),
+        ),
       );
-      expect(f.read(receipt)).toMatchObject({
-        kind: "value",
-        value: { state: { activeMessageCount: 2 }, latestIndexedReset: { seq: 2 } },
-      });
+    const receipt = f.receipt(actor);
+    expect(readContext(receipt)).toEqual(readContext());
+    expect(readAccounting(receipt)).toEqual(readAccounting());
+    expect(readContext(receipt, 1)).toMatchObject({ events: [assistant], truncated: true });
+
+    const next = {
+      ...user,
+      id: "next",
+      parentId: "assistant",
+      message: { role: "user", content: "é🦞" },
+    };
+    f.write(() => withActorTransaction(f.database, actor, () => f.append([next])));
+    const committed = f.receipt(actor);
+    expect(readContext(committed).events).toEqual([user, assistant, next]);
+    expect(readAccounting(committed)).toMatchObject({
+      kind: "value",
+      value: {
+        eventCount: 3,
+        byteSize: [user, assistant, next].reduce(
+          (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
+          0,
+        ),
+      },
+    });
+  });
+});
+
+it("keeps stored header bytes, event limits and admitted-turn fences in the covered reader", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const header = { type: "session", version: 3, id: "header", cwd: "/synthetic/é" };
+    const f = fixture([header, user, assistant]);
+    const receipt = f.receipt();
+    const headerBytes = Buffer.byteLength(JSON.stringify(header)) + 1;
+    const answerBytes = Buffer.byteLength(JSON.stringify(assistant)) + 1;
+    const read = (maxBytes: number) =>
+      withReceipt(receipt, () => readBoundedContext(f.scope, { maxBytes, maxEvents: 100 }));
+    expect(read(headerBytes + answerBytes)).toMatchObject({
+      events: [header, assistant],
+      serializedBytes: headerBytes + answerBytes,
+      truncated: true,
+    });
+    expect(() => read(headerBytes - 1)).toThrow("header exceeds");
+    assert(receipt.facts?.generation, "Transcript fixture requires a generation");
+    const fence = {
+      agentId: f.database.agentId,
+      sessionKey: f.scope.sessionKey,
+      sessionId: f.scope.sessionId,
+      storePath: f.database.path,
+      role: "user" as const,
+      entryId: "user",
+      logicalTurnId: "user-turn",
+      rawSeq: 1,
+      activeMessagePosition: 0,
+      effectiveParentId: null,
+      generation: receipt.facts.generation,
+    };
+    expect(runWithSessionTranscriptReadFence(fence, () => read(1_000_000))).toMatchObject({
+      events: [header],
+      serializedBytes: headerBytes,
     });
   });
 });

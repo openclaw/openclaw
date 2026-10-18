@@ -381,7 +381,7 @@
   height: 44px;
 }
 
-.chat-image-actions::part(menu) {
+.chat-image-actions .oc-menu {
   min-width: 164px;
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
@@ -405,7 +405,7 @@
 }
 
 .chat-image-action:hover,
-.chat-image-actions[open] .chat-image-action {
+.chat-image-actions .chat-image-action[aria-expanded="true"] {
   color: var(--text);
   background: var(--bg-hover);
 }
@@ -715,6 +715,10 @@
   padding: 14px 16px;
 }
 
+.chat-assistant-attachment-card__original {
+  margin: 0 16px 12px;
+}
+
 .chat-assistant-attachment-card__header--preview {
   padding: 10px 14px;
 }
@@ -823,33 +827,46 @@
 .chat-image-frame--compact > .chat-assistant-attachment-card {
   align-self: start;
 
+  .chat-assistant-attachment-card__header {
+    align-items: flex-start;
+    /* Keep the secondary image menu separate from the primary Retry action. */
+    padding-right: 52px;
+  }
+
   .chat-assistant-attachment-card__status-meta {
-    display: inline-flex;
-    gap: 0.5em;
-    overflow: hidden;
-    white-space: nowrap;
+    display: grid;
+    gap: 3px;
+    overflow: visible;
+    white-space: normal;
   }
 
   .chat-assistant-attachment-card__status-separator {
-    display: inline;
+    display: none;
   }
 
   .chat-assistant-attachment-card__status-reason {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .chat-assistant-attachment-card__action {
+    min-height: 44px;
   }
 }
 
 @container (max-width: 240px) {
   .chat-image-frame--compact > .chat-assistant-attachment-card {
     .chat-assistant-attachment-card__header {
-      height: 72px;
+      min-height: 72px;
       box-sizing: border-box;
       flex-direction: column;
       align-items: stretch;
       gap: 2px;
-      padding: 4px;
+      padding: 8px 44px 8px 8px;
     }
 
     .chat-attachment-file-icon {
@@ -866,9 +883,8 @@
     }
 
     .chat-assistant-attachment-card__action {
-      height: 26px;
       padding: 0;
-      font-size: clamp(8px, 14cqi, 12px);
+      font-size: 12px;
     }
   }
 }

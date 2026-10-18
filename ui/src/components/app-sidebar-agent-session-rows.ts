@@ -31,13 +31,13 @@ import {
   type SidebarRecentSession,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 
 type AgentSessionRowsHost = {
   readonly sessionDataContext:
     | Pick<ApplicationContext, "agents" | "gateway" | "sessions">
     | undefined;
-  readonly sessionData: SessionDataController;
+  readonly sessionData: SessionDataOwner;
   visibleSessionCatalogs(): readonly SessionCatalog[];
   selectedAgentMainSessionKey(agentId: string): string;
   readonly sessionsShowCron: boolean;
@@ -46,7 +46,6 @@ type AgentSessionRowsHost = {
   readonly sessionInvolvingMeFilterActive: boolean;
 };
 
-/** Project either sidebar scope through one sorted session forest. */
 export function projectSidebarAgentSessionRows({
   host,
   navigationState,
@@ -227,11 +226,12 @@ export function projectSidebarAgentSessionRows({
   }
   const sessionCandidateRows = [...visibleRowsByKey.values()].filter(
     (row) =>
+      !isMainSession(row.key) &&
       inScope(row) &&
       (!grouped || reachableKeys.has(normalizeDefaultMainSessionAliasForUi(row.key))),
   );
   const categorizedChildRows = collectCategorizedChildRootRows({
-    rows: sessionCandidateRows.filter((row) => !isMainSession(row.key)),
+    rows: sessionCandidateRows,
     scopedRoots: scopedRootRows,
     visibilityOptions,
   });
@@ -286,7 +286,7 @@ export type SidebarHomeSession = SidebarRecentSession & {
   metadataVisible: boolean;
 };
 
-/** Home navigation owns its own state; persistent child conversations own separate rows. */
+/** Home is a navigation root even when its persisted lineage points to itself. */
 export function projectSidebarHomeSession({
   host,
   row,
@@ -322,7 +322,7 @@ export function projectSidebarHomeSession({
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
   });
   const { rows, childSessionRowsByParent, isChildSessionVisible } = visibility;
-  const scopedRow = { ...row, agentId };
+  const scopedRow = { ...row, agentId, sidebarRoot: true };
   const own = navigationState.toSidebarSession(scopedRow);
   const home = projectSessionTree({
     roots: [scopedRow],

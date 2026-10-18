@@ -55,8 +55,11 @@ export async function createMatrixQaCliE2eeSetupRuntime(params: {
     run: (args: string[], timeoutMs = params.context.timeoutMs, stdin?: string) =>
       runtime.run(args, { stdin, timeoutMs }),
     rootDir: runtime.artifactDir,
-    start: (args: string[], timeoutMs = params.context.timeoutMs) =>
-      runtime.start(args, { timeoutMs }),
+    start: (
+      args: string[],
+      timeoutMs = params.context.timeoutMs,
+      options: { allowNonZero?: boolean } = {},
+    ) => runtime.start(args, { ...options, timeoutMs }),
     stateDir: runtime.stateDir,
   };
 }

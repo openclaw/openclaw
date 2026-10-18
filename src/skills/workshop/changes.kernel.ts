@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -102,7 +102,7 @@ export function recordWorkshopChangeInDatabase(
 
 /** Newest first; a database that never recorded a change has no table yet. */
 export function listWorkshopChangesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   query: WorkshopChangesQuery,
 ): WorkshopChange[] {
   if (!tableExists(db, "skill_workshop_changes")) {

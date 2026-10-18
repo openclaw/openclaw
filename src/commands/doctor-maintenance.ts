@@ -23,7 +23,7 @@ import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
 import {
-  assertDoctorAgentLeaseAdmission,
+  admitDoctorAgentLeases,
   preflightExternalDoctorAgentLease,
 } from "./doctor-agent-lease-refusal.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
@@ -32,6 +32,7 @@ import {
   assertDoctorMaintenanceInspection,
   classifyDoctorMaintenanceRefusal,
   readDoctorGatewayOwnerLease,
+  readOfflineAppOwnedDoctorInspection,
 } from "./doctor-maintenance-inspection.js";
 import {
   assertStaleDoctorGatewayStopped,
@@ -63,9 +64,8 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   const env = { ...process.env, ...(params.runId ? { [UPDATE_RUN_ID_ENV]: params.runId } : {}) };
   // Ordinary activation remains with the parent. Stale-instance recovery below
   // retains custody through offline repair and verified restoration.
-  const parentActivation = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options))
-    ? resolveUpdateParentGatewayActivation(env)
-    : undefined;
+  const updateRepair = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options));
+  const parentActivation = updateRepair ? resolveUpdateParentGatewayActivation(env) : undefined;
   // Repair discovery can execute plugins and open writable state. Establish
   // ownership for every admitted repair before running those inspections.
   let stopped: PreManagedServiceStop | undefined;
@@ -352,9 +352,15 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     inspectingActivation = false;
     await assertLegacyGatewayStoppedForMaintenance(state.env);
     // Retain one process owner across every migration and its resource drainage.
-    await acquireStoppedMaintenanceResources();
-    assertUpdateAdmissionCurrent?.();
-    await assertDoctorAgentLeaseAdmission(state.env);
+    await admitDoctorAgentLeases({
+      state,
+      wait: updateRepair,
+      acquire: () =>
+        acquireStoppedMaintenanceResources().then(() => assertUpdateAdmissionCurrent?.()),
+      assertCurrent: assertCallerCurrent,
+      signal: exit.signal,
+      log: params.runtime.log,
+    });
     repairStoresMayBeOpen = true;
   };
   let admissionFailureHandled = false;
@@ -437,7 +443,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     await settle(async () => {
       const externallyManaged = isServiceRepairExternallyManaged();
       if (externallyManaged) {
-        await preflightExternalDoctorAgentLease(env);
+        await preflightExternalDoctorAgentLease(env, updateRepair);
       }
       if (
         params.root &&
@@ -448,13 +454,23 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         const { maybeStopManagedServiceBeforeMutableUpdate } =
           await import("../cli/update-cli/update-command-service-maintenance.js");
         inspectingActivation = true;
-        const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
-          updateInstallKind: "package",
-          root: params.root,
-          shouldRestart: true,
-          jsonMode: true,
-          phase: "inspect",
-        });
+        let inspection: PreManagedServiceStop;
+        try {
+          inspection = await maybeStopManagedServiceBeforeMutableUpdate({
+            updateInstallKind: "package",
+            root: params.root,
+            shouldRestart: true,
+            jsonMode: true,
+            phase: "inspect",
+          });
+        } catch (error) {
+          const offlineApp = await readOfflineAppOwnedDoctorInspection(error, env);
+          if (!offlineApp) {
+            throw error;
+          }
+          inspection = offlineApp;
+          warn(offlineApp.serviceMutationSkipMessage);
+        }
         assertDoctorMaintenanceInspection(inspection, env);
         serviceUpdateVerdict = inspection.serviceUpdateVerdict;
         if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {

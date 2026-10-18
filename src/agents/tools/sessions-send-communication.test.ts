@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimeConfig from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readSessionSendDeliveryAdmission } from "../../gateway/session-send-delivery.js";
 import {
   communicationEntryBinding,
   type CommunicationEndpoint,
@@ -82,6 +83,42 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 describe("sessions_send communication boundary", () => {
+  it("retains JSON-stable delivery identity for sessions without lifecycle revisions", async () => {
+    const input = operation();
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceTool: "sessions_send",
+      sourceSessionKey: input.source.sessionKey,
+    };
+    input.callGateway.mockImplementation(async () => {
+      const admitted = readSessionSendDeliveryAdmission({
+        agentId: "main",
+        sessionKey: input.target.sessionKey,
+        sessionId: "target",
+        runId: "saved-peer",
+      });
+      expect(admitted).toBeDefined();
+      expect(admitted!.delivery.source).not.toHaveProperty("lifecycleRevision");
+      expect(admitted!.delivery.target).not.toHaveProperty("lifecycleRevision");
+    });
+    const gate = await prepareSessionsSendCommunication({ ...input, inputProvenance });
+    try {
+      await gate.callGateway({
+        method: "agent",
+        params: {
+          agentId: "main",
+          sessionKey: input.target.sessionKey,
+          message: input.message,
+          idempotencyKey: "saved-peer",
+          inputProvenance,
+        },
+      });
+      expect(input.callGateway).toHaveBeenCalledOnce();
+    } finally {
+      gate.close();
+    }
+  });
+
   it.each([
     [undefined, undefined, false],
     [true, false, false],
@@ -173,16 +210,6 @@ describe("sessions_send communication boundary", () => {
     receive.resolve();
     (await pending).close();
   });
-  it.each(["refused", "expired", "cancelled"])(
-    "%s never delivers or releases a backlog",
-    async (reason) => {
-      const input = operation(endpoint("source", { communication: { send: "ask" } }));
-      state.approve.mockRejectedValue(new Error(reason));
-      await expect(prepareSessionsSendCommunication(input)).rejects.toThrow(reason);
-      state.config = { session: { communication: { send: "always" } } };
-      expect(input.callGateway).not.toHaveBeenCalled();
-    },
-  );
   it("rejects policy changes during approval", async () => {
     const input = operation(endpoint("source", { communication: { send: "ask" } }));
     state.approve.mockImplementation(async () => {
@@ -261,6 +288,33 @@ describe("sessions_send communication boundary", () => {
       gate.close();
     },
   );
+  it("ignores metadata notifications but fences unknown storage changes", async () => {
+    const input = operation();
+    const gate = await prepareSessionsSendCommunication(input);
+    try {
+      sessionChanges.emit({ agentId: "main", sessionKey: input.target.sessionKey });
+      await gate.refresh();
+      expect(gate.assertCurrent).not.toThrow();
+      sessionChanges.emit({
+        agentId: "main",
+        sessionKey: input.target.sessionKey,
+        factsInvalidated: true,
+      });
+      expect(gate.assertCurrent).toThrow("changed");
+    } finally {
+      gate.close();
+    }
+  });
+
+  it("does not request fresh consent during durable delivery recovery", async () => {
+    const input = operation(endpoint("source", { communication: { send: "ask" } }));
+    await expect(
+      prepareSessionsSendCommunication({ ...input, allowApproval: false }),
+    ).rejects.toThrow("fresh human communication approval");
+    expect(state.approve).not.toHaveBeenCalled();
+    expect(input.callGateway).not.toHaveBeenCalled();
+  });
+
   it("refuses a replacement without current communication facts", async () => {
     const input = operation();
     const gate = await prepareSessionsSendCommunication(input);

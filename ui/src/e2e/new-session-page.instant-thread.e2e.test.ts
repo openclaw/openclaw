@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   ONE_PIXEL_PNG_B64,
@@ -269,7 +270,7 @@ suite.define(() => {
         }
         await page.locator("#new-session-checkout-trigger").click();
         await page
-          .locator('wa-popover.new-session-page__checkout-popover [data-value="worktree"]')
+          .locator('.oc-popover.new-session-page__checkout-popover [data-value="worktree"]')
           .click();
         await checkoutBaseRefInput(page).fill("release/proof");
         await page.getByLabel("Name", { exact: true }).fill("instant-proof");
@@ -398,12 +399,22 @@ suite.define(() => {
           );
         }
         await navigateInApp(page, "new-session", "?agent=main");
+        await waitForControlUiRoute(page, {
+          routeId: "new-session",
+          pathname: "/new",
+          search: "?agent=main",
+        });
+        await page.locator("openclaw-new-session-page").evaluate(async (element) => {
+          // SAFETY: This registered Solid bridge exposes its mount completion promise.
+          await (element as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+        });
         const composer = page.locator(".new-session-page__message");
         if (readiness) {
-          // Wait for the retained draft before fill selects and replaces it.
-          await expect.poll(() => composer.inputValue()).toBe(submitted);
+          // Accepted input retires even while preview readiness is pending.
+          await expect.poll(() => composer.inputValue()).toBe("");
         }
         await composer.fill(message);
+        await expect.poll(() => composer.inputValue()).toBe(message);
         const newerUrl = page.url();
         if (readiness) {
           await page.evaluate(() =>
@@ -418,9 +429,9 @@ suite.define(() => {
             runId: "late-old-run",
           });
           await gateway.waitForRequest("sessions.list");
-          expect(await composer.inputValue()).toBe(message);
-          expect(page.url()).toBe(newerUrl);
         }
+        expect(await composer.inputValue()).toBe(message);
+        expect(page.url()).toBe(newerUrl);
         await gateway.deferNext("sessions.create");
         await page.getByRole("button", { name: "Start session", exact: true }).click();
         const second = createParams(await gateway.waitForRequest("sessions.create", { after: 1 }));
@@ -478,12 +489,13 @@ suite.define(() => {
   });
 
   it.each([
-    { change: "gateway", message: "private old-identity text" },
-    { change: "principal", message: "private first principal" },
-    { change: "boot", message: "do not duplicate this admission" },
+    { change: "gateway", message: "private old-identity text", followUps: true },
+    { change: "principal", message: "private first principal", followUps: true },
+    { change: "boot", message: "do not duplicate this admission", followUps: true },
+    { change: "boot", message: "keep the interrupted task draft", followUps: false },
   ] as const)(
-    "fences interrupted admission after a $change change",
-    async ({ change, message }) => {
+    "fences interrupted admission after a $change change (follow-ups: $followUps)",
+    async ({ change, message, followUps }) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         const gateway = await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}new?agent=main${change === "boot" ? "#boot" : ""}`);
@@ -503,10 +515,14 @@ suite.define(() => {
         const followUpComposer = page.locator(
           ".agent-chat__composer-combobox textarea:not(.new-session-page__message)",
         );
-        await followUpComposer.fill("private staged follow-up");
-        await followUpComposer.press("Enter");
-        await page.locator(".chat-queue__item", { hasText: "private staged follow-up" }).waitFor();
-        await followUpComposer.fill("private unfinished follow-up");
+        if (followUps) {
+          await followUpComposer.fill("private staged follow-up");
+          await followUpComposer.press("Enter");
+          await page
+            .locator(".chat-queue__item", { hasText: "private staged follow-up" })
+            .waitFor();
+          await followUpComposer.fill("private unfinished follow-up");
+        }
         if (change === "gateway") {
           await evaluateControlUiContext(page, (application) => {
             application.gateway.connect({
@@ -539,6 +555,16 @@ suite.define(() => {
             await page.getByRole("button", { name: "Start session", exact: true }).isDisabled(),
           ).toBe(true);
           expect(page.url()).toBe(originalUrl);
+          await captureUiProof(suite, page, `interrupted-boot-follow-ups-${followUps}.png`);
+          if (followUps) {
+            expect(await followUpComposer.inputValue()).toBe("private unfinished follow-up");
+            expect(await page.locator(".chat-queue__text").allTextContents()).toEqual([
+              "private staged follow-up",
+            ]);
+          } else {
+            expect(await page.locator(".creation-composer").count()).toBe(0);
+            expect(await page.locator("textarea:visible").count()).toBe(1);
+          }
         } else {
           await expect.poll(() => page.locator("openclaw-new-session-page").count()).toBe(1);
           await expect.poll(() => composer.inputValue()).toBe("");

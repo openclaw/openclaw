@@ -32,6 +32,7 @@ import type {
   InitialSessionTranscriptWriter,
   SessionTranscriptWriterFence,
 } from "./session-transcript-writer.types.js";
+import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
 import {
   captureSessionTranscriptStorageEnvironment,
   captureSessionTranscriptTargetBinding,
@@ -240,7 +241,7 @@ export function readOwnedSessionTranscriptEntry(
   const target = binding.actor.target;
   const entry =
     target.database.kind === "file"
-      ? readSessionActorEntryFacts({ ...target, database: target.database })?.entry
+      ? readSessionActorEntryFacts({ ...target, database: target.database }, [])?.entry
       : binding.actor.snapshot({ assertCurrent, authorize: assertCurrent })?.entry;
   return (
     entry && {
@@ -387,7 +388,7 @@ function contextMatches(
       contextTarget &&
       requestedTarget &&
       contextTarget.sessionKey === requestedTarget.sessionKey &&
-      contextTarget.storePath === requestedTarget.storePath &&
+      sameSessionTranscriptStorePath(contextTarget.storePath, requestedTarget.storePath) &&
       sameSessionTranscriptStorageEnvironment(contextTarget.env, requestedTarget.env) &&
       (!contextTarget.agentId ||
         !requestedTarget.agentId ||

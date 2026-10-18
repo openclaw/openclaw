@@ -200,10 +200,7 @@ suite.define(() => {
             ...Array.from({ length: 3 }, (_, index) => ({
               step: `warning:doctor:${index + 1}`,
               status: "completed" as const,
-              detail:
-                "An optional integration needs attention. Review its configuration in Settings. ".repeat(
-                  6,
-                ),
+              detail: `Integration ${index + 1}: ${"An optional integration needs attention. Review its configuration in Settings. ".repeat(6)}`,
             })),
           ],
           verification: {

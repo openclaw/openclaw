@@ -1,4 +1,5 @@
 import { types as utilTypes } from "node:util";
+import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { SCHEMA_MAP_KEYS } from "./schema-walk.js";
@@ -11,6 +12,7 @@ import {
   type ToolSchemaPosition,
 } from "./tool-schema-depth.js";
 import type { PreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
+import { SCHEMA_LITERAL_KEYS } from "./tool-schema-refs.js";
 
 /** JSON-safe schema value used when projecting runtime tool parameters. */
 export type RuntimeToolInputSchemaJson =
@@ -31,6 +33,7 @@ type PublishedRuntimeToolInputSchema = {
   readonly projection: RuntimeToolInputSchemaProjection;
   readonly json: string;
   readonly fingerprint: string;
+  readonly canonicalFingerprint: string;
 };
 
 const publishedSchemas = new WeakMap<object, PublishedRuntimeToolInputSchema>();
@@ -71,7 +74,12 @@ export function publishRuntimeToolInputSchema(
   Object.freeze(projection);
   publishedSchemas.set(
     projection.schema,
-    Object.freeze({ projection, json, fingerprint: sha256Hex(json) }),
+    Object.freeze({
+      projection,
+      json,
+      fingerprint: sha256Hex(json),
+      canonicalFingerprint: sha256Hex(stableStringify(projection.schema)),
+    }),
   );
   return projection;
 }
@@ -183,12 +191,13 @@ function inspectJsonSchema(
   schema: RuntimeToolInputSchemaJson,
   path: (string | number)[],
   violations: string[],
+  inspectKeywords = true,
 ): boolean {
   if (Array.isArray(schema)) {
     let index = 0;
     for (const entry of schema) {
       path.push("[", index++, "]");
-      const valid = inspectJsonSchema(entry, path, violations);
+      const valid = inspectJsonSchema(entry, path, violations, inspectKeywords);
       path.length -= 3;
       if (!valid) {
         return false;
@@ -201,9 +210,11 @@ function inspectJsonSchema(
     // through the stringify replacer's non-finite number check.
     return typeof schema !== "number" || Number.isFinite(schema);
   }
-  for (const key of ["$dynamicRef", "$dynamicAnchor"] as const) {
-    if (key in schema) {
-      violations.push(`${path.join("")}.${key}`);
+  if (inspectKeywords) {
+    for (const key of ["$dynamicRef", "$dynamicAnchor"] as const) {
+      if (key in schema) {
+        violations.push(`${path.join("")}.${key}`);
+      }
     }
   }
   for (const [key, value] of Object.entries(schema)) {
@@ -214,7 +225,9 @@ function inspectJsonSchema(
       continue;
     }
     path.push(".", key);
-    if (SCHEMA_MAP_KEYS.has(key) && isJsonObject(value)) {
+    // Literal subtrees contain instance data, but still need JSON number checks.
+    const inspectChildKeywords = inspectKeywords && !SCHEMA_LITERAL_KEYS.has(key);
+    if (inspectChildKeywords && SCHEMA_MAP_KEYS.has(key) && isJsonObject(value)) {
       for (const [schemaName, childSchema] of Object.entries(value)) {
         path.push(".", schemaName);
         const valid = inspectJsonSchema(childSchema, path, violations);
@@ -223,7 +236,7 @@ function inspectJsonSchema(
           return false;
         }
       }
-    } else if (!inspectJsonSchema(value, path, violations)) {
+    } else if (!inspectJsonSchema(value, path, violations, inspectChildKeywords)) {
       return false;
     }
     path.length -= 2;

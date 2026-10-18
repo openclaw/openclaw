@@ -78,6 +78,7 @@ Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list 
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                                                             |
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                                            |
 | `workerProviders`                | `string[]` | Cloud-worker provider ids this plugin owns for provisioning and profile-backed lease lifecycle.                                      |
+| `workerProfileSuggestions`       | `string[]` | Worker provider ids with a lightweight [profile suggestion artifact](/plugins/manifest#cloud-worker-profile-suggestions).            |
 | `storageProviders`               | `string[]` | Storage transport ids registered with `api.registerStorageProvider`; selected by named storage locations.                            |
 | `usageProviders`                 | `string[]` | Provider ids whose usage-auth and usage-snapshot hooks this plugin owns.                                                             |
 | `migrationProviders`             | `string[]` | Import provider ids this plugin owns for [`openclaw migrate`](/cli/migrate).                                                         |
@@ -226,7 +227,7 @@ This block is planner metadata, not a lifecycle API. It does not register runtim
 
 Prefer the narrowest metadata that already describes ownership. Use `providers`, `channels`, `commandAliases`, setup descriptors, or `contracts` when those fields express the relationship. Use `activation` for extra planner hints that cannot be represented by those ownership fields. Use top-level `cliBackends` for CLI runtime aliases such as `claude-cli`, `my-cli`, or `google-gemini-cli`; `activation.onAgentHarnesses` is only for embedded agent harness ids that do not already have an ownership field.
 
-Every plugin should set `activation.onStartup` intentionally. Set it to `true` only when the plugin must run during Gateway startup. Set it to `false` when the plugin is inert at startup and should load only from narrower triggers. Omitting `onStartup` no longer startup-loads the plugin implicitly; use explicit activation metadata for startup, channel, config, agent-harness, memory, or other narrower activation triggers.
+Every plugin should set `activation.onStartup` intentionally. Set it to `true` only when the plugin must run during Gateway startup. Set it to `false` when the plugin is inert at startup and should load only from narrower triggers. Omitting `onStartup` no longer startup-loads the plugin implicitly; use explicit activation metadata for startup, channel, config, agent-harness, memory, or other narrower activation triggers. Manifestless standalone files listed in `plugins.load.paths` have no manifest to declare this and start like `onStartup: true` once enabled.
 
 ```json
 {

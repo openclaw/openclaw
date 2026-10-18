@@ -27,9 +27,8 @@ export async function appendSessionCostLine(
   if (!sessionId) {
     return usageLine;
   }
-  let sessionFile: string;
   try {
-    sessionFile = formatSqliteSessionFileMarker({
+    const sessionFile = formatSqliteSessionFileMarker({
       sessionId,
       agentId,
       storePath: await preparePhysicalSessionStorePath(
@@ -37,13 +36,9 @@ export async function appendSessionCostLine(
         cfg,
       ),
     });
-  } catch {
-    return usageLine;
-  }
-  const now = Date.now();
-  const date = new Date(now);
-  const startMs = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  try {
+    const now = Date.now();
+    const date = new Date(now);
+    const startMs = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
     const loaded = await withTimeout(
       loadSessionCostSummariesFromCache({
         sessions: [{ sessionId, sessionFile }],
@@ -65,7 +60,11 @@ export async function appendSessionCostLine(
       summary.missingCostEntries > 0
         ? `missing cost: ${formatMissingCostEntries(summary)}`
         : formatUsd(summary.totalCost);
-    const line = `💵 ${cost ? `${cost} · ` : ""}${formatTokenCount(summary.totalTokens)} tok (today)`;
+    const tokens =
+      summary.usageReport?.state === "unavailable"
+        ? `usage incomplete · ${formatTokenCount(summary.totalTokens)} known tokens`
+        : `${formatTokenCount(summary.totalTokens)} tok`;
+    const line = `💵 ${cost ? `${cost} · ` : ""}${tokens} (today)`;
     return [usageLine, line].filter(Boolean).join("\n");
   } catch {
     return usageLine;

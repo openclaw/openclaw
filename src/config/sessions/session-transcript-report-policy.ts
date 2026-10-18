@@ -80,17 +80,8 @@ export function selectTranscriptReport(
   selection: TranscriptReportSelection,
 ): PreparedTranscriptReport {
   const suppressed =
-    selection.kind === "assistant"
-      ? branch.path.some((entry) => entry.assistantResponseId === selection.responseId)
-      : selection.suppressWhenAssistantRun !== undefined &&
-        branch.path.some((entry) => {
-          if (entry.assistantRunId !== selection.suppressWhenAssistantRun) {
-            return false;
-          }
-          // Progress and commentary cannot stand in for a durable failure outcome.
-          const message = readEvent(entry.seq)?.message;
-          return isRecord(message) && message.stopReason === "error";
-        });
+    selection.kind === "assistant" &&
+    branch.path.some((entry) => entry.assistantResponseId === selection.responseId);
   return {
     appendParentId: branch.appendParentId,
     suppressed,

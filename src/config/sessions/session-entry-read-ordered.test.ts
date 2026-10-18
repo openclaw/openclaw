@@ -1,8 +1,9 @@
+import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -11,7 +12,6 @@ import {
 } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveInternalSessionEffectsIdentity } from "./internal-session-key.js";
-import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revision.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -21,6 +21,7 @@ import {
   readSessionEntriesFromStoreInWorker,
   readSessionEntryReadOnlyInWorker,
   withSessionEntriesFromStoresInWorker,
+  withSessionStoreReaderInWorker,
 } from "./session-entry-read-runtime.js";
 import {
   addSessionMemberInWorker,
@@ -82,7 +83,10 @@ it("retains exact reads without dispatch, isolates agent stores, and evicts the 
       requests.clear();
       const repeated = await read([keys[0]!]);
       expect(repeated.entries[0]?.entry.sessionId).toBe("entry-0");
-      repeated.entries[0]!.entry.sessionId = "caller-mutated";
+      expect(() => {
+        repeated.entries[0]!.entry.sessionId = "caller-mutated";
+      }).toThrow(TypeError);
+      expect((await read([keys[0]!])).entries[0]?.entry).toBe(repeated.entries[0]?.entry);
       expect((await read([keys[0]!])).entries[0]?.entry.sessionId).toBe("entry-0");
       expect((await readOther()).entries[0]?.entry.sessionId).toBe("other-store");
       expect(requests.count()).toBe(0);
@@ -140,10 +144,19 @@ it("derives lifecycle and current runtime targets from committed facts and retir
     await readSessionEntriesFromStoreInWorker(input);
     const requests = observeEntryReaderRequests();
     try {
-      expect(readRetainedSessionEntryFacts(owner, request)).toMatchObject({
-        lifecycleTimestamps: { sessionStartedAt: 100, lastInteractionAt: 200 },
-        runtimeTarget: { ...runtimeTarget, storePath: database.path },
-      });
+      const stat = vi.spyOn(fs, "statSync");
+      const realpath = vi.spyOn(fs.realpathSync, "native");
+      try {
+        expect(readRetainedSessionEntryFacts(owner, request)).toMatchObject({
+          lifecycleTimestamps: { sessionStartedAt: 100, lastInteractionAt: 200 },
+          runtimeTarget: { ...runtimeTarget, storePath: database.path },
+        });
+        expect(stat).not.toHaveBeenCalled();
+        expect(realpath).not.toHaveBeenCalled();
+      } finally {
+        stat.mockRestore();
+        realpath.mockRestore();
+      }
       expect(
         (await readSessionEntriesFromStoreInWorker({ ...input, lifecycleSessionKey: sessionKey }))
           .lifecycleTimestamps,
@@ -490,33 +503,6 @@ it("retains exact membership and participant reads across metadata-only worker p
   });
 });
 
-it("keeps an ordered read current when session generation tracking initializes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const options = { agentId: "main", env };
-    const seeded = openOpenClawAgentDatabase(options);
-    const sessionKey = "agent:main:cold-generation";
-    writeSessionEntry(seeded, sessionKey, { sessionId: "original", updatedAt: 1 });
-    await closeOpenClawAgentDatabaseByPathAsync(seeded.path, seeded.agentId);
-    const database = openOpenClawAgentDatabase(options);
-    await expect(
-      withSessionEntriesFromStoresInWorker(
-        [{ ...options, storePath: database.path, sessionKeys: [sessionKey] }],
-        ([read]) => {
-          read!.assertCurrent();
-          return read!.result.entries[0]?.entry.sessionId;
-        },
-        {
-          ordered: true,
-          onReadAdmitted: () => {
-            expect(database.db.prepare("SELECT name FROM temp.sqlite_schema").all()).toEqual([]);
-            expect(readSessionNodesGeneration(database.db)).toBe(0);
-          },
-        },
-      ),
-    ).resolves.toBe("original");
-  });
-});
-
 it("retains the foreground FIFO through a nested ordered read", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -646,5 +632,53 @@ it("rejects ordered reads that invert an inherited store acquisition", async () 
         ),
       ),
     ).rejects.toThrow("would invert inherited SQLite writer admission order");
+  });
+});
+
+it("captures a cold read's physical source after the preceding writer creates it", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = { agentId: "cold-source", env };
+    const storePath = resolveOpenClawAgentSqlitePath(database);
+    const sessionKey = "agent:cold-source:admitted-source";
+    const writerEntered = createDeferred();
+    const create = createDeferred();
+    const readEntered = createDeferred();
+    let capturedIdentity: { key: string; birthtime?: string } | undefined;
+    const writer = runOpenClawAgentWriteAdmission(database, async () => {
+      writerEntered.resolve();
+      await create.promise;
+      const opened = openOpenClawAgentDatabase(database);
+      writeSessionEntry(opened, sessionKey, { sessionId: "admitted-source", updatedAt: 1 });
+    });
+    await writerEntered.promise;
+    const read = withSessionStoreReaderInWorker(
+      { ...database, storePath },
+      async ({ reader }) => {
+        readEntered.resolve();
+        return reader.readExactEntries({ sessionKeys: [sessionKey], env });
+      },
+      {
+        prepareSource: (_source, identity) => {
+          capturedIdentity = identity;
+        },
+      },
+    );
+    try {
+      await awaitGateBeforeSettlement(
+        readEntered.promise,
+        read,
+        "Cold reader did not reach admission",
+      );
+      create.resolve();
+      const [result] = await Promise.all([read, writer]);
+      expect(result.entries[0]?.entry.sessionId).toBe("admitted-source");
+      expect(capturedIdentity).toMatchObject({
+        key: `file:${result.source?.databaseIdentity}`,
+        birthtime: result.source?.databaseBirthtime,
+      });
+    } finally {
+      create.resolve();
+      await Promise.allSettled([read, writer]);
+    }
   });
 });

@@ -26,6 +26,7 @@ import { seedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { mutateSkillLibrary, saveSkillLibrary } from "../../skills/library/service.js";
 import type { SkillLibraryAuthority } from "../../skills/library/store.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   cleanupSessionStateForTest,
@@ -361,6 +362,52 @@ describe("skill library retained support files", () => {
 });
 
 describe("session skill library projection and activation", () => {
+  it.each(["pins", "plugin ownership"])(
+    "does not disclose a selected revision after %s changes during its file read",
+    async (change) => {
+      const { alice, actor, cfg, call } = retainedFilesHarness();
+      setRuntimeConfigSnapshot(cfg);
+      const saved = await saveSkillLibrary(actor(alice.id), {
+        slug: "selected-revision",
+        content,
+        expectedRevision: null,
+      });
+      const key = "agent:main:selected-revision";
+      const scope = { agentId: "main", sessionKey: key };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "selected-revision",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: alice.id },
+        skillLibrarySelections: await seedSkillLibrarySelection(actor(alice.id)),
+      });
+      const readManifest = libraryBundle.readSkillLibraryManifestTree;
+      using manifest = vi
+        .spyOn(libraryBundle, "readSkillLibraryManifestTree")
+        .mockImplementation(async (...args) => {
+          const files = await readManifest(...args);
+          await patchSessionEntryCore(scope, () =>
+            change === "pins"
+              ? { skillLibrarySelections: [] }
+              : { pluginOwnerId: "replacement-plugin" },
+          );
+          return files;
+        });
+      const response = await call("skills.library.read", {
+        sessionKey: key,
+        skillId: saved.entry.skillId,
+        revision: saved.entry.revision,
+      });
+      expect(manifest).toHaveBeenCalledOnce();
+      expect(loadSessionEntry(scope)).toMatchObject(
+        change === "pins"
+          ? { skillLibrarySelections: [] }
+          : { pluginOwnerId: "replacement-plugin" },
+      );
+      expect(response[0]).toBe(false);
+      expect(response[1]).toBeUndefined();
+    },
+  );
+
   it.each(["success", "missing session", "invalid selection"])(
     "releases activation authorization after %s",
     async (outcome) => {
@@ -421,6 +468,7 @@ describe("session skill library projection and activation", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const alice = ensureProfileForEmail("alice@example.test");
     const bob = ensureProfileForEmail("bob@example.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const cfg = { agents: { entries: { main: { workspace: path.join(root, "workspace") } } } };
     setRuntimeConfigSnapshot(cfg);
     const actor = (profileId: string): SkillLibraryAuthority => ({

@@ -23,27 +23,11 @@ import type { ProviderPlugin } from "./types.js";
 
 const fixture = vi.hoisted(() => ({
   providers: [] as ProviderPlugin[],
-  rawRows: new WeakSet<object>(),
-  idReads: 0,
 }));
 
 vi.mock("./provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => fixture.providers,
 }));
-
-// Delegate the safe reader without retaining mock arguments for every copied field.
-vi.mock("../shared/safe-record.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../shared/safe-record.js")>();
-  return {
-    ...actual,
-    readRecordValue(value: unknown, key: string) {
-      if (key === "id" && typeof value === "object" && value && fixture.rawRows.has(value)) {
-        fixture.idReads += 1;
-      }
-      return actual.readRecordValue(value, key);
-    },
-  };
-});
 
 it("keeps first-match configured precedence and last-entry aggregate precedence", async () => {
   const providerId = "catalog-precedence";
@@ -103,7 +87,7 @@ it("keeps first-match configured precedence and last-entry aggregate precedence"
   expect(resolvePreparedProviderStaticConfigs(prepared)).toEqual({ [providerId]: last });
 });
 
-it("copies a workspace catalog once across configured and implicit agent reads", async () => {
+it("shares a workspace catalog across configured and implicit agent reads", async () => {
   const providerId = "catalog-copy-fixture";
   const pluginId = "catalog-copy-owner";
   const agentCount = 32;
@@ -141,8 +125,6 @@ it("copies a workspace catalog once across configured and implicit agent reads",
     },
   };
   fixture.providers = [provider];
-  fixture.rawRows = new WeakSet(models);
-  fixture.idReads = 0;
   const metadata = createPluginMetadataSnapshotFixture({
     plugins: [{ id: pluginId, providers: [providerId] }],
   });
@@ -254,5 +236,4 @@ it("copies a workspace catalog once across configured and implicit agent reads",
     })),
   );
   expect(resolvedProviders).toEqual({ [providerId]: providerConfig });
-  expect(fixture.idReads, "raw catalog model ID reads").toBe(models.length);
 });

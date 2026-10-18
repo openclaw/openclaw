@@ -203,11 +203,6 @@ export function startNodeHostConnection({
         state.rejectedParams = undefined;
         try {
           await connectionClient.request(method, nextParams);
-          // Request settlement races reconnect teardown. Stale completions must
-          // not mutate or report against the retired connection.
-          if (!connectionIsCurrent()) {
-            return;
-          }
           if (isDeepStrictEqual(state.pendingParams, nextParams)) {
             state.pendingParams = undefined;
           }
@@ -217,9 +212,6 @@ export function startNodeHostConnection({
           state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
           state.retryPending = false;
         } catch (error) {
-          if (!connectionIsCurrent()) {
-            return;
-          }
           const failure = classifyNodeMethodFailure(error, method, gatewayProtocol);
           if (failure === "legacy-unsupported") {
             state.unsupported = true;
@@ -325,6 +317,10 @@ export function startNodeHostConnection({
               },
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION)
                 ? { idleRetention: true }
+                : {}),
+              ...(prepared.deviceFoldersEnabled &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS)
+                ? { deviceFolders: true }
                 : {}),
               ...(prepared.preparedWorkspacesEnabled
                 ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }

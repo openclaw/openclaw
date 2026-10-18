@@ -181,7 +181,7 @@ it.each(["board", "session end"] as const)(
       await lifecycle.start();
       const db = openOpenClawStateDatabase().db;
       const prepare = db.prepare.bind(db);
-      const hostRead = vi.spyOn(db, "prepare").mockImplementation((sql) => {
+      const hostRead = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
         if (/select\b[\s\S]*\bplugin_state_entries\b/i.test(sql)) {
           throw new Error("Dashboard discovery queried plugin rows on the host");
         }

@@ -1,16 +1,20 @@
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-route-types.ts";
 
 export const page = definePage({
   ...routePageSpec("meetings"),
   loaderDeps: (_context, { search }) => search,
   loader: (_context, { deps }) => deps,
   component: () =>
-    import("./meetings-page.tsx").then(() => ({
+    import("./meetings-page.tsx").then((module) => ({
       header: true,
-      render: (search: unknown) => html`<openclaw-meetings-page
-        .routeSearch=${typeof search === "string" ? search : ""}
-      ></openclaw-meetings-page>`,
+      renderSolid: (props: SolidRouteProps<string>) =>
+        createComponent(module.MeetingsPage, {
+          get routeSearch() {
+            return props.data ?? "";
+          },
+        }),
     })),
 });

@@ -122,6 +122,8 @@ describe("mantis visual task runtime", () => {
     });
 
     expect(result.status).toBe("pass");
+    const warmupArgs = commands.find((entry) => entry.args[0] === "warmup")?.args ?? [];
+    expectArgsContainSequence(warmupArgs, ["--class", "beast"]);
     expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual([
       ["/tmp/crabbox", "warmup"],
       ["/tmp/crabbox", "inspect"],

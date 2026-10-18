@@ -6,7 +6,7 @@ import { countToolResults, extractToolCallNames } from "../utils/transcript-tool
 import type { CostBreakdown, ParsedTranscriptEntry } from "./session-cost-usage.types.js";
 
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
-  if (!usageRaw || typeof usageRaw !== "object") {
+  if (!usageRaw || usageRaw.usageReport?.state === "unavailable") {
     return undefined;
   }
   const cost = usageRaw.cost;
@@ -126,8 +126,23 @@ export function needsUsageCostEstimate(
   // Recorded estimates include request-time service tiers the current catalog cannot recover.
   return (
     Boolean(entry?.usage) &&
+    entry?.usage?.usageReport?.state !== "unavailable" &&
     !((entry?.costTotal ?? 0) > 0 || hasRecordedUsageCost(entry?.costBreakdown))
   );
+}
+
+/**
+ * Counters above the context marker's prompt cover several model calls, and their sum cannot
+ * recover each request's tier. A sum inside the lowest tier keeps every call there, so it is exact.
+ */
+function hasAmbiguousRequestTier(usage: NormalizedUsage, cost: ModelCostConfig): boolean {
+  const secondTier = cost.tieredPricing?.[1];
+  const context = usage.contextUsage;
+  if (!secondTier || context?.state !== "available") {
+    return false;
+  }
+  const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+  return promptTokens > context.promptTokens && promptTokens >= secondTier.range[0];
 }
 
 export function applyUsageCostEstimate(
@@ -140,7 +155,10 @@ export function applyUsageCostEstimate(
     entry.costTotal = undefined;
     entry.costBreakdown = undefined;
   } else if (entry.costTotal === undefined || totalTokens > 0) {
-    const estimated = cost ? calculateUsageCost(entry.usage, cost) : undefined;
+    const estimated =
+      cost && !hasAmbiguousRequestTier(entry.usage, cost)
+        ? calculateUsageCost(entry.usage, cost)
+        : undefined;
     entry.costBreakdown = estimated && Number.isFinite(estimated.total) ? estimated : undefined;
     entry.costTotal = entry.costBreakdown?.total;
   }

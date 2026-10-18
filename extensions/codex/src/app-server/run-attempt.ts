@@ -119,6 +119,7 @@ export async function runCodexAppServerAttempt(
               lifecycle,
               notifications,
               turnStart,
+              turnRequest.codexModelCallDiagnostics.emitResponseObserved,
             );
             activeTurnOwnsCleanup = true;
             let finalizedResult: EmbeddedRunAttemptResult | undefined;
@@ -193,8 +194,12 @@ export async function runCodexAppServerAttempt(
     throw codexPrewriteRejectionCause(error);
   } finally {
     // Preparation can fail before the active turn installs its terminal freeze.
-    connection.cancellation.dispose();
-    connection.releaseModelExecution();
-    connection.releaseSandboxContext();
+    try {
+      connection.cancellation.dispose();
+      connection.releaseModelExecution();
+      connection.releaseSandboxContext();
+    } finally {
+      connection.releaseBindingAuthority();
+    }
   }
 }

@@ -50,6 +50,7 @@ const { pruneExpiredDeliveryQueueTombstones } = await import("../delivery-queue-
 const { loadDeliveryQueueEntry, seedDeliveryQueueEntry } =
   await import("../delivery-queue-sqlite.test-support.js");
 const {
+  createDeliveryQueueMediaRetention,
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
   OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -98,9 +99,12 @@ afterEach(async () => {
 
 describe("retention", () => {
   it("reclaims expired custody off-thread and preserves pending media across reopen", async () => {
+    await pruneOrphanedDeliveryQueueMedia({ stateDir });
     const retained = await seedArtifact(ARTIFACT_A, 30 * DAY_MS);
     const orphan = await seedArtifact(ARTIFACT_B, 30 * DAY_MS);
     const fresh = await seedArtifact(PART_ARTIFACT, DAY_MS / 2);
+    const staged = await seedArtifact("00000000-0000-4000-8000-000000000004.ogg", 30 * DAY_MS);
+    await createDeliveryQueueMediaRetention([staged], "outbound-media-stage", stateDir);
     const id = await enqueueDelivery(
       {
         channel: "matrix",
@@ -115,6 +119,7 @@ describe("retention", () => {
       status: "completed",
       stateDir,
     });
+    await pruneOrphanedDeliveryQueueMedia({ stateDir });
     await closeOpenClawStateDatabaseAsync();
 
     const mainSql = observeMainThreadSql();
@@ -132,6 +137,7 @@ describe("retention", () => {
       loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, "expired-receipt", stateDir, "all"),
     ).toBeNull();
     expect(await exists(retained)).toBe(true);
+    expect(await exists(staged)).toBe(true);
     expect(await exists(orphan)).toBe(false);
     // Grace protects stage-before-row-commit and bounds crash leftovers.
     expect(await exists(fresh)).toBe(true);
@@ -304,21 +310,6 @@ describe("staging", () => {
       await closeOpenClawStateDatabaseAsync();
       writer.close();
     }
-  });
-
-  it("leaves replayable remote media untouched without creating the spool", async () => {
-    const result = await stageQueuePayloadMedia({
-      payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-
-    expect(result).toEqual({
-      status: "staged",
-      payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
-      artifacts: [],
-    });
-    expect(await exists(spoolRoot)).toBe(false);
   });
 
   it("uses the live send's local-read capability", async () => {

@@ -5,7 +5,13 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { appendSessionTranscriptReport } from "../../config/sessions/session-accessor.sqlite-transcript-reports.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import {
+  runWithoutOwnedSessionTranscriptWrites,
+  withSessionTranscriptWriteAssertion,
+} from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayTransportError } from "../../gateway/call.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
@@ -29,6 +35,7 @@ import {
 } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
+  getInProcessGatewayToolContext,
   hasInProcessGatewayToolContext,
   runWithGatewayToolContinuationContext,
   type AgentToolGatewayRequestCaller,
@@ -43,8 +50,9 @@ import {
 import { listSessionCloudProfiles } from "./sessions-cloud-profiles.js";
 import { isSessionToolMainAlias, resolveSessionToolContext } from "./sessions-helpers.js";
 import {
+  captureSessionControlAuthority,
   hasSessionControlAuthority,
-  hasSessionRenameAuthority,
+  hasSessionWriteAuthority,
 } from "./sessions-operator-authority.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
 import {
@@ -60,8 +68,6 @@ import {
 } from "./sessions-tool-patch.js";
 import {
   SessionControlToolSchema,
-  SessionOwnerToolSchema,
-  SessionRenameOwnerToolSchema,
   SessionRenameToolSchema,
   resolveSessionsToolSchema,
 } from "./sessions-tool-schema.js";
@@ -193,7 +199,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
   // Absence is the existing senderless system surface, not an explicit non-owner.
   const sandboxRenameOnly = opts.sandboxSessionRenameOnly === true;
   const controlOnly = opts.senderIsOwner === false || sandboxRenameOnly;
-  const renameAllowed = controlOnly && hasSessionRenameAuthority(opts.sessionControlAuthority);
+  const renameAllowed = controlOnly && hasSessionWriteAuthority(opts.sessionControlAuthority);
   const renameOnly = controlOnly && !hasSessionControlAuthority(opts.sessionControlAuthority);
   const assignmentOnly = renameOnly && !renameAllowed;
   const stopAllowed = opts.stopAllowed !== false;
@@ -205,22 +211,14 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
   return {
     label: "Sessions",
     name: "sessions",
+    // Only session-stable facts pick the definition, so every turn of a session
+    // offers the same tool; per-turn authority is enforced when it runs.
     description: sandboxRenameOnly
-      ? "Rename a session created by the requesting operator with patch and label (empty string clears it). Default target: current session. Another session requires sessionKey and expectedSessionId from sessions_list. No other session actions or settings."
-      : assignmentOnly
-        ? "Assign responsibility for a visible session to a human or agent with assign_owner, ownerType, and ownerId. Default target: current session. Does not change creator attribution or access."
-        : renameOnly
-          ? "Rename a session created by the requesting operator: use patch with label (empty string clears it). Default target: current session; another session requires sessionKey and expectedSessionId from sessions_list. assign_owner assigns responsibility for a visible session to a human or agent. No other settings or session controls."
-          : controlOnly
-            ? `Rename sessions created by the requesting operator with patch and label. Archive or restore sessions created by the requesting operator requires operator.write. Use patch with archived=true/false; self-archive waits until this run finishes. ${stopAllowed ? "Stop targets another session created by or assigned to the operator; runId optionally selects one active run. " : ""}assign_owner assigns responsibility for a visible session to a human or agent. No deletion, other settings, batch, or global group changes.`
-            : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.`,
+      ? "Rename a session created by the requesting operator with patch and label (empty string clears it). Default target: current session. Another session requires sessionKey and expectedSessionId from sessions_list. Archive and restore are unavailable in this authority context. No other session actions or settings."
+      : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions. Turns without owner authority are limited when the action runs.`,
     parameters: sandboxRenameOnly
       ? SessionRenameToolSchema
-      : assignmentOnly
-        ? SessionOwnerToolSchema
-        : renameOnly
-          ? SessionRenameOwnerToolSchema
-          : resolveSessionsToolSchema(controlOnly, stopAllowed, renameAllowed),
+      : resolveSessionsToolSchema(stopAllowed),
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, rawArgs, signal) => {
       let params = rawArgs as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
@@ -245,7 +243,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         params = Object.fromEntries(
           Object.keys(SessionRenameToolSchema.properties).map((key) => [key, params[key]]),
         );
-        if (!hasSessionRenameAuthority()) {
+        if (!hasSessionWriteAuthority()) {
           throw new ToolAuthorizationError(
             "Session rename requires current session write authority",
           );
@@ -564,56 +562,101 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             // keeps a reset replacement from being archived between checks.
             // Accepted work retains its source authority, not the request/turn
             // lifetime that must end before the archive can commit.
+            const archiveGatewayContext = getInProcessGatewayToolContext();
             void runWithGatewayToolContinuationContext(() =>
-              released.then(async () => {
-                const archiveIdentities = [key, expectedSessionIdentity.expectedSessionId];
-                const archivePatch = {
-                  key,
-                  ...agentScope,
-                  archived: true,
-                  ...expectedSessionIdentity,
-                };
-                while (true) {
-                  const competingRelease = getSessionWorkAdmissionRelease({
-                    scope: storePath,
-                    identities: archiveIdentities,
-                  });
-                  if (competingRelease) {
-                    await competingRelease;
-                    continue;
-                  }
-
-                  try {
-                    await (controlOnly
-                      ? callSessionPatch(archivePatch)
-                      : callGateway("sessions.patch", archivePatch));
-                    return;
-                  } catch (error) {
-                    // A tracked competing turn can delay archival. Untracked
-                    // races and transport failures are best effort: warn below.
-                    const retryableGatewayFailure =
-                      error instanceof GatewayTransportError ||
-                      isTransientNetworkError(error) ||
-                      (typeof error === "object" &&
-                        error !== null &&
-                        "retryable" in error &&
-                        error.retryable === true);
-                    if (!retryableGatewayFailure) {
-                      throw error;
-                    }
-                    const retryAfterRelease = getSessionWorkAdmissionRelease({
+              released
+                .then(async () => {
+                  const archiveIdentities = [key, expectedSessionIdentity.expectedSessionId];
+                  const archivePatch = {
+                    key,
+                    ...agentScope,
+                    archived: true,
+                    ...expectedSessionIdentity,
+                  };
+                  while (true) {
+                    const competingRelease = getSessionWorkAdmissionRelease({
                       scope: storePath,
                       identities: archiveIdentities,
                     });
-                    if (!retryAfterRelease) {
-                      throw error;
+                    if (competingRelease) {
+                      await competingRelease;
+                      continue;
                     }
-                    await retryAfterRelease;
+
+                    try {
+                      await (controlOnly
+                        ? callSessionPatch(archivePatch)
+                        : callGateway("sessions.patch", archivePatch));
+                      return;
+                    } catch (error) {
+                      // A tracked competing turn can delay archival. Untracked
+                      // races and transport failures are best effort: warn below.
+                      const retryableGatewayFailure =
+                        error instanceof GatewayTransportError ||
+                        isTransientNetworkError(error) ||
+                        (typeof error === "object" &&
+                          error !== null &&
+                          "retryable" in error &&
+                          error.retryable === true);
+                      if (!retryableGatewayFailure) {
+                        throw error;
+                      }
+                      const retryAfterRelease = getSessionWorkAdmissionRelease({
+                        scope: storePath,
+                        identities: archiveIdentities,
+                      });
+                      if (!retryAfterRelease) {
+                        throw error;
+                      }
+                      await retryAfterRelease;
+                    }
                   }
-                }
-              }),
+                })
+                .catch(async (error: unknown) => {
+                  log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
+                  const source = captureSessionControlAuthority();
+                  const target = {
+                    agentId,
+                    storePath,
+                    sessionKey: key,
+                    sessionId: expectedSessionIdentity.expectedSessionId,
+                  };
+                  // The settled model writer no longer owns this accepted outcome.
+                  // Keep the retained source and exact session generation at the report commit.
+                  const report = await runWithoutOwnedSessionTranscriptWrites(() =>
+                    withSessionTranscriptWriteAssertion(
+                      target,
+                      composeSessionSourceAssertion([source?.assertCurrent], (assertSource) => {
+                        assertSource();
+                        if (getInProcessGatewayToolContext() !== archiveGatewayContext) {
+                          throw new Error("Deferred archive Gateway owner changed");
+                        }
+                      }),
+                      () =>
+                        appendSessionTranscriptReport(target, {
+                          kind: "custom",
+                          customTypes: ["session-archive-failed"],
+                          selectReport: () => ({
+                            customType: "session-archive-failed",
+                            content:
+                              "The scheduled session archive could not be confirmed. Check whether this session is archived before trying again.",
+                            display: true,
+                            excludeFromContext: true,
+                            details: { operation: "archive", outcome: "unconfirmed" },
+                          }),
+                        }),
+                    ),
+                  );
+                  if (!report.ok) {
+                    log.warn(
+                      `deferred self-archive notice unavailable for ${key}: ${report.error.code}`,
+                    );
+                  }
+                }),
             ).catch((error: unknown) => {
-              log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
+              log.warn(
+                `deferred self-archive outcome unavailable for ${key}: ${formatErrorMessage(error)}`,
+              );
             });
 
             recordSessionToolActionFact({

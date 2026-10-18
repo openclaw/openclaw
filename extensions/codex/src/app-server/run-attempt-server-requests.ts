@@ -107,7 +107,7 @@ export function createCodexAttemptServerRequestController(
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
     requestSignal: AbortSignal = new AbortController().signal,
-    setExecutionTimeoutMs?: (timeoutMs: number) => void,
+    setExecutionTimeoutMs?: (timeoutMs: number | null) => void,
   ) => {
     const signal = AbortSignal.any([runAbortController.signal, requestSignal]);
     const turnId = turnIdRef.current;
@@ -177,6 +177,15 @@ export function createCodexAttemptServerRequestController(
       }
       const replayedExecution = openClawDynamicToolExecutions.get(call);
       if (replayedExecution) {
+        if (call.tool === "autoreview") {
+          setExecutionTimeoutMs?.(
+            resolveDynamicToolCallTimeoutMs({
+              call,
+              config: params.config,
+              parentTimeoutMs: params.timeoutMs,
+            }),
+          );
+        }
         markCurrentTurnRequestProgress();
         const response = await replayedExecution;
         await settlePluginRuntimeRefresh(turnId);
@@ -235,6 +244,7 @@ export function createCodexAttemptServerRequestController(
         call,
         config: params.config,
         toolBridge,
+        parentTimeoutMs: params.timeoutMs,
       });
       setExecutionTimeoutMs?.(dynamicToolTimeoutMs);
       const toolStartedAt = Date.now();

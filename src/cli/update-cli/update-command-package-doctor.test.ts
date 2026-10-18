@@ -38,7 +38,7 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import * as configCapture from "./update-command-config-snapshot.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
-import { createUpdateRunProgress } from "./update-command-run.js";
+import { completeUpdateCommandRun, createUpdateRunProgress } from "./update-command-run.js";
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -62,13 +62,54 @@ async function createDoctorFixture() {
 }
 
 it.each([
+  { requested: false, supported: false },
+  { requested: false, supported: true },
+  { requested: true, supported: false },
+  { requested: true, supported: true },
+])(
+  "runs the candidate Doctor with full integrity requested=$requested supported=$supported",
+  async ({ requested, supported }) => {
+    const { root, env } = await createDoctorFixture();
+    const calls = path.join(root, "doctor-calls.jsonl");
+    await fs.writeFile(
+      path.join(root, "dist", "entry.js"),
+      `const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+if (args.includes("--help")) {
+  console.log(${JSON.stringify(supported ? "  --full-integrity-check  Check all indexes" : "  --fix  Repair problems")});
+} else {
+  if (!${supported} && args.includes("--full-integrity-check")) process.exit(2);
+  fs.writeFileSync(process.env.${UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV}, JSON.stringify({ status: "ok" }));
+}
+`,
+    );
+    const result = await runPackageUpdateDoctor({
+      root,
+      nodeRunner: process.execPath,
+      fullIntegrityCheck: requested,
+      managedServiceEnv: env,
+      timeoutMs: 5_000,
+      progress: {},
+    });
+    expect(result?.exitCode).toBe(0);
+    const argv = (await fs.readFile(calls, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[]);
+    expect(argv.filter((args) => args.includes("--help"))).toHaveLength(requested ? 1 : 0);
+    expect(argv.at(-1)?.includes("--full-integrity-check")).toBe(requested && supported);
+  },
+);
+
+it.each([
   { restart: false, contention: true },
   { restart: false, contention: true, wrapped: true },
   { restart: true, contention: true },
   { restart: false, contention: false },
   { restart: false, contention: false, wrapped: true },
 ])(
-  "defers only operator-owned state contention ($restart, $contention, wrapped=$wrapped)",
+  "defers package replacement state handoff ($restart, contention=$contention, wrapped=$wrapped)",
   async ({ restart, contention, wrapped }) => {
     const { root, env } = await createDoctorFixture();
     const cause = contention
@@ -87,7 +128,7 @@ it.each([
       progress: { onStepComplete },
       onConfigSnapshot: vi.fn(),
     });
-    if (restart || !contention) {
+    if (restart) {
       await expect(operation).rejects.toBe(error);
     } else {
       const step = await operation;
@@ -101,11 +142,17 @@ it.each([
         },
       });
       expect(step && isFailedUpdateStep(step)).toBe(false);
-      expect(step?.advisory?.message).toContain("service owner");
       expect(step?.advisory?.message).toContain("openclaw update status");
       expect(step?.advisory?.message).toContain("openclaw doctor");
       expect(results).toEqual([step]);
       expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(step));
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const result = completeUpdateCommandRun(
+        { status: "ok", mode: "npm", root, steps: results, durationMs: 0 },
+        run,
+      );
+      expect(result.status).toBe("ok");
+      expect(getUpdateRun(run.runId, { env })?.status).toBe("succeeded");
     }
     expect(spawn).not.toHaveBeenCalled();
   },
@@ -406,7 +453,8 @@ it.each([
 
 it("leaves the run ledger unchanged while the activation Doctor child is pending", async () => {
   const { root, env } = await createDoctorFixture();
-  vi.useFakeTimers();
+  // Ledger receipts still need real worker scheduling and monotonic clocks.
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   const { runId } = createUpdateRun({ trigger: "control-ui" }, { env });
   expect(adoptUpdateRun(runId, { env }).origin.driver?.pid).toBe(process.pid);
   const spawned = createDeferredCore();

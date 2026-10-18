@@ -90,7 +90,6 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     resetPluginRuntimeStateForTest();
     activePluginRegistry = createTelegramPluginRegistry();
     setActivePluginRegistry(activePluginRegistry as never);
-    ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
     ({
       createCommandBot,
       createNativeCommandTestParams,
@@ -99,6 +98,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       resetNativeCommandMenuMocks,
       waitForRegisteredCommands,
     } = await import("./bot-native-commands.menu-test-support.js"));
+    ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
   });
 
   beforeEach(() => {

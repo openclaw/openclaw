@@ -29,7 +29,6 @@ import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-c
 import { gitBackupCommandRuntimeEntrypoint } from "./git-backup-command-runtime.test-support.js";
 import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from "./git-backup.js";
 import {
-  createAgentFixture,
   createCatalogFixture,
   createFormatFixture,
   writeBackupManifest,
@@ -346,34 +345,6 @@ describe("Git-backed SQLite snapshots", () => {
       );
     },
   );
-
-  it("preserves an unowned global namespace in an adopted repository", async () => {
-    const root = await tempRoot();
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "repository");
-    const operatorFile = path.join(repositoryPath, "global", "operator.txt");
-    await initializeGitBackupRepository({ repositoryPath, stateDir });
-    await fs.mkdir(path.dirname(operatorFile), { recursive: true });
-    await fs.writeFile(operatorFile, "operator-owned\n");
-
-    await expect(
-      createGitBackup({ repositoryPath, stateDir, databases: [database] }),
-    ).resolves.toMatchObject({ noChanges: false });
-    await expect(fs.readFile(operatorFile, "utf8")).resolves.toBe("operator-owned\n");
-  });
-
-  it("removes stale backup-owned agent scopes for an all-database backup", async () => {
-    const root = await tempRoot();
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "repository");
-    const staleAgentPath = path.join(repositoryPath, "agents", "old-agent");
-    await initializeGitBackupRepository({ repositoryPath, stateDir });
-    await writeBackupManifest(staleAgentPath, "old-agent");
-
-    await createGitBackup({ repositoryPath, stateDir, databases: [database], all: true });
-
-    await expect(fs.lstat(staleAgentPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
 
   it("prunes owned artifacts without deleting an unowned agent scope", async () => {
     const root = await tempRoot();
@@ -752,71 +723,6 @@ describe("Git-backed SQLite snapshots", () => {
     await expect(conflict).rejects.not.toThrow(password);
   });
 
-  it("round-trips losslessly, converges FTS, and omits derived vec and transcript state", async () => {
-    const root = await tempRoot();
-    const source = path.join(root, "source.sqlite");
-    const dump = path.join(root, "dump");
-    const restoredPath = path.join(root, "restored.sqlite");
-    await createFormatFixture(source);
-    const manifest = await dumpGitBackupDatabase({
-      snapshotPath: source,
-      outputPath: dump,
-      identity: { role: "global" },
-    });
-    const restored = await restoreGitBackupDirectory({
-      sourcePath: dump,
-      targetPath: restoredPath,
-      expectedIdentity: { role: "global" },
-    });
-    expect(restored.tables.every((table) => table.ok)).toBe(true);
-    expect(restored.manifest.tables).toEqual(manifest.tables);
-    expect(manifest.tables).not.toHaveProperty("session_transcript_index_state");
-    expect(manifest.tables).not.toHaveProperty("session_transcript_fts_rows");
-    if (process.platform !== "win32") {
-      expect((await fs.stat(restoredPath)).mode & 0o777).toBe(0o600);
-    }
-
-    const database = new DatabaseSync(restoredPath, { readOnly: true });
-    try {
-      const statement = database.prepare(
-        "SELECT id, huge, bytes, optional FROM content ORDER BY id",
-      );
-      statement.setReadBigInts(true);
-      const rows = statement.all() as Array<{
-        id: bigint;
-        huge: bigint;
-        bytes: Uint8Array;
-        optional: string | null;
-      }>;
-      expect(
-        rows.map((row) => ({
-          id: row.id,
-          huge: row.huge,
-          bytes: [...row.bytes],
-          optional: row.optional,
-        })),
-      ).toEqual([
-        {
-          id: 1n,
-          huge: 9_007_199_254_740_993n,
-          bytes: [0, 1, 254, 255],
-          optional: "",
-        },
-        { id: 2n, huge: -9_007_199_254_740_994n, bytes: [42], optional: null },
-      ]);
-      expect(
-        database.prepare("SELECT rowid FROM content_fts WHERE content_fts MATCH 'lobster'").all(),
-      ).toEqual([{ rowid: 1 }]);
-      const tables = database
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
-        .all() as Array<{ name: string }>;
-      expect(tables.some((table) => table.name === "memory_vec")).toBe(false);
-      expect(tables.some((table) => table.name === "session_transcript_index_state")).toBe(false);
-    } finally {
-      database.close();
-    }
-  });
-
   it.each([false, true])(
     "redacts catalog credentials only for secret-excluded backups (exclude=%s)",
     async (excludeSecrets) => {
@@ -908,6 +814,8 @@ describe("Git-backed SQLite snapshots", () => {
     expect(manifest.tables).not.toHaveProperty("device_auth_tokens");
     expect(manifest.tables).not.toHaveProperty("channel_pairing_requests");
     expect(manifest.tables).not.toHaveProperty("device_pairing_join_codes");
+    expect(manifest.tables).not.toHaveProperty("session_transcript_index_state");
+    expect(manifest.tables).not.toHaveProperty("session_transcript_fts_rows");
     await expect(
       fs.lstat(path.join(dump, "tables", "channel_pairing_requests.jsonl")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -923,8 +831,25 @@ describe("Git-backed SQLite snapshots", () => {
       targetPath: path.join(root, "redacted.sqlite"),
     });
     expect(restored.excludedTables).toContain("device_auth_tokens");
+    expect(restored.tables.every((table) => table.ok)).toBe(true);
+    expect(restored.manifest.tables).toEqual(manifest.tables);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(restored.targetPath)).mode & 0o777).toBe(0o600);
+    }
     const restoredDatabase = new DatabaseSync(restored.targetPath, { readOnly: true });
     try {
+      expect(
+        restoredDatabase
+          .prepare("SELECT rowid FROM content_fts WHERE content_fts MATCH 'lobster'")
+          .all(),
+      ).toEqual([{ rowid: 1 }]);
+      expect(
+        restoredDatabase
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('memory_vec', 'session_transcript_index_state')",
+          )
+          .all(),
+      ).toEqual([]);
       expect(
         restoredDatabase.prepare("SELECT COUNT(*) AS count FROM device_auth_tokens").get(),
       ).toEqual({ count: 0 });
@@ -1021,35 +946,5 @@ describe("Git-backed SQLite snapshots", () => {
       }),
     ).rejects.toThrow(/schema role missing; expected global/u);
     await expect(fs.lstat(restoredPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("converges and validates the requested agent database owner", async () => {
-    const root = await tempRoot();
-    const source = path.join(root, "agent.sqlite");
-    const dump = path.join(root, "dump");
-    const restoredPath = path.join(root, "restored.sqlite");
-    createAgentFixture(source, "main");
-    await dumpGitBackupDatabase({
-      snapshotPath: source,
-      outputPath: dump,
-      identity: { role: "agent", agentId: "main" },
-    });
-
-    await restoreGitBackupDirectory({
-      sourcePath: dump,
-      targetPath: restoredPath,
-      expectedIdentity: { role: "agent", agentId: "main" },
-    });
-    const restored = new DatabaseSync(restoredPath, { readOnly: true });
-    try {
-      expect(
-        restored.prepare("SELECT role, agent_id FROM schema_meta WHERE meta_key = 'primary'").get(),
-      ).toEqual({ role: "agent", agent_id: "main" });
-      expect(
-        restored.prepare("SELECT COUNT(*) AS count FROM session_transcript_index_state").get(),
-      ).toEqual({ count: 0 });
-    } finally {
-      restored.close();
-    }
   });
 });

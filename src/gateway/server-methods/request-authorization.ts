@@ -152,18 +152,17 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     await params.context.ensureSessionRowProjection();
   }
   params.markSessionSubscribePhase?.("accessFacts");
+  // SAFETY: The host-owned method registry carries the PluginRegistry selected for dispatch.
+  const pluginRegistry = params.methodRegistry.pluginRegistry as PluginRegistry | undefined;
   const authorizeMethod = () =>
-    withPluginRuntimeRegistryScope(
-      // SAFETY: The host-owned method registry carries the PluginRegistry selected for dispatch.
-      params.methodRegistry.pluginRegistry as PluginRegistry | undefined,
-      () =>
-        authorizeGatewayMethod(
-          params.method,
-          params.client,
-          params.requestParams,
-          params.methodRegistry,
-          params.context,
-        ),
+    withPluginRuntimeRegistryScope(pluginRegistry, () =>
+      authorizeGatewayMethod(
+        params.method,
+        params.client,
+        params.requestParams,
+        params.methodRegistry,
+        params.context,
+      ),
     );
   const startupError = () =>
     params.context.unavailableGatewayMethods?.has(params.method)
@@ -442,7 +441,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       params.markSessionSubscribePhase?.(
         subscriptionAccessOnly ? "accessFacts" : "projectionReadiness",
       );
-      const preparedSessionMutation =
+      const sessionMutation =
         projection && params.consumeSessionTurn && !subscriptionAccessOnly
           ? await projection.withPreparedExactRows((cfg) => {
               signal?.throwIfAborted();
@@ -456,20 +455,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
                 return agent.ok ? [{ key: target.sessionKey, agentId: agent.agentId }] : [];
               });
             }, authorizeSessionAndConsume)
-          : { kind: "complete" as const, value: authorizeSessionAndConsume() };
+          : authorizeSessionAndConsume();
       params.markSessionSubscribePhase?.("accessFacts");
       signal?.throwIfAborted();
-      if (preparedSessionMutation.kind === "pending") {
-        workerSessionMutation.authorization?.release?.();
-        const { certifySessionCanonicalValidationPending } =
-          await import("../../config/sessions/session-canonical-validation-readiness.js");
-        signal?.throwIfAborted();
-        await certifySessionCanonicalValidationPending(preparedSessionMutation.database);
-        // No permission result survives readiness. Method scopes, profile binding,
-        // startup state, target selection and current session facts all run again.
-        continue;
-      }
-      const sessionMutation = preparedSessionMutation.value;
       if (sessionMutation.error) {
         workerSessionMutation.authorization?.release?.();
         return { error: sessionMutation.error };
@@ -483,6 +471,10 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         try {
           const preparedAccess = await prepareGatewaySessionAccessAuthority({
             policy: sessionPolicy,
+            methodOwner: params.methodRegistry
+              .descriptors()
+              .find((descriptor) => descriptor.name === params.method)?.owner,
+            pluginRegistry,
             requestParams: params.requestParams,
             client: params.client ?? null,
             context: params.context,

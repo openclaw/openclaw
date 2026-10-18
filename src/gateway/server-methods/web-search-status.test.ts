@@ -30,8 +30,14 @@ vi.mock("../../web-search/runtime.js", () => ({
   listConfiguredWebSearchProviders: mocks.available,
   resolveWebSearchProviderId: mocks.selection,
 }));
-vi.mock("../../plugins/management-service.js", () => ({
-  resolveManagedPluginMetadata: mocks.metadata,
+// mock-isolation: Provider status uses fixed metadata without loading the discovery registry.
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginMetadataSnapshotAsync: mocks.metadata,
+}));
+// mock-isolation: Use fixed discovery policy without opening machine state for status projection.
+vi.mock("../../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+  readBundledDiscoveryModeMemoized: () => undefined,
 }));
 vi.mock("../../plugins/credential-descriptors.js", () => ({
   resolvePluginCredentialDescriptors: () => [credential],

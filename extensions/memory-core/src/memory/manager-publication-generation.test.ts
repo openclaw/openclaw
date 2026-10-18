@@ -12,7 +12,10 @@ import {
   runOpenClawAgentWriteAdmission,
   withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -33,7 +36,7 @@ async function withPublishedIndex(run: (database: MemoryIndexDatabase) => Promis
       writeOptions: { agentId: "main", path: path.join(state.stateDir, "agent.sqlite") },
       readOnly: false,
       allowExtension: false,
-      schema: { cacheEnabled: false, ftsEnabled: false },
+      schema: { cacheEnabled: true, ftsEnabled: false },
     });
     try {
       await run(database);
@@ -101,6 +104,37 @@ function indexCommands(calls: unknown[][]): string[] {
   });
 }
 
+function recordIndexCommands(target: "messagePort" | "worker") {
+  const commands: string[] = [];
+  const record = (message: unknown, send: () => void) => {
+    const dispatched = indexCommands([[message]]);
+    send();
+    commands.push(...dispatched);
+  };
+  if (target === "messagePort") {
+    const prototype: Pick<MessagePort, "postMessage"> = MessagePort.prototype;
+    const nativePost = prototype.postMessage;
+    const posts = vi.spyOn(prototype, "postMessage").mockImplementation(function (
+      this: MessagePort,
+      message: unknown,
+      options,
+    ) {
+      record(message, () => nativePost.call(this, message, options));
+    });
+    return { commands, restore: () => posts.mockRestore() };
+  }
+  const prototype: Pick<Worker, "postMessage"> = Worker.prototype;
+  const nativePost = prototype.postMessage;
+  const posts = vi.spyOn(prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    message: unknown,
+    transferList,
+  ) {
+    record(message, () => nativePost.call(this, message, transferList));
+  });
+  return { commands, restore: () => posts.mockRestore() };
+}
+
 it("retains session entry facts across memory publication and refreshes after a session write", async () => {
   await withPublishedIndex(async (database) => {
     const target = {
@@ -155,14 +189,60 @@ it("retains session entry facts across memory publication and refreshes after a 
   });
 });
 
+it("retains published memory facts across session and embedding-cache writes", async () => {
+  await withPublishedIndex(async (database) => {
+    await database.writeMetadata(metadata);
+    const facts = database.facts;
+    const messages = recordIndexCommands("messagePort");
+    try {
+      await upsertSessionEntry({
+        agentId: "main",
+        storePath: database.db.location()!,
+        sessionKey: "agent:main:memory-facts",
+        entry: { sessionId: "memory-facts", updatedAt: 1 },
+      });
+      await database.refreshFacts();
+      await database.mutateEmbeddingCache(
+        {
+          kind: "upsert",
+          header: {
+            agentId: "main",
+            provider: { id: "test", model: "test" },
+            providerKey: "test",
+            maxEntries: 2,
+          },
+          entries: [{ hash: "test", embedding: [1] }],
+        },
+        () => {},
+        () => true,
+      );
+      await database.refreshFacts();
+      expect(database.facts).toBe(facts);
+      expect(messages.commands).not.toContain("index.facts");
+
+      await database.writeMetadata({ ...metadata, model: "updated-model" });
+      await database.refreshFacts();
+      expect(database.facts.meta?.model).toBe("updated-model");
+      expect(messages.commands).not.toContain("index.facts");
+    } finally {
+      messages.restore();
+    }
+  });
+});
+
 it("keeps no-op and refused publication preparation SQL-free without opening a worker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const borrowed = borrowOpenClawAgentDatabase({ agentId: "main" });
     const source = readOpenClawAgentDatabaseIdentity(borrowed);
-    const database = new MemoryIndexDatabase(borrowed.db, borrowed.release, false, {
-      agentId: "main",
-      path: source.filename,
-    });
+    const database = new MemoryIndexDatabase(
+      requireNativeSqliteDatabase(borrowed.db),
+      borrowed.release,
+      false,
+      {
+        agentId: "main",
+        path: source.filename,
+      },
+    );
     const sql = observeHostDataSql();
     const messages = vi.spyOn(Worker.prototype, "postMessage");
     try {
@@ -292,7 +372,7 @@ it("refreshes facts once after another in-process writer commits", async () => {
       db.prepare("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1").run();
     });
     const sql = observeHostDataSql();
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    const messages = recordIndexCommands("worker");
     try {
       for (let turn = 0; turn < 3; turn++) {
         await database.refreshFacts();
@@ -308,9 +388,9 @@ it("refreshes facts once after another in-process writer commits", async () => {
         });
       }
       expect(sql.queries).toEqual([]);
-      expect(indexCommands(messages.mock.calls)).toEqual(["index.facts"]);
+      expect(messages.commands).toEqual(["index.facts"]);
     } finally {
-      messages.mockRestore();
+      messages.restore();
       sql.restore();
     }
   });

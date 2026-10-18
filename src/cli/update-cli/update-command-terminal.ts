@@ -2,11 +2,7 @@ import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.j
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
-import {
-  createUpdateErrorFact,
-  normalizeUpdateFailureFacts,
-  type UpdateFailureFact,
-} from "../../infra/update-failure-facts.js";
+import { createUpdateErrorFact, type UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
@@ -23,6 +19,7 @@ import { printResult } from "./progress.js";
 import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import type { MigratedUpdateFinalizationResult } from "./update-command-migrated-types.js";
 import {
   recordMutableUpdateInterruption,
   withMutableUpdateTerminalSettlement,
@@ -31,6 +28,7 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 import {
   recordUpdateResultNextAction,
   failUpdateCommandRun,
+  createPreMutationUpdateResult,
   createUpdateCommandFailureResult,
   UnreportedUpdateAdmissionOutcome,
   type UpdateAdmissionReportParams,
@@ -38,6 +36,8 @@ import {
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
+  withUpdateStateRead,
+  isUpdateStateReadContention,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import {
@@ -72,6 +72,44 @@ export function deferUpdateCommandTerminalResult(
   }
   owner.publish = publish;
   return true;
+}
+
+/** Deliver candidate-owned facts only after the retained parent's executor settles. */
+export function deferMigratedUpdateCommandTerminalResult(
+  run: Run,
+  prepared: Pick<MigratedUpdateFinalizationResult, "result" | "exitCode">,
+  stdout: string,
+): UpdateCommandFailure | undefined {
+  const expectedFailure =
+    prepared.exitCode === 0
+      ? undefined
+      : new UpdateCommandFailure(prepared.result, prepared.exitCode);
+  const pending = (cause: unknown) =>
+    new UpdateCommandPendingRecoveryFailure(prepared.result, formatErrorMessage(cause), { cause });
+  if (
+    !deferUpdateCommandTerminalResult(run, async (failure) => {
+      // Only the exact candidate failure is expected. Cleanup and release errors
+      // must suppress its output without reopening the newer ledger in this parent.
+      if (failure !== expectedFailure) {
+        throw pending(
+          failure === undefined
+            ? new Error("Update continuation did not propagate its prepared failure.")
+            : failure,
+        );
+      }
+      try {
+        if (stdout) {
+          process.stdout.write(stdout);
+        }
+      } catch (cause) {
+        throw pending(cause);
+      }
+      return prepared.result;
+    })
+  ) {
+    throw pending(new Error("Migrated update result has no terminal publication owner."));
+  }
+  return expectedFailure;
 }
 
 export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
@@ -294,8 +332,6 @@ async function settleUpdateCommandTerminalResult<T>(
         formatErrorMessage(failure),
         {
           cause: failure,
-          automaticTriage:
-            failure instanceof UpdateCommandFailure ? failure.automaticTriage : undefined,
         },
       );
     }
@@ -395,11 +431,15 @@ export async function resolveSettledUpdateCommandResult(
         stderrTail: activationTimeout?.message ?? formatErrorMessage(failure),
       }
     : undefined;
+  const version = pendingResult.after?.version?.trim();
+  const recovery: UpdateRunResult["recovery"] =
+    pendingResult.recovery ?? (version ? { serviceRestartSafe: true, version } : undefined);
   const result: UpdateRunResult = failedStep
     ? {
         ...pendingResult,
         status: "error",
         reason: activationTimeout?.reason ?? "update-executor-settlement-failed",
+        recovery: isUpdateStateReadContention(failure) ? recovery : undefined,
         failedStep,
         steps: [...pendingResult.steps, failedStep],
       }
@@ -416,16 +456,21 @@ export async function resolveSettledUpdateCommandResult(
     const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
     // Keep the first target stable if selectors change during admission.
     const targetPath = resolveOpenClawStateSqlitePath(env);
-    await assertUpdateRecoveryAdmission({ env, path: targetPath });
-    if (params.opts.run) {
-      if (resolveOpenClawStateSqlitePath(params.opts.run.env) !== targetPath) {
-        await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
-      }
-      const prior = getUpdateRun(params.opts.run.runId, { env: params.opts.run.env });
-      if (prior && prior.status !== "running" && settlementFailed) {
-        throw new Error("Update history was already finalized by another owner.");
-      }
-    }
+    await withUpdateStateRead(
+      async () => {
+        await assertUpdateRecoveryAdmission({ env, path: targetPath });
+        if (params.opts.run) {
+          if (resolveOpenClawStateSqlitePath(params.opts.run.env) !== targetPath) {
+            await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
+          }
+          const prior = getUpdateRun(params.opts.run.runId, { env: params.opts.run.env });
+          if (prior && prior.status !== "running" && settlementFailed) {
+            throw new Error("Update history was already finalized by another owner.");
+          }
+        }
+      },
+      params.opts.run?.deadline?.remainingMs() ?? params.opts.run?.defaultStepTimeoutMs ?? 0,
+    );
   } catch (cause) {
     throw new UpdateCommandPendingRecoveryFailure(result, formatErrorMessage(cause), { cause });
   }
@@ -600,46 +645,6 @@ export async function reportPreMutationUpdateResult(
     params.status === "skipped" ? 0 : resolveManagedServiceUpdateFailureExitCode(result),
     params.message,
   );
-}
-
-function createPreMutationUpdateResult(
-  params: UpdateAdmissionReportParams,
-  outcome: Pick<UpdateRunResult, "status" | "recovery">,
-  phase = "requested",
-): UpdateRunResult {
-  const run = params.opts.run;
-  const stepResult = outcome.status === "error" ? params.stepResult : undefined;
-  const failedStep: UpdateStepResult | undefined =
-    stepResult?.failedStep ??
-    (outcome.status === "error" || params.failureFacts?.length
-      ? {
-          // A skipped admission adds facts to its phase, not evidence of update work.
-          name: outcome.status === "skipped" ? phase : params.reason,
-          command: "openclaw update",
-          cwd: params.root,
-          durationMs: 0,
-          exitCode: outcome.status === "error" ? 1 : 0,
-          stderrTail: params.message,
-          ...(params.recoverySteps ? { recoverySteps: params.recoverySteps } : {}),
-          failureFacts: normalizeUpdateFailureFacts(
-            params.failureFacts ?? [
-              { check: params.reason, code: params.reason, message: params.message },
-            ],
-            run?.env,
-          ),
-        }
-      : undefined);
-  return {
-    ...outcome,
-    mode: params.mode ?? (params.installKind === "git" ? "git" : "unknown"),
-    root: params.root,
-    reason: params.reason,
-    failedStep: outcome.status === "error" ? failedStep : undefined,
-    steps: stepResult?.failedStep
-      ? stepResult.steps
-      : [...(stepResult?.steps ?? []), ...(failedStep ? [failedStep] : [])],
-    durationMs: 0,
-  };
 }
 
 async function publishPreMutationUpdateOutcome(

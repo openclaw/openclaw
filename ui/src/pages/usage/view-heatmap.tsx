@@ -37,27 +37,21 @@ function renderHeatmapSvg(heatmap: UsageHeatmap) {
       <For each={heatmap.monthLabels}>
         {(label, index) =>
           label ? (
-            <>
-              {" "}
-              <text class="usage-heatmap__month" x={HEATMAP_LEFT + index() * HEATMAP_PITCH} y="10">
-                {label}
-              </text>{" "}
-            </>
+            <text class="usage-heatmap__month" x={HEATMAP_LEFT + index() * HEATMAP_PITCH} y="10">
+              {label}
+            </text>
           ) : undefined
         }
       </For>
       <For each={WEEKDAY_LABEL_ROWS}>
         {({ row, utcDay }) => (
-          <>
-            {" "}
-            <text
-              class="usage-heatmap__weekday"
-              x={HEATMAP_LEFT - 6}
-              y={HEATMAP_TOP + row * HEATMAP_PITCH + HEATMAP_CELL - 2}
-            >
-              {weekdayFormat.format(new Date(utcDay))}
-            </text>{" "}
-          </>
+          <text
+            class="usage-heatmap__weekday"
+            x={HEATMAP_LEFT - 6}
+            y={HEATMAP_TOP + row * HEATMAP_PITCH + HEATMAP_CELL - 2}
+          >
+            {weekdayFormat.format(new Date(utcDay))}
+          </text>
         )}
       </For>
       <For each={heatmap.weeks}>
@@ -73,7 +67,7 @@ function renderHeatmapSvg(heatmap: UsageHeatmap) {
                 })}`;
               return (
                 <rect
-                  class={`usage-heatmap__cell usage-heatmap__cell--l${day.level}`}
+                  class={["usage-heatmap__cell", `usage-heatmap__cell--l${day.level}`]}
                   x={HEATMAP_LEFT + weekIndex() * HEATMAP_PITCH}
                   y={HEATMAP_TOP + dayIndex() * HEATMAP_PITCH}
                   width={HEATMAP_CELL}
@@ -108,7 +102,7 @@ export function renderUsageHeatmap(
         {(level) => (
           <>
             {" "}
-            <span class={`usage-heatmap__swatch usage-heatmap__cell--l${level}`} />{" "}
+            <span class={["usage-heatmap__swatch", `usage-heatmap__cell--l${level}`]} />{" "}
           </>
         )}
       </For>

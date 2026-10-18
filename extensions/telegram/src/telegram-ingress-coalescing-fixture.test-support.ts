@@ -23,7 +23,6 @@ import {
   resolveFlushTimerForDelay,
 } from "./bot-media-timers.test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
-import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
 import * as messageDispatchDedupe from "./message-dispatch-dedupe.js";
 import { setTelegramRuntime } from "./runtime.js";
@@ -31,7 +30,7 @@ import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js
 import type { TelegramRuntime } from "./runtime.types.js";
 import {
   createBotApiTransport,
-  createTelegramDeps,
+  configureTelegramModuleMocks,
   photoUpdate,
 } from "./telegram-ingress-coalescing.test-support.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
@@ -115,7 +114,6 @@ export function createDownstreamTurnFixture(
   function holdFirstDownstreamTurn() {
     const headDispatched = createDeferred<void>();
     const releaseHead = createDeferred<void>();
-    const headFinished = createDeferred<void>();
     downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
       if (downstreamTurns.mock.calls.length === 1) {
         if (!lifecycle?.deferredHeartbeatIntervalMs) {
@@ -134,18 +132,17 @@ export function createDownstreamTurnFixture(
           }
         } finally {
           clearInterval(heartbeat);
-          headFinished.resolve();
         }
       }
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
-    return { headDispatched, releaseHead, headFinished };
+    return { headDispatched, releaseHead };
   }
 
   function holdDownstreamLane() {
     const releaseHead = createDeferred<void>();
-    const turnsDeferred = [createDeferred<void>(), createDeferred<void>()];
-    const turnsFinished: Promise<void>[] = [];
+    const turnsDeferred = [createDeferred<void>(), createDeferred<void>()] as const;
+    let turnIndex = 0;
     // Session-lane stand-in: every turn defers, heartbeats, and adopts after the turn ahead.
     let laneTail: Promise<void> = releaseHead.promise;
     downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
@@ -155,13 +152,13 @@ export function createDownstreamTurnFixture(
       const ahead = laneTail;
       const finished = createDeferred<void>();
       laneTail = finished.promise;
-      const turnIndex = turnsFinished.push(finished.promise) - 1;
       lifecycle.onDeferred?.();
       const heartbeat = setInterval(
         () => lifecycle.onDeferredHeartbeat?.(),
         lifecycle.deferredHeartbeatIntervalMs,
       );
       turnsDeferred[turnIndex]?.resolve();
+      turnIndex += 1;
       try {
         await ahead;
         if (!abortSignal?.aborted) {
@@ -173,7 +170,7 @@ export function createDownstreamTurnFixture(
       }
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
-    return { releaseHead, turnsDeferred, turnsFinished };
+    return { releaseHead, turnsDeferred };
   }
 
   return {
@@ -210,6 +207,7 @@ export function resetTelegramIngressRuntime() {
 export type TelegramIngressMonitorOptions = {
   telegramTransport?: TelegramTransport;
   adoptionStallTimeoutMs?: number;
+  pollIntervalMs?: number;
   onRuntimeError?: (error: unknown) => void;
 };
 
@@ -219,11 +217,12 @@ export async function createIngressMonitor(
 ) {
   const telegramTransport = options.telegramTransport ?? createBotApiTransport();
   const abortController = new AbortController();
+  configureTelegramModuleMocks(stateDir, cfg);
+  const { createTelegramBot } = await import("./bot.js");
   const bot = await createTelegramBot({
     token: "tok",
     botInfo: telegramBotInfoForTest,
     config: cfg,
-    telegramDeps: createTelegramDeps(stateDir, cfg),
     telegramTransport,
     fetchAbortSignal: abortController.signal,
     mediaAbortSignal: abortController.signal,
@@ -250,9 +249,9 @@ export async function createIngressMonitor(
     ...(options.adoptionStallTimeoutMs === undefined
       ? {}
       : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
-    pollIntervalMs: 10,
+    pollIntervalMs: options.pollIntervalMs ?? 10,
   });
-  const resources = { monitor, telegramTransport, abortController };
+  const resources = { monitor, telegramTransport, abortController, bot };
   return resources;
 }
 

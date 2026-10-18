@@ -18,6 +18,7 @@ import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
@@ -112,6 +113,10 @@ export async function createGatewayKernel(
   opts: GatewayServerOptions = {},
   options: GatewayKernelOptions = {},
 ) {
+  await installGatewayDatabaseEngine(
+    opts.startupConfigSnapshotRead?.snapshot,
+    opts.startupConfigSnapshotRead?.databaseEngineSelection,
+  );
   const scheduler = new GatewayScheduler();
   const sdkResourceHost = options.sdkResourceHost ?? new LegacyPluginSdkResourceHost();
   sdkResourceHost.bindScheduler(scheduler);
@@ -136,10 +141,11 @@ async function createGatewayKernelWithSdkHost(
     throw new Error("Gateway boot ID must contain 1 to 96 characters");
   }
   const bootId = suppliedBootId ?? randomUUID();
-  // Publish before bootstrap creates catalog consumers; later downloads use explicit adoption.
-  await prepareRemoteModelCatalogStartupSnapshot();
-  // Retain cancellation before bootstrap owns resources or an update replaces its chunk.
-  const { cancelPreparedModelRuntimeRefresh } = await import("../agents/prepared-model-runtime.js");
+  // Join catalog publication and retained cancellation code before bootstrap owns resources.
+  const [, { cancelPreparedModelRuntimeRefresh }] = await Promise.all([
+    prepareRemoteModelCatalogStartupSnapshot(),
+    import("../agents/prepared-model-runtime.js"),
+  ]);
   ensureOpenClawCliOnPath();
   const pluginMetadata = retainGatewayPluginMetadata(scheduler, async () => {
     cancelPreparedModelRuntimeRefresh();

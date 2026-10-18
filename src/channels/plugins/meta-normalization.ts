@@ -6,8 +6,8 @@ export function normalizeChannelMeta<TId extends string>(params: {
   meta?: Partial<ChannelMeta> | null;
   existing?: Partial<ChannelMeta> | null;
 }): ChannelMeta & { id: TId } {
-  const next = params.meta ?? undefined;
-  const existing = params.existing ?? undefined;
+  const next = params.meta;
+  const existing = params.existing;
   const label =
     normalizeOptionalString(next?.label) ??
     normalizeOptionalString(existing?.label) ??

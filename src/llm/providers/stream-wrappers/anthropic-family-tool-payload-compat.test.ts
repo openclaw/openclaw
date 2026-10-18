@@ -17,12 +17,10 @@ function lookupFunction() {
   return { type: "function", function: lookupTool() };
 }
 
-function unreadableTool(name = "bad_schema") {
+function invalidTool(name = "bad_schema") {
   return {
     name,
-    get parameters(): never {
-      throw new Error("parameters getter exploded");
-    },
+    parameters: { type: "object", required: "query" },
   };
 }
 
@@ -46,6 +44,51 @@ function runWrapper(payload: Record<string, unknown>, nextModel = model) {
 }
 
 describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
+  it.each([
+    {
+      label: "raw tool with no schema",
+      tool: { name: "lookup" },
+      definition: { name: "lookup", parameters: emptySchema() },
+    },
+    {
+      label: "nested function with no schema",
+      tool: { type: "function", function: { name: "lookup", strict: null } },
+      definition: { name: "lookup", strict: null },
+    },
+    {
+      label: "raw tool with boolean strict",
+      tool: { name: "lookup", parameters: querySchema(), strict: false },
+      definition: { name: "lookup", parameters: querySchema(), strict: false },
+    },
+    {
+      label: "raw tool with null strict",
+      tool: { name: "lookup", parameters: querySchema(), strict: null },
+      definition: { name: "lookup", parameters: querySchema() },
+    },
+    {
+      label: "input_schema taking precedence over parameters",
+      tool: { name: "lookup", input_schema: querySchema(), parameters: emptySchema() },
+      definition: { name: "lookup", parameters: querySchema() },
+    },
+    {
+      label: "parameters fallback for a nonobject input_schema",
+      tool: { name: "lookup", input_schema: null, parameters: querySchema() },
+      definition: { name: "lookup", parameters: querySchema() },
+    },
+    {
+      label: "schema-backed custom tool without function strict",
+      tool: {
+        type: "custom",
+        custom: { name: "lookup", input_schema: querySchema(), strict: true },
+      },
+      definition: { name: "lookup", parameters: querySchema() },
+    },
+  ])("preserves $label projection", ({ tool, definition }) => {
+    expect(runWrapper({ tools: [tool] })?.tools).toEqual([
+      { type: "function", function: definition },
+    ]);
+  });
+
   it("disables GPT-5.6 reasoning when projecting function tools", () => {
     const payload = runWrapper(
       {
@@ -63,10 +106,10 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     expect(payload?.reasoning_effort).toBe("none");
   });
 
-  it("skips unreadable schemas while preserving a healthy pinned tool", () => {
+  it("skips invalid schemas while preserving a healthy pinned tool", () => {
     const payload = runWrapper({
       tools: [
-        unreadableTool(),
+        invalidTool(),
         {
           name: "lookup",
           description: "Lookup",
@@ -223,9 +266,7 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
           function: {
             name: "lookup",
             parameters: emptySchema(),
-            get description(): never {
-              throw new Error("description getter exploded");
-            },
+            description: "Lookup",
           },
         },
       ],
@@ -240,6 +281,7 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
           function: {
             name: "lookup",
             parameters: emptySchema(),
+            description: "Lookup",
           },
         },
       ],
@@ -314,7 +356,7 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
   it("projects allowed custom tool choices against surviving functions", () => {
     const payload = runWrapper({
       tools: [
-        unreadableTool("broken"),
+        invalidTool("broken"),
         {
           type: "custom",
           custom: {
@@ -370,7 +412,7 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
   it("disables tool calls when no auto-allowed tools survive", () => {
     const payload = runWrapper({
       tools: [
-        unreadableTool("broken"),
+        invalidTool("broken"),
         {
           type: "custom",
           custom: { name: "shell" },
@@ -388,33 +430,6 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     expect(payload?.tool_choice).toBe("none");
   });
 
-  it("keeps a usable schema when optional metadata getters throw", () => {
-    const payload = runWrapper({
-      tools: [
-        {
-          name: "lookup",
-          parameters: emptySchema(),
-          get description(): never {
-            throw new Error("description getter exploded");
-          },
-          get strict(): never {
-            throw new Error("strict getter exploded");
-          },
-        },
-      ],
-    });
-
-    expect(payload?.tools).toEqual([
-      {
-        type: "function",
-        function: {
-          name: "lookup",
-          parameters: emptySchema(),
-        },
-      },
-    ]);
-  });
-
   it.each([
     ["pinned", { type: "tool", name: "bad_schema" }, 'requested unavailable tool "bad_schema"'],
     ["required", { type: "any" }, "requires a tool, but no tools survived"],
@@ -430,11 +445,11 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
       },
       "no allowed tools survived",
     ],
-  ] as const)("rejects %s choices for unreadable tools", (name, tool_choice, error) => {
+  ] as const)("rejects %s choices for invalid tools", (name, tool_choice, error) => {
     expect(() =>
       runWrapper({
         tools: [
-          unreadableTool(),
+          invalidTool(),
           ...(name === "pinned" ? [{ name: "lookup", parameters: emptySchema() }] : []),
         ],
         tool_choice,
@@ -443,9 +458,9 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
   });
 
   it.each([{ type: "auto" }, "auto"])(
-    "omits %j choice when every tool is unreadable",
+    "omits %j choice when every tool is invalid",
     (tool_choice) => {
-      const payload = runWrapper({ tools: [unreadableTool()], tool_choice });
+      const payload = runWrapper({ tools: [invalidTool()], tool_choice });
       expect(payload).not.toHaveProperty("tools");
       expect(payload).not.toHaveProperty("tool_choice");
     },

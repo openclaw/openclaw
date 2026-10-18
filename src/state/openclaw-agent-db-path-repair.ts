@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { readMainTableList } from "../infra/sqlite-strict.js";
@@ -19,7 +21,10 @@ export function repairOpenClawAgentDatabasePaths(
   database: Pick<OpenClawStateDatabase, "db" | "path">,
 ): { repaired: number; warnings: string[] } {
   const { db, path: pathname } = database;
-  assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+  const postgres = isPostgresSqlConnection(db);
+  if (!postgres) {
+    assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+  }
   const active = readActiveUpdateRun(db);
   if (active) {
     return {
@@ -60,6 +65,9 @@ export function repairOpenClawAgentDatabasePaths(
     const sentinel =
       name === "(multiple).sqlite" || name === `(multiple).${newest.agent_id}.sqlite`;
     if (sentinel) {
+      if (postgres) {
+        requireNativeDatabaseFile("postgres", "repair");
+      }
       try {
         const files = resolveSqliteDatabaseFilePaths(registeredPath);
         const stats = files.map((file) => fs.lstatSync(file, { throwIfNoEntry: false }));
@@ -99,6 +107,9 @@ export function repairOpenClawAgentDatabasePaths(
         !aliases.some((row) => row.path.startsWith("\\\\?\\"))
       ) {
         continue;
+      }
+      if (postgres) {
+        requireNativeDatabaseFile("postgres", "repair");
       }
       const canonical = { ...newest, path: stored };
       executeSqliteQuerySync(

@@ -199,6 +199,7 @@ export function registerAgentSendEventTests(): void {
       agentId: "main",
       dropIfSlow: true,
       sessionKeys: ["agent:main:main"],
+      sessionEventSubscriptionKeys: ["agent:main:main"],
       prepareSessionProjection: expect.any(Function),
     });
   });
@@ -269,6 +270,7 @@ export function registerAgentGlobalGoalEventTest(): void {
           agentId: "work",
           dropIfSlow: true,
           sessionKeys: ["global"],
+          sessionEventSubscriptionKeys: ["agent:work:global"],
           prepareSessionProjection: expect.any(Function),
         },
       );

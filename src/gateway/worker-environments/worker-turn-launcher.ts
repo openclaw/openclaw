@@ -204,7 +204,6 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             (assertSources) => {
               inputTurn.abortSignal?.throwIfAborted();
               assertSources();
-              requiredAdmission.assertCurrent(claim);
             },
           );
           // An admission wait ends without authority; retry from the durable placement.
@@ -412,6 +411,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 turn.abortSignal?.throwIfAborted();
                 assertAdmission();
                 const preparedPlacement = placementRead.current();
+                requiredAdmission.assertCurrent(preparedPlacement);
                 if (
                   preparedPlacement?.state !== "active" ||
                   preparedPlacement.executionMode !== placement.executionMode ||
@@ -634,27 +634,15 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                   requireActivePlacement(reconciled);
                 }
               }
-              const pendingWorkspaceResult = await prepareWorkerTurnFailure(
-                options.placements,
+              await prepareWorkerTurnFailure(
+                options,
+                placement,
                 { ...identity, ...turnClaim },
+                error,
+                assertCurrent,
+                turn.abortSignal,
                 handedOff && !remoteExec ? options.persistAbandonedPartial : undefined,
               );
-              if (pendingWorkspaceResult) {
-                if (turnClaim.owner.kind === "local") {
-                  // The Gateway-owned run is already terminal. Atomically record the
-                  // reconciliation failure before teardown so reclaim cannot see live work.
-                  await options.placements.failWorkspaceResultAndReleaseTurn(
-                    pendingWorkspaceResult,
-                    error,
-                  );
-                } else {
-                  // A recovery sweep owns the still-live worker claim. Teardown here
-                  // could discard the terminal event's durably fenced file results.
-                  await options.placements.handoffWorkspaceResultRecovery(turnClaim);
-                }
-                await options.reconcileActivePlacement(placement.environmentId);
-                throw error;
-              }
               if (
                 error instanceof WorkerRunnerCapacityError ||
                 (error instanceof WorkerRunnerUnavailableError && !handedOff) ||

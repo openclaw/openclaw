@@ -20,7 +20,6 @@ import {
 import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
-import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { prepareAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
@@ -475,48 +474,14 @@ export async function prepareWorkspaceBuildGroup(
     };
   };
   try {
-    const run = () =>
-      withPluginRuntimeGenerationScope(
-        {
-          metadataSnapshot: pluginMetadataSnapshot,
-          pluginRegistry: runtimePluginRegistry,
-        },
-        prepare,
-      );
-    if (!mediaCapabilityProviderSource) {
-      return await run();
-    }
-    const isSourceCurrent = capturePluginLifecycleAuthority(
-      mediaCapabilityProviderSource.registry,
-      undefined,
-      { scopedRuntime: true },
+    // The build's registry resources already retain the source through preparation.
+    return await withPluginRuntimeGenerationScope(
+      {
+        metadataSnapshot: pluginMetadataSnapshot,
+        pluginRegistry: runtimePluginRegistry,
+      },
+      prepare,
     );
-    if (!isSourceCurrent?.()) {
-      throw new Error("Prepared media capability provider source is retired");
-    }
-    const claim = mediaCapabilityProviderSource.resources.retain();
-    let prepared: Awaited<ReturnType<typeof prepare>>;
-    try {
-      prepared = await run();
-    } catch (error) {
-      let failure = error;
-      try {
-        await claim.release();
-      } catch (cleanupError) {
-        failure = new AggregateError(
-          [error, cleanupError],
-          "Prepared construction and registration cleanup failed",
-          { cause: error },
-        );
-      }
-      throw failure;
-    }
-    // The caller still owns the original inspection; construction owns its actual awaited work.
-    await claim.release();
-    if (!isSourceCurrent()) {
-      throw new Error("Prepared media capability provider source is retired");
-    }
-    return prepared;
   } catch (error) {
     const cleanup = preparedGeneration ? [discardPreparedPluginGeneration(preparedGeneration)] : [];
     const results = await Promise.allSettled(cleanup);

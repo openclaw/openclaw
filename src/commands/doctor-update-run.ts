@@ -1,5 +1,5 @@
 import { note } from "../../packages/terminal-core/src/note.js";
-import { readResolvedDeferredPluginMigrationWarnings } from "../infra/deferred-plugin-migration-warnings.js";
+import { readRetiredDeferredPluginMigrationWarnings } from "../infra/deferred-plugin-migration-warnings.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
@@ -183,10 +183,10 @@ async function inspectStaleUpdateRuns(
     ) {
       note(`Update ${latest.runId}: ${renderUpdateRunReport(latest).markdown}`, "Update history");
     }
-    const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(
+    const retiredWarnings = await readRetiredDeferredPluginMigrationWarnings(
       latest.steps.map((step) => step.detail),
     );
-    const warningSteps = latest.steps.filter((step) => !resolvedWarnings.has(step.detail ?? ""));
+    const warningSteps = latest.steps.filter((step) => !retiredWarnings.has(step.detail ?? ""));
     const warnings = updateRunWarningMessages(warningSteps);
     if (warnings.length) {
       note(

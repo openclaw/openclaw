@@ -1,15 +1,20 @@
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
-import { settleDurableDelivery } from "../../infra/outbound/delivery-completion.js";
+import {
+  settleDurableDelivery,
+  settlePendingFinalDelivery,
+} from "../../infra/outbound/delivery-completion.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -73,7 +78,7 @@ describe("pending delivery notice end to end", () => {
   let cfg: OpenClawConfig;
   const sessionKey = "agent:main:telegram:direct:chat-1";
   const context = { channel: "telegram", to: "chat-1", accountId: "default" };
-  const completion = {
+  let completion = {
     deliveryId: "delivery-e2e",
     intentId: "intent-e2e",
     sessionId: "session-e2e",
@@ -86,7 +91,7 @@ describe("pending delivery notice end to end", () => {
     sendRecoveryNotice.mockResolvedValue({ suppressed: false });
     appendAssistantMessageToSessionTranscript.mockResolvedValue({ ok: true });
     storePath = path.join(sessionDirs.make(), "sessions.json");
-    completion.storePath = storePath;
+    completion = { ...completion, storePath };
     cfg = { session: { store: storePath } } as OpenClawConfig;
     await replaceSessionEntry(
       { sessionKey, storePath },
@@ -137,6 +142,105 @@ describe("pending delivery notice end to end", () => {
     });
   };
 
+  it.each(["prepared", "queued"] as const)(
+    "does not announce an in-flight %s final on a concurrent inbound turn",
+    async (state) => {
+      if (state === "queued") {
+        await settlePendingFinalDelivery({ kind: "pending-final", ...completion }, "queued", [
+          "prepared",
+        ]);
+      }
+      const sending = createDeferred();
+      const finish = createDeferred();
+      const attempt = runTurn(async () => {
+        sending.resolve();
+        const finalization = finish.promise.then(() => ({ visibleReplySent: true }));
+        return state === "queued" ? { visibleReplySent: false, finalization } : await finalization;
+      });
+      await sending.promise;
+      try {
+        await runTurn(async () => ({ visibleReplySent: true }), { bindCustody: false });
+        expect(sendRecoveryNotice).not.toHaveBeenCalled();
+        expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+        expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+          "owed",
+        );
+
+        // A refused duplicate admission cannot release the original send's custody.
+        const duplicate = vi.fn(async () => ({ visibleReplySent: true }));
+        await runTurn(duplicate);
+        expect(duplicate).not.toHaveBeenCalled();
+        await runTurn(async () => ({ visibleReplySent: true }), { bindCustody: false });
+        expect(sendRecoveryNotice).not.toHaveBeenCalled();
+      } finally {
+        finish.resolve();
+        await attempt;
+      }
+      await runTurn(async () => ({ visibleReplySent: true }), { bindCustody: false });
+      expect(sendRecoveryNotice).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toBeUndefined();
+    },
+  );
+
+  it("preserves an earlier ambiguous send when deferred provider admission is refused", async () => {
+    await settlePendingFinalDelivery({ kind: "pending-final", ...completion }, "unknown", [
+      "prepared",
+    ]);
+    const admittedEntry = await readSessionEntryReadOnlyInWorker({ sessionKey, storePath });
+    const platformSend = vi.fn();
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const buffered = createDeferred();
+      const flush = createDeferred();
+      dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) => {
+        const dispatcher = createReplyDispatcher(params.dispatcherOptions);
+        dispatcher.sendFinalReply(
+          setReplyPayloadMetadata(
+            { text: "the final answer" },
+            { pendingFinalDeliveryCompletion: { ...completion } },
+          ),
+        );
+        dispatcher.markComplete();
+        await buffered.promise;
+        flush.resolve();
+        const settledReceipt = await dispatcher.waitForIdle();
+        return { queuedFinal: true, counts: dispatcher.getQueuedCounts(), settledReceipt };
+      });
+      const error = await dispatchRoutedChannelTurn({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        route: { agentId: "main", sessionKey },
+        ctxPayload: createCtx({ OriginatingTo: "chat-1" }),
+        delivery: {
+          deliverWithProviderMessageSending: async (_payload, info) => {
+            buffered.resolve();
+            return {
+              visibleReplySent: false,
+              finalization: flush.promise.then(async () => {
+                await info.onPlatformSendDispatch();
+                platformSend();
+                return { visibleReplySent: true };
+              }),
+            };
+          },
+        },
+      }).then(
+        () => undefined,
+        (failure: unknown) => failure,
+      );
+      const afterReplay = await readSessionEntryReadOnlyInWorker({ sessionKey, storePath });
+      expect(afterReplay?.pendingFinalDelivery).toEqual(admittedEntry?.pendingFinalDelivery);
+      expect(afterReplay?.pendingDeliveryNotice).toEqual({
+        ...admittedEntry?.pendingDeliveryNotice,
+        state: "acknowledged",
+      });
+      expect(error).toBeUndefined();
+    }
+    expect(platformSend).not.toHaveBeenCalled();
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { failure: "rejected", operation: "raw", state: "suppressed" },
     { failure: "rejected", operation: "prepared", state: "suppressed" },
@@ -160,7 +264,12 @@ describe("pending delivery notice end to end", () => {
               },
             )
           : notDispatched;
-      withDurableDeliveryRuntime.mockImplementationOnce(() => {
+      withDurableDeliveryRuntime.mockImplementationOnce(async () => {
+        if (failure === "queue-owned") {
+          await settlePendingFinalDelivery({ kind: "pending-final", ...completion }, "queued", [
+            "prepared",
+          ]);
+        }
         throw error;
       });
       dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) => {

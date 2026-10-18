@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -99,7 +99,7 @@ export function managedImageRecordsEqual(
 }
 
 function readManagedImageRecordInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   attachmentId: string,
 ): ManagedImageRecord | null {
   const row = executeSqliteQueryTakeFirstSync(
@@ -114,7 +114,7 @@ function readManagedImageRecordInDatabase(
 }
 
 function listManagedImageRecordEntriesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey?: string,
 ): ManagedImageRecordEntry[] {
   const stateDb = getNodeSqliteKysely<ManagedImageRecordDatabase>(db);
@@ -133,7 +133,7 @@ function listManagedImageRecordEntriesInDatabase(
   }));
 }
 
-function listManagedImageOriginalMediaIdsInDatabase(db: DatabaseSync): string[] {
+function listManagedImageOriginalMediaIdsInDatabase(db: EngineConnection): string[] {
   return executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<ManagedImageRecordDatabase>(db)
@@ -151,7 +151,10 @@ function listManagedImageOriginalMediaIdsInDatabase(db: DatabaseSync): string[] 
   ).rows.map((row) => row.original_media_id);
 }
 
-function insertManagedImageRecordInDatabase(db: DatabaseSync, record: ManagedImageRecord): boolean {
+function insertManagedImageRecordInDatabase(
+  db: EngineConnection,
+  record: ManagedImageRecord,
+): boolean {
   executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<ManagedImageRecordDatabase>(db)
@@ -163,7 +166,7 @@ function insertManagedImageRecordInDatabase(db: DatabaseSync, record: ManagedIma
 
 /** Promote a transient record atomically so concurrent message commits cannot lose state. */
 function attachManagedImageRecordInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: ManagedImageRecordAttachment,
 ): boolean {
   const stateDb = getNodeSqliteKysely<ManagedImageRecordDatabase>(db);
@@ -206,7 +209,7 @@ function attachManagedImageRecordInDatabase(
 
 /** Both cleanup transitions require the exact planned row; concurrent updates win. */
 function mutateManagedImageCleanupInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   planned: ManagedImageRecord,
   transition: "claim" | "delete",
 ): boolean {
@@ -244,7 +247,7 @@ function mutateManagedImageCleanupInDatabase(
   return true;
 }
 
-function mutation<Input>(type: string, apply: (db: DatabaseSync, input: Input) => boolean) {
+function mutation<Input>(type: string, apply: (db: EngineConnection, input: Input) => boolean) {
   return (input: Input, { open }: WorkerOperationContext) =>
     runOpenClawStateWriteTransaction(
       ({ db }) => {
@@ -271,25 +274,23 @@ export const managedImageRecordOperations = {
     "managedImages.deleteClaimed",
     (db, record: ManagedImageRecord) => mutateManagedImageCleanupInDatabase(db, record, "delete"),
   ),
-  "managedImages.read": ({ attachmentId }: { attachmentId: string }, { open }) =>
-    readManagedImageRecordInDatabase(open().db, attachmentId),
-  "managedImages.entries": ({ sessionKey }: { sessionKey?: string }, { open }) =>
-    listManagedImageRecordEntriesInDatabase(open().db, sessionKey),
-  "managedImages.originalMediaIds": (_input: undefined, { open }) =>
-    listManagedImageOriginalMediaIdsInDatabase(open().db),
 } satisfies WorkerOperationHandlers;
 
-export type ManagedImageRecordWorkerOperations = WorkerOperations<
-  typeof managedImageRecordOperations
->;
+export const managedImageRecordReadOperations = {
+  "managedImages.read": ({ attachmentId }: { attachmentId: string }, db) => ({
+    type: "managedImages.read" as const,
+    record: readManagedImageRecordInDatabase(db, attachmentId),
+  }),
+  "managedImages.entries": ({ sessionKey }: { sessionKey?: string }, db) => ({
+    type: "managedImages.entries" as const,
+    entries: listManagedImageRecordEntriesInDatabase(db, sessionKey),
+  }),
+  "managedImages.originalMediaIds": (_input: undefined, db) => ({
+    type: "managedImages.originalMediaIds" as const,
+    mediaIds: listManagedImageOriginalMediaIdsInDatabase(db),
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
-export type ManagedImageRecordMutation = Extract<
-  SqliteWorkerCommand<ManagedImageRecordWorkerOperations>,
-  {
-    type:
-      | "managedImages.insert"
-      | "managedImages.attach"
-      | "managedImages.claimCleanup"
-      | "managedImages.deleteClaimed";
-  }
+export type ManagedImageRecordMutation = SqliteWorkerCommand<
+  WorkerOperations<typeof managedImageRecordOperations>
 >;

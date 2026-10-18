@@ -18,7 +18,7 @@ export function holdNextReply(
   beforeDispatch?: () => void,
 ) {
   const ready = createDeferredCore();
-  let deliver: (() => void) | undefined;
+  let deliver: ((error?: Error) => void) | undefined;
   let target: { worker: Worker; id: number } | undefined;
   // Restored spies retain native call-through; Reflect.apply supplies each live Worker.
   const postMessage = vi.spyOn(Worker.prototype, "postMessage");
@@ -53,20 +53,27 @@ export function holdNextReply(
   ) {
     if (event === "message" && this === target?.worker && reply.id === target.id && reply.ok) {
       messages.mockRestore();
-      deliver = () => {
-        Reflect.apply(emit, this, [event, reply, ...args]);
+      deliver = (error) => {
+        const outcome: SqliteWorkerReply = error
+          ? {
+              id: reply.id,
+              ok: false,
+              error: { name: error.name, message: error.message, code: "outcome-unknown" },
+            }
+          : reply;
+        Reflect.apply(emit, this, [event, outcome, ...args]);
       };
       ready.resolve();
       return true;
     }
     return Reflect.apply(emit, this, [event, reply, ...args]);
   });
-  const release = () => {
+  const release = (error?: Error) => {
     const send = deliver;
     deliver = undefined;
     heldReplies.delete(release);
     try {
-      send?.();
+      send?.(error);
     } finally {
       postMessage.mockClear();
       emit.mockClear();

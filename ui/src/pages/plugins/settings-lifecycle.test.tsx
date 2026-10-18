@@ -4,6 +4,7 @@ import { flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createInspectResult, createPlugin, createResult } from "./plugins-page.test-support.ts";
 import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.tsx";
 
@@ -59,6 +60,19 @@ function mount(overrides: Partial<DetailProps>) {
   return container;
 }
 
+async function selectSettingAction(row: Element, value: "ask" | "reset") {
+  // JSDOM has no layout; browser suites own menu scrolling and focus.
+  for (const item of row.querySelectorAll<HTMLElement>('[role="menuitem"]')) {
+    item.scrollIntoView = vi.fn();
+  }
+  const trigger = row.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  row.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${value}"]`)!.click();
+  await Promise.resolve();
+  flush();
+}
+
 it("does not offer enablement or Settings for an uninstalled plugin", () => {
   const container = mount({
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),
@@ -80,11 +94,15 @@ it("does not dispatch enablement when setup is missing", () => {
   expect(onSetEnabled).not.toHaveBeenCalled();
 });
 
-it("keeps disconnected plugin settings from dispatching enablement", () => {
+it("retains disconnected plugin details without dispatching enablement", () => {
   const onSetEnabled = vi.fn();
   const container = mount({ connected: false, canMutate: false, onSetEnabled });
-  expect(container.textContent).toContain("Connect");
-  expect(container.querySelector('[aria-label="Enable Workboard"]')).toBeNull();
+  expect(container.textContent).toContain("Agent work queue and session handoff.");
+  expect(container.querySelector("[inert]")).toBeNull();
+  const button = container.querySelector<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
+  expect(button).not.toBeNull();
+  expect(button.disabled).toBe(true);
+  button.click();
   expect(onSetEnabled).not.toHaveBeenCalled();
 });
 
@@ -128,10 +146,8 @@ it("gives host permissions the setting menu and preserves configured, inherited,
   const row = container.querySelector('[data-setting="hooks.allowPromptInjection"]')!;
   expect(row).not.toBeNull();
   expect(row.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true);
-  expect(row.querySelector("wa-dropdown-item[value=reset]")?.hasAttribute("disabled")).toBe(true);
-  row
-    .querySelector("wa-dropdown")!
-    .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "ask" } } }));
+  expect(row.querySelector('[data-value="reset"]')?.hasAttribute("disabled")).toBe(true);
+  await selectSettingAction(row, "ask");
   expect(onAsk).toHaveBeenCalledWith(
     expect.objectContaining({
       path: ["plugins", "entries", "workboard", "hooks", "allowPromptInjection"],
@@ -144,10 +160,11 @@ it("gives host permissions the setting menu and preserves configured, inherited,
     ["plugins", "entries", "workboard", "hooks", "allowPromptInjection"],
     false,
   );
-  const timeout = container.querySelector('[data-setting="hooks.timeoutMs"] wa-dropdown')!;
-  timeout.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "reset" } } }));
+  await selectSettingAction(container.querySelector('[data-setting="hooks.timeoutMs"]')!, "reset");
   expect(onRemove).toHaveBeenCalledWith(["plugins", "entries", "workboard", "hooks", "timeoutMs"]);
-  expect(container.querySelector('[data-setting="llm.allowedModels"] wa-dropdown')).not.toBeNull();
+  expect(
+    container.querySelector('[data-setting="llm.allowedModels"] .oc-menu-trigger'),
+  ).not.toBeNull();
   expect(container.textContent).not.toContain("Declared capabilities");
   expect(container.textContent).not.toContain("Your grants");
   onPatch.mockClear();

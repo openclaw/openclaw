@@ -1,29 +1,22 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
-  resolveSqliteScope,
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
-  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
-import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
 import { withSessionStoreTarget } from "../config/sessions/session-store-target-runtime.js";
 import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
+import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../state/openclaw-agent-db.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.paths.js";
+import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
-import { ensureMessageToolRunOutcomeSchema } from "../state/openclaw-agent-message-tool-outcome-schema.js";
 import {
   openOpenClawAgentSqliteWorkerStore,
   type OpenClawAgentSqliteWorkerStore,
@@ -36,15 +29,11 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
-import {
-  recordMessageToolRunOutcomeInDatabase,
-  type MessageToolRunOutcomeInsert,
-} from "./message-tool-run-outcome-store.kernel.js";
+import type { MessageToolRunOutcomeInsert } from "./message-tool-run-outcome-store.kernel.js";
 import type { MessageToolRunOutcomeWorkerOperations } from "./message-tool-run-outcome-store.worker.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
-import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 /** Records one bounded completion fact before the run's owner retires. */
 export async function recordMessageToolRunOutcome(params: {
@@ -70,56 +59,36 @@ export async function recordMessageToolRunOutcome(params: {
     run_status: params.runStatus,
     occurred_at: params.occurredAt,
   };
-  const memory = getSessionActorStorageBinding(params);
+  const authority = { assertCurrent() {}, authorize() {} };
+  const memory = captureSessionActorStorageOwner(params, authority);
   if (memory) {
-    const result = await memory.actor.storage!.mutate(
-      { type: "session.messageToolOutcome.record", input: values },
-      memory.authority,
+    const recorded = await withSessionActorStorage(
+      params,
+      {
+        authority,
+        lifetime: {
+          assertCurrent: () => authority.assertCurrent(),
+          assertReadable: () => authority.assertCurrent(),
+        },
+      },
+      async ({ actor, authority: selectedAuthority }) => {
+        const result = await actor.storage.mutate(
+          { type: "session.messageToolOutcome.record", input: values },
+          selectedAuthority,
+        );
+        readSessionActorStorageResult(result);
+        return true;
+      },
     );
-    if (result.kind === "rolled-back") {
-      throw new Error(result.error.message);
+    // Closing an incognito session discards late bookkeeping; the run owner records the warning.
+    if (!recorded) {
+      throw new IncognitoSessionMissingError();
     }
     return;
   }
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const scope = { ...params, env };
-  const incognito = captureIncognitoSessionOperation(scope);
-  if (incognito) {
-    const { actor, authority } = incognito;
-    const expected = actor.sessions.readSharing(params.sessionKey)?.entry;
-    await actor.sessions.withSharedState(() =>
-      actor.sessions.sideData(
-        {
-          assertCurrent: () => authority.assertCurrent(),
-          authorize(_stage, facts) {
-            if (
-              facts.sharing?.entry?.sessionId !== expected?.sessionId ||
-              facts.sharing?.entry?.lifecycleRevision !== expected?.lifecycleRevision
-            ) {
-              throw new Error("Message-tool outcome session generation changed");
-            }
-          },
-        },
-        { type: "session.messageToolOutcome.record", input: values },
-      ),
-    );
-    return;
-  }
-  if (
-    isIncognitoSessionKey(scope.sessionKey) ||
-    (scope.storePath && isIncognitoOpenClawAgentSqlitePath(scope.storePath, scope))
-  ) {
-    // Process-held incognito side data stays with its existing in-memory owner.
-    const options = toDatabaseOptions(resolveSqliteScope(scope));
-    ensureMessageToolRunOutcomeSchema(openOpenClawAgentDatabase(options).db);
-    runOpenClawAgentWriteTransaction(
-      ({ db }) => recordMessageToolRunOutcomeInDatabase(db, values),
-      options,
-      { operationLabel: "message-tool.run-outcome.record" },
-    );
-    return;
-  }
   const storePath = scope.storePath ?? resolveOpenClawAgentSqlitePath(scope);
   const candidates = captureSessionStoreReadCandidates(storePath);
   const admission = resolveSqliteWriteAdmissionScope({ ...scope, storePath });
@@ -148,20 +117,11 @@ export async function recordMessageToolRunOutcome(params: {
                 await owner.refreshBeforeDispatch(() => execution.assertCurrent());
                 await runOpenClawAgentWorkerWrite(options, () =>
                   execution.prepare({
-                    assertCurrent,
+                    ...createSessionWorkerExecutionSource(
+                      assertCurrent,
+                      "Message-tool outcome preparation authority expired",
+                    ),
                     onRegistryChange: owner.onRegistryChange,
-                    createAdmission(binding) {
-                      return () => ({
-                        nativeLocations: binding.nativeLocations,
-                        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                          binding.authorize(request);
-                          assertCurrent();
-                          if (!grant()) {
-                            throw new Error("Message-tool outcome preparation authority expired");
-                          }
-                        }, binding.attachment),
-                      });
-                    },
                   }),
                 );
                 await owner.revalidateTarget();

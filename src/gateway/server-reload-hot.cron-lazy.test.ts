@@ -136,6 +136,26 @@ describe("cron reload loading", { concurrent: false }, () => {
     }
   });
 
+  it("keeps the committed runtime when the cron owner has scheduled a monitor retry", async () => {
+    const fixture = await createFixture();
+    vi.mocked(fixture.next.reconcileSystemJobs).mockResolvedValue("retry-scheduled");
+    try {
+      await expect(
+        fixture.handlers.applyHotReload(
+          { ...fixture.plan, reconcileSystemJobs: true },
+          fixture.nextConfig,
+        ),
+      ).resolves.toBe("applied");
+      expect(fixture.setState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cronState: fixture.next }),
+      );
+      expect(fixture.nextCron.start).toHaveBeenCalledOnce();
+      expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
+    } finally {
+      fixture.handlers.stopRestartRetries();
+    }
+  });
+
   // Each await rechecks the same ownership guard; cover every cause and await point.
   it.each([
     { phase: "load", action: "stop", plugins: false },

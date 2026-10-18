@@ -20,12 +20,21 @@ import {
   resolveWorkerNpmInstallationArtifact,
   type WorkerInstallationArtifact,
 } from "./bundle.js";
-import { createWorkerProjectPreparationIdentity } from "./preparation-identity.js";
+import type { WorkerBundleBuildOptions } from "./node-bootstrap-artifact-contract.js";
+import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
 import { workerWorkspaceRsyncReceiverEntryPath } from "./workspace-sync-helpers.js";
 
 type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
+
+// mock-isolation: keep staging fault injection beside the builder; the worker suite covers isolation.
+vi.mock("./node-bootstrap-artifact-worker.js", () => ({
+  prepareNodeArtifactInWorker: async (_kind: "bundle", options: WorkerBundleBuildOptions) => {
+    const { prepareWorkerBundle } = await import("./bundle.js");
+    return await prepareWorkerBundle(options);
+  },
+}));
 
 async function writeFixture(
   packageRoot: string,
@@ -48,6 +57,7 @@ async function writeFixture(
     ["code-mode-node.worker.mjs", "export const codeModeNode = true;\n"],
     ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
     ["file-tool-read.worker.mjs", "export const fileToolRead = true;\n"],
+    ["gateway-state-owner-heartbeat.worker.mjs", "export const heartbeat = true;\n"],
     ["github-exec-launcher.mjs", "export const launcher = true;\n"],
     ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
     ["openclaw-state-read.worker.mjs", "export const stateRead = true;\n"],
@@ -57,6 +67,7 @@ async function writeFixture(
     ["sqlite-store.worker.mjs", "export const sqliteStore = true;\n"],
     ["worker-native-lifecycle.worker.mjs", "export const nativeLifecycle = true;\n"],
     ["worker.mjs", workerSource],
+    ["windows-security-helper.exe", "MZ\0worker-permission-helper"],
     ["workspace-rsync-receiver.mjs", "export const receiver = true;\n"],
   ] as const) {
     await fs.writeFile(path.join(packageRoot, "dist", "worker", artifactName), contents, {
@@ -228,6 +239,7 @@ describe("worker bundle producer", () => {
         "code-mode-node.worker.mjs",
         "file-tool-planning.worker.mjs",
         "file-tool-read.worker.mjs",
+        "gateway-state-owner-heartbeat.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
         "openclaw-state-read.worker.mjs",
@@ -235,6 +247,7 @@ describe("worker bundle producer", () => {
         "service-child-relay.mjs",
         "sqlite-source-revision.worker.mjs",
         "sqlite-store.worker.mjs",
+        "windows-security-helper.exe",
         "worker-native-lifecycle.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
@@ -249,6 +262,7 @@ describe("worker bundle producer", () => {
       for (const [artifactName, expectedContents] of [
         ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
         ["file-tool-read.worker.mjs", "export const fileToolRead = true;\n"],
+        ["gateway-state-owner-heartbeat.worker.mjs", "export const heartbeat = true;\n"],
         ["github-exec-launcher.mjs", "export const launcher = true;\n"],
         ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
         ["openclaw-state-read.worker.mjs", "export const stateRead = true;\n"],
@@ -290,6 +304,7 @@ describe("worker bundle producer", () => {
       for (const artifactName of [
         "file-tool-planning.worker.mjs",
         "file-tool-read.worker.mjs",
+        "gateway-state-owner-heartbeat.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
         "openclaw-state-read.worker.mjs",
@@ -297,6 +312,7 @@ describe("worker bundle producer", () => {
         "service-child-relay.mjs",
         "sqlite-source-revision.worker.mjs",
         "sqlite-store.worker.mjs",
+        "windows-security-helper.exe",
         "worker-native-lifecycle.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
@@ -395,85 +411,93 @@ describe("worker bundle producer", () => {
     });
   });
 
-  it("retains a persisted provisioning bundle until its environment terminates", async () => {
-    await withTestDir({ prefix: "openclaw-worker-bundle-provisioning-" }, async (root) => {
-      const packageRoot = path.join(root, "package");
-      const cacheDir = path.join(root, "cache");
-      const databasePath = path.join(root, "state", "openclaw.sqlite");
-      await writeFixture(packageRoot, "export const value = 1;\n");
-      const admitted = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      const admittedBytes = await fs.readFile(admitted.tarballPath);
-      const project = { key: "project", root, baseCommit: "a".repeat(40) };
-      const preparation = createWorkerProjectPreparationIdentity({
-        namespace: "bundle-retention-test",
-        providerId: "fixture",
-        profileId: "test",
-        profileSnapshot: { settings: {} },
-        project,
-        target: { machineClass: "small", platform: "linux" },
-        artifacts: {
-          nodeBootstrapSha256: "b".repeat(64),
-          enabledPluginIds: [],
-          workerBundleHash: admitted.bundleHash,
-          workerArchiveSha256: admitted.tarballSha256,
-          openclawVersion: admitted.openclawVersion,
-          protocolFeatures: [...admitted.protocolFeatures],
-        },
-      });
-      try {
-        const store = await createWorkerEnvironmentStore({
-          database: openOpenClawStateDatabase({ path: databasePath }),
-        });
-        await store.createIntent({
-          environmentId: "preparing",
+  it.each([false, true])(
+    "retains a persisted provisioning bundle until its environment terminates (empty=%s)",
+    async (empty) => {
+      await withTestDir({ prefix: "openclaw-worker-bundle-provisioning-" }, async (root) => {
+        const packageRoot = path.join(root, "package");
+        const cacheDir = path.join(root, "cache");
+        const databasePath = path.join(root, "state", "openclaw.sqlite");
+        await writeFixture(packageRoot, "export const value = 1;\n");
+        const admitted = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+        const admittedBytes = await fs.readFile(admitted.tarballPath);
+        const project = { key: "project", root, baseCommit: "a".repeat(40) };
+        const preparation = createWorkerPreparationIdentity({
+          namespace: "bundle-retention-test",
           providerId: "fixture",
           profileId: "test",
-          provisionOperationId: "prepare-project",
-          profileSnapshot: { settings: {}, project: { ...project, preparation } },
+          profileSnapshot: { settings: {} },
+          project: empty ? undefined : project,
+          target: { machineClass: "small", platform: "linux" },
+          artifacts: {
+            nodeBootstrapSha256: "b".repeat(64),
+            enabledPluginIds: [],
+            workerBundleHash: admitted.bundleHash,
+            workerArchiveSha256: admitted.tarballSha256,
+            openclawVersion: admitted.openclawVersion,
+            protocolFeatures: [...admitted.protocolFeatures],
+          },
         });
-        await store.transition({
-          environmentId: "preparing",
-          from: "requested",
-          to: "provisioning",
-        });
-        await closeOpenClawStateDatabaseAsync();
-        closeOpenClawStateDatabaseForTest();
+        try {
+          const store = await createWorkerEnvironmentStore({
+            database: openOpenClawStateDatabase({ path: databasePath }),
+          });
+          await store.createIntent({
+            environmentId: "preparing",
+            providerId: "fixture",
+            profileId: "test",
+            provisionOperationId: "prepare-project",
+            profileSnapshot: {
+              settings: {},
+              ...(empty
+                ? { runtimePreparation: { source: "empty", ...preparation } }
+                : { project: { ...project, preparation } }),
+            },
+          });
+          await store.transition({
+            environmentId: "preparing",
+            from: "requested",
+            to: "provisioning",
+          });
+          await closeOpenClawStateDatabaseAsync();
+          closeOpenClawStateDatabaseForTest();
 
-        await writeFixture(packageRoot, "export const value = 2;\n");
-        const successor = createWorkerBundleProducer({
-          packageRoot,
-          cacheDir,
-          cacheOwnership: "exclusive",
-        });
-        const current = await successor.prepare();
-        expect(current.bundleHash).not.toBe(admitted.bundleHash);
-        const reopened = await createWorkerEnvironmentStore({
-          database: openOpenClawStateDatabase({ path: databasePath }),
-        });
-        expect(reopened.get("preparing")).toMatchObject({
-          state: "provisioning",
-          bootstrapReceipt: null,
-        });
-        const retained = () =>
-          listRetainedWorkerBundleHashes({ environments: reopened.list(), placements: [] });
+          await writeFixture(packageRoot, "export const value = 2;\n");
+          const successor = createWorkerBundleProducer({
+            packageRoot,
+            cacheDir,
+            cacheOwnership: "exclusive",
+          });
+          const current = await successor.prepare();
+          expect(current.bundleHash).not.toBe(admitted.bundleHash);
+          const reopened = await createWorkerEnvironmentStore({
+            database: openOpenClawStateDatabase({ path: databasePath }),
+          });
+          expect(reopened.get("preparing")).toMatchObject({
+            state: "provisioning",
+            bootstrapReceipt: null,
+          });
+          const retained = () =>
+            listRetainedWorkerBundleHashes({ environments: reopened.list(), placements: [] });
 
-        await successor.prune(retained);
-        await expect(fs.readFile(admitted.tarballPath)).resolves.toEqual(admittedBytes);
+          await successor.prune(retained);
+          await expect(fs.readFile(admitted.tarballPath)).resolves.toEqual(admittedBytes);
 
-        await reopened.transition({
-          environmentId: "preparing",
-          from: "provisioning",
-          to: "failed",
-        });
-        await successor.prune(retained);
-        await expect(fs.stat(admitted.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
-      } finally {
-        await closeOpenClawStateDatabaseAsync();
-        closeOpenClawStateDatabaseForTest();
-      }
-    });
-  });
+          await reopened.transition({
+            environmentId: "preparing",
+            from: "provisioning",
+            to: "failed",
+          });
+          await successor.prune(retained);
+          await expect(fs.stat(admitted.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+        } finally {
+          await closeOpenClawStateDatabaseAsync();
+          closeOpenClawStateDatabaseForTest();
+        }
+      });
+    },
+  );
 
   it("reclaims recognized crash artifacts but preserves unknown cache entries", async () => {
     await withTestDir({ prefix: "openclaw-worker-bundle-crash-cleanup-" }, async (root) => {
@@ -716,6 +740,7 @@ describe("worker bundle producer", () => {
         "code-mode-node.worker.mjs",
         "file-tool-planning.worker.mjs",
         "file-tool-read.worker.mjs",
+        "gateway-state-owner-heartbeat.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
         "openclaw-state-read.worker.mjs",
@@ -723,6 +748,7 @@ describe("worker bundle producer", () => {
         "service-child-relay.mjs",
         "sqlite-source-revision.worker.mjs",
         "sqlite-store.worker.mjs",
+        "windows-security-helper.exe",
         "worker-native-lifecycle.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
@@ -735,6 +761,7 @@ describe("worker bundle producer", () => {
       "worker-chunk-symlink.mjs",
       "file-tool-planning.worker.mjs",
       "file-tool-read.worker.mjs",
+      "gateway-state-owner-heartbeat.worker.mjs",
       "github-exec-launcher.mjs",
       "image-processor.worker.mjs",
       "openclaw-state-read.worker.mjs",

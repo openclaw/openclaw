@@ -29,7 +29,9 @@ const defaults = {
 
 function preflight({
   output = defaults.output,
-  profiler = "        OpenClaw-Mic:\n        OpenClaw-Feed:\n",
+  profiler = JSON.stringify({
+    SPAudioDataType: [{ _items: [{ _name: "OpenClaw-Mic" }, { _name: "OpenClaw-Feed" }] }],
+  }),
   ...overrides
 }: Partial<Parameters<typeof runFaceTimePreflight>[0]> & {
   output?: typeof defaults.output;
@@ -89,6 +91,18 @@ describe("FaceTime preflight", () => {
   });
 
   afterEach(() => vi.unstubAllEnvs());
+
+  it.each(["{invalid", "        OpenClaw-Mic:\n        OpenClaw-Feed:\n"])(
+    "reports missing driver devices when system_profiler violates its JSON contract: %s",
+    async (profiler) => {
+      const result = await preflight({ profiler });
+      expect(result.ok).toBe(false);
+      expect(result.checks.filter((check) => check.id.startsWith("paired-driver-"))).toEqual([
+        expect.objectContaining({ id: "paired-driver-mic", ok: false }),
+        expect.objectContaining({ id: "paired-driver-feed", ok: false }),
+      ]);
+    },
+  );
 
   it("fails provider readiness for an unresolved configured SecretRef", async () => {
     const missingKey = "OPENCLAW_FACETIME_TEST_MISSING_KEY";

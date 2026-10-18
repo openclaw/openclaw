@@ -10,9 +10,18 @@ import { racePromiseWithAbortSignal, sleepWithAbort } from "@openclaw/retry";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
+import {
+  fetchConfiguredLocalOriginWithSsrFGuard,
+  type GuardedFetchResult,
+} from "../infra/net/fetch-guard.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  assertProviderAuthAuthority,
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
 import { shouldDetachChildForProcessTree } from "../process/child-process-tree.js";
 import { prepareOomScoreAdjustedSpawnPreservingExecEnv as prepareLocalServiceSpawn } from "../process/linux-oom-score.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -54,7 +63,7 @@ type ModelWithProviderLocalService = {
 
 type ManagedLocalService = {
   process?: ManagedLocalServiceProcess;
-  processStop?: { process: ManagedLocalServiceProcess; promise?: Promise<void> };
+  processStop?: Promise<void>;
   stopping?: { promise?: Promise<void> };
   starting?: Promise<void>;
   startupAbort?: AbortController;
@@ -100,13 +109,16 @@ export async function ensureModelProviderLocalService(
   signal?: AbortSignal | null,
 ): Promise<ProviderLocalServiceLease | undefined> {
   return await ensureProviderLocalService(
-    {
-      providerId: model.provider,
-      baseUrl: model.baseUrl,
-      headers: buildHealthProbeHeaders(model.headers, probeHeaders),
-      service: getModelProviderLocalService(model),
-      reconcile: getModelProviderLocalServiceReconciler(model),
-    },
+    attachProviderAuthAuthority(
+      {
+        providerId: model.provider,
+        baseUrl: model.baseUrl,
+        headers: buildHealthProbeHeaders(model.headers, probeHeaders),
+        service: getModelProviderLocalService(model),
+        reconcile: getModelProviderLocalServiceReconciler(model),
+      },
+      getProviderAuthAuthority(model),
+    ),
     signal,
   );
 }
@@ -122,6 +134,7 @@ export async function ensureProviderLocalService(
   try {
     await target.reconcile({ baseUrl: target.baseUrl, signal: signal ?? undefined });
     throwIfAborted(signal);
+    assertProviderAuthAuthority(target);
   } catch (error) {
     lease.release();
     throw error;
@@ -161,6 +174,19 @@ async function acquireProviderLocalService(
   managed.active += 1;
 
   let released = false;
+  let ownsStartup = false;
+  let credentialRevoked = false;
+  const authority = getProviderAuthAuthority(target);
+  const assertAuthCurrent = authority
+    ? () => {
+        try {
+          authority();
+        } catch (error) {
+          credentialRevoked = true;
+          throw error;
+        }
+      }
+    : undefined;
   const release = () => {
     if (released) {
       return;
@@ -178,10 +204,14 @@ async function acquireProviderLocalService(
         currentProcess &&
         !managed.processStop &&
         !hasLocalServiceProcessExited(currentProcess.child)
-          ? await probeHealth(healthUrl, healthHeaders, signal)
+          ? await probeHealth(healthUrl, healthHeaders, signal, assertAuthCurrent)
           : false;
       assertCurrentServiceAcquisition(key, managed, signal);
+      assertAuthCurrent?.();
+      // Startup failure retires the shared process. No caller may acquire a
+      // healthy lease until that startup has settled successfully.
       if (
+        !managed.starting &&
         healthy &&
         currentProcess &&
         managed.process === currentProcess &&
@@ -191,6 +221,7 @@ async function acquireProviderLocalService(
         return { release };
       }
       if (!managed.starting) {
+        ownsStartup = true;
         // Concurrent callers share one startup promise for the same service key.
         const startup = {
           key,
@@ -199,6 +230,7 @@ async function acquireProviderLocalService(
           healthUrl,
           healthHeaders,
           managed,
+          assertAuthCurrent,
         };
         managed.starting = runInDetachedAsyncContext(() => {
           const startupAbort = new AbortController();
@@ -214,17 +246,10 @@ async function acquireProviderLocalService(
         });
       }
       await waitForAbort(managed.starting, signal);
+      ownsStartup = false;
       assertCurrentServiceAcquisition(key, managed, signal);
-      const ready =
-        !managed.processStop &&
-        ((managed.process && !hasLocalServiceProcessExited(managed.process.child)) ||
-          (await probeHealth(healthUrl, healthHeaders, signal)));
-      assertCurrentServiceAcquisition(key, managed, signal);
-      if (ready && !managed.processStop) {
-        return { release };
-      }
-      release();
-      return undefined;
+      assertAuthCurrent?.();
+      return { release };
     } finally {
       target.onReadinessWait?.(false);
     }
@@ -236,7 +261,9 @@ async function acquireProviderLocalService(
         managed.startupAbort?.abort(toAbortError(signal));
         await stopManagedService(key, managed, "startup-aborted");
       }
-    } else {
+    } else if (!credentialRevoked || ownsStartup) {
+      // A rejected credential releases only its own lease. It must not retire a
+      // healthy shared process whose other callers still hold valid leases.
       await stopManagedService(key, managed, "startup-failed");
     }
     throw error;
@@ -262,11 +289,9 @@ export async function stopManagedProviderLocalServices(): Promise<void> {
 }
 
 export function getManagedProviderLocalServiceDiagnosticsForTest(): LocalServiceDiagnostics[] {
-  return structuredClone(
-    [...services.values()]
-      .map((managed) => managed.diagnostics)
-      .filter((value): value is LocalServiceDiagnostics => value !== undefined),
-  );
+  return [...services.values()]
+    .map((managed) => managed.diagnostics)
+    .filter((value): value is LocalServiceDiagnostics => value !== undefined);
 }
 
 function resolveHealthUrl(service: ModelProviderLocalServiceConfig, baseUrl: string): string {
@@ -314,6 +339,7 @@ async function probeHealth(
   url: string,
   headers: HeadersInit | undefined,
   signal?: AbortSignal | null,
+  assertAuthCurrent?: () => void,
 ): Promise<boolean> {
   throwIfAborted(signal);
   // Only the actual health request may materialize retained sentinel headers.
@@ -321,24 +347,41 @@ async function probeHealth(
     headers,
     "to check local model provider health",
   );
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), DEFAULT_PROBE_TIMEOUT_MS);
-  timeout.unref?.();
-  const onAbort = () => controller.abort(toAbortError(signal));
-  signal?.addEventListener("abort", onAbort, { once: true });
-  let response: Response | undefined;
+  let guarded: GuardedFetchResult | undefined;
+  let credentialRevoked = false;
   try {
-    response = await fetch(url, { headers: egressHeaders, signal: controller.signal });
-    return response.ok;
-  } catch {
+    guarded = await fetchConfiguredLocalOriginWithSsrFGuard({
+      url,
+      configuredLocalOriginBaseUrl: url,
+      init: { headers: egressHeaders },
+      signal: signal ?? undefined,
+      timeoutMs: DEFAULT_PROBE_TIMEOUT_MS,
+      // Operator-configured health endpoints retain private-network access and
+      // Fetch's 20-hop limit; the guard owns admission on every redirect.
+      policy: { allowPrivateNetwork: true },
+      maxRedirects: 20,
+      capture: false,
+      beforeRequest: () => {
+        try {
+          assertAuthCurrent?.();
+        } catch (error) {
+          credentialRevoked = true;
+          throw error;
+        }
+      },
+    });
+    return guarded.response.ok;
+  } catch (error) {
+    // A failed per-hop admission is terminal, never an unhealthy probe to retry.
+    if (credentialRevoked) {
+      throw error;
+    }
     if (signal?.aborted) {
       throw toAbortError(signal);
     }
     return false;
   } finally {
-    clearTimeout(timeout);
-    signal?.removeEventListener("abort", onAbort);
-    await response?.body?.cancel?.().catch(() => undefined);
+    await guarded?.release();
   }
 }
 
@@ -350,9 +393,11 @@ async function startAndWaitForLocalService(params: {
   healthHeaders: HeadersInit | undefined;
   managed: ManagedLocalService;
   signal: AbortSignal;
+  assertAuthCurrent?: () => void;
 }): Promise<void> {
-  const { key, provider, service, healthUrl, healthHeaders, managed, signal } = params;
-  const healthy = await probeHealth(healthUrl, healthHeaders, signal);
+  const { key, provider, service, healthUrl, healthHeaders, managed, signal, assertAuthCurrent } =
+    params;
+  const healthy = await probeHealth(healthUrl, healthHeaders, signal, assertAuthCurrent);
   assertCurrentServiceAcquisition(key, managed, signal);
   if (healthy) {
     return;
@@ -367,12 +412,12 @@ async function startAndWaitForLocalService(params: {
     providerId: provider,
     healthUrl,
     startedAt,
-    stdoutTail: "",
     stderrTail: "",
   };
   managed.diagnostics = diagnostics;
   // Recheck after health/restart so the last lease cannot disappear before spawn.
   assertCurrentServiceAcquisition(key, managed, signal);
+  assertAuthCurrent?.();
   log.info(`starting ${provider} local service: ${service.command}`);
   const serviceEnv = service.env ? mergeProcessEnv([process.env, service.env]) : process.env;
   const preparedSpawn = prepareLocalServiceSpawn(service.command, service.args ?? [], {
@@ -388,22 +433,18 @@ async function startAndWaitForLocalService(params: {
   managed.process = owned;
   diagnostics.pid = child.pid;
   managed.lastExit = undefined;
-  for (const [stream, tail] of [
-    [child.stdout, "stdoutTail"],
-    [child.stderr, "stderrTail"],
-  ] as const) {
-    stream?.setEncoding("utf8");
-    stream?.on("data", (chunk: string) => {
-      diagnostics[tail] = appendLocalServiceOutputTail(
-        diagnostics[tail],
-        chunk,
-        service.env,
-        process.env,
-        service.args,
-        healthHeaders,
-      );
-    });
-  }
+  child.stdout?.resume();
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk: string) => {
+    diagnostics.stderrTail = appendLocalServiceOutputTail(
+      diagnostics.stderrTail,
+      chunk,
+      service.env,
+      process.env,
+      service.args,
+      healthHeaders,
+    );
+  });
   child.unref();
   child.once("exit", (code, signalLocal) => {
     const exit = { code, signal: signalLocal };
@@ -429,11 +470,10 @@ async function startAndWaitForLocalService(params: {
   );
   const deadline = Date.now() + readyTimeoutMs;
   for (;;) {
-    if (await probeHealth(healthUrl, healthHeaders, signal)) {
+    if (await probeHealth(healthUrl, healthHeaders, signal, assertAuthCurrent)) {
       diagnostics.readyAt = Date.now();
       diagnostics.lastHealthyAt = diagnostics.readyAt;
       // Drain readiness diagnostics so pipes cannot pin one-shot hosts.
-      diagnostics.stdoutTail = "";
       diagnostics.stderrTail = "";
       drainLocalServiceOutput(child);
       log.info(
@@ -541,40 +581,30 @@ function stopManagedService(
 
 async function stopManagedProcess(managed: ManagedLocalService, signal: AbortSignal) {
   throwIfAborted(signal);
-  if (!managed.processStop) {
-    const owned = managed.process;
-    managed.lastExit = undefined;
-    if (!owned) {
-      return;
-    }
-    managed.processStop = { process: owned };
+  const owned = managed.process;
+  managed.lastExit = undefined;
+  if (!owned) {
+    return;
   }
-  const stopping = managed.processStop;
-  let pending = stopping.promise;
-  if (!pending) {
+  if (!managed.processStop) {
     // Restart cancellation stops its waiter, not the process-tree cleanup owner.
-    pending = Promise.resolve()
-      .then(() => stopLocalServiceProcess(stopping.process))
+    managed.processStop = Promise.resolve()
+      .then(() => stopLocalServiceProcess(owned))
       .then(() => {
-        if (managed.process === stopping.process) {
-          managed.process = undefined;
-        }
-        if (managed.processStop === stopping) {
-          managed.processStop = undefined;
-        }
+        managed.process = undefined;
+        managed.processStop = undefined;
       })
       .catch((error: unknown) => {
-        stopping.promise = undefined;
+        managed.processStop = undefined;
         throw error;
       });
-    stopping.promise = pending;
   }
-  await waitForAbort(pending, signal);
+  await waitForAbort(managed.processStop, signal);
 }
 
 function forceStopManagedService(key: string, managed: ManagedLocalService) {
   clearIdleTimer(managed);
-  const owned = managed.processStop?.process ?? managed.process;
+  const owned = managed.process;
   managed.process = undefined;
   if (services.get(key) === managed) {
     services.delete(key);
@@ -624,9 +654,7 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
   if (!signal) {
     return promise;
   }
-  return racePromiseWithAbortSignal(promise, signal, toAbortError).catch((error: unknown) => {
-    throw toErrorObject(error, "Non-Error rejection");
-  });
+  return racePromiseWithAbortSignal(promise, signal, toAbortError);
 }
 
 function waitForSpawnResult(

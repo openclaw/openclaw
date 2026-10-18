@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import type { SessionsUsageParams } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionCostSummary } from "../../../src/infra/session-cost-usage.types.js";
 import { buildUsageOverview } from "../../../src/shared/usage-overview.js";
 import type { SessionUsageEntry, SessionsUsageResult } from "../../../src/shared/usage-types.js";
 import type {
@@ -47,28 +46,27 @@ export async function installUsageOverviewGateway(
       return value;
     }
     const response = value as SessionsUsageResult;
-    const summaries = response.sessions.map((session): SessionCostSummary | null => {
+    const rows = response.sessions.map((session): SessionUsageEntry => {
       const usage = session.usage;
-      if (!usage) {
-        return null;
-      }
       return {
-        ...usage,
-        firstActivity:
-          usage.firstActivity ??
-          (usage.totalTokens || usage.messageCounts?.total
-            ? (session.updatedAt ?? response.updatedAt)
-            : undefined),
+        ...session,
+        agentId: session.agentId ?? "main",
+        usage: usage
+          ? {
+              ...usage,
+              firstActivity:
+                usage.firstActivity ??
+                (usage.totalTokens || usage.messageCounts?.total
+                  ? (session.updatedAt ?? response.updatedAt)
+                  : undefined),
+            }
+          : null,
+        ...(!usage ? { computing: true } : {}),
       };
     });
     const options = { ...params, limit: 50 };
     const projected = buildUsageOverview({
-      sessions: response.sessions.map(({ usage: _usage, ...session }: SessionUsageEntry) => ({
-        ...session,
-        agentId: session.agentId ?? "main",
-        instances: [{ sessionFile: session.key }],
-      })),
-      summaries,
+      rows,
       options,
       dayBucket:
         params.mode === "utc"

@@ -5,6 +5,7 @@ import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
+import type { InstallOwner } from "./install-owner.js";
 import {
   packageActivationRuntimeIdentity,
   resolveImmutableRecoveryCommand,
@@ -138,13 +139,29 @@ async function installationRoot(input: string): Promise<string | null> {
 /** Shape is only a hint. Unadopted releases must never fall through to mutable Git. */
 export async function inspectImmutableInstall(
   root: string,
-): Promise<UpdateImmutableInstall | null> {
+  options: { allowExternalOwner?: boolean } = {},
+): Promise<(UpdateImmutableInstall & { installOwner?: InstallOwner }) | null> {
   const installation = await installationRoot(root);
   if (!installation) {
     return null;
   }
   const record = await readImmutableInstallRecord(installation);
   if (!record) {
+    if (options.allowExternalOwner) {
+      const layout = readImmutableLayout(installation);
+      return {
+        root: installation,
+        currentSha: layout.current.sha,
+        currentPath: layout.current.path,
+        installOwner: {
+          schemaVersion: 1,
+          owner: "immutable-deployer",
+          displayName: "immutable release deployment owner",
+          updateHint:
+            "Update through the deployment owner. Native updates require explicit adoption after its previous updater has stopped.",
+        },
+      };
+    }
     throw new Error(
       "Immutable release layout is not adopted. Use openclaw update adopt-immutable after its previous updater has stopped.",
     );
@@ -506,7 +523,7 @@ export async function prepareImmutableUpdate(params: {
     requireUpdater();
     const { verifyImmutableService } = await import("./update-immutable-service.js");
     const { runImmutableBuild } = await import("./update-immutable-build.js");
-    const { readGitTargetSchemaVersions } = await import("./update-runner-git-target.js");
+    const { readGitTargetSchemaVersions } = await import("./update-runner-git-schema.js");
     const selectedSha = targetSha;
     return await withImmutableUpdateOwner(installation.root, async (assertOwner) => {
       const record = await readImmutableInstallRecord(installation.root);

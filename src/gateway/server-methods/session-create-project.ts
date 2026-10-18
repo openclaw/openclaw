@@ -8,9 +8,9 @@ import {
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
@@ -363,19 +363,13 @@ export async function prepareSessionWorkspaceForRun(params: {
     signal,
   } = params;
   const target = { agentId, sessionKey, storePath };
-  const incognito = captureIncognitoSessionSource(target);
-  const metadata = captureSessionEntryMetadataRead(target);
-  const claim =
-    incognito && !("kind" in incognito)
-      ? incognito.actor.sessions.captureCurrent(sessionKey)
-      : undefined;
+  const metadata = captureSessionEntryMetadataRead(target, params.assertCurrent);
   const assertRunOwnership = composeSessionSourceAssertion(
     [params.assertCurrent],
     (assertSources) => {
       signal.throwIfAborted();
       assertSources();
       metadata?.assertCurrent();
-      claim?.assertCurrent();
     },
   );
   assertRunOwnership();
@@ -390,18 +384,17 @@ export async function prepareSessionWorkspaceForRun(params: {
   const prepare = () =>
     workspacePreparations.enqueue(`${storePath}\0${sessionKey}`, async () => {
       assertRunOwnership();
-      const saved = incognito
-        ? await (
-            await import("../../config/sessions/session-entry-read-runtime.js")
-          ).readSessionEntryReadOnlyInWorker(target, assertRunOwnership)
+      const initial = metadata
+        ? metadata.readCurrent()
         : await readSessionEntryReadOnlyInWorker(target, assertRunOwnership);
       if (
-        !saved ||
-        saved.sessionId !== entry.sessionId ||
-        saved.lifecycleRevision !== entry.lifecycleRevision
+        !initial ||
+        initial.sessionId !== entry.sessionId ||
+        initial.lifecycleRevision !== entry.lifecycleRevision
       ) {
         throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
       }
+      let saved = initial;
       let pending = saved.pendingWorktree;
       const assertSavedWorkspaceIntent = (current: Partial<typeof saved> | undefined) => {
         assertRunOwnership();
@@ -521,7 +514,7 @@ export async function prepareSessionWorkspaceForRun(params: {
           if (!updated) {
             throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
           }
-          Object.assign(saved, updated);
+          saved = { ...saved, ...updated };
           pending = next;
         }
         // Retries inherit workspace intent, not a previous caller's setup authority.
@@ -562,7 +555,7 @@ export async function prepareSessionWorkspaceForRun(params: {
                 });
                 // Subsequent Git effects must accept the project binding this
                 // preparation just published, while retaining its pending intent.
-                Object.assign(saved, bound);
+                saved = { ...saved, ...bound };
                 Object.assign(entry, bound);
                 params.onPromptReady?.();
               }
@@ -591,8 +584,19 @@ export async function prepareSessionWorkspaceForRun(params: {
       assertRunOwnership();
       emitSessionsChanged(context, { sessionKey, agentId, reason: "project" });
     });
-  await (incognito && !("kind" in incognito)
-    ? incognito.actor.sessions.withSharedState(prepare)
-    : prepare());
+  const handled = await withSessionActorStorage(
+    target,
+    {
+      lifetime: { assertCurrent: assertRunOwnership, assertReadable: assertRunOwnership },
+      authority: { assertCurrent: assertRunOwnership, authorize() {} },
+    },
+    async () => {
+      await prepare();
+      return true;
+    },
+  );
+  if (!handled) {
+    await prepare();
+  }
   assertRunOwnership();
 }

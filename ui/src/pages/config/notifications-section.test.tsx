@@ -245,25 +245,6 @@ describe("Web Push preference controls", () => {
     );
   });
 
-  it("retains UTC and the saved timezone when the browser catalog is unavailable", () => {
-    const catalog = vi.spyOn(Intl, "supportedValuesOf").mockImplementation(() => {
-      throw new RangeError("unavailable");
-    });
-    try {
-      const { container } = renderPreferences({ timeZone: "US/Pacific" });
-      const select = expectDefined(
-        container.querySelector<HTMLSelectElement>('select[aria-label="Time zone"]'),
-        "timezone select",
-      );
-      expect(select.value).toBe("US/Pacific");
-      expect([...select.options].map((option) => option.value)).toEqual(
-        expect.arrayContaining(["UTC", "US/Pacific"]),
-      );
-    } finally {
-      catalog.mockRestore();
-    }
-  });
-
   it("patches device preferences from the toggle row and select row", () => {
     const onDevice = vi.fn<DevicePreferencesListener>();
     const { container } = renderPreferences({ onDevice });

@@ -211,9 +211,9 @@ it("runs startup recovery, lookup, expiry and history without host SQLite calls 
     });
     const pending = await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions });
     expect(pending.map((record) => record.id)).toEqual(["off-thread"]);
-    expect(
-      (await store.expireDueOperatorApprovals({ nowMs: 10_000, databaseOptions })).affected,
-    ).toBe(1);
+    const expired = await store.prepareOperatorApprovalReplay({ nowMs: 10_000, databaseOptions });
+    expect(expired.outcome).toBe("expired");
+    expect(expired.records.map((record) => record.id)).toEqual(["off-thread"]);
     expect(
       await store.getOperatorApprovalDetailed({ id: "off-thread", nowMs: 10_001, databaseOptions }),
     ).toMatchObject({ outcome: "found", record: { status: "expired" } });
@@ -268,10 +268,13 @@ it.each(["worker", "native-compatibility"] as const)(
         guard,
       });
       expect(pending.map((record) => record.id)).toEqual(["expiry"]);
-      expect(
-        (await store.expireDueOperatorApprovals({ nowMs: 10_000, databaseOptions, guard }))
-          .affected,
-      ).toBe(1);
+      const expired = await store.prepareOperatorApprovalReplay({
+        nowMs: 10_000,
+        databaseOptions,
+        guard,
+      });
+      expect(expired.outcome).toBe("expired");
+      expect(expired.records.map((record) => record.id)).toEqual(["expiry"]);
       expect(
         await store.getOperatorApprovalDetailed({
           id: "expiry",

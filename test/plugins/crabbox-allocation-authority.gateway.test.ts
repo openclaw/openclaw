@@ -9,7 +9,7 @@ import type {
   PluginStateKeyedStore,
 } from "../../src/plugin-sdk/plugin-state-runtime.js";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "../../src/plugin-sdk/plugin-state-test-runtime.js";
 import {
@@ -61,15 +61,18 @@ describe("Crabbox allocation through Gateway ownership", () => {
       let pauseLookup = false;
       const runtime = createPluginRuntimeMock({
         state: {
-          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T> => {
-            const store = createPluginStateKeyedStoreForTests<T>("crabbox", {
-              ...options,
-              env: { OPENCLAW_STATE_DIR: support.testState.root },
-            });
+          openKeyedStoreV2: <T>(
+            options: OpenAsyncKeyedStoreOptions,
+          ): PluginStateKeyedStore<T, 2> => {
+            const store = createPluginStateKeyedStoreV2ForTests<T>(
+              "crabbox",
+              {
+                ...options,
+                env: { OPENCLAW_STATE_DIR: support.testState.root },
+              },
+              { assertCurrent() {} },
+            );
             const compareAndApply = store.compareAndApply;
-            if (!compareAndApply) {
-              throw new Error("Crabbox fixture requires atomic plugin state");
-            }
             return {
               ...store,
               compareAndApply: async (key, comparison, intent) => {
@@ -165,6 +168,8 @@ describe("Crabbox allocation through Gateway ownership", () => {
                     id,
                     state: "running",
                     ready: true,
+                    expiresAt: new Date(Date.now() + 4 * 60 * 60_000).toISOString(),
+                    leasePolicy: { maxTTLSeconds: 14_400 },
                     providerMetadata: { instanceProfileAttached: false },
                   }),
                 )

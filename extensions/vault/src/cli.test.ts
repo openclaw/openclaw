@@ -115,14 +115,13 @@ describe("vault CLI setup plan", () => {
     ]);
   });
 
-  it.each(["providers/../openai/apiKey", "providers//openai/apiKey", "apiKey"])(
-    "rejects non-canonical Vault secret id %s",
-    async (secretId) => {
-      await expect(createSetupPlan(["--provider-key", `openai=${secretId}`])).rejects.toThrow(
-        "Invalid --provider-key openai Vault secret id",
-      );
-    },
-  );
+  it.each([
+    ["providers/../openai/apiKey", "must not contain dot path segments"],
+    ["providers//openai/apiKey", "must not contain empty path segments"],
+    ["apiKey", 'must use "<path>/<field>", for example "providers/openai/apiKey"'],
+  ])("rejects non-canonical Vault secret id %s", async (secretId, reason) => {
+    await expect(createSetupPlan(["--provider-key", `openai=${secretId}`])).rejects.toThrow(reason);
+  });
 });
 
 describe("vault CLI status", () => {

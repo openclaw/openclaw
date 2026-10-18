@@ -1,9 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { For, Show, createMemo } from "solid-js";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
-import "../../components/agent-row-chip.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
@@ -177,17 +177,13 @@ function renderInsightList(
     error?: boolean;
   },
 ) {
-  const cardClass = ["usage-insight-card", options?.className].filter(Boolean).join(" ");
-  const listClass = [options?.error ? "usage-error-list" : "usage-list", options?.listClassName]
-    .filter(Boolean)
-    .join(" ");
   return (
-    <div class={cardClass}>
+    <div class={["usage-insight-card", options?.className]}>
       <div class="usage-insight-title">{title}</div>
       {items.length === 0 ? (
         <div class="muted">{emptyLabel}</div>
       ) : (
-        <div class={listClass}>
+        <div class={[options?.error ? "usage-error-list" : "usage-list", options?.listClassName]}>
           <For each={items}>
             {(item) =>
               options?.error ? (
@@ -198,13 +194,7 @@ function renderInsightList(
                 </div>
               ) : (
                 <div class="usage-list-item">
-                  <span>
-                    {item.agentId ? (
-                      <openclaw-agent-row-chip prop:agentId={item.agentId} />
-                    ) : (
-                      item.label
-                    )}
-                  </span>
+                  <span>{item.agentId ? <AgentRowChip agentId={item.agentId} /> : item.label}</span>
                   <span class="usage-list-value">
                     <span>{item.value}</span>
                     {item.sub ? (
@@ -271,7 +261,7 @@ export function UsageInsights(props: {
       .map((day) => ({
         label: formatDayLabel(day.date),
         value: `${((day.errors / day.messages) * 100).toFixed(2)}%`,
-        sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens)}`,
+        sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens, day.usageReport)}`,
       }));
 
     const costAttribution = (
@@ -281,14 +271,14 @@ export function UsageInsights(props: {
     ) => ({
       label,
       ...(agent ? { agentId: label } : {}),
-      value: formatAnalysisCost(entryTotals.totalCost),
+      value: formatAnalysisCost(entryTotals.totalCost, entryTotals.usageReport),
       sub: [
-        showCostShares && totals.totalCost > 0
+        showCostShares && entryTotals.usageReport?.state !== "unavailable" && totals.totalCost > 0
           ? t("usage.overview.costShare", {
               percent: ((entryTotals.totalCost / totals.totalCost) * 100).toFixed(1),
             })
           : null,
-        formatUsageTokens(entryTotals.totalTokens),
+        formatUsageTokens(entryTotals.totalTokens, entryTotals.usageReport),
         count === undefined ? null : `${count} ${t("usage.overview.messagesAbbrev")}`,
       ]
         .filter((part): part is string => part !== null)

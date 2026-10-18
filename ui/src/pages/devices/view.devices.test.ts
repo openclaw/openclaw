@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
@@ -17,6 +16,8 @@ import {
   getDevicesSection as getSection,
   getDeviceSettingsRow as getSettingsRow,
 } from "../../test-helpers/devices-view.tsx";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 
 vi.mock("../../components/desktop/desktop-focus-window.ts", () => ({
   openDesktopFocus: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("../../components/desktop/desktop-focus-window.ts", () => ({
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
 afterEach(() => {
+  cleanupSolid();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
@@ -65,12 +67,22 @@ function findButton(scope: Element, label: string): HTMLButtonElement {
   return button;
 }
 
-function selectMenuItem(scope: Element, value: string): WaDropdownItem {
+async function selectMenuItem(scope: Element, value: string): Promise<HTMLButtonElement> {
+  const trigger = expectDefined(
+    scope.querySelector<HTMLButtonElement>(".device-entry__menu-trigger"),
+    "device actions trigger",
+  );
+  if (trigger.getAttribute("aria-expanded") !== "true") {
+    trigger.click();
+    await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  }
   const item = expectDefined(
-    scope.querySelector<WaDropdownItem>(`wa-dropdown-item[value="${value}"]`),
+    scope.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${value}"]`),
     `menu item ${value}`,
   );
-  item.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item: { value } } }));
+  item.click();
+  await Promise.resolve();
+  flush();
   return item;
 }
 
@@ -234,7 +246,7 @@ describe("devices inventory rendering", () => {
 
   it.each(["gateway", "node:studio"])(
     "opens the recorded %s desktop environment in a focus window",
-    (environmentId) => {
+    async (environmentId) => {
       // Settings routes hide the docked panel, so the row must open the standalone window.
       vi.mocked(openDesktopFocus).mockClear();
       const container = renderDevicesContainer({
@@ -252,7 +264,7 @@ describe("devices inventory rendering", () => {
       ).click();
       expect(openDesktopFocus).toHaveBeenCalledExactlyOnceWith("/ui", environmentId);
       vi.mocked(openDesktopFocus).mockClear();
-      selectMenuItem(
+      await selectMenuItem(
         getSettingsRow(container, environmentId === "gateway" ? "Gateway" : "Studio"),
         "desktop",
       );
@@ -355,7 +367,7 @@ describe("devices inventory rendering", () => {
     expect(findButton(section, "Clean up 1 stale")).toBeInstanceOf(HTMLButtonElement);
   });
 
-  it("routes the danger menu item through the existing inventory removal request", () => {
+  it("routes the danger menu item through the existing inventory removal request", async () => {
     const removed: InventoryRemovalRequest[] = [];
     const container = renderDevicesContainer({
       devicesList: {
@@ -373,14 +385,14 @@ describe("devices inventory rendering", () => {
 
     const row = getSettingsRow(container, "Browser");
     expect(row.querySelector(".device-entry__remove")).toBeNull();
-    expect(selectMenuItem(row, "remove").variant).toBe("danger");
+    expect((await selectMenuItem(row, "remove")).dataset.variant).toBe("danger");
 
     expect(removed).toEqual([
       { id: "op-only", name: "Browser", removeNode: false, removeDevice: true },
     ]);
   });
 
-  it("routes the Edit alias menu item to the device with its current alias", () => {
+  it("routes the Edit alias menu item to the device with its current alias", async () => {
     const renamed: Array<{ id: string; name: string; operatorLabel?: string }> = [];
     const container = renderDevicesContainer({
       devicesList: {
@@ -402,8 +414,8 @@ describe("devices inventory rendering", () => {
       onDeviceRename: (device) => renamed.push(device),
     });
 
-    selectMenuItem(getSettingsRow(container, "Office node"), "editAlias");
-    selectMenuItem(getSettingsRow(container, "Fresh laptop"), "editAlias");
+    await selectMenuItem(getSettingsRow(container, "Office node"), "editAlias");
+    await selectMenuItem(getSettingsRow(container, "Fresh laptop"), "editAlias");
 
     expect(renamed).toEqual([
       { id: "alias-device", name: "Office node", operatorLabel: "Office node" },
@@ -416,12 +428,17 @@ describe("devices inventory rendering", () => {
     const props = createDevicesViewProps({ nodes: [node] });
     const container = renderDevicesContainer(props);
     const copy = expectDefined(
-      container.querySelector<HTMLElementTagNameMap["wa-dropdown-item"]>(
-        'wa-dropdown-item[value="copy"]',
-      ),
+      container.querySelector<HTMLButtonElement>('[role="menuitem"][data-value="copy"]'),
       "Copy device ID menu item",
     );
-    await copy.updateComplete;
+    const trigger = expectDefined(
+      getSettingsRow(container, "Node One").querySelector<HTMLButtonElement>(
+        ".device-entry__menu-trigger",
+      ),
+      "device actions trigger",
+    );
+    trigger.click();
+    await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
     copy.focus();
     expect(document.activeElement).toBe(copy);
 
@@ -430,8 +447,14 @@ describe("devices inventory rendering", () => {
       nodes: [{ ...node, approvalState: "pending-reapproval", pendingRequestId: "request-new" }],
     });
 
-    expect(container.querySelector('wa-dropdown-item[value="approve"]')).not.toBeNull();
-    expect(container.querySelector('wa-dropdown-item[value="copy"]')).toBe(copy);
+    expect(container.querySelector('[role="menuitem"][data-value="approve"]')).not.toBeNull();
+    expect(
+      Array.from(
+        container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+        (item) => item.dataset.value,
+      ),
+    ).toEqual(["approve", "reject", "copy", "remove"]);
+    expect(container.querySelector('[role="menuitem"][data-value="copy"]')).toBe(copy);
     expect(document.activeElement).toBe(copy);
   });
 
@@ -450,7 +473,7 @@ describe("devices inventory rendering", () => {
         },
       });
       const row = getSettingsRow(container, "Copy device");
-      expect(selectMenuItem(row, "copy").hasAttribute("disabled")).toBe(false);
+      expect((await selectMenuItem(row, "copy")).disabled).toBe(false);
       await vi.waitFor(() =>
         expect(showToast).toHaveBeenCalledWith({
           message: succeeds ? "Device ID copied" : "Copy failed",
@@ -460,7 +483,7 @@ describe("devices inventory rendering", () => {
     },
   );
 
-  it("renders approve and reject actions for pending node approvals", () => {
+  it("renders approve and reject actions for pending node approvals", async () => {
     const approvals: string[] = [];
     const rejections: string[] = [];
     const container = renderDevicesContainer({
@@ -481,10 +504,12 @@ describe("devices inventory rendering", () => {
 
     expect(section.textContent).toContain("approval needed");
     expect(
-      Array.from(section.querySelectorAll("button"), (button) => button.textContent?.trim()),
+      Array.from(section.querySelectorAll('button:not([role="menuitem"])'), (button) =>
+        button.textContent?.trim(),
+      ),
     ).not.toContain("Approve");
-    selectMenuItem(section, "approve");
-    selectMenuItem(section, "reject");
+    await selectMenuItem(section, "approve");
+    await selectMenuItem(section, "reject");
     expect(rejections).toEqual(["node-req-1"]);
     expect(approvals).toEqual(["node-req-1"]);
   });
@@ -808,20 +833,28 @@ describe("devices access gating", () => {
     for (const label of ["Approve", "Reject", "Rotate", "Revoke", "Save"]) {
       expect(findButton(container, label).disabled).toBe(true);
     }
-    const remove = getSettingsRow(container, "Device One").querySelector<WaDropdownItem>(
-      'wa-dropdown-item[value="remove"]',
+    const remove = getSettingsRow(container, "Device One").querySelector<HTMLButtonElement>(
+      '[role="menuitem"][data-value="remove"]',
     );
     expect(remove?.disabled).toBe(true);
     expect(remove?.getAttribute("title")).toContain("operator.pairing");
-    const editAlias = getSettingsRow(container, "Device One").querySelector<WaDropdownItem>(
-      'wa-dropdown-item[value="editAlias"]',
+    const editAlias = getSettingsRow(container, "Device One").querySelector<HTMLButtonElement>(
+      '[role="menuitem"][data-value="editAlias"]',
     );
     expect(editAlias?.disabled).toBe(true);
     expect(editAlias?.getAttribute("title")).toContain("operator.pairing");
-    selectMenuItem(getSettingsRow(container, "Device One"), "remove");
-    selectMenuItem(getSettingsRow(container, "Device One"), "editAlias");
+    remove?.click();
+    editAlias?.click();
     for (const action of ["approve", "reject"]) {
-      expect(selectMenuItem(getSettingsRow(container, "Pending node"), action).disabled).toBe(true);
+      const item = expectDefined(
+        getSettingsRow(container, "Pending node").querySelector<HTMLButtonElement>(
+          `[role="menuitem"][data-value="${action}"]`,
+        ),
+        `device action ${action}`,
+      );
+      expect(item.disabled).toBe(true);
+      expect(item.title).toContain("operator.pairing");
+      item.click();
     }
     expect(onInventoryRemove).not.toHaveBeenCalled();
     expect(onDeviceRename).not.toHaveBeenCalled();

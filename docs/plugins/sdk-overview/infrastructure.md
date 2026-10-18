@@ -125,8 +125,8 @@ update warning; callers using only the existing synchronous guard remain support
 For runtime storage, use the owning domain's awaited operations or
 `openOpenClawAgentSqliteWorkerStoreV2`; see
 [native SQLite migration](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
-The following `sqlite-runtime` callback helper is deprecated compatibility until
-the next Plugin SDK major. Awaiting admission does not move its SQL off the
+The following `sqlite-runtime` callback helper is deprecated compatibility through
+2026-12-31. Awaiting admission does not move its SQL off the
 caller's thread.
 
 `runSqliteImmediateTransaction(db, prepare, options?)` from
@@ -178,6 +178,9 @@ side of the host/worker boundary:
   for snapshot reads. `runEngineWorkerWrite` selects the extra PostgreSQL worker
   envelope using the kernel's transaction callback; SQLite executes the operation
   directly. Keep the kernel's own write-transaction API atomic on both engines.
+  `jsonPathValue(connection, value, path, kind)` projects an object-member JSON
+  path as text, a number, or JSON text. It preserves SQLite's `json_extract`
+  statement and bindings and selects the PostgreSQL expression for that engine.
 
 The worker entrypoint exports the `EngineConnection`, `StoreSchema`, and
 `DatabaseEngineAdapter` types; it does not export a PostgreSQL connection
@@ -185,6 +188,49 @@ constructor. Open physical connections through `openEngineStore`. A store
 without registered PostgreSQL DDL stays on SQLite; a selected PostgreSQL store that
 fails admission never falls back. See [Database engines](/reference/database-engines)
 for configuration, supported stores, durability, anchors, and observation events.
+
+Experimental search capabilities use the same worker entrypoint. Call
+`admitStoreSearch` with an admitted store and its existing index declarations to
+bind `TextIndex` and `VectorIndex` handles. `FullTextCapability` supplies native
+Kysely expressions; `VectorCapability` owns native candidate queries and derived
+index maintenance. Callers retain filters, limits, chronology, snippets' display
+bounds, and scoring policy. The adapter's existing capability labels remain
+diagnostic metadata. SQLite retains its L2 candidate selection and cosine
+reranking, with the memory owner's exact fallback when native vectors are
+unavailable. PostgreSQL search capabilities are currently `null` with an admission
+diagnostic; their later implementation will use explicitly documented native
+ranking rather than promise SQLite ranking equivalence.
+
+### Owned stdio processes
+
+Bundled and official plugins with a bidirectional CLI protocol can use
+`createOwnedStdioProcess(options)` and `closeOwnedStdioProcess(child, options?)`
+from `openclaw/plugin-sdk/process-runtime`. The `OwnedStdioProcessOptions` and
+`OwnedStdioProcess` types describe the launch and its process-tree owner.
+Creation resolves after startup and private-input delivery. A failed launch
+also reports a cleanup failure if resource closure cannot be confirmed.
+
+Pass the command and arguments together as `argv`, with optional `argv0`, `cwd`,
+`env`, and `abortSignal`. For an already prepared CLI invocation, `exactEnv: true`
+preserves its environment and avoids a shell wrapper; the shared native child
+OOM policy still applies on Linux. `windowsShell: true` retains the configured
+Windows wrapper's shell launch contract when needed.
+
+| Option                            | Contract                                                                                                                                                                                                       |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `terminateOnHostLoss: true`       | On POSIX, terminate the owned process tree when its host disappears, before forwarding input EOF. Explicit `child.stdin.end()` still delivers graceful protocol EOF. Omit for the existing input-EOF behavior. |
+| `secretInput: { fd, createData }` | Deliver one credential buffer through a private descriptor numbered 3 or higher. The owner closes the descriptor after delivery and clears the returned buffer.                                                |
+| `assertCurrent`                   | Revalidate the caller's authority during launch preparation and before private-input delivery.                                                                                                                 |
+| `stdoutConsumption: "awaited"`    | Return an additional `consumeStdout(listener)` method. Subscribe once; it awaits each accepted chunk, decoder flush, and EOF.                                                                                  |
+| `stderrDestination`               | Send stderr to the supplied writable stream instead of callback observation.                                                                                                                                   |
+
+Use `onStdout`, `onStderr`, `onExit`, and `onError` for observation. `wait()` joins
+the command's result; it does not by itself prove that descendants have stopped.
+For shutdown, await `closeOwnedStdioProcess(child)`. It sends graceful input EOF,
+waits up to `graceMs` (2,000 ms by default), then escalates through `SIGTERM` and
+`SIGKILL` if needed. `{ force: true }` skips directly to `SIGKILL`. Both paths join
+process-tree cleanup, report cleanup failures, and dispose the owner. Do not
+replace that join with a child-exit listener or a separate process census.
 
 ### Worker task admission
 
@@ -286,7 +332,7 @@ provides explicit worker-owned `prepare()` for creation, and checks live
 authority at transaction and commit admission. `executeExisting` leaves missing
 storage absent. See the [migration example](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
 Released raw native callbacks retain their ordering and warn on use until their
-removal in the next Plugin SDK major.
+removal in the first January 2027 stable release.
 
 Use `openSqliteWorkerStore<Operations>` from
 `openclaw/plugin-sdk/sqlite-runtime` to move a feature's SQLite lifecycle off the
@@ -635,7 +681,10 @@ Contract notes:
   requester. OpenClaw never falls back to another requester's credentials.
 
 Memory prompt supplement builders receive optional `agentId`,
-`agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`
+`agentSessionKey`, `sandboxed`, and `projectKey` context. `projectKey` is the
+host-resolved repository identity for the current run, or absent outside a
+repository. The host only resolves it; a memory plugin that stores project
+scope decides whether and how to ask the agent to annotate writes with it. Memory corpus supplement `search`
 and `get` calls receive optional `agentId` and `sandboxed` context. Plugins with
 agent-owned storage should resolve that storage for each call instead of
 capturing one global path during registration. If an agent id is required but

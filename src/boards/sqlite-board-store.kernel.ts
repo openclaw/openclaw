@@ -1,11 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { BoardOp, BoardSnapshot } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  sqliteStringSet,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
@@ -17,7 +13,6 @@ import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { applyBoardOps, BoardValidationError, normalizeBoardLayout } from "./board-layout.js";
 import {
-  cloneBoardSnapshot,
   createBoardWidgetPutResult,
   createBoardGrantSnapshot,
   createBoardWidgetPutSnapshot,
@@ -56,7 +51,7 @@ type StoredBoard = {
   htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
 };
 
-const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
+const ensuredBoardDatabases = new WeakSet<EngineConnection>();
 const BOARD_WRITE_BATCH_SIZE = 64;
 
 export function ensureBoardSchema(database: BoardDatabaseHandle): void {
@@ -277,7 +272,7 @@ function deleteRemovedTabs(
   }
 }
 
-export function hasBoardSession(
+function hasBoardSession(
   database: BoardDatabaseHandle,
   sessionKey: string,
   expected?: BoardSessionIdentity,
@@ -302,26 +297,6 @@ export function hasBoardSession(
   } catch {
     return false;
   }
-}
-
-export function readBoardSessionKeys(
-  database: BoardDatabaseHandle,
-  sessionKeys: readonly string[],
-): Set<string> {
-  // Read-only connections cannot run the lazy DDL; pre-existing v13 databases
-  // have no board tables until their first write.
-  if (sessionKeys.length === 0 || !tableExists(database.db, "board_widgets")) {
-    return new Set();
-  }
-  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  const query = db.selectFrom("board_tabs").select("session_key").distinct();
-  // Every persisted widget belongs to a tab.
-  return new Set(
-    executeSqliteQuerySync(
-      database.db,
-      query.where("session_key", "in", sqliteStringSet(sessionKeys)),
-    ).rows.map((row) => row.session_key),
-  );
 }
 
 export function readBoardSnapshotWithHtmlViewMetadata(
@@ -394,7 +369,7 @@ export function applyBoardOpsToDatabase(
   updateWidgetLayouts(database, previous, next, now);
   updateWidgetHeightModes(database, previous, ops);
   deleteRemovedTabs(database, previous, next);
-  return cloneBoardSnapshot(next);
+  return next;
 }
 
 export function putBoardWidgetInDatabase(
@@ -544,5 +519,5 @@ export function grantBoardWidgetInDatabase(
       .where("session_key", "=", sessionKey)
       .where("name", "=", name),
   );
-  return cloneBoardSnapshot(next);
+  return next;
 }

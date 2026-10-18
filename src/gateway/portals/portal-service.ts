@@ -22,6 +22,7 @@ import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { claimTailscaleServePort, type TailscaleRouteClaim } from "../../infra/tailscale.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
+import { isLoopbackHost } from "../net.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
 import { getTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 import {
@@ -32,8 +33,6 @@ import {
 import { createPortalIngress, portalIngressHostname } from "./portal-ingress.js";
 import { closePortalServers, removePortalServers } from "./portal-listeners.js";
 import { resolvePortalTlsHostname } from "./portal-tls-hostname.js";
-
-const PORTAL_PORT_ALLOCATION_ATTEMPTS = 10;
 
 type PortalEntry = {
   id: string;
@@ -284,6 +283,16 @@ export function createGatewayPortalService(params: {
       tokenQuery,
       url: openableUrl.toString(),
       publicUrl,
+      exposure: {
+        // A DNS/TLS name does not expose a direct listener bound only to loopback.
+        // Ingress can expose a loopback backend, but never proves viewer access.
+        kind:
+          isLoopbackHost(openableUrl.hostname) ||
+          (!ingress && !params.managedTailscale && params.httpBindHosts.every(isLoopbackHost))
+            ? "loopback-only"
+            : "non-loopback",
+        browserReachability: "unverified",
+      },
       ...(portal.path ? { path: portal.path } : {}),
       ...(portal.description ? { description: portal.description } : {}),
       ...(portal.origin ? { origin: portal.origin } : {}),
@@ -445,29 +454,23 @@ export function createGatewayPortalService(params: {
               if (!primaryServer || !primaryHost) {
                 throw new Error("Missing primary portal HTTP server");
               }
-              for (let attempt = 0; attempt < PORTAL_PORT_ALLOCATION_ATTEMPTS; attempt += 1) {
-                await listenGatewayHttpServer({
-                  httpServer: primaryServer,
-                  bindHost: primaryHost,
-                  port: 0,
-                  retryEaddrinuse: false,
-                  serviceName: "portal",
-                  endpointScheme: tlsOptions ? "https" : "http",
-                });
-                const address = primaryServer.address();
-                if (!address || typeof address === "string") {
-                  throw new Error("Portal listener failed to resolve its port");
-                }
-                if (target.kind === "worker" || address.port !== targetPort) {
-                  portal.listenPort = address.port;
-                  break;
-                }
-                // A proxy cannot share its target port: it would dial itself and fail auth.
-                await closePortalServers([primaryServer]);
+              await listenGatewayHttpServer({
+                httpServer: primaryServer,
+                bindHost: primaryHost,
+                port: 0,
+                retryEaddrinuse: false,
+                serviceName: "portal",
+                endpointScheme: tlsOptions ? "https" : "http",
+              });
+              const address = primaryServer.address();
+              if (!address || typeof address === "string") {
+                throw new Error("Portal listener failed to resolve its port");
               }
-              if (portal.listenPort === 0) {
+              // A rare allocation of an inactive target's port fails without self-dialing.
+              if (target.kind === "local" && address.port === targetPort) {
                 throw new Error(`Portal listener repeatedly allocated target port ${targetPort}`);
               }
+              portal.listenPort = address.port;
               for (const [index, host] of bindHosts.entries()) {
                 if (index === 0) {
                   continue;

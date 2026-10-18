@@ -33,6 +33,7 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(10_000);
   vi.mocked(collectNodeCatalogRuntimeState).mockReturnValue({
     sessionHostNodeIds: new Set(),
+    deviceFolderNodeIds: new Set(),
     issuesByNodeId: new Map(),
     workerSlotsByNodeId: new Map(),
     workerBundleByNodeId: new Map(),
@@ -108,7 +109,7 @@ describe("prepared worker pool projection", () => {
         expect(summary).toMatchObject({
           id: "worker-1",
           type: "worker",
-          status: "available",
+          status: listing ? "stopping" : "available",
           trust: "disposable",
           worker: {
             providerId: "static-ssh",

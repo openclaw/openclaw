@@ -257,8 +257,11 @@ describe("runtime-guard", () => {
   });
 
   it.each([
-    ["1.4.0", true],
-    ["1.4.1", true],
+    ["1.4.0", false],
+    ["1.4.1", false],
+    ["1.4.2", false],
+    ["1.4.3", true],
+    ["1.4.3-canary.1+65d94e715", true],
     ["2.0.0", true],
     ["1.3.14", false],
     [null, false],
@@ -317,7 +320,7 @@ describe("runtime-guard", () => {
     };
     const details = {
       kind: "bun" as const,
-      version: "1.4.0",
+      version: "1.4.3",
       execPath: "/usr/bin/bun",
       pathEnv: "/usr/bin",
       hasNodeSqlite: true,
@@ -335,7 +338,7 @@ describe("runtime-guard", () => {
       "Fix or unset OPENCLAW_SQLITE_LIBRARY; install a supported library with brew install sqlite.";
     await assertSupportedRuntime(runtime, {
       kind: "bun",
-      version: "1.4.2",
+      version: "1.4.3",
       execPath: "/usr/bin/bun",
       pathEnv: "/usr/bin",
       hasNodeSqlite: true,
@@ -343,7 +346,7 @@ describe("runtime-guard", () => {
       sqliteSelectionError,
     });
     expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
-      `${sqliteSelectionError}\nDetected: bun 1.4.2 (exec: /usr/bin/bun).`,
+      `${sqliteSelectionError}\nDetected: bun 1.4.3 (exec: /usr/bin/bun).`,
     );
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
@@ -363,7 +366,7 @@ describe("runtime-guard", () => {
     await expect(assertSupportedRuntime(runtime, details)).rejects.toThrow("exit");
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Bun 1.4 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release).",
+        "openclaw requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release).",
         "Detected: bun 1.3.14 (exec: /usr/bin/bun).",
         "Detected SQLite: unavailable.",
         "PATH searched: /usr/bin",
@@ -373,20 +376,23 @@ describe("runtime-guard", () => {
     );
   });
 
-  it("rejects Bun below 1.4 even when node:sqlite is available", async () => {
-    const runtime = createExitingRuntime();
+  it.each(["1.4.0", "1.4.1", "1.4.2"])(
+    "rejects Bun below 1.4.3 even when node:sqlite is available: %s",
+    async (version) => {
+      const runtime = createExitingRuntime();
 
-    await expect(
-      assertSupportedRuntime(runtime, {
-        kind: "bun",
-        version: "1.3.14",
-        execPath: "/usr/bin/bun",
-        pathEnv: "/usr/bin",
-        hasNodeSqlite: true,
-        sqliteVersion: "3.53.2",
-      }),
-    ).rejects.toThrow("exit");
-  });
+      await expect(
+        assertSupportedRuntime(runtime, {
+          kind: "bun",
+          version,
+          execPath: "/usr/bin/bun",
+          pathEnv: "/usr/bin",
+          hasNodeSqlite: true,
+          sqliteVersion: "3.53.2",
+        }),
+      ).rejects.toThrow("exit");
+    },
+  );
 
   it("rejects Bun when its node:sqlite version is not WAL-reset-safe", async () => {
     const runtime = createExitingRuntime();
@@ -394,7 +400,7 @@ describe("runtime-guard", () => {
     await expect(
       assertSupportedRuntime(runtime, {
         kind: "bun",
-        version: "1.4.0",
+        version: "1.4.3",
         execPath: "/usr/bin/bun",
         pathEnv: "/usr/bin",
         hasNodeSqlite: true,

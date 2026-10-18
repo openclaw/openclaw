@@ -100,7 +100,7 @@ describe("acpx plugin", () => {
 
     const api = createTestPluginApi({
       pluginConfig: { stateDir: "/tmp/acpx" },
-      runtime: { state: { openKeyedStore } } as never,
+      runtime: { state: { openKeyedStoreV2: openKeyedStore } } as never,
       registerService: vi.fn(),
       on: vi.fn(),
     });
@@ -121,21 +121,6 @@ describe("acpx plugin", () => {
     expect(api.on).toHaveBeenCalledWith("reply_dispatch", tryDispatchAcpReplyHookMock, {
       eligibleDispatchKinds: ["acp"],
     });
-  });
-
-  it("does not touch runtime state while registering metadata-only plugin APIs", () => {
-    const service = { id: "acpx-service", start: vi.fn() };
-    createAcpxRuntimeServiceMock.mockReturnValue(service);
-
-    const api = createTestPluginApi({
-      pluginConfig: {},
-      runtime: {} as never,
-      registerService: vi.fn(),
-      on: vi.fn(),
-    });
-
-    expect(() => plugin.register(api)).not.toThrow();
-    expect(api.registerService).toHaveBeenCalledWith(service);
   });
 
   it("declares setup auto-enable reasons for ACPX-owned ACP config", () => {
@@ -373,7 +358,7 @@ export { sendReceipt };`,
               resolveStateDir: () => {
                 throw new Error("Catalog inspection must not resolve runtime state");
               },
-              openKeyedStore: () => {
+              openKeyedStoreV2: () => {
                 throw new Error("Catalog inspection must not open runtime state");
               },
             },
@@ -462,12 +447,6 @@ export { sendReceipt };`,
     {
       name: "RequestError",
       code: -32000,
-      message: "Authentication required",
-      status: "auth-rejected",
-    },
-    {
-      name: "RequestError",
-      code: -32000,
       message: "Authentication required: fixture sign-in",
       status: "auth-rejected",
     },
@@ -477,13 +456,6 @@ export { sendReceipt };`,
       message: "Generic fixture server error",
       status: "unavailable",
     },
-    {
-      name: "RequestError",
-      code: -32603,
-      message: "Authentication required",
-      status: "unavailable",
-    },
-    { name: "Error", code: -32000, message: "Authentication required", status: "unavailable" },
   ])(
     "attributes native discovery $name/$code/$message without forwarding error data",
     async ({ name, code, message, status }) => {

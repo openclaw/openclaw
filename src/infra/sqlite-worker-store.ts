@@ -11,7 +11,6 @@ import type {
 import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
-  type SqliteWorkerEphemeralTarget,
   type SqliteWorkerStore,
 } from "./sqlite-worker-contract.js";
 import {
@@ -121,7 +120,7 @@ export function createSqliteWorkerWriteAdmission(
       admission: createSqliteWorkerOperationAdmission((request, grant) => {
         if (
           !(
-            (phase === "waiting" && request.stage === "transaction") ||
+            ((phase === "waiting" || phase === "transaction") && request.stage === "transaction") ||
             (phase === "transaction" && request.stage === "commit")
           )
         ) {
@@ -131,7 +130,9 @@ export function createSqliteWorkerWriteAdmission(
         if (!grant()) {
           throw new Error("SQLite worker write authority expired");
         }
-        phase = phase === "waiting" ? "transaction" : "commit";
+        // A rolled-back attempt can reacquire its initial grant. A successful
+        // commit grant remains terminal for this command's admission owner.
+        phase = request.stage === "transaction" ? "transaction" : "commit";
       }, attachment),
     };
   };
@@ -164,25 +165,17 @@ export function closeUnclaimedSharedStateSqliteWorkers(databasePath: string): Pr
 }
 
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { existingOnly: true; target?: never },
+  options: SqliteWorkerStoreOptions & { existingOnly: true },
 ): Promise<SqliteWorkerStore<Operations> | undefined>;
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { existingOnly?: false; target?: never },
+  options: SqliteWorkerStoreOptions & { existingOnly?: false },
 ): Promise<SqliteWorkerStore<Operations>>;
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { target?: never },
+  options: SqliteWorkerStoreOptions,
 ): Promise<SqliteWorkerStore<Operations> | undefined>;
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { target?: never },
+  options: SqliteWorkerStoreOptions,
 ): Promise<SqliteWorkerStore<Operations> | undefined> {
-  if (options.target) {
-    return Promise.reject(
-      new SqliteWorkerError(
-        "Ephemeral SQLite stores require their agent execution owner",
-        "closed",
-      ),
-    );
-  }
   if (!isMainThread) {
     return Promise.reject(
       new SqliteWorkerError(
@@ -229,35 +222,6 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
   );
 }
 
-/** Inactive incognito foundation: its execution owner pins the client until explicit disposal. */
-export function openEphemeralAgentDatabaseSqliteWorkerStore<
-  Operations extends SqliteWorkerOperations,
->(
-  options: SqliteWorkerStoreOptions & { target: SqliteWorkerEphemeralTarget },
-  custody: {
-    assertCurrent(): void;
-    createAdmission: SqliteWorkerAdmissionFactory;
-    onNativeLost?: SqliteWorkerOpenCustody["onNativeLost"];
-    onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
-    signal?: AbortSignal;
-  },
-): Promise<SqliteWorkerStore<Operations> | undefined> {
-  if (!isMainThread) {
-    return Promise.reject(
-      new SqliteWorkerError("Ephemeral agent admission requires its host owner", "unavailable"),
-    );
-  }
-  custody.assertCurrent();
-  return withCallerErrors(
-    resolveSqliteWorkerBroker().open<Operations>(
-      options,
-      undefined,
-      () => custody.assertCurrent(),
-      custody,
-    ),
-  );
-}
-
 /** Host-internal admission for the canonical shared-state actor. */
 export function openSharedStateSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   options: Omit<SqliteWorkerStoreOptions, "input">,
@@ -275,7 +239,7 @@ export function openSharedStateSqliteWorkerStore<Operations extends SqliteWorker
       { ...options, input: undefined },
       stateContext,
       assertCurrent,
-      lifecycle,
+      { ...lifecycle, sharedState: true },
     ),
   ).then((store) => {
     if (store) {

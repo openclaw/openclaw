@@ -432,6 +432,8 @@ JSON result. Dry runs do not load harness plugins.
 
 Applied artifact cleanup counts only successful file removals. If a file cannot
 be deleted, it contributes no freed bytes and remains part of disk usage.
+Artifacts retained by a deferred plugin import receipt or migration manifest
+remain protected even after their canonical session entry is gone.
 Unreferenced artifact cleanup and legacy disk-budget enforcement continue with
 other eligible files. SQLite archive pruning stops after a deletion
 error to retain its database recovery copy. If usage stays above the target,
@@ -538,7 +540,9 @@ openclaw sessions compact "agent:work:main" --agent work --json
   does not impose a client deadline by default; the Gateway owns the
   configured compaction lifecycle.
 - With `--max-lines <n>`, it permanently truncates the SQLite transcript to the
-  last `n` lines. This path does not create a backup archive.
+  last `n` lines. The Gateway finishes rebuilding the retained transcript's
+  indexes in its storage worker before reporting success, so the next turn does
+  not wait for background index maintenance. This path does not create a backup archive.
 - `--agent <id>`: agent that owns the session; required for `global` keys.
 - `--url` / `--token` / `--password`: Gateway connection overrides.
 - `--timeout <ms>`: optional client-side RPC timeout in milliseconds.

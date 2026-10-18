@@ -69,7 +69,7 @@ export async function discoverClaudeCliModels(params: {
   let transport: ClaudeCliTransport | undefined;
   let abortListener: Disposable | undefined;
   try {
-    transport = createClaudeCliTransport({
+    transport = await createClaudeCliTransport({
       context,
       args: invocation.argv,
       currentContext: () => (signal.aborted ? undefined : context),
@@ -110,11 +110,10 @@ export async function discoverClaudeCliModels(params: {
       if (option.value === "default") {
         defaultAliasIds.add(id);
       }
-      const levels = NATIVE_EFFORT_LEVELS.filter(
-        (level) =>
-          Array.isArray(option.supportedEffortLevels) &&
-          option.supportedEffortLevels.includes(level),
-      );
+      const supportedEffortLevels = Array.isArray(option.supportedEffortLevels)
+        ? option.supportedEffortLevels
+        : [];
+      const levels = NATIVE_EFFORT_LEVELS.filter((level) => supportedEffortLevels.includes(level));
       models.set(id, {
         id,
         name: displayName,

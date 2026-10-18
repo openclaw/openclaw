@@ -15,10 +15,15 @@ Bare `openclaw doctor --json` is read-only and non-interactive: no prompts, repa
 
 Explicit `openclaw doctor --lint` is the deployment-preflight posture. Add `--json` for machine-readable output without changing lint's threshold-based exit code. Policy findings reported here are documented in [`openclaw policy`](/cli/policy).
 
-Full reports reuse a private shared-state snapshot for ordinary reads within the
-report, preserving the live database and its WAL files. Each new report reads a
-fresh snapshot. Checks that need writable inspection state or independent database
-verification retain their own copies; `--only` checks prepare state on demand.
+The setup assistant's `doctor` action uses this read-only lint posture in an isolated
+process. It reports findings without applying repairs or migrations. Run
+`openclaw doctor --fix` separately on the Gateway host when you intend to repair state.
+
+Reports reuse a private shared-state snapshot for ordinary reads within the report,
+preserving the live database and its WAL files. `--only` reports prepare that shared
+snapshot on the first shared-state read.
+Each new report reads a fresh snapshot. Checks that need writable inspection state
+or independent database verification retain their own copies.
 
 Read-only reports preserve existing SQLite database, WAL, and shared-memory files,
 including their modification times. An older shared-state schema produces a
@@ -33,6 +38,7 @@ retirement fails, Doctor reports the error and leaves the private snapshot in pl
 Plugin source captures use the original profile's temporary storage, outside these
 database snapshots. Their plugin-cache owner retains them until plugin inspection
 finishes, so later channel setup checks can reuse admitted native files safely.
+Read-only database checks also keep plugin captures outside the profile's state directory.
 
 ```bash
 openclaw doctor --json

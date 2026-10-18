@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   canonicalPathFromExistingAncestor,
   isPathInside,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { createMigrationItem, MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
 import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CLAUDE_AUTO_MEMORY_MAX_FILES,
@@ -16,18 +16,6 @@ import {
 } from "./source.js";
 
 const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
-
-async function lstatIfExists(filePath: string) {
-  try {
-    return await fs.lstat(filePath);
-  } catch (error) {
-    const code = extractErrorCode(error);
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return undefined;
-    }
-    throw error;
-  }
-}
 
 async function addInstructionItem(params: {
   items: MigrationItem[];

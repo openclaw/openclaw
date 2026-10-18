@@ -405,9 +405,6 @@ export const buildTelegramMessageContext = async ({
       });
       return null;
     }
-    logVerbose(
-      `telegram: using configured ACP binding for ${bindingMode.binding.record.conversation.conversationId} -> ${bindingMode.sessionKey}`,
-    );
   }
 
   // Send the first typing cue before expensive context/session construction,

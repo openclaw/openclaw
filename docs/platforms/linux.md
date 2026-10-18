@@ -9,14 +9,17 @@ title: "Linux app"
 ---
 
 The Gateway is fully supported on Linux. Node is the primary, default, and
-recommended runtime; Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run
+recommended runtime; Bun 1.4.3+ builds with WAL-reset-safe `node:sqlite` can run
 OpenClaw as an explicit opt-in. Use `pnpm` rather than Bun for dependency
 installation.
 
 ## Desktop companion
 
 The OpenClaw Linux companion is a Tauri desktop app for local and remote
-Gateways. It:
+Gateways. On Windows, the native [Windows Hub](/platforms/windows#recommended-windows-hub)
+is recommended; this cross-platform [Tauri app](/platforms/windows#backup-tauri-desktop-app)
+is the backup, available in regular OpenClaw releases with bundled Bun for a local
+Windows Gateway. On Linux, it:
 
 - automatically sets up a local Gateway for fresh installs, with manual local,
   discovered remote, direct URL, and SSH choices available if setup fails
@@ -73,7 +76,7 @@ credential. A remote-only desktop connection still needs a browser node on this
 computer to expose its tabs to the remote Gateway.
 
 Development builds use an existing local CLI rather than downloading an
-unrelated stable runtime. The Windows Tauri test build does not provide this
+unrelated stable runtime. The Windows Tauri build does not provide this
 runtime installer. See [Chrome extension](/tools/chrome-extension) for approval,
 disconnection, and manual recovery.
 
@@ -83,8 +86,8 @@ The Linux companion shares one Bun fork pin with the native macOS app and CI.
 Runtime admission, SQLite safety checks, and the fork's disabled implicit package
 auto-install remain enabled. macOS Tauri test builds keep their existing runtime
 behavior; the native macOS app owns its separate bundled runtime. Windows Tauri
-test builds retain their existing runtime until a signed Windows fork is
-available; an unsigned dry-run is not shippable. See
+releases use the signed Windows fork from the shared pin for local setup; an
+unsigned dry-run is not shippable. See
 [Bun compatibility](/install/bun-compatibility).
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
@@ -110,8 +113,9 @@ streaming only. Other device commands belong to the [CLI node host](/cli/node) a
 [Linux Node plugin](/platforms/linux#node-capabilities).
 
 The [native macOS app](/platforms/macos) and [Windows Hub](/platforms/windows)
-are separate applications, not this shell's opt-in macOS and Windows Tauri test
-bundles. See their platform pages for requirements and capabilities.
+are separate applications. Windows Hub is the recommended Windows app; this
+Tauri shell is the backup. The macOS Tauri build remains an opt-in test bundle.
+See the platform pages for requirements and capabilities.
 
 ### Gateway selection
 

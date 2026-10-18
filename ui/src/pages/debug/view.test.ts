@@ -1,11 +1,13 @@
 import hljs from "highlight.js/lib/core";
-import { createComponent, createStore, flush } from "solid-js";
+import { createComponent, flush } from "solid-js";
 import { assert, describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import type { EventLogEntry } from "../../api/event-log.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
+import type { CommandLaneDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -17,7 +19,6 @@ import {
   normalizedText,
   useDebugTestEnvironment,
 } from "./debug.test-support.ts";
-import { DebugPageView, type DebugProps } from "./view.tsx";
 
 type TestDebugPage = HTMLElement;
 const pages = new WeakMap<
@@ -25,18 +26,12 @@ const pages = new WeakMap<
   { unmount: () => void; setContext: (context: ApplicationContext) => void }
 >();
 
-function mountView(initial: DebugProps, container: HTMLElement) {
-  const [props, setProps] = createStore(initial, { shallow: true });
-  mountSolid(() => createComponent(DebugPageView, props), { container });
-  return (next: DebugProps) => {
-    setProps(() => next);
-    flush();
-  };
-}
-
-function mountDebugHost(context: ApplicationContext): TestDebugPage {
+function mountDebugHost(context: ApplicationContext, container?: HTMLElement): TestDebugPage {
   const provider = createSolidApplicationContextProvider(context);
-  const mounted = mountSolid(() => createComponent(DebugPage, {}), { wrapper: provider.wrapper });
+  const mounted = mountSolid(() => createComponent(DebugPage, {}), {
+    container,
+    wrapper: provider.wrapper,
+  });
   const page = mounted.container;
   pages.set(page, { unmount: mounted.unmount, setContext: provider.setContext });
   flush();
@@ -87,37 +82,131 @@ function expectSnapshots(page: TestDebugPage, marker: string): void {
   expect(normalizedText(page.querySelector(".command-lane-row"))).toContain(marker);
 }
 
-function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
+type DebugPresentationFixture = {
+  status: Record<string, unknown> | null;
+  health: Record<string, unknown> | null;
+  models: unknown[];
+  heartbeat: unknown;
+  lanes: CommandLaneDiagnostics["lanes"];
+  dynamic: CommandLaneDiagnostics["dynamic"];
+  eventLog: readonly EventLogEntry[];
+  callParams: string;
+  callResult: string | null;
+};
+
+function createProps(overrides: Partial<DebugPresentationFixture> = {}): DebugPresentationFixture {
   return {
-    connected: true,
-    offlineStable: false,
-    loading: false,
     status: null,
     health: null,
     models: [],
     heartbeat: null,
     lanes: [],
     dynamic: null,
-    diagnosticsError: null,
     eventLog: [],
-    methods: [],
-    callMethod: "",
     callParams: "{}",
     callResult: null,
-    callError: null,
-    onCallMethodChange: () => undefined,
-    onCallParamsChange: () => undefined,
-    onRefresh: () => undefined,
-    onOpenOverlay: () => undefined,
-    onCall: () => undefined,
     ...overrides,
+  };
+}
+
+async function mountDebugPresentation(initial: DebugPresentationFixture, container: HTMLElement) {
+  let current = initial;
+  let eventRevision = 0;
+  const eventListeners = new Set<(events: readonly EventLogEntry[]) => void>();
+  const context = createDebugApplicationContext(async (method) => {
+    switch (method) {
+      case "status":
+        return current.status;
+      case "health":
+        return current.health;
+      case "models.list":
+        return { models: current.models };
+      case "last-heartbeat":
+        return current.heartbeat;
+      case "diagnostics.lanes":
+        return { ts: 1, lanes: current.lanes, dynamic: current.dynamic };
+      case "manual.latest": {
+        const result: unknown = JSON.parse(current.callResult ?? "null");
+        return result;
+      }
+      default:
+        throw new Error(`Unexpected diagnostics method: ${method}`);
+    }
+  });
+  const page = mountDebugHost(
+    {
+      ...context,
+      gateway: {
+        ...context.gateway,
+        get eventLog() {
+          return current.eventLog;
+        },
+        get eventLogRevision() {
+          return eventRevision;
+        },
+        subscribeEventLog(listener) {
+          eventListeners.add(listener);
+          return () => eventListeners.delete(listener);
+        },
+      },
+    },
+    container,
+  );
+  const waitForDiagnostics = () =>
+    waitForSolid(() =>
+      expect(page.querySelector<HTMLButtonElement>(".settings-section button")?.disabled).toBe(
+        false,
+      ),
+    );
+  const call = async () => {
+    callMethod(page, "manual.latest");
+    await waitForSolid(() =>
+      expect(page.querySelector('pre[aria-label="manual.latest: OK"]')?.textContent).toBe(
+        JSON.stringify(JSON.parse(current.callResult ?? "null"), null, 2),
+      ),
+    );
+  };
+  await waitForDiagnostics();
+  if (initial.callResult !== null) {
+    await call();
+  }
+  return async (next: DebugPresentationFixture) => {
+    const previous = current;
+    current = next;
+    if (next.eventLog !== previous.eventLog) {
+      eventRevision += 1;
+      for (const listener of eventListeners) {
+        listener(next.eventLog);
+      }
+    }
+    if (next.callParams !== previous.callParams) {
+      const input = page.querySelector<HTMLTextAreaElement>("textarea");
+      assert(input);
+      input.value = next.callParams;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    flush();
+    if (
+      next.status !== previous.status ||
+      next.health !== previous.health ||
+      next.models !== previous.models ||
+      next.heartbeat !== previous.heartbeat ||
+      next.lanes !== previous.lanes ||
+      next.dynamic !== previous.dynamic
+    ) {
+      page.querySelector<HTMLButtonElement>(".settings-section button")!.click();
+      await waitForDiagnostics();
+    }
+    if (next.callResult !== previous.callResult && next.callResult !== null) {
+      await call();
+    }
   };
 }
 
 useDebugTestEnvironment();
 
-describe("DebugPageView", () => {
-  it("retains event payload DOM and only highlights changed diagnostics", () => {
+describe("DebugPage presentation", () => {
+  it("retains event payload DOM and only highlights changed diagnostics", async () => {
     const container = document.createElement("div");
     const events = Array.from({ length: 250 }, (_, index) => ({
       ts: 1,
@@ -127,11 +216,12 @@ describe("DebugPageView", () => {
     const props = createProps({ eventLog: events, callResult: '{"ok":true}' });
     const highlight = vi.spyOn(hljs, "highlight");
     try {
-      const update = mountView(props, container);
+      const update = await mountDebugPresentation(props, container);
       const eventSection = container.querySelector(".settings-section:last-child");
       assert(eventSection);
       const payloads = Array.from(eventSection.querySelectorAll("pre"));
       assert(payloads[0]);
+      await waitForSolid(() => expect(payloads[0]!.querySelector("span")).not.toBeNull());
       const firstToken = payloads[0].querySelector("span");
       assert(firstToken);
       highlight.mockClear();
@@ -142,7 +232,7 @@ describe("DebugPageView", () => {
         payload: { message: "newest" },
       };
       const nextProps = { ...props, eventLog: [newest, ...events.slice(0, -1)] };
-      update(nextProps);
+      await update(nextProps);
 
       const nextPayloads = Array.from(eventSection.querySelectorAll("pre"));
       expect(nextPayloads).toHaveLength(250);
@@ -155,10 +245,10 @@ describe("DebugPageView", () => {
       expect(highlight).toHaveBeenCalledTimes(1);
 
       highlight.mockClear();
-      update({ ...nextProps, callParams: '{"typed":true}' });
+      await update({ ...nextProps, callParams: '{"typed":true}' });
       expect(highlight).not.toHaveBeenCalled();
 
-      update({
+      await update({
         ...nextProps,
         status: { version: "updated" },
         health: { ok: true },
@@ -169,7 +259,7 @@ describe("DebugPageView", () => {
       expect(highlight).toHaveBeenCalledTimes(5);
       expect(container.textContent).toContain("updated");
 
-      update({ ...props, eventLog: [] });
+      await update({ ...props, eventLog: [] });
       expect(eventSection.querySelector("pre")).toBeNull();
       expect(eventSection.textContent).not.toContain("event 0");
     } finally {
@@ -180,7 +270,7 @@ describe("DebugPageView", () => {
   it("updates security audit labels with the locale and keeps the command monospace", async () => {
     const container = document.createElement("div");
 
-    mountView(
+    await mountDebugPresentation(
       createProps({
         status: {
           securityAudit: {
@@ -217,8 +307,8 @@ describe("DebugPageView", () => {
 
   it.each<{
     label: string;
-    lane: DebugProps["lanes"][number];
-    dynamic: DebugProps["dynamic"];
+    lane: CommandLaneDiagnostics["lanes"][number];
+    dynamic: CommandLaneDiagnostics["dynamic"];
     text: string;
     saturated: boolean;
     queued: boolean;
@@ -261,10 +351,10 @@ describe("DebugPageView", () => {
     },
   ])(
     "renders $label lane capacity and saturation",
-    ({ lane, dynamic, text, saturated, queued }) => {
+    async ({ lane, dynamic, text, saturated, queued }) => {
       const container = document.createElement("div");
       const props = createProps({ lanes: [lane], dynamic });
-      const update = mountView(props, container);
+      const update = await mountDebugPresentation(props, container);
       const row = container.querySelector(".command-lane-row");
       expect(row?.classList.contains("command-lane-row--saturated")).toBe(saturated);
       expect(row?.classList.contains("command-lane-row--queued")).toBe(queued);
@@ -274,7 +364,7 @@ describe("DebugPageView", () => {
           "Session lanes · 23 9 4 —",
         );
       } else {
-        update({ ...props, lanes: [{ ...lane, saturatedLaneCount: 1 }] });
+        await update({ ...props, lanes: [{ ...lane, saturatedLaneCount: 1 }] });
         expect(container.querySelector(".command-lane-row")?.classList).toContain(
           "command-lane-row--saturated",
         );
@@ -558,21 +648,22 @@ describe("DebugPage", () => {
     },
   );
 
-  it.each(["models.list", "health"] as const)(
-    "preserves snapshots and independent Manual RPC errors through %s failure and recovery",
-    async (failedMethod) => {
-      let failure: typeof failedMethod | null = null;
-      let marker = "initial";
-      const request = vi.fn(async (method: string) => {
-        if (method === "manual.latest") {
-          throw new Error("manual request failed");
-        }
-        if (method === failure) {
-          throw new Error(`${method} unavailable`);
-        }
-        return diagnosticResponse(method, marker);
-      });
-      const page = await mountDebugPage(request);
+  it("preserves snapshots and independent Manual RPC errors through model failure and recovery", async () => {
+    const failedMethod = "models.list";
+    vi.useFakeTimers();
+    let failure: typeof failedMethod | null = null;
+    let marker = "initial";
+    const request = vi.fn(async (method: string) => {
+      if (method === "manual.latest") {
+        throw new Error("manual request failed");
+      }
+      if (method === failure) {
+        throw new Error(`${method} unavailable`);
+      }
+      return diagnosticResponse(method, marker);
+    });
+    const page = await mountDebugPage(request);
+    try {
       expectSnapshots(page, "initial");
       callMethod(page, "manual.latest");
       await waitForSolid(() => expect(page.textContent).toContain("manual request failed"));
@@ -599,6 +690,9 @@ describe("DebugPage", () => {
 
       expect(page.querySelector('.settings-section:first-child [role="alert"]')).toBeNull();
       expect(page.textContent).toContain("manual request failed");
-    },
-  );
+    } finally {
+      unmountDebugHost(page);
+      vi.useRealTimers();
+    }
+  });
 });

@@ -7,6 +7,7 @@ import {
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
 import { withinTest } from "../helpers/promise.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const configs = [
@@ -95,7 +96,6 @@ export function createVitestReportFixture(
     NODE_COMPILE_CACHE: compileCache,
     COREPACK_ENABLE_NETWORK: "0",
     GIT_OPTIONAL_LOCKS: "0",
-    CI: "1",
     NO_COLOR: "1",
     FORCE_COLOR: "0",
     TZ: "UTC",
@@ -120,6 +120,7 @@ export function createVitestReportFixture(
       configOutput?: boolean;
       crashSignal?: "SIGABRT" | "SIGKILL";
       finalIndexFailure?: boolean;
+      env?: NodeJS.ProcessEnv;
     } = {},
   ) => {
     const deadline = performance.now() + 45000;
@@ -455,20 +456,25 @@ registerHooks({ resolve(specifier, context, nextResolve) {
       );
       command.unshift("--import", preload);
     }
-    const childEnv = {
-      ...env,
-      // V8 coverage needs fresh compilation; other phases can share private bytecode.
-      NODE_DISABLE_COMPILE_CACHE: ["metadata", "coverage-missing"].includes(mode) ? "1" : undefined,
-      OPENCLAW_TEST_PROJECTS_PARALLEL: mode === "automatic" ? "" : isParallel ? "2" : "1",
-      OPENCLAW_TEST_PROJECTS_SERIAL: mode === "automatic" ? "" : isParallel ? "0" : "1",
-      OPENCLAW_EXTENSION_BATCH_PARALLEL: isParallel ? "2" : "1",
-      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
-        mode === "automatic" ? "" : env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
-      OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT:
-        mode === "automatic" ? path.join(root, "automatic-cache") : undefined,
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS:
-        mode === "watchdog" ? "1500" : env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
-    };
+    const childEnv = testRunnerFixtureEnv(
+      {
+        // V8 coverage needs fresh compilation; other phases can share private bytecode.
+        NODE_DISABLE_COMPILE_CACHE: ["metadata", "coverage-missing"].includes(mode)
+          ? "1"
+          : undefined,
+        OPENCLAW_TEST_PROJECTS_PARALLEL: mode === "automatic" ? "" : isParallel ? "2" : "1",
+        OPENCLAW_TEST_PROJECTS_SERIAL: mode === "automatic" ? "" : isParallel ? "0" : "1",
+        OPENCLAW_EXTENSION_BATCH_PARALLEL: isParallel ? "2" : "1",
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
+          mode === "automatic" ? "" : env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
+        OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT:
+          mode === "automatic" ? path.join(root, "automatic-cache") : undefined,
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS:
+          mode === "watchdog" ? "1500" : env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
+        ...options.env,
+      },
+      env,
+    );
     let executable = process.execPath;
     if (process.platform === "linux" && options.crashSignal === "SIGABRT") {
       // Preserve an inherited zero hard limit; raising it needs OS authority we do not own.

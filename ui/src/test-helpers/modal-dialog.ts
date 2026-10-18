@@ -23,10 +23,10 @@ export function afterModalHidden(modal: OpenClawModalDialog): Promise<void> {
       if (event.target !== modal) {
         return;
       }
-      modal.removeEventListener("wa-after-hide", onHidden);
+      modal.removeEventListener("overlay-after-hide", onHidden);
       resolve();
     };
-    modal.addEventListener("wa-after-hide", onHidden);
+    modal.addEventListener("overlay-after-hide", onHidden);
   });
 }
 
@@ -164,9 +164,16 @@ export function waitForConfirmDialogActions(): Promise<HTMLElement> {
   });
 }
 
-export function answerConfirmDialog(actions: HTMLElement, choice: "confirm" | "cancel") {
+export function answerConfirmDialog(
+  actions: HTMLElement,
+  choice: "confirm" | "alternative" | "cancel",
+) {
   const button = actions.querySelector<HTMLButtonElement>(
-    choice === "confirm" ? ".btn.danger, .btn.primary" : ".btn[autofocus]",
+    choice === "confirm"
+      ? ".btn.danger, .btn.primary"
+      : choice === "alternative"
+        ? ".btn:not(.danger):not(.primary):not([autofocus])"
+        : ".btn[autofocus]",
   );
   if (!button) {
     throw new Error(`Expected the confirm dialog's ${choice} button`);
