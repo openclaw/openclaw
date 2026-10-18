@@ -17,6 +17,11 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
+import {
+  createDetailsOutputsBinding,
+  projectDetailsOutputs,
+  type DetailsOutputsBinding,
+} from "./chat-details-outputs-binding.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import {
   chatHistoryRequests,
@@ -41,8 +46,12 @@ import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
+import type { ChatDetailsOutputsIcons } from "./components/chat-details-types.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation-view.tsx";
-import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
+import {
+  clearSessionWorkspacePreviews,
+  getSessionWorkspace,
+} from "./components/chat-session-workspace-state.ts";
 import {
   dismissThreadPortals,
   isThreadPresentationFocused,
@@ -57,6 +66,61 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   readonly activeSessionResources = new ChatPaneActiveResources();
+
+  private detailsOutputsBinding?: DetailsOutputsBinding;
+
+  /** The Details host consumes this binding; native workspace/board projections already subscribe the pane. */
+  protected captureDetailsOutputs(icons: ChatDetailsOutputsIcons) {
+    const state = this.state;
+    if (!state || !this.presented || !this.isConnected) {
+      this.detailsOutputsBinding?.stop();
+      this.detailsOutputsBinding = undefined;
+      return {};
+    }
+    const workspace = getSessionWorkspace(state);
+    const board = this.resolveBoardView();
+    const scope = gatewayPresentationScope(this.context.gateway);
+    let binding = this.detailsOutputsBinding;
+    if (
+      !binding ||
+      binding.state !== state ||
+      binding.workspace !== workspace ||
+      binding.provider !== board.provider ||
+      binding.client !== state.client ||
+      binding.connected !== state.connected ||
+      binding.sessionId !== state.currentSessionId ||
+      binding.scope !== scope
+    ) {
+      binding?.stop();
+      binding = this.detailsOutputsBinding = createDetailsOutputsBinding(
+        {
+          state: () => this.state,
+          gateway: () => this.context.gateway,
+          isConnected: () => this.isConnected,
+          presented: () => this.presented,
+          presentation: () => this.sessionPresentation,
+          readBoard: () => this.resolveBoardView(),
+          showDashboard: () => this.showDashboard(false),
+        },
+        state,
+        workspace,
+        board.provider,
+      );
+    }
+    return projectDetailsOutputs(
+      binding,
+      workspace,
+      board,
+      this.boardProvider !== undefined || this.boardProviderLease?.provider === board.provider,
+      icons,
+    );
+  }
+
+  override dispose(): void {
+    this.detailsOutputsBinding?.stop();
+    this.detailsOutputsBinding = undefined;
+    super.dispose();
+  }
 
   readProgressCardScope() {
     const gateway = this.context.gateway;
@@ -504,6 +568,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   protected override presentedChanged(presented: boolean): void {
     if (!presented) {
+      this.detailsOutputsBinding?.stop();
+      this.detailsOutputsBinding = undefined;
       this.retireHeaderSessionMutations();
       this.dashboardPresentationActivation = undefined;
       this.retainedProgressCard = undefined;

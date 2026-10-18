@@ -246,6 +246,16 @@ export const en: TranslationMap & {
     execHost: "Codex exec",
   },
   agentsHome: {},
+  outputs: {
+    viewAll: "View all",
+    dashboard: "Dashboard",
+    files: "Files",
+    loading: "Loading outputs…",
+    updating: "Updating outputs…",
+    loadingDashboard: "Loading dashboard…",
+    emptyTitle: "No outputs yet",
+    emptyDescription: "Files and dashboards from the session appear here.",
+  },
   common: {
     uploadsDisabled: "File and image uploads are disabled.",
     health: "Health",
