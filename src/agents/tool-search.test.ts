@@ -495,7 +495,7 @@ describe("Tool Search", () => {
     const contractTools = [
       createStructuredOutputTool({ runId: "run-contract-tools", schema: { type: "object" } }),
       createSessionsYieldTool({ sessionId: "session-contract-tools" }),
-      expectDefined(resolveHeartbeatResponseTool({ enableHeartbeatTool: true })),
+      expectDefined(resolveHeartbeatResponseTool({ enableHeartbeatTool: true }), "heartbeat tool"),
     ];
 
     const { catalogRef, compacted } = catalogFixture(
