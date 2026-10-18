@@ -8,7 +8,7 @@ import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import {
   adoptPluginHttpRouteHandoffs,
   createPluginHttpRouteHandoff,
-  registerPluginHttpRoute,
+  registerPluginHttpRoute as registerRoute,
   withPluginHttpRouteRegistry,
 } from "./http-registry.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -19,22 +19,20 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runti
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
-function expectRegisteredRouteShape(
-  registry: ReturnType<typeof createEmptyPluginRegistry>,
-  params: {
-    path: string;
-    handler?: unknown;
-    auth: "plugin" | "gateway";
-    match?: "exact" | "prefix";
-    pluginId?: string;
-    source?: string;
-  },
-) {
+type Registry = ReturnType<typeof createEmptyPluginRegistry>;
+type RouteParams = Omit<Parameters<typeof registerRoute>[0], "auth" | "handler"> &
+  Partial<Pick<Parameters<typeof registerRoute>[0], "auth" | "handler">>;
+
+function registerPluginHttpRoute(params: RouteParams) {
+  return registerRoute({ auth: "plugin", handler: vi.fn(), ...params });
+}
+
+function expectRegisteredRouteShape(registry: Registry, params: RouteParams) {
   expect(registry.httpRoutes).toHaveLength(1);
   expect(registry.httpRoutes[0]).toEqual({
     path: params.path,
     handler: params.handler ?? registry.httpRoutes[0]?.handler,
-    auth: params.auth,
+    auth: params.auth ?? "plugin",
     match: params.match ?? "exact",
     pluginId: params.pluginId,
     source: params.source,
@@ -47,21 +45,48 @@ function createLoggedRouteHarness() {
   return {
     registry,
     logs,
-    register: (
-      params: Omit<
-        Parameters<typeof registerPluginHttpRoute>[0],
-        "registry" | "handler" | "log"
-      > & {
-        handler?: Parameters<typeof registerPluginHttpRoute>[0]["handler"];
-      },
-    ) =>
+    register: (params: Omit<RouteParams, "registry" | "log">) =>
       registerPluginHttpRoute({
         ...params,
-        handler: params.handler ?? vi.fn(),
         registry,
         log: (msg) => logs.push(msg),
       }),
   };
+}
+
+function registerLeasedRoute(
+  registry: Registry,
+  owner: ReturnType<typeof createTrackedRouteLease>,
+  params: RouteParams,
+) {
+  return withPluginHttpRouteRegistry(registry, () => registerPluginHttpRoute(params), owner.lease);
+}
+
+function registerStaticRoute(
+  record: ReturnType<typeof createPluginRecord>,
+  params: RouteParams & { path: string },
+) {
+  const harness = createTestPluginRegistry();
+  harness.registry.plugins.push(record);
+  harness.createApi(record, { config: {} as OpenClawConfig }).registerHttpRoute({
+    auth: "plugin",
+    handler: vi.fn(),
+    ...params,
+  });
+  return harness.registry;
+}
+
+function registryWithService(Service: new () => { id: string; start: () => void }) {
+  const registry = createEmptyPluginRegistry();
+  const service = new Service();
+  registry.services.push({
+    id: service.id,
+    pluginId: "retained-plugin",
+    service,
+    source: "retention-test",
+    origin: "config",
+  });
+  return registry;
 }
 
 function createTrackedRouteLease() {
@@ -107,11 +132,11 @@ describe("registerPluginHttpRoute", () => {
       pluginId: "demo",
       source: "account",
     };
-    const unregisterOld = withPluginHttpRouteRegistry(
-      previous,
-      () => registerPluginHttpRoute({ ...route, handler: vi.fn(), throwOnFailure: true }),
-      retired.lease,
-    );
+    const unregisterOld = registerLeasedRoute(previous, retired, {
+      ...route,
+      handler: vi.fn(),
+      throwOnFailure: true,
+    });
     const handoff = createPluginHttpRouteHandoff();
     handoff.park(retired.lease);
     retired.revoke();
@@ -120,11 +145,7 @@ describe("registerPluginHttpRoute", () => {
     expect(previous.httpRoutes).toHaveLength(0);
     expect(next.httpRoutes).toHaveLength(1);
     const handler = vi.fn();
-    withPluginHttpRouteRegistry(
-      next,
-      () => registerPluginHttpRoute({ ...route, handler, throwOnFailure: true }),
-      current.lease,
-    );
+    registerLeasedRoute(next, current, { ...route, handler, throwOnFailure: true });
     unregisterOld();
     handoff.release();
     expect(next.httpRoutes.map((entry) => entry.handler)).toEqual([handler]);
@@ -144,11 +165,7 @@ describe("registerPluginHttpRoute", () => {
         pluginId: "demo",
         source: "account",
       };
-      withPluginHttpRouteRegistry(
-        registry,
-        () => registerPluginHttpRoute({ ...route, handler: vi.fn(), throwOnFailure: true }),
-        retired.lease,
-      );
+      registerLeasedRoute(registry, retired, { ...route, handler: vi.fn(), throwOnFailure: true });
       const handoff = createPluginHttpRouteHandoff();
       handoff.park(retired.lease);
       retired.revoke();
@@ -158,7 +175,6 @@ describe("registerPluginHttpRoute", () => {
           ...route,
           ...changed,
           registry,
-          handler: vi.fn(),
           throwOnFailure: true,
         }),
       ).toThrow();
@@ -168,7 +184,6 @@ describe("registerPluginHttpRoute", () => {
         ...route,
         ...changed,
         registry: next,
-        handler: vi.fn(),
         throwOnFailure: true,
       });
       expect(() => adoptPluginHttpRouteHandoffs(registry, next)).toThrow();
@@ -193,17 +208,11 @@ describe("registerPluginHttpRoute", () => {
         source: "shared",
       };
       for (const owner of [first, second]) {
-        withPluginHttpRouteRegistry(
-          registry,
-          () =>
-            registerPluginHttpRoute({
-              ...route,
-              handler: vi.fn(),
-              reuseExistingSameOwner: true,
-              throwOnFailure: true,
-            }),
-          owner.lease,
-        );
+        registerLeasedRoute(registry, owner, {
+          ...route,
+          reuseExistingSameOwner: true,
+          throwOnFailure: true,
+        });
       }
       firstHandoff.park(first.lease);
       first.revoke();
@@ -280,7 +289,6 @@ describe("registerPluginHttpRoute", () => {
     const registerMissingPath = () =>
       register({
         path: "",
-        auth: "plugin",
         accountId: "default",
         throwOnFailure,
       });
@@ -310,7 +318,6 @@ describe("registerPluginHttpRoute", () => {
       () =>
         register({
           path: "/plugins/shared",
-          auth: "plugin",
           handler: firstHandler,
           pluginId: "demo",
           source: "shared-route",
@@ -323,7 +330,6 @@ describe("registerPluginHttpRoute", () => {
       () =>
         register({
           path: "/PLUGINS//SHARED/",
-          auth: "plugin",
           handler: secondHandler,
           pluginId: "demo",
           source: "shared-route",
@@ -353,34 +359,24 @@ describe("registerPluginHttpRoute", () => {
   it.each(["unregister", "revoke"] as const)(
     "preserves a static plugin route when a dynamic holder calls %s",
     (cleanup) => {
-      const pluginRegistry = createTestPluginRegistry();
       const record = createPluginRecord({ id: "demo", source: "/plugins/demo/index.js" });
       const handler = vi.fn();
-      pluginRegistry.registry.plugins.push(record);
-      pluginRegistry.createApi(record, { config: {} as OpenClawConfig }).registerHttpRoute({
+      const registry = registerStaticRoute(record, {
         path: "/plugins/shared",
-        auth: "plugin",
         handler,
       });
       const owner = createTrackedRouteLease();
-      const unregister = withPluginHttpRouteRegistry(
-        pluginRegistry.registry,
-        () =>
-          registerPluginHttpRoute({
-            path: "/PLUGINS//SHARED/",
-            auth: "plugin",
-            handler: vi.fn(),
-            pluginId: record.id,
-            source: record.source,
-            reuseExistingSameOwner: true,
-            throwOnFailure: true,
-          }),
-        owner.lease,
-      );
+      const unregister = registerLeasedRoute(registry, owner, {
+        path: "/PLUGINS//SHARED/",
+        pluginId: record.id,
+        source: record.source,
+        reuseExistingSameOwner: true,
+        throwOnFailure: true,
+      });
 
       (cleanup === "unregister" ? unregister : owner.revoke)();
-      expect(pluginRegistry.registry.httpRoutes).toHaveLength(1);
-      expect(pluginRegistry.registry.httpRoutes[0]?.handler).toBe(handler);
+      expect(registry.httpRoutes).toHaveLength(1);
+      expect(registry.httpRoutes[0]?.handler).toBe(handler);
       unregister();
       owner.revoke();
     },
@@ -394,7 +390,6 @@ describe("registerPluginHttpRoute", () => {
     const firstHandler = vi.fn();
     register({
       path: "/plugins/shared",
-      auth: "plugin",
       handler: firstHandler,
       pluginId: "demo",
       source: "shared-route",
@@ -403,7 +398,6 @@ describe("registerPluginHttpRoute", () => {
     expect(() =>
       register({
         path: "/plugins/shared",
-        auth: "plugin",
         pluginId,
         source,
         reuseExistingSameOwner: true,
@@ -418,21 +412,18 @@ describe("registerPluginHttpRoute", () => {
     const { registry, register } = createLoggedRouteHarness();
     register({
       path: "/webhooks",
-      auth: "plugin",
       match: "prefix",
       pluginId: "sms",
       source: "prefix",
     });
     register({
       path: "/Webhooks/SMS/",
-      auth: "plugin",
       pluginId: "sms",
       source: "sms-exact",
     });
 
     register({
       path: "/webhooks/sms",
-      auth: "plugin",
       pluginId: "sms",
       source: "sms-exact",
       replaceExisting: true,
@@ -443,25 +434,20 @@ describe("registerPluginHttpRoute", () => {
   });
 
   it("rejects replacement when a distinct route source owns the same plugin path", () => {
-    const pluginRegistry = createTestPluginRegistry();
     const record = createPluginRecord({
       id: "mattermost",
       source: "/plugins/mattermost/index.js",
     });
     const slashHandler = vi.fn();
-    pluginRegistry.registry.plugins.push(record);
-    pluginRegistry.createApi(record, { config: {} as OpenClawConfig }).registerHttpRoute({
+    const registry = registerStaticRoute(record, {
       path: "/Mattermost//Interactions/default/",
-      auth: "plugin",
       handler: slashHandler,
     });
 
     expect(() =>
       registerPluginHttpRoute({
         path: "/mattermost/interactions/default",
-        auth: "plugin",
-        handler: vi.fn(),
-        registry: pluginRegistry.registry,
+        registry,
         pluginId: "mattermost",
         source: "mattermost-interactions",
         replaceExisting: true,
@@ -469,8 +455,8 @@ describe("registerPluginHttpRoute", () => {
       }),
     ).toThrow("plugin: route replacement denied");
 
-    expect(pluginRegistry.registry.httpRoutes).toHaveLength(1);
-    expect(pluginRegistry.registry.httpRoutes[0]).toMatchObject({
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.httpRoutes[0]).toMatchObject({
       handler: slashHandler,
       pluginId: "mattermost",
       source: "/plugins/mattermost/index.js",
@@ -484,7 +470,6 @@ describe("registerPluginHttpRoute", () => {
 
     const unregisterFirst = register({
       path: "/plugins/synology",
-      auth: "plugin",
       handler: firstHandler,
       accountId: "default",
       pluginId: "synology-chat",
@@ -492,7 +477,6 @@ describe("registerPluginHttpRoute", () => {
 
     const unregisterSecond = register({
       path: "/plugins/synology",
-      auth: "plugin",
       replaceExisting: true,
       handler: secondHandler,
       accountId: "default",
@@ -546,7 +530,6 @@ describe("registerPluginHttpRoute", () => {
     const existingHandler = vi.fn();
     register({
       path: "/plugins/demo",
-      auth: "plugin",
       handler: existingHandler,
       ...existing,
     });
@@ -554,7 +537,6 @@ describe("registerPluginHttpRoute", () => {
     expect(() =>
       register({
         path: "/plugins/demo",
-        auth: "plugin",
         ...replacement,
         replaceExisting: true,
         throwOnFailure: true,
@@ -570,13 +552,11 @@ describe("registerPluginHttpRoute", () => {
     const { registry, register } = createLoggedRouteHarness();
     register({
       path: "/plugins/demo",
-      auth: "plugin",
       source: "old-anonymous",
     });
 
     register({
       path: "/plugins/demo",
-      auth: "plugin",
       replaceExisting: true,
       throwOnFailure: true,
       source: "new-anonymous",
@@ -590,7 +570,6 @@ describe("registerPluginHttpRoute", () => {
     const { registry, register } = createLoggedRouteHarness();
     register({
       path: "/plugin",
-      auth: "plugin",
       match: "prefix",
       pluginId: "demo-plugin",
     });
@@ -606,7 +585,6 @@ describe("registerPluginHttpRoute", () => {
     expect(() =>
       register({
         path: "/PLUGIN/secure/report/",
-        auth: "plugin",
         match: "exact",
         pluginId: "demo-plugin",
         throwOnFailure: true,
@@ -624,14 +602,7 @@ describe("registerPluginHttpRoute", () => {
       }
       const lease = leased ? createPluginRuntimeCapabilityLease("retention test") : undefined;
       const resources = Array.from({ length: 24 }, () => {
-        const registry = createEmptyPluginRegistry();
-        registry.services.push({
-          id: "retained-service",
-          pluginId: "retained-plugin",
-          service: new RetainedService(),
-          source: "retention-test",
-          origin: "config",
-        });
+        const registry = registryWithService(RetainedService);
         const resource = withPluginHttpRouteRegistry(
           registry,
           () => new AsyncResource("plugin-http-retention"),
@@ -651,7 +622,6 @@ describe("registerPluginHttpRoute", () => {
             resource.runInAsyncScope(() =>
               registerPluginHttpRoute({
                 path: "/retired-webhook",
-                auth: "plugin",
                 handler: () => true,
                 throwOnFailure: true,
               }),
@@ -680,16 +650,9 @@ describe("registerPluginHttpRoute", () => {
       }
       const currentRegistry = createEmptyPluginRegistry();
       const { resource, instance, handler } = (() => {
-        const registry = createEmptyPluginRegistry();
+        const registry = registryWithService(RetainedService);
         const record = createPluginRecord({ id: "adopted-plugin" });
         registry.plugins.push(record);
-        registry.services.push({
-          id: "retired-service",
-          pluginId: "retired-plugin",
-          service: new RetainedService(),
-          source: "retention-test",
-          origin: "config",
-        });
         const adoptedInstance = new PluginInstance(record.id, { record, registry });
         const adoptedHandler = adoptedInstance.wrap(() => true);
         const capturedResource = withScope(
@@ -707,7 +670,6 @@ describe("registerPluginHttpRoute", () => {
         const unregister = resource.runInAsyncScope(() =>
           registerPluginHttpRoute({
             path: "/adopted-webhook",
-            auth: "plugin",
             handler,
             throwOnFailure: true,
           }),
@@ -726,8 +688,6 @@ describe("registerPluginHttpRoute", () => {
     const owner = createTrackedRouteLease();
     registerPluginHttpRoute({
       path: "/unrelated-webhook",
-      auth: "plugin",
-      handler: vi.fn(),
       registry,
     });
 
@@ -736,13 +696,9 @@ describe("registerPluginHttpRoute", () => {
       () => [
         registerPluginHttpRoute({
           path: "/leased-anonymous-webhook",
-          auth: "plugin",
-          handler: vi.fn(),
         }),
         registerPluginHttpRoute({
           path: "/leased-owned-webhook",
-          auth: "plugin",
-          handler: vi.fn(),
           pluginId: "demo",
         }),
       ],
@@ -797,8 +753,6 @@ describe("registerPluginHttpRoute", () => {
           const register = () =>
             registerPluginHttpRoute({
               path: "/late-webhook",
-              auth: "plugin",
-              handler: vi.fn(),
               throwOnFailure: true,
               ...(pluginId ? { pluginId } : {}),
               ...(explicitRegistry ? { registry } : {}),
@@ -846,13 +800,7 @@ describe("registerPluginHttpRoute", () => {
         () =>
           withPluginHttpRouteRegistry(
             nestedRegistry,
-            () =>
-              registerPluginHttpRoute({
-                path: "/independent-webhook",
-                auth: "plugin",
-                handler: vi.fn(),
-                throwOnFailure: true,
-              }),
+            () => registerPluginHttpRoute({ path: "/independent-webhook", throwOnFailure: true }),
             childLease ? child.lease : undefined,
           ),
         parent.lease,
@@ -874,17 +822,10 @@ describe("registerPluginHttpRoute", () => {
     const unregister = withPluginHttpRouteRegistry(
       parentRegistry,
       () =>
-        withPluginHttpRouteRegistry(
-          nestedRegistry,
-          () =>
-            registerPluginHttpRoute({
-              path: "/nested-webhook",
-              auth: "plugin",
-              handler: vi.fn(),
-              throwOnFailure: true,
-            }),
-          child.lease,
-        ),
+        registerLeasedRoute(nestedRegistry, child, {
+          path: "/nested-webhook",
+          throwOnFailure: true,
+        }),
       parent.lease,
     );
 
