@@ -100,15 +100,13 @@ export class GenerationCodec {
     value: unknown,
     seen = new Map<object, number>(),
     key?: string,
-    owner?: object,
+    inheritedOwner?: object,
   ): GenerationWireValue {
     if (value === null || (typeof value !== "object" && typeof value !== "function")) {
       return { kind: "value", value };
     }
     const resource = this.resources.has(value);
-    if (resource) {
-      owner = value;
-    }
+    const owner = resource ? value : inheritedOwner;
     const remote = this.remote.get(value);
     if (remote !== undefined) {
       return { kind: "remote", id: remote };
@@ -318,11 +316,15 @@ export class GenerationCodec {
           let disposing: Promise<void> | undefined;
           // Native leases consume custody before cleanup completes. A failed retry
           // could otherwise no-op and hide the original cleanup failure.
-          let nativeFailure: { error: unknown } | undefined;
+          let nativeFailure: Error | undefined;
+          const failNativeCleanup = (error: unknown): never => {
+            nativeFailure = error instanceof Error ? error : new Error(String(error));
+            throw nativeFailure;
+          };
           Object.defineProperty(result, "dispose", {
             value: () => {
               if (nativeFailure) {
-                throw nativeFailure.error;
+                throw nativeFailure;
               }
               if (disposed || disposing) {
                 return;
@@ -333,8 +335,7 @@ export class GenerationCodec {
                 try {
                   nativeRecovery?.dispose();
                 } catch (error) {
-                  nativeFailure = { error };
-                  throw error;
+                  failNativeCleanup(error);
                 }
               }
               disposed = true;
@@ -345,7 +346,7 @@ export class GenerationCodec {
           Object.defineProperty(result, "disposeAsync", {
             value: () => {
               if (nativeFailure) {
-                return Promise.reject(nativeFailure.error);
+                return Promise.reject(nativeFailure);
               }
               if (disposing) {
                 return disposing;
@@ -360,8 +361,7 @@ export class GenerationCodec {
                   try {
                     await nativeRecovery?.disposeAsync();
                   } catch (error) {
-                    nativeFailure = { error };
-                    throw error;
+                    failNativeCleanup(error);
                   }
                 }
                 disposed = true;
