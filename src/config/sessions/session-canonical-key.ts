@@ -15,6 +15,7 @@ import {
 } from "../../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
+  readSqliteDatabaseWriteRevision,
   publishSqliteDatabaseAdmission,
   revokeSqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissionKey,
@@ -350,9 +351,13 @@ export function readWithCanonicalSessionReaderContinuation<T>(
   return value;
 }
 
-export type ValidatedSessionMetadata = {
+type CanonicalSessionMetadata = {
   entries: Map<string, SessionEntry>;
   keys: string[];
+};
+
+export type ValidatedSessionMetadata = CanonicalSessionMetadata & {
+  writeRevision: number | undefined;
 };
 
 function isCanonicalSessionKey(sessionKey: string): boolean {
@@ -497,7 +502,7 @@ export function hasCanonicalSessionValidationProjection(database: {
 export function scanCanonicalSqliteSessionEntries(
   database: { agentId: string; db: EngineConnection; path?: string },
   visit?: (summary: { entry: SessionEntry; sessionKey: string }) => void,
-  metadata?: ValidatedSessionMetadata,
+  metadata?: CanonicalSessionMetadata,
 ): number {
   // Doctor visitors and full inventories retain complete validation and source JSON semantics.
   let count = 0;
@@ -601,7 +606,7 @@ export function assertCanonicalSqliteSessionKeysCurrent(
   }
   // A list already needs the whole inventory; hand its parsed rows through once.
   const metadata: ValidatedSessionMetadata | undefined = collectMetadata
-    ? { entries: new Map(), keys: [] }
+    ? { writeRevision: readSqliteDatabaseWriteRevision(database.db), entries: new Map(), keys: [] }
     : undefined;
   scanCanonicalSqliteSessionEntries(database, undefined, metadata);
   if (incremental) {

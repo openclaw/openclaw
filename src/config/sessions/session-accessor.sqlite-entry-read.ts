@@ -59,8 +59,7 @@ export function parseReadableSessionEntryData(
       : parseSessionEntryRow(row, projection);
   if (row.retained_window_id !== undefined) {
     // The guard and decoded entry share one statement snapshot, including cold handles.
-    validateCanonicalSessionRowEntry(row, parsed, "read");
-    return parsed;
+    return validateCanonicalSessionRowEntry(row, parsed, "read") ?? null;
   }
   if (parsed) {
     validateDeliveryCanonicalSessionEntry(row.session_key, parsed);

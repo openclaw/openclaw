@@ -3,6 +3,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type {
@@ -27,9 +28,15 @@ type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes"
 export function loadSessionEntrySnapshot(
   database: SessionEntryCacheDatabase,
   projection: "full" | "list" = "list",
-  metadata?: ValidatedSessionMetadata,
+  prepared?: ValidatedSessionMetadata,
   deferParticipants = false,
 ): SessionEntryCacheSnapshot {
+  // Only the same settled writer receipt can certify the parsed validation rows.
+  const metadata =
+    prepared?.writeRevision !== undefined &&
+    prepared.writeRevision === readSqliteDatabaseWriteRevision(database.db)
+      ? prepared
+      : undefined;
   const parsedEntries = metadata?.entries ?? new Map<string, SessionEntry>();
   const keys = metadata?.keys ?? [];
   // Stream raw JSON so a full read never holds both serialized and parsed store-wide payloads.
