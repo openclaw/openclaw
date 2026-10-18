@@ -169,7 +169,7 @@ export function prepareConfigWritePayload(
     snapshot.parsed,
     undefined,
     deps.homedir(),
-  ) as OpenClawConfig;
+  ) as OpenClawConfig; // SAFETY: validation established the root shape; tilde restoration only changes path strings.
   const stampedOutputConfig = stampConfigWriteMetadata(
     preserveDeferredPluginMigrationConfig({
       sourceConfig: snapshot.parsed,
