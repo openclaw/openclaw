@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { children, For, onCleanup, Show } from "solid-js";
+import { children, For, onCleanup, onSettled, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -77,12 +77,15 @@ export function LearnMoreLink(props: { url: string }) {
 }
 
 export function SettingsPageHeader(props: {
+  registerHeading?: (heading: HTMLHeadingElement) => () => void;
   title: JSX.Element;
   subtitle?: JSX.Element;
   actions?: JSX.Element;
   /** Keep title and subtitle together below floating shell chrome. */
   stacked?: boolean;
 }) {
+  let heading!: HTMLHeadingElement;
+  onSettled(() => props.registerHeading?.(heading));
   return (
     <ShellLayoutBoundary traits={{ toolbarHeader: !props.stacked }}>
       <section
@@ -92,7 +95,9 @@ export function SettingsPageHeader(props: {
         ]}
       >
         <div>
-          <h1 class="page-title">{props.title}</h1>
+          <h1 class="page-title" ref={(element) => (heading = element)}>
+            {props.title}
+          </h1>
           <Show when={props.subtitle}>
             <div class="page-subtitle">{props.subtitle}</div>
           </Show>

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import type { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
@@ -64,7 +64,7 @@ export function createSettingsStatus<T>(
   function capture() {
     const owner = context.gateway;
     // Mutation authority captures this connection once, then checks it at settlement.
-    const currentClient = untrack(client);
+    const currentClient = client();
     const captured = connectionKey();
     return () => {
       const current = connectionKey();
