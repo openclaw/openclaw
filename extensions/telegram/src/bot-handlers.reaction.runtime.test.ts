@@ -65,6 +65,25 @@ function buildTelegramConfig(overrides?: {
   } as OpenClawConfig;
 }
 
+function buildPrivateTopicConfig(overrides?: { requireTopic?: boolean }): OpenClawConfig {
+  return {
+    session: { dmScope: "per-channel-peer" },
+    channels: {
+      telegram: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        reactionNotifications: "all",
+        direct: {
+          "5678": {
+            ...(overrides?.requireTopic ? { requireTopic: true } : {}),
+            topics: { [String(FORUM_TOPIC_ID)]: { enabled: true, agentId: "topicbot" } },
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
 /**
  * Registers the real reaction handler against the real authorization runtime so
  * the test proves topic-scoped config lookup, not just the handler's own branch.
@@ -391,6 +410,35 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
     expect(runtimeLog).toHaveBeenCalledTimes(1);
     expect(String(runtimeLog.mock.calls[0]?.[0])).toContain("thread-context-unavailable");
+  });
+
+  it("routes a cached private-chat topic reaction to its DM topic session", async () => {
+    resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "dm", id: FORUM_TOPIC_ID });
+    enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
+    const handler = registerHandler(buildPrivateTopicConfig({ requireTopic: true }));
+    const context = forumReactionContext({ isForum: false, chatType: "private" });
+
+    await handler({
+      ...context,
+      messageReaction: {
+        ...context.messageReaction,
+        user: { id: 5678, first_name: "Bob", username: "bob_user" },
+      },
+    });
+
+    expect(resolveCachedMessageThreadSpec).toHaveBeenCalledWith({
+      chatId: 5678,
+      messageId: REACTED_MESSAGE_ID,
+    });
+    expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
+    const topicSessionKey = "agent:topicbot:telegram:direct:5678:thread:5678:77";
+    expect(systemEventOptions().sessionKey).toBe(topicSessionKey);
+    expect(peekSystemEventEntries(topicSessionKey)).toEqual([
+      expect.objectContaining({
+        text: `Telegram reaction added: ${FIRE_EMOJI} by Bob (@bob_user) on msg 100`,
+      }),
+    ]);
+    expect(peekSystemEventEntries("agent:topicbot:telegram:direct:5678")).toEqual([]);
   });
 
   it.each([false, true])(

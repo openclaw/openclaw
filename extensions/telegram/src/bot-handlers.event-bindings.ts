@@ -2,6 +2,7 @@ import type { ChatMember, ReactionTypeEmoji } from "grammy/types";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeAllowFrom } from "./bot-access.js";
@@ -18,7 +19,10 @@ import {
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
 import { resolveTelegramThreadSpec, type TelegramThreadSpec } from "./bot/helpers.js";
-import { resolveTelegramConversationRoute } from "./conversation-route.js";
+import {
+  resolveTelegramConversationRoute,
+  resolveTelegramTargetSession,
+} from "./conversation-route.js";
 import { evaluateTelegramGroupPolicyAccess } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
@@ -166,8 +170,9 @@ export function createTelegramEventBindings({
         const user = reaction.user;
         const senderId = user?.id != null ? String(user.id) : "";
         const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
+        const isPrivateChat = reaction.chat.type === "private";
         const isDirectMessagesChat = reaction.chat.is_direct_messages === true;
-        const isForum = !isDirectMessagesChat && reaction.chat.is_forum === true;
+        const isForum = isGroup && !isDirectMessagesChat && reaction.chat.is_forum === true;
         const authorizationCfg = telegramDeps.getRuntimeConfig();
         const authorizationTelegramCfg = resolveTelegramAccount({
           cfg: authorizationCfg,
@@ -224,6 +229,12 @@ export function createTelegramEventBindings({
             );
             return;
           }
+        } else if (isPrivateChat) {
+          const cachedThreadSpec = await resolveCachedMessageThreadSpec({ chatId, messageId });
+          recoveredThreadSpec =
+            cachedThreadSpec?.scope === "dm" && cachedThreadSpec.id !== undefined
+              ? cachedThreadSpec
+              : undefined;
         }
 
         const eventAuthContext = await resolveAuthorizedEventContext({
@@ -243,13 +254,13 @@ export function createTelegramEventBindings({
           return;
         }
 
-        // DM reactions cannot prove topic membership because Telegram omits the thread id.
+        // DM reactions recover topic membership from the cache; require an explicit topic when configured.
         if (!isGroup) {
           const requireTopic =
             eventAuthContext.groupConfig && "requireTopic" in eventAuthContext.groupConfig
               ? eventAuthContext.groupConfig.requireTopic
               : undefined;
-          if (requireTopic === true) {
+          if (requireTopic === true && eventAuthContext.dmThreadId == null) {
             logVerbose(
               `Blocked telegram reaction in DM ${chatId}: requireTopic=true but topic unknown for reactions`,
             );
@@ -257,7 +268,7 @@ export function createTelegramEventBindings({
           }
         }
 
-        const { route } = await resolveTelegramConversationRoute({
+        let { route } = await resolveTelegramConversationRoute({
           cfg: eventAuthContext.cfg,
           accountId,
           chatId,
@@ -266,6 +277,27 @@ export function createTelegramEventBindings({
           senderId,
           topicAgentId: eventAuthContext.topicConfig?.agentId,
         });
+        const recoveredDmThreadId =
+          recoveredThreadSpec?.scope === "dm" ? recoveredThreadSpec.id : undefined;
+        if (recoveredDmThreadId != null) {
+          const sessionKey = resolveTelegramTargetSession({
+            cfg: eventAuthContext.cfg,
+            route,
+            chatId,
+            isGroup,
+            senderId,
+            dmThreadId: recoveredDmThreadId,
+            botHasTopicsEnabled: true,
+          });
+          route = {
+            ...route,
+            sessionKey,
+            lastRoutePolicy: deriveLastRoutePolicy({
+              sessionKey,
+              mainSessionKey: route.mainSessionKey,
+            }),
+          };
+        }
 
         const senderName = user
           ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
