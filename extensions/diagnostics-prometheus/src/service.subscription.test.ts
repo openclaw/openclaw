@@ -40,6 +40,71 @@ it("exports trusted WebSocket event totals and the current operator socket count
   }
 });
 
+it("exports codec bytes separately and cumulative raw frame-size buckets", () => {
+  const metrics = createMetricsHarness();
+  const observation = {
+    type: "gateway.ws.event",
+    event: "chat",
+    count: 3,
+    bytes: 1_536,
+    frameBytes: {
+      "256": 0,
+      "512": 2,
+      "1024": 3,
+      "2048": 3,
+      "4096": 3,
+      "8192": 3,
+      "16384": 3,
+      "65536": 3,
+      "+Inf": 3,
+    },
+  } as const;
+  try {
+    metrics.record(observation);
+    metrics.record({ type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 600 });
+    metrics.record({
+      type: "gateway.ws.event",
+      event: "chat",
+      count: 0,
+      bytes: 0,
+      frameBytes: { "512": 0 },
+    });
+    metrics.record({
+      type: "gateway.ws.event",
+      event: "chat",
+      count: 1,
+      bytes: 70_000,
+      wireBytes: 700,
+      frameBytes: { "+Inf": 1 },
+    });
+    metrics.record({ type: "gateway.ws.event", event: "other", count: 1, bytes: 64 });
+    metrics.record({ ...observation, wireBytes: 999 }, untrusted);
+    const rendered = metrics.render();
+    expect(rendered).toContain('openclaw_gateway_ws_events_total{event="chat"} 4');
+    expect(rendered).toContain('openclaw_gateway_ws_event_bytes_total{event="chat"} 71536');
+    expect(rendered).toContain('openclaw_gateway_ws_event_wire_bytes_total{event="chat"} 1300');
+    expect(rendered).not.toContain('openclaw_gateway_ws_event_wire_bytes_total{event="other"}');
+    expect(rendered).not.toContain('openclaw_gateway_ws_event_frame_bytes{event="other"');
+    for (const [le, count] of [
+      ["256", 0],
+      ["512", 2],
+      ["1024", 3],
+      ["2048", 3],
+      ["4096", 3],
+      ["8192", 3],
+      ["16384", 3],
+      ["65536", 3],
+      ["+Inf", 4],
+    ]) {
+      expect(rendered).toContain(
+        `openclaw_gateway_ws_event_frame_bytes{event="chat",le="${le}"} ${count}`,
+      );
+    }
+  } finally {
+    metrics.stop();
+  }
+});
+
 it("exports session traffic attribution while keeping aggregate event labels unchanged", () => {
   const metrics = createMetricsHarness();
   try {

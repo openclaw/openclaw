@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, createEffect, createSignal, onCleanup } from "solid-js";
+import { For, createSignal, onCleanup } from "solid-js";
 import {
   validateApprovalHistoryResult,
   type ApprovalHistoryResult,
@@ -29,6 +29,7 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
@@ -164,44 +165,39 @@ export function ApprovalsPage() {
     revision();
     return state;
   };
-  createEffect(
-    () => context.gateway,
-    (gateway) => {
-      resetHistory(true);
-      state.gatewaySource = gateway;
-      applyGatewaySnapshot(gateway.snapshot);
-      // Gateway receipts retire history and grant reads before reconnect or access changes settle them.
-      const stopSnapshots = gateway.subscribe((snapshot) => {
-        if (state.gatewaySource === gateway && context.gateway === gateway) {
-          applyGatewaySnapshot(snapshot);
-        }
-      });
-      const stopEvents = gateway.subscribeEvents((event) => {
-        if (
-          state.gatewaySource !== gateway ||
-          context.gateway !== gateway ||
-          !state.approvalsAccess ||
-          !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals ||
-          !parseApprovalResolvedEvent(event.event, event.payload)
-        ) {
-          return;
-        }
-        state.historyRefreshPending = true;
-        if (state.loadKind === null) {
-          void loadPage(true);
-        }
-      });
-      return () => {
-        stopSnapshots();
-        stopEvents();
-        resetHistory(false);
-        state.gatewaySource = null;
-      };
+  let stopEvents: (() => void) | undefined;
+  useGatewayPage({
+    getGateway: () => context.gateway,
+    onSnapshot: ({ snapshot, initial, sourceChanged }) => {
+      if (initial || sourceChanged) {
+        stopEvents?.();
+        resetHistory(true);
+        const gateway = context.gateway;
+        state.gatewaySource = gateway;
+        stopEvents = gateway.subscribeEvents((event) => {
+          if (
+            state.gatewaySource !== gateway ||
+            context.gateway !== gateway ||
+            !state.approvalsAccess ||
+            !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals ||
+            !parseApprovalResolvedEvent(event.event, event.payload)
+          ) {
+            return;
+          }
+          state.historyRefreshPending = true;
+          if (state.loadKind === null) {
+            void loadPage(true);
+          }
+        });
+      }
+      applyGatewaySnapshot(snapshot);
     },
-  );
+  });
   onCleanup(() => {
     disposed = true;
+    stopEvents?.();
     resetHistory(false);
+    state.gatewaySource = null;
   });
 
   function resetHistory(clearData: boolean) {

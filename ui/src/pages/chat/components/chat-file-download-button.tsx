@@ -58,12 +58,10 @@ export function FileDownloadButton(props: {
         type="button"
         aria-label={label()}
         disabled={props.disabled || pending()}
-        ref={(button) =>
-          button.addEventListener("click", (event) => {
-            event.stopPropagation();
-            void download();
-          })
-        }
+        onClick={(event) => {
+          event.stopPropagation();
+          void download();
+        }}
       >
         <Icon name="download" />
       </button>

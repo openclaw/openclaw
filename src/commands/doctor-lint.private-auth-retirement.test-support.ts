@@ -7,7 +7,7 @@ import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite.js";
 import type { HealthCheck } from "../flows/health-checks.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { removeTempDirectoryAsync } from "../infra/sqlite-readonly-location-cleanup.js";
-import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
+import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -43,7 +43,10 @@ export async function verifyDoctorLintPrivateAuthRetirement(
         using database = openNodeSqliteDatabase(filename);
         database.exec("CREATE TABLE fixture AS SELECT 'unchanged' AS value");
       }
-      const reader = acquireAuthProfileReadDatabase(filename, openSqliteReadOnlyDatabase);
+      const reader = acquireAuthProfileReadDatabase(
+        filename,
+        sqliteSnapshotSource.openSqliteReadOnlyDatabase,
+      );
       if (reader.status !== "readable") {
         throw new Error("auth reader fixture is not readable");
       }
@@ -60,6 +63,8 @@ export async function verifyDoctorLintPrivateAuthRetirement(
     const removalErrors: unknown[] = [];
     let unregister: (() => void) | undefined;
     let restoreAuthClose: (() => void) | undefined;
+    let cleanupFork: (() => Promise<boolean>) | undefined;
+    let disposalRefused = false;
     let denyWriter = mode.startsWith("writer-close");
     const cleanupFailure = mode.startsWith("cleanup");
     const readerFailure = mode.startsWith("reader-close");
@@ -117,6 +122,26 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       return readerFailure ? [detectorFinding] : [];
     }
     installHealthChecks([{ id: checkId, kind: "core", description: checkId, detect }]);
+    // The fork's native child owns an outer staging root beyond Doctor's private root.
+    // Capture its disposal for every failure mode so finally joins that exact owner.
+    const fork = sqliteSnapshotSource.forkSqlitePrivateSnapshot;
+    const snapshot = vi
+      .spyOn(sqliteSnapshotSource, "forkSqlitePrivateSnapshot")
+      .mockImplementation(async (...args) => {
+        const prepared = await fork(...args);
+        cleanupFork = prepared.cleanupAsync;
+        if (windows || !cleanupFailure) {
+          return prepared;
+        }
+        // Native-child payload retirement is outside this host's fs mock.
+        return {
+          ...prepared,
+          async cleanupAsync() {
+            disposalRefused = true;
+            return false;
+          },
+        };
+      });
     const remove = fs.promises.rm;
     const removal = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
       const prefix = `${String(target)}${path.sep}`;
@@ -188,6 +213,9 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       expect(report.warnings ?? []).toMatchObject(
         cleanupFailure ? [{ requirement: "temporary-snapshot-cleanup", severity: "warning" }] : [],
       );
+      if (!windows && cleanupFailure) {
+        expect(disposalRefused).toBe(true);
+      }
       expect(auth?.isOpen).toBe(readerFailure);
       if (readerFailure || cleanupFailure) {
         expect([privateState?.db.isOpen, privateRead?.database.db.isOpen]).toEqual([false, false]);
@@ -210,6 +238,7 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       stdout.mockRestore();
       removal.mockRestore();
       restoreAuthClose?.();
+      snapshot.mockRestore();
       sqliteOpen.mockReset();
       blocker?.close();
       privateRead?.close();
@@ -218,7 +247,9 @@ export async function verifyDoctorLintPrivateAuthRetirement(
         closeAuthProfileReadPool({ kind: "root", rootPath });
         await closeOpenClawStateDatabaseByPathAsync(privateState.path);
         // Retained snapshots still own native staging tokens after injected failures.
-        expect(await removeTempDirectoryAsync(path.dirname(rootPath))).toBe(true);
+        expect(
+          await (cleanupFork ? cleanupFork() : removeTempDirectoryAsync(path.dirname(rootPath))),
+        ).toBe(true);
       }
       unregister?.();
       closeAuthProfileReadPool({ kind: "root", rootPath: state.root });

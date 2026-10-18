@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onSettled } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 import type { CronJob, CronScratchGetResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../../app/operator-access.ts";
@@ -245,6 +245,12 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     preparePanel();
     eventSource.sync();
     notify?.();
+    // The state writer owns route admission; its DOM requests follow this publication's commit.
+    onSettled(() => {
+      if (active) {
+        afterRender();
+      }
+    });
   }
 
   function resetGatewayState(snapshot: ApplicationContext["gateway"]["snapshot"]) {
@@ -346,15 +352,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   }
 
   function afterRender() {
+    routeSelection.resolveLoadedSession(cron, selectJob);
     const routeData = routeSelection.target;
     const client = cron.client;
-    if (routeData?.session && cron.cronJobsSnapshotRevision && !cron.cronLoading) {
-      routeSelection.target = null;
-      const [job] = cron.cronJobs;
-      if (cron.cronJobsTotal === 1 && job) {
-        selectJob(job);
-      }
-    }
     if (routeData?.jobId && client && cron.connected && !routeSelection.requested) {
       void runCronTask((current) =>
         routeSelection.resolve(
@@ -723,8 +723,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       }),
     onViewRunTranscript: (entry, trigger) => void runTranscript.open(entry, trigger),
   } satisfies Pick<CronProps, Extract<keyof CronProps, `on${string}`>>;
-  // Commit the cron owner's pending scroll/focus requests to the rendered DOM.
-  createEffect(projection.revision, afterRender);
   return {
     context,
     inventories: { agents, channels, runtimeConfig },

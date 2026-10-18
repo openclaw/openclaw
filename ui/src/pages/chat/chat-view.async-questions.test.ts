@@ -185,11 +185,11 @@ it("reads confirmed discard from the outbox before the next queue frame arrives"
     }),
     getQueue: () => queue,
   };
-  const before = createChatViewFrame(props);
+  const before = createChatViewFrame(props, () => undefined);
   expect(before.asyncQuestions.pending).toEqual([]);
   queue = [];
   before.asyncQuestions.discard(row);
-  const after = createChatViewFrame(props);
+  const after = createChatViewFrame(props, () => undefined);
   expect(after.asyncQuestions.pending.map((question) => question.itemId)).toEqual(["audience"]);
   expect(after.asyncQuestions.delivery.size).toBe(0);
   expect(props.onAsyncQuestionSubmit).not.toHaveBeenCalled();

@@ -46,6 +46,32 @@ function deliveredMessage(id: string, nativeId = "stored-" + id) {
 }
 
 describe("outbox receipt attention", () => {
+  it.each(["complete", "omitted"])(
+    "settles a background outbox from canonical history after a %s roster message body",
+    async (body) => {
+      const host = attentionHost(["delivered"], () => ({
+        sessionId,
+        sessionInfo: row(sessionKey, { sessionId, status: "done", hasActiveRun: false }),
+        messages: [deliveredMessage("delivered")],
+      }));
+      await resumeStoredChatOutboxes(host, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey,
+          agentId: "main",
+          messageId: "stored-delivered",
+          messageSeq: 2,
+          runId: "run-delivered",
+          ...(body === "complete" ? { message: deliveredMessage("delivered") } : {}),
+        },
+      });
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      expect(requestCalls(host.request, "chat.history")).toHaveLength(1);
+      expect(requestCalls(host.request, "chat.send")).toEqual([]);
+    },
+  );
+
   it.each(["receipt", "legacy"] as const)(
     "retires delivered attention behind an uncertain FIFO head using %s proof",
     async (proof) => {

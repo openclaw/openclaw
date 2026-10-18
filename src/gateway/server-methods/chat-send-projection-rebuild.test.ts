@@ -1,10 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import {
   appendTranscriptMessage,
@@ -18,7 +14,6 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
-import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getSessionControllerWorkCount } from "../../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
@@ -26,6 +21,10 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
+import {
+  holdSessionWriter,
+  observeChatReservation,
+} from "./chat-send-admission-fixtures.test-support.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import type { RespondFn } from "./types.js";
 
@@ -38,6 +37,7 @@ async function createRebuildingFixture() {
     active: false,
     persistDuringDispatch: true,
   });
+  const runId = fixture.params.idempotencyKey;
   await appendTranscriptMessage(fixture.scope, {
     eventId: "current-leaf",
     message: { role: "assistant", content: "Existing response.", timestamp: 2 },
@@ -46,34 +46,25 @@ async function createRebuildingFixture() {
   const databaseOptions = toDatabaseOptions(resolveSqliteScope(fixture.scope));
   await waitForSessionTranscriptIndexReconcile(databaseOptions);
   const before = loadTranscriptEventsSync(fixture.scope);
-  const beforeSession = loadSessionEntry(fixture.scope);
-  const markRebuilding = () => {
-    // Fault injection changes real projection state, not the reader or error classifier.
+  // Fault injection changes real projection state, not the reader or error classifier.
+  const markRebuilding = () =>
     openOpenClawAgentDatabase(databaseOptions)
       .db.prepare(
         "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
       )
       .run(fixture.scope.sessionId);
-  };
   const assertNoDispatch = async () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     expect(rpcSourceTesting.size).toBe(0);
-    expect(
-      fixture.context.dedupe.has(pendingChatSendDedupeKey(fixture.params.idempotencyKey)),
-    ).toBe(false);
+    expect(fixture.context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
     expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
     expect(loadTranscriptEventsSync(fixture.scope)).toEqual(before);
     expect(getSessionControllerWorkCount()).toBe(0);
   };
-  const send = async () => {
+  const send = async (method = "chat.send", params: unknown = fixture.params) => {
     const respond = vi.fn<RespondFn>();
     await handleGatewayRequest({
-      req: {
-        type: "req",
-        id: fixture.params.idempotencyKey,
-        method: "chat.send",
-        params: fixture.params,
-      },
+      req: { type: "req", id: runId, method, params },
       client: fixture.client,
       context: fixture.context,
       respond,
@@ -85,8 +76,7 @@ async function createRebuildingFixture() {
     ...fixture,
     send,
     databaseOptions,
-    before,
-    beforeSession,
+    beforeSession: loadSessionEntry(fixture.scope),
     markRebuilding,
     assertNoDispatch,
     async [Symbol.asyncDispose]() {
@@ -107,166 +97,124 @@ function expectRebuildingResponse(respond: ReturnType<typeof vi.fn<RespondFn>>) 
   expect(JSON.stringify(respond.mock.calls)).not.toContain("cloud-session");
 }
 
-describe("registered chat.send during SQLite projection rebuild", () => {
-  it("rejects without mutation, then admits the same safe retry exactly once after reconciliation", async () => {
-    await using fixture = await createRebuildingFixture();
-    fixture.markRebuilding();
-    const rejected = await fixture.send();
-    expectRebuildingResponse(rejected);
-    await fixture.assertNoDispatch();
-    expect(loadSessionEntry(fixture.scope)).toEqual(fixture.beforeSession);
-    await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
-    const accepted = await fixture.send();
-    expect(accepted.mock.calls[0]?.[0]).toBe(true);
-    expect(accepted.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    await fixture.finishDispatch();
-    const after = loadTranscriptEventsSync(fixture.scope);
-    expect(
-      after.filter(
-        (event) =>
-          isRecord(event) &&
-          event.type === "message" &&
-          isRecord(event.message) &&
-          event.message.role === "user",
-      ),
-    ).toHaveLength(2);
-    const replay = await fixture.send();
-    expect(replay.mock.calls[0]?.[0]).toBe(true);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-    expect(loadTranscriptEventsSync(fixture.scope)).toEqual(after);
-  });
+it("rejects without mutation, then admits the same safe retry exactly once after reconciliation", async () => {
+  await using fixture = await createRebuildingFixture();
+  fixture.markRebuilding();
+  expectRebuildingResponse(await fixture.send());
+  await fixture.assertNoDispatch();
+  expect(loadSessionEntry(fixture.scope)).toEqual(fixture.beforeSession);
+  await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
+  const accepted = await fixture.send();
+  expect(accepted.mock.calls[0]).toMatchObject({ 0: true, 1: { status: "started" } });
+  await fixture.finishDispatch();
+  const after = loadTranscriptEventsSync(fixture.scope);
+  expect(
+    after.filter(
+      (event) =>
+        isRecord(event) &&
+        event.type === "message" &&
+        isRecord(event.message) &&
+        event.message.role === "user",
+    ),
+  ).toHaveLength(2);
+  const replay = await fixture.send();
+  expect(replay.mock.calls[0]?.[0]).toBe(true);
+  expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+  expect(loadTranscriptEventsSync(fixture.scope)).toEqual(after);
+});
 
-  it.each(["active leaf", "settings"] as const)(
-    "still rejects changed %s on the retry",
-    async (change) => {
-      await using fixture = await createRebuildingFixture();
-      fixture.params.expectedPermissionMode = null;
+it.each(["active leaf", "settings"] as const)(
+  "still rejects changed %s on the retry",
+  async (change) => {
+    await using fixture = await createRebuildingFixture();
+    fixture.params.expectedPermissionMode = null;
+    fixture.markRebuilding();
+    expectRebuildingResponse(await fixture.send());
+    await fixture.assertNoDispatch();
+    await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
+    if (change === "active leaf") {
+      fixture.params.expectedLeafEntryId = "obsolete-leaf";
+    } else {
+      await patchSessionEntryCore(fixture.scope, () => ({ permissionMode: "full" }));
+    }
+    const response = await fixture.send();
+    expect(response.mock.calls[0]?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: {
+        reason: change === "active leaf" ? "active-leaf-changed" : "session-settings-changed",
+      },
+    });
+    await fixture.assertNoDispatch();
+  },
+);
+
+it.for(["expired", "removed", "lifecycle rotation", "chat abort"] as const)(
+  "never revives a %s reservation while projection is rebuilding",
+  async (change, { signal }) => {
+    await using fixture = await createRebuildingFixture();
+    const runId = fixture.params.idempotencyKey;
+    const writer = holdSessionWriter(fixture.scope.storePath);
+    let request: ReturnType<typeof fixture.send> | undefined;
+    try {
+      await writer.entered;
       fixture.markRebuilding();
-      expectRebuildingResponse(await fixture.send());
+      let key: string;
+      {
+        using reservation = observeChatReservation(fixture.context, runId);
+        key = reservation.key;
+        request = fixture.send();
+        await withinTest(reservation.wait(request), signal);
+        expect(fixture.context.dedupe.has(key)).toBe(true);
+      }
+      if (change === "removed") {
+        fixture.context.dedupe.delete(key);
+      } else if (change === "expired") {
+        const reservation = fixture.context.dedupe.get(key);
+        if (!reservation || !isRecord(reservation.payload)) {
+          throw new Error("Expected a live pending chat reservation");
+        }
+        fixture.context.dedupe.set(key, {
+          ...reservation,
+          payload: { ...reservation.payload, expiresAtMs: 1 },
+        });
+      } else if (change === "lifecycle rotation") {
+        rotateAgentEventLifecycleGeneration();
+      } else {
+        const abortResponse = await fixture.send("chat.abort", {
+          sessionKey: fixture.scope.sessionKey,
+          runId,
+        });
+        expect(abortResponse.mock.calls[0]?.[1]).toMatchObject({ aborted: true });
+      }
+      writer.release();
+      await writer.finished;
+      const response = await request;
+      expect(JSON.stringify(response.mock.calls)).not.toContain("cloud-session");
       await fixture.assertNoDispatch();
       await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
-      if (change === "active leaf") {
-        fixture.params.expectedLeafEntryId = "obsolete-leaf";
-      } else {
-        await patchSessionEntryCore(fixture.scope, () => ({ permissionMode: "full" }));
-      }
-      const response = await fixture.send();
-      expect(response.mock.calls[0]?.[2]).toMatchObject({
-        code: "INVALID_REQUEST",
-        details: {
-          reason: change === "active leaf" ? "active-leaf-changed" : "session-settings-changed",
-        },
-      });
+      const aborted = { status: "timeout", summary: "aborted" };
+      expect(response.mock.calls[0]?.[1]).toMatchObject(aborted);
+      const retry = await fixture.send();
+      expect(retry).toHaveBeenCalledExactlyOnceWith(
+        true,
+        expect.objectContaining(aborted),
+        undefined,
+        { cached: true },
+      );
+      fixture.params.message = "A different input must not reuse the aborted request.";
+      expect(await fixture.send()).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          details: { reason: "chat-request-conflict" },
+        }),
+      );
       await fixture.assertNoDispatch();
-    },
-  );
-
-  it.for(["expired", "removed", "lifecycle rotation", "chat abort"] as const)(
-    "never revives a %s reservation while projection is rebuilding",
-    async (change, { signal }) => {
-      await using fixture = await createRebuildingFixture();
-      const entered = createDeferred();
-      const release = createDeferred();
-      const writer = runExclusiveSessionStoreWrite(fixture.scope.storePath, async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      let request: ReturnType<typeof fixture.send> | undefined;
-      try {
-        await entered.promise;
-        fixture.markRebuilding();
-        const key = pendingChatSendDedupeKey(fixture.params.idempotencyKey);
-        const reserved = createDeferred();
-        const setDedupe = fixture.context.dedupe.set.bind(fixture.context.dedupe);
-        // Observe real admission while the writer gate prevents it from completing.
-        const observeReservation = vi
-          .spyOn(fixture.context.dedupe, "set")
-          .mockImplementation((pendingKey, entry) => {
-            const result = setDedupe(pendingKey, entry);
-            if (pendingKey === key) {
-              reserved.resolve();
-            }
-            return result;
-          });
-        try {
-          request = fixture.send();
-          await withinTest(
-            awaitGateBeforeSettlement(
-              reserved.promise,
-              request,
-              "chat.send settled before its pending reservation",
-            ),
-            signal,
-          );
-          expect(fixture.context.dedupe.has(key)).toBe(true);
-        } finally {
-          observeReservation.mockRestore();
-        }
-        if (change === "removed") {
-          fixture.context.dedupe.delete(key);
-        } else if (change === "expired") {
-          const reservation = fixture.context.dedupe.get(key);
-          if (!reservation || !isRecord(reservation.payload)) {
-            throw new Error("Expected a live pending chat reservation");
-          }
-          fixture.context.dedupe.set(key, {
-            ...reservation,
-            payload: { ...reservation.payload, expiresAtMs: 1 },
-          });
-        } else if (change === "lifecycle rotation") {
-          rotateAgentEventLifecycleGeneration();
-        } else {
-          const abortResponse = vi.fn<RespondFn>();
-          await handleGatewayRequest({
-            req: {
-              type: "req",
-              id: "cancel-pending",
-              method: "chat.abort",
-              params: {
-                sessionKey: fixture.scope.sessionKey,
-                runId: fixture.params.idempotencyKey,
-              },
-            },
-            client: fixture.client,
-            context: fixture.context,
-            respond: abortResponse,
-            isWebchatConnect: () => true,
-          });
-          expect(abortResponse.mock.calls[0]?.[1]).toMatchObject({ aborted: true });
-        }
-        release.resolve();
-        await writer;
-        const response = await request;
-        expect(JSON.stringify(response.mock.calls)).not.toContain("cloud-session");
-        await fixture.assertNoDispatch();
-        await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
-        expect(response.mock.calls[0]?.[1]).toMatchObject({
-          status: "timeout",
-          summary: "aborted",
-        });
-        const retry = await fixture.send();
-        expect(retry).toHaveBeenCalledExactlyOnceWith(
-          true,
-          expect.objectContaining({ status: "timeout", summary: "aborted" }),
-          undefined,
-          { cached: true },
-        );
-        fixture.params.message = "A different input must not reuse the aborted request.";
-        const conflict = await fixture.send();
-        expect(conflict).toHaveBeenCalledExactlyOnceWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            details: { reason: "chat-request-conflict" },
-          }),
-        );
-        await fixture.assertNoDispatch();
-      } finally {
-        release.resolve();
-        await writer;
-        await request;
-      }
-    },
-  );
-});
+    } finally {
+      writer.release();
+      await writer.finished;
+      await request;
+    }
+  },
+);

@@ -20,7 +20,7 @@ import {
   resolveLiveToolResultMaxChars,
 } from "../tool-result-limits.js";
 import { readCacheTtlCheckpoint } from "./cache-ttl-checkpoint.js";
-import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
+import * as truncationNotice from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import {
   recordToolResultPromptProjection,
@@ -307,7 +307,7 @@ type ToolResultTruncationOptions = {
   minimumRawWeight?: number;
 };
 
-const DEFAULT_SUFFIX = formatContextLimitTruncationNotice;
+const DEFAULT_SUFFIX = truncationNotice.formatContextLimitTruncationNotice;
 const COMPACT_RECOVERY_SUFFIX = (truncatedChars: number) =>
   `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; narrow args]`;
 const AGGREGATE_ELISION_MARKER =
@@ -519,7 +519,7 @@ export function truncateToolResultMessage(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
-  const suffixFactory = options.suffix ?? DEFAULT_SUFFIX;
+  const suffixFactory = options.suffix ?? truncationNotice.forMessage(msg);
   const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
   const minKeepChars = resolveEffectiveMinKeepChars(maxChars, options, suffixFactory);
   const content = (msg as { content?: unknown }).content;

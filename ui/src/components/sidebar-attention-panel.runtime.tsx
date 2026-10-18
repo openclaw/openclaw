@@ -1,4 +1,4 @@
-import { createMemo, For, Match, onCleanup, Show, Switch, untrack } from "solid-js";
+import { createMemo, For, Match, onCleanup, onSettled, Show, Switch } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
@@ -8,6 +8,7 @@ import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway, projectMentions, projectOverlays } from "../lib/reactive/application.ts";
+import { useApplication } from "../lib/reactive/context.ts";
 import {
   projectAgents,
   projectAgentIdentity,
@@ -23,6 +24,12 @@ import {
   type SidebarAttentionItem,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
+import {
+  SidebarAttentionFocusContext,
+  type SidebarAttentionFocus,
+  type SidebarAttentionFocusKind,
+} from "./sidebar-attention-focus.ts";
+import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 import "../styles/hub-tabs.css";
 import {
   renderSidebarApprovalItem as SidebarApprovalItem,
@@ -45,8 +52,6 @@ export type SidebarAttentionPanelPosition = { left: number } & (
   | { anchor: "bottom"; bottom: number }
 );
 export type SidebarAttentionPanelParams = {
-  context: ApplicationContext;
-  mentions: MentionsCapability;
   entries: readonly SidebarInboxEntry[];
   onApprovalDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
   onClose: () => void;
@@ -56,6 +61,7 @@ export type SidebarAttentionPanelParams = {
   onOpen: (item: SidebarAttentionItem) => void;
   onScroll: () => void;
   listRef?: (element: HTMLDivElement | null) => void;
+  focusRef?: (registry: SidebarAttentionFocus | null) => void;
   onSelectTab: (tab: IssueTab) => void;
   overflowAbove: boolean;
   overflowBelow: boolean;
@@ -64,9 +70,55 @@ export type SidebarAttentionPanelParams = {
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
 };
 
+/** The mounted Inbox owns its controls; DOM order can change when keyed rows move. */
+function createSidebarAttentionFocus(root: () => HTMLElement): SidebarAttentionFocus {
+  const targets = new Map<HTMLElement, SidebarAttentionFocusKind>();
+  const ordered = (row: boolean) =>
+    [...targets]
+      .filter(
+        ([element, kind]) =>
+          element.isConnected &&
+          root().contains(element) &&
+          (row ? kind !== "control" : kind !== "row-only"),
+      )
+      .map(([element]) => element)
+      .toSorted((left, right) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      );
+  return {
+    ref(kind = "control") {
+      let element: HTMLElement | undefined;
+      onSettled(() => {
+        if (!element) {
+          return undefined;
+        }
+        const target = element;
+        targets.set(target, kind);
+        return () => targets.delete(target);
+      });
+      return (target) => {
+        element = target;
+      };
+    },
+    rows: () => ordered(true),
+    controls: () =>
+      ordered(false).filter((element) => {
+        const closedDetails = element.closest("details:not([open])");
+        const insideSummary =
+          element.tagName === "SUMMARY" || Boolean(element.parentElement?.closest("summary"));
+        return (
+          !element.hasAttribute("disabled") &&
+          !element.closest("[hidden]") &&
+          (!closedDetails || insideSummary)
+        );
+      }),
+  };
+}
+
 function SidebarInboxItem(props: {
   entry: SidebarInboxEntry;
   panel: SidebarAttentionPanelParams;
+  mentions: MentionsCapability;
   readContext: () => ApplicationContext;
   isMentionDismissing: (id: string) => boolean;
 }) {
@@ -102,7 +154,6 @@ function SidebarInboxItem(props: {
         {(entry) => (
           <SidebarOutboxItem
             entry={entry()}
-            context={props.readContext()}
             onNavigate={(route, options) => props.panel.onNavigate(route, options)}
           />
         )}
@@ -140,7 +191,7 @@ function SidebarInboxItem(props: {
             mention={entry().mention}
             context={props.readContext()}
             dismissing={props.isMentionDismissing(entry().mention.id)}
-            onDismiss={() => void props.panel.mentions.dismiss([entry().mention.id])}
+            onDismiss={() => void props.mentions.dismiss([entry().mention.id])}
             onNavigate={(route, options) => props.panel.onNavigate(route, options)}
           />
         )}
@@ -196,19 +247,26 @@ function inboxEntryIdentity(
   return entry satisfies never;
 }
 
-export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
+export function SidebarAttentionPanel(
+  props: SidebarAttentionPanelParams,
+  context: ApplicationContext = useApplication(),
+  mentionSource: MentionsCapability = context.sidebarAttention.activate(SidebarAttentionStoreOwner),
+) {
   onCleanup(() => props.listRef?.(null));
-  // These capability owners belong to this panel's lifetime; a new panel binds new owners.
-  const initialContext = untrack(() => props.context);
-  const initialMentions = untrack(() => props.mentions);
-  const mentions = projectMentions(initialMentions);
-  const gateway = projectGateway(initialContext.gateway);
-  const overlays = initialContext.overlays && projectOverlays(initialContext.overlays);
-  const agents = initialContext.agents && projectAgents(initialContext.agents);
-  const sessions = initialContext.sessions && projectSessions(initialContext.sessions);
+  let panel!: HTMLElement;
+  const focus = createSidebarAttentionFocus(() => panel);
+  onSettled(() => {
+    props.focusRef?.(focus);
+    return () => props.focusRef?.(null);
+  });
+  const mentions = projectMentions(mentionSource);
+  const gateway = projectGateway(context.gateway);
+  const overlays = context.overlays && projectOverlays(context.overlays);
+  const agents = context.agents && projectAgents(context.agents);
+  const sessions = context.sessions && projectSessions(context.sessions);
   const identities =
-    initialContext.agentIdentity &&
-    projectAgentIdentity({ identities: initialContext.agentIdentity, agentId: null });
+    context.agentIdentity &&
+    projectAgentIdentity({ identities: context.agentIdentity, agentId: null });
   const visibleEntries = createMemo(() =>
     props.entries.filter((entry) => sidebarInboxEntryMatchesTab(entry, props.selectedTab)),
   );
@@ -248,7 +306,7 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
     agents?.revision();
     sessions?.revision();
     identities?.revision();
-    return initialContext;
+    return context;
   };
   const renderedEntries = createMemo(() => {
     const currentGateway = gateway.read();
@@ -262,7 +320,7 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
     }));
   });
   return (
-    <>
+    <SidebarAttentionFocusContext value={focus}>
       <button
         type="button"
         class="sidebar-issues-panel__backdrop"
@@ -271,6 +329,7 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
       />
       <openclaw-menu-surface>
         <section
+          ref={(element) => (panel = element)}
           id="sidebar-issues-panel"
           class="sidebar-issues-panel"
           role="dialog"
@@ -289,6 +348,7 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
             </h2>
             <div class="sidebar-issues-panel__header-actions">
               <button
+                ref={focus.ref()}
                 type="button"
                 class="btn btn--xs btn--ghost sidebar-issues-panel__dismiss-shown"
                 style={hasVisibleDismissals() ? undefined : "visibility:hidden"}
@@ -299,7 +359,7 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
                     props.onDismiss(dismissal);
                   }
                   if (mentionDismissals().length > 0) {
-                    void props.mentions.dismiss(mentionDismissals());
+                    void mentionSource.dismiss(mentionDismissals());
                   }
                 }}
               >
@@ -307,9 +367,10 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
               </button>
               <openclaw-tooltip prop:content={t("attention.mentions.notifications")}>
                 <a
+                  ref={focus.ref()}
                   class="sidebar-brand__icon"
                   aria-label={t("attention.mentions.notifications")}
-                  href={pathForRoute("notifications", props.context.basePath)}
+                  href={pathForRoute("notifications", context.basePath)}
                   onClick={(event) => {
                     if (!shouldHandleNavigationClick(event)) {
                       return;
@@ -322,6 +383,7 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
                 </a>
               </openclaw-tooltip>
               <button
+                ref={focus.ref()}
                 type="button"
                 class="sidebar-brand__icon sidebar-issues-panel__mobile-close"
                 aria-label={t("common.close")}
@@ -331,6 +393,7 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
               </button>
             </div>
           </header>
+          {/* Header controls and the list bound the tablist, so its tabs are never wrap endpoints. */}
           <HubTabs
             id="sidebar-issues"
             active={props.selectedTab}
@@ -347,7 +410,7 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
           />
           <div class="sidebar-issues-panel__list-wrap">
             <div
-              ref={(element) => props.listRef?.(element)}
+              ref={[focus.ref(), (element) => props.listRef?.(element)]}
               id="sidebar-issues-tabpanel"
               class="sidebar-issues-panel__list"
               role="tabpanel"
@@ -369,10 +432,11 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
                   <Show when={mentions.read().error !== null}>
                     <span>{mentions.read().error}</span>
                     <button
+                      ref={focus.ref()}
                       type="button"
                       class="sidebar-issues-panel__action"
                       disabled={mentions.read().phase === "loading"}
-                      onClick={() => void props.mentions.refresh()}
+                      onClick={() => void mentionSource.refresh()}
                     >
                       {t("attention.mentions.refresh")}
                     </button>
@@ -397,6 +461,7 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
                   <SidebarInboxItem
                     entry={row().entry}
                     panel={props}
+                    mentions={mentionSource}
                     readContext={readContext}
                     isMentionDismissing={(id) => mentions.read().dismissing.includes(id)}
                   />
@@ -421,6 +486,6 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
           </Show>
         </section>
       </openclaw-menu-surface>
-    </>
+    </SidebarAttentionFocusContext>
   );
 }

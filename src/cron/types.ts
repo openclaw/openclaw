@@ -211,7 +211,7 @@ export type CronJobExecutionResult = CronRunOutcome &
     triggerEval?: CronTriggerEvalOutcome;
   };
 
-/** One run's requested delay before the same paced job runs again. */
+/** One run's requested delay before the same paced job or one-shot continuation runs again. */
 export type CronNextCheckProposal = {
   delayMs: number;
 };
@@ -407,6 +407,11 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {
+  /** Original authenticated source for a same-conversation continuation, never a public grant. */
+  operatorSource?: {
+    source: import("../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
+    executionRevision: string;
+  };
   /** Captured inference owner; private and independent of scheduled tool authority. */
   inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
   /** Creation-bound destination for isolated results when no external route exists. */

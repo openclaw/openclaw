@@ -3,6 +3,8 @@ type UsageHeatmapDay = {
   tokens: number;
   /** 0 = no activity, 1-4 = nonzero-quartile intensity buckets. */
   level: 0 | 1 | 2 | 3 | 4;
+  /** An interrupted response that day leaves its recorded tokens as a lower bound. */
+  partial: boolean;
 };
 
 type UsageHeatmapWeek = {
@@ -16,7 +18,11 @@ export type UsageHeatmap = {
   monthLabels: string[];
 };
 
-type DailyTokensEntry = { date: string; totalTokens: number };
+type DailyTokensEntry = {
+  date: string;
+  totalTokens: number;
+  usageReport?: { state: "available" | "unavailable" };
+};
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_HEATMAP_DAYS = 52 * 7;
@@ -65,6 +71,9 @@ export function buildUsageHeatmap(
   const endMs = dateToUtcNoon(rangeEndDate);
   const startMs = Math.max(dateToUtcNoon(rangeStartDate), endMs - (MAX_HEATMAP_DAYS - 1) * DAY_MS);
   const tokensByDate = new Map(daily.map((entry) => [entry.date, entry.totalTokens]));
+  const partialDates = new Set(
+    daily.filter((entry) => entry.usageReport?.state === "unavailable").map((entry) => entry.date),
+  );
   const nonZero = daily
     .filter((entry) => {
       const entryMs = dateToUtcNoon(entry.date);
@@ -89,7 +98,12 @@ export function buildUsageHeatmap(
       }
       const date = new Date(dayMs).toISOString().slice(0, 10);
       const tokens = tokensByDate.get(date) ?? 0;
-      days.push({ date, tokens, level: levelFor(tokens, thresholds) });
+      days.push({
+        date,
+        tokens,
+        level: levelFor(tokens, thresholds),
+        partial: partialDates.has(date),
+      });
     }
     weeks.push({ days });
     const firstVisibleDay = days.find((day): day is UsageHeatmapDay => day !== null);

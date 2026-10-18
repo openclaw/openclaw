@@ -25,14 +25,16 @@ import {
   buildStatusSystemEventsTrailer,
   statusHealthColumns,
 } from "./status.command-sections.js";
+import type { StatusScanResult } from "./status.scan-result.ts";
 import { formatUpdateAvailableHint } from "./status.update.js";
 import { shortenText } from "./text-format.js";
 
 export async function buildStatusCommandReportLines(
-  params: Omit<
+  input: Omit<
     Parameters<typeof buildStatusCommandOverviewRows>[0],
     "backupFreshness" | "osLabel"
   > & {
+    publish?: StatusScanResult["publish"];
     opts: { deep?: boolean; verbose?: boolean };
     osSummary: ReturnType<typeof resolveOsSummary>;
     securityAudit?: SecurityAuditReport;
@@ -51,16 +53,20 @@ export async function buildStatusCommandReportLines(
     tableWidth: number;
   },
 ) {
+  const databaseEngines = await resolveStatusDatabaseEngines(
+    input.surface.cfg,
+    input.summary.databaseStores,
+  );
+  const backupFreshness = await readBackupRunFreshness(input.env);
+  const published = input.publish?.();
+  const params = {
+    ...input,
+    ...published,
+    surface: { ...input.surface, ...published, databaseEngines },
+  };
   const overviewRows = buildStatusCommandOverviewRows({
     ...params,
-    surface: {
-      ...params.surface,
-      databaseEngines: await resolveStatusDatabaseEngines(
-        params.surface.cfg,
-        params.summary.databaseStores,
-      ),
-    },
-    backupFreshness: await readBackupRunFreshness(params.env),
+    backupFreshness,
     osLabel: params.osSummary.label,
   });
 
