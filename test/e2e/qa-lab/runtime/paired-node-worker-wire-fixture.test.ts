@@ -1,6 +1,6 @@
 import "../../../../src/test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayClient, type GatewayClientOptions } from "../../../../src/gateway/client.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
@@ -74,6 +74,34 @@ vi.mock("../../../../src/node-host/node-worker-supervisor.js", () => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
+
+function workspace(reconciling?: boolean) {
+  return { session: { placement: { state: "active", workspaceResultReconciling: reconciling } } };
+}
+
+function settlementFixture() {
+  const settlement = createWireWorkspaceSettlementWaiter();
+  const controller = new AbortController();
+  const outcomes = new Map<string, unknown>();
+  const waits: Promise<unknown>[] = [];
+  onTestFinished(async () => {
+    controller.abort();
+    await Promise.all(waits);
+  });
+  return {
+    ...settlement,
+    controller,
+    outcomes,
+    observe(client: Parameters<typeof settlement.wait>[0], key: string) {
+      waits.push(
+        settlement.wait(client, key, controller.signal).then(
+          () => outcomes.set(key, "settled"),
+          (error: unknown) => outcomes.set(key, error),
+        ),
+      );
+    },
+  };
+}
 
 it("gates inventory on current hello, propagates failures, and retires removed nodes", async () => {
   const operator = new GatewayClient({});
@@ -179,8 +207,8 @@ it("gates inventory on current hello, propagates failures, and retires removed n
 it.each(["keyless", "keyed"] as const)(
   "refreshes concurrent workspace waits after a %s sessions.changed notice",
   async (notice) => {
-    const settlement = createWireWorkspaceSettlementWaiter();
-    const controller = new AbortController();
+    const settlement = settlementFixture();
+    const { outcomes } = settlement;
     const keys = ["agent:qa:workspace-a", "agent:qa:workspace-b"];
     const placements = new Map(
       keys.map((key) => [key, { state: "active", workspaceResultReconciling: true }]),
@@ -191,129 +219,87 @@ it.each(["keyless", "keyed"] as const)(
         return { session: { placement: placements.get(key) } };
       }),
     };
-    const outcomes = new Map<string, unknown>();
-    const waits = keys.map((key) =>
-      settlement.wait(client, key, controller.signal).then(
-        () => outcomes.set(key, "settled"),
-        (error: unknown) => outcomes.set(key, error),
-      ),
-    );
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(outcomes.size).toBe(0);
-      placements.set(keys[0]!, { state: "active", workspaceResultReconciling: false });
-      settlement.onEvent({ event: "chat", payload: { reason: "update" } });
-      settlement.onEvent({ event: "sessions.changed", payload: null });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(outcomes.size).toBe(0);
-      settlement.onEvent({
-        event: "sessions.changed",
-        payload: {
-          reason: "update",
-          agentId: "qa",
-          ...(notice === "keyed" ? { sessionKey: keys[0] } : {}),
-        },
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect([...outcomes]).toEqual([[keys[0], "settled"]]);
-      settlement.onEvent({
-        event: "sessions.changed",
-        payload: {
-          session: {
-            key: keys[1],
-            placement: { state: "active", workspaceResultReconciling: false },
-          },
-        },
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect([...outcomes]).toEqual(keys.map((key) => [key, "settled"]));
-    } finally {
-      controller.abort();
-      await Promise.all(waits);
-    }
+    keys.forEach((key) => settlement.observe(client, key));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(outcomes.size).toBe(0);
+    placements.set(keys[0]!, { state: "active", workspaceResultReconciling: false });
+    settlement.onEvent({ event: "chat", payload: { reason: "update" } });
+    settlement.onEvent({ event: "sessions.changed", payload: null });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(outcomes.size).toBe(0);
+    settlement.onEvent({
+      event: "sessions.changed",
+      payload: {
+        reason: "update",
+        agentId: "qa",
+        ...(notice === "keyed" ? { sessionKey: keys[0] } : {}),
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect([...outcomes]).toEqual([[keys[0], "settled"]]);
+    settlement.onEvent({
+      event: "sessions.changed",
+      payload: {
+        session: { key: keys[1], ...workspace(false).session },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect([...outcomes]).toEqual(keys.map((key) => [key, "settled"]));
   },
 );
 
 it.each(["initial", "refresh"] as const)(
   "surfaces %s workspace describe failures and retires their wait",
   async (failureAt) => {
-    const settlement = createWireWorkspaceSettlementWaiter();
-    const controller = new AbortController();
+    const settlement = settlementFixture();
+    const { controller, outcomes } = settlement;
     const key = "agent:qa:workspace-error";
     const failure = new Error("synthetic describe failure");
     const client = { request: vi.fn() };
     if (failureAt === "refresh") {
-      client.request.mockResolvedValueOnce({
-        session: { placement: { state: "active", workspaceResultReconciling: true } },
-      });
+      client.request.mockResolvedValueOnce(workspace(true));
     }
     client.request.mockRejectedValue(failure);
-    let outcome: unknown;
-    const wait = settlement.wait(client, key, controller.signal).then(
-      () => {
-        outcome = "settled";
-      },
-      (error: unknown) => {
-        outcome = error;
-      },
-    );
-    try {
+    settlement.observe(client, key);
+    await vi.advanceTimersByTimeAsync(0);
+    if (failureAt === "refresh") {
+      expect(outcomes.get(key)).toBeUndefined();
+      settlement.onEvent({
+        event: "sessions.changed",
+        payload: { reason: "update", agentId: "qa" },
+      });
       await vi.advanceTimersByTimeAsync(0);
-      if (failureAt === "refresh") {
-        expect(outcome).toBeUndefined();
-        settlement.onEvent({
-          event: "sessions.changed",
-          payload: { reason: "update", agentId: "qa" },
-        });
-        await vi.advanceTimersByTimeAsync(0);
-      }
-      expect(outcome).toBe(failure);
-      client.request.mockResolvedValue({ session: { placement: { state: "active" } } });
-      await expect(settlement.wait(client, key, controller.signal)).resolves.toBeUndefined();
-    } finally {
-      controller.abort();
-      await wait;
     }
+    expect(outcomes.get(key)).toBe(failure);
+    client.request.mockResolvedValue(workspace());
+    await expect(settlement.wait(client, key, controller.signal)).resolves.toBeUndefined();
   },
 );
 
 it.each(["snapshot", "abort"] as const)(
   "observes %s while the initial workspace describe is pending",
   async (completion) => {
-    const settlement = createWireWorkspaceSettlementWaiter();
-    const controller = new AbortController();
+    const settlement = settlementFixture();
+    const { controller, outcomes } = settlement;
     const key = "agent:qa:workspace-pending";
-    const read = createDeferred<{
-      session: { placement: { state: string; workspaceResultReconciling: boolean } };
-    }>();
+    const read = createDeferred<ReturnType<typeof workspace>>();
     const client = { request: vi.fn().mockReturnValue(read.promise) };
     const stopped = new Error("synthetic test abort");
-    let outcome: unknown;
-    const wait = settlement.wait(client, key, controller.signal).then(
-      () => {
-        outcome = "settled";
-      },
-      (error: unknown) => {
-        outcome = error;
-      },
-    );
+    settlement.observe(client, key);
     try {
       if (completion === "snapshot") {
         settlement.onEvent({
           event: "sessions.changed",
-          payload: { sessionKey: key, session: { placement: { state: "active" } } },
+          payload: { sessionKey: key, ...workspace() },
         });
       } else {
         controller.abort(stopped);
       }
       await vi.advanceTimersByTimeAsync(0);
-      expect(outcome).toBe(completion === "snapshot" ? "settled" : stopped);
+      expect(outcomes.get(key)).toBe(completion === "snapshot" ? "settled" : stopped);
     } finally {
-      read.resolve({
-        session: { placement: { state: "active", workspaceResultReconciling: false } },
-      });
+      read.resolve(workspace(false));
       controller.abort(stopped);
-      await wait;
     }
   },
 );
