@@ -4,6 +4,7 @@ Own agent assembly, run authority, focused tests. Slow, import-bound tests = arc
 
 ## Guardrails
 
+- Prompts, tools, results: describe available capabilities accurately, with context for next useful action and no unnecessary model round trips. Inject cross-tool references from enabled tool set; drop stale model-facing arguments; give new optional features discovery paths.
 - Performance edits: benchmark before/after; reuse grouped artifacts or `/usr/bin/time -l pnpm test <file>`. Report seconds + RSS.
 - Schema, capability, routing, static-discovery tests: lightweight typed artifacts, not cold-loaded plugin/channel/provider runtimes. Keep runtime fallbacks; isolate expensive bootstrap/runners behind injection/narrow helpers.
 - Hot paths: pure helpers/lightweight public artifacts for target parsing, peer-kind inference, setup hints, descriptors before `getChannelPlugin()`/bundled runtime. Spawn/session/requester-origin normalization: deterministic, runtime-free; test channel-prefix parsing.

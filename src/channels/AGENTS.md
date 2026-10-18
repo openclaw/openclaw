@@ -2,6 +2,10 @@
 
 `src/channels/**` = core channel implementation. Plugin authors: no direct imports from tree.
 
+## Ownership
+
+- Core owns shared message tools, action vocabulary, dispatch; channels own account, security, conversation, transport contracts. Keep typed command/approval/URL/action distinctions until encoding; never infer commands from raw strings.
+
 ## Public Contracts
 
 - Docs:

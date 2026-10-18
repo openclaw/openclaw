@@ -328,6 +328,10 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each<[string[], string[]]>([
     [["src/plugin-sdk/provider-entry.ts"], ["src/plugin-sdk/provider-entry.test.ts"]],
     [
+      ["src/plugin-sdk/lazy-value.ts"],
+      ["src/plugin-sdk/core.test.ts", "src/plugin-sdk/channel-entry-contract.test.ts"],
+    ],
+    [
       ["extensions/qa-lab/src/scenario-catalog.test.ts"],
       ["extensions/qa-lab/src/scenario-catalog.test.ts"],
     ],

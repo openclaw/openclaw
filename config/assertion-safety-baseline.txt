@@ -2066,7 +2066,7 @@ src/infra/session-sqlite-migration-readers.ts	2
 src/infra/sqlite-file-generation.ts	7
 src/infra/sqlite-files.ts	1
 src/infra/sqlite-index-schema.ts	1
-src/infra/sqlite-integrity.ts	2
+src/infra/sqlite-integrity.ts	1
 src/infra/sqlite-readonly-location.ts	3
 src/infra/sqlite-schema-contract.ts	3
 src/infra/sqlite-snapshot.ts	2
