@@ -35,13 +35,15 @@ export async function restoreCronOperatorSource(params: {
   const fence = params.deliveryAttemptFence;
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
+    // Admission may force-run an already paused job; later disable/remove edits
+    // revoke this exact occurrence through its existing cancellation owner.
     assertOccurrence();
     fence.assertCurrent();
     const current: CronStoredJob | undefined = context.cron.getJob(params.job.id);
     const policy = current?.scheduledToolPolicy;
     if (
       context.resolveGatewayContext?.() !== context ||
-      !current?.enabled ||
+      !current ||
       current.payload.kind !== "agentTurn" ||
       policy?.mode !== "account" ||
       policy.ownerSessionKey !== source.sessionKey ||

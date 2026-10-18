@@ -94,11 +94,13 @@ afterEach(() => {
 describe("same-conversation scheduled operator continuation", () => {
   it.each([
     "operator",
+    "paused force run",
     "guest",
     "legacy attribution",
     "foreign target",
     "current tool deny",
     "role revoked",
+    "role revoked during merge",
     "session replaced",
   ] as const)("preserves the %s boundary", async (scenario) => {
     const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -222,7 +224,7 @@ describe("same-conversation scheduled operator continuation", () => {
                     action: "add",
                     job: {
                       name: "Finish authorized landing",
-                      enabled: true,
+                      enabled: scenario !== "paused force run",
                       schedule: {
                         kind: "at",
                         at: new Date(clock.clock.now() + 60_000).toISOString(),
@@ -322,6 +324,7 @@ describe("same-conversation scheduled operator continuation", () => {
     });
     vi.spyOn(publicationIdentity, "matchesCurrentGitHubPublicationIdentity").mockReturnValue(true);
     let merged = false;
+    let reads = 0;
     const writes: unknown[] = [];
     const github = vi
       .spyOn(publicationTransport, "runPublicationCommand")
@@ -333,6 +336,12 @@ describe("same-conversation scheduled operator continuation", () => {
         } else {
           expect(argv).toContain("GET");
           expect(argv).toContain("repos/fixture/repository/pulls/7");
+          reads++;
+          if (scenario === "role revoked during merge" && reads === 2) {
+            // Inspect already succeeded. Revoke while merge's preflight read is
+            // awaited, before the action owner can perform its final write.
+            await setCanonicalUserProfileRole(profile.id, "blocked");
+          }
         }
         return {
           code: 0,
@@ -457,8 +466,13 @@ describe("same-conversation scheduled operator continuation", () => {
       await execution.start();
       expect(entered).toBe(0);
       const reloaded = expectDefined(execution.getJob(job.id), "reloaded scheduled job");
-      clock.setTime(expectDefined(reloaded.state.nextRunAtMs, "scheduled timer"));
-      await onTimer(schedulerState);
+      if (scenario === "paused force run") {
+        expect(reloaded.enabled).toBe(false);
+        await execution.run(job.id, "force");
+      } else {
+        clock.setTime(expectDefined(reloaded.state.nextRunAtMs, "scheduled timer"));
+        await onTimer(schedulerState);
+      }
       await finished.promise;
       await execution.waitForIdle();
       const state = expectDefined(execution.getJob(job.id), "finished scheduled job").state;
@@ -473,7 +487,7 @@ describe("same-conversation scheduled operator continuation", () => {
       } else {
         expect(state.lastRunStatus, state.lastError).toBe("ok");
         expect(entered).toBe(1);
-        if (scenario === "operator") {
+        if (scenario === "operator" || scenario === "paused force run") {
           expect(JSON.stringify(offered)).toContain("inspect");
           expect(JSON.stringify(offered)).toContain("merge");
           expect(rejected).toBeUndefined();
@@ -485,6 +499,17 @@ describe("same-conversation scheduled operator continuation", () => {
           ]);
           expect(writes).toEqual([{ sha: "a".repeat(40), merge_method: "merge" }]);
           expect(receipt).toHaveBeenCalled();
+          if (scenario === "paused force run") {
+            expect(execution.getJob(job.id)).toMatchObject({
+              enabled: false,
+              schedule: job.schedule,
+            });
+          }
+        } else if (scenario === "role revoked during merge") {
+          expect(reads).toBe(2);
+          expect(results).toHaveLength(1);
+          expect(rejected).toMatch(/operator authority changed/i);
+          expect(writes).toEqual([]);
         } else if (scenario === "current tool deny") {
           expect(offered).toBeUndefined();
         } else {
@@ -493,7 +518,11 @@ describe("same-conversation scheduled operator continuation", () => {
           expect(results).toEqual([]);
         }
       }
-      if (scenario !== "operator") {
+      if (
+        scenario !== "operator" &&
+        scenario !== "paused force run" &&
+        scenario !== "role revoked during merge"
+      ) {
         expect(writes).toEqual([]);
         expect(github).not.toHaveBeenCalled();
         expect(receipt).not.toHaveBeenCalled();
