@@ -1,7 +1,10 @@
 // Openai tests cover realtime voice provider plugin behavior.
 import { once } from "node:events";
 import { MessageChannel } from "node:worker_threads";
-import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  resolveConfiguredRealtimeVoiceProviderAsync,
+} from "openclaw/plugin-sdk/realtime-voice";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceGatewayControl,
@@ -745,6 +748,53 @@ describe("OpenAI realtime voice bridge connection", () => {
       await Promise.allSettled([closing]);
       port1.close();
       port2.close();
+    }
+  });
+
+  it("starts GPT-Live with a channel speakerVoiceId as the saved voice reference", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    // Discord flattens voice.realtime.speakerVoiceId into the shared voice override.
+    const { providerConfig } = await resolveConfiguredRealtimeVoiceProviderAsync({
+      providers: [provider],
+      configuredProviderId: provider.id,
+      providerConfigs: { openai: { apiKey: "fixture-key" } },
+      providerConfigOverrides: { model: "gpt-live-1", voice: "voice_demo123" },
+      cfg: {},
+      surface: "gateway-relay",
+      autoRespondToAudio: true,
+    });
+    const bridge = provider.createBridge({
+      providerConfig,
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+    });
+    try {
+      const connecting = bridge.connect();
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = requireSocket();
+      openSocket(socket);
+      await vi.waitFor(() =>
+        expect(parseSent(socket)).toContainEqual(
+          expect.objectContaining({
+            type: "session.start",
+            session: expect.objectContaining({
+              model: "gpt-live-1",
+              audio: { output: { voice: { id: "voice_demo123" } } },
+            }),
+          }),
+        ),
+      );
+      emitServerEvent(socket, { type: "session.started", session: {} });
+      await connecting;
+    } finally {
+      const closing = bridge.close();
+      const socket = FakeWebSocket.instances[0];
+      if (socket && !socket.closed) {
+        emitServerEvent(socket, { type: "session.closed", reason: "close_requested" });
+      }
+      await Promise.allSettled([closing]);
     }
   });
 

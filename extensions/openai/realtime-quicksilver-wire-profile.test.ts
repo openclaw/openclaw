@@ -2,19 +2,11 @@ import { describe, expect, it } from "vitest";
 import { buildOpenAIQuicksilverSession } from "./realtime-quicksilver-wire.js";
 
 describe("GPT-Live session shaping", () => {
-  it("preserves a saved voice reference for the public GPT-Live session", () => {
-    expect(
-      buildOpenAIQuicksilverSession({
-        model: "gpt-live-1",
-        voice: { id: "voice_demo123" },
-      }).audio,
-    ).toEqual({ output: { voice: { id: "voice_demo123" } } });
-  });
-
   it.each([
     [{ id: "marin" }],
     [{ id: "voice_demo123", name: "extra" }],
     [{ id: "voice_demo123 secret" }],
+    ["voice_demo123 secret"],
   ])("rejects malformed saved voice reference %j without echoing it", (voice) => {
     expect(() => buildOpenAIQuicksilverSession({ model: "gpt-live-1", voice })).toThrow(
       'Invalid GPT-Live custom voice reference: expected { id: "voice_..." }',

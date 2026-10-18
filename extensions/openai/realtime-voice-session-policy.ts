@@ -193,7 +193,6 @@ export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
   const baseUrl = normalizeRealtimeBaseUrl(raw.baseUrl);
   const azureEndpoint = normalizeOptionalString(raw.azureEndpoint);
   const azureDeployment = normalizeOptionalString(raw.azureDeployment);
-  const speakerVoiceId = normalizeOptionalString(raw.speakerVoiceId);
   if (baseUrl && (azureEndpoint || azureDeployment)) {
     throw new Error("OpenAI realtime baseUrl cannot be combined with Azure endpoint or deployment");
   }
@@ -205,9 +204,10 @@ export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
     }),
     model: normalizeOptionalString(raw.model),
     // Session creation selects the effective model; an earlier family fallback loses overrides.
-    voice: normalizeOpenAIQuicksilverVoiceInput(
-      raw.speakerVoice ?? (speakerVoiceId ? { id: speakerVoiceId } : raw.voice),
-    ),
+    voice:
+      normalizeOpenAIQuicksilverVoiceInput(raw.speakerVoice) ??
+      normalizeOpenAIQuicksilverVoiceInput(raw.speakerVoiceId) ??
+      normalizeOpenAIQuicksilverVoiceInput(raw.voice),
     temperature: asFiniteNumber(raw.temperature),
     vadThreshold: asFiniteNumberInRange(raw.vadThreshold, { min: 0, max: 1 }),
     silenceDurationMs: asSafeIntegerInRange(raw.silenceDurationMs, { min: 0 }),

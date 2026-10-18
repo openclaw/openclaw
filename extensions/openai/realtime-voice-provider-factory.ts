@@ -24,12 +24,12 @@ import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instr
 import type { OpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
 import {
   OPENAI_QUICKSILVER_CAPABILITIES,
-  isOpenAIGptLiveApiModel,
+  assertOpenAIGptLiveCustomVoiceModel,
   isOpenAIGptLiveModel,
   isOpenAIGptLiveSubscriptionModel,
+  normalizeOpenAIQuicksilverVoiceInput,
   resolveOpenAIQuicksilverVoiceCapabilities,
   resolveOpenAIQuicksilverVoice,
-  type OpenAIGptLiveVoiceSelection,
 } from "./realtime-quicksilver.js";
 import { OpenAIRealtimeBridge } from "./realtime-voice-bridge.js";
 import {
@@ -201,22 +201,18 @@ async function createOpenAIRealtimeBrowserSession(
   }
 
   const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-  if (typeof config.voice === "object") {
-    resolveOpenAIQuicksilverVoice(model, config.voice);
-  }
+  // Talk passes talk.realtime.speakerVoiceId through this string override.
+  const requestedVoice = normalizeOpenAIQuicksilverVoiceInput(req.voice) ?? config.voice;
+  assertOpenAIGptLiveCustomVoiceModel(model, requestedVoice);
   if (isOpenAIGptLiveModel(model)) {
     if (!quicksilverBroker) {
       throw new Error("OpenAI GPT-Live browser session broker is unavailable");
     }
-    const voice: OpenAIGptLiveVoiceSelection = resolveOpenAIQuicksilverVoice(
-      model,
-      req.voice ?? config.voice,
-    );
     const quicksilverRequest = {
       ...req,
       model,
       instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
-      voice,
+      voice: resolveOpenAIQuicksilverVoice(model, requestedVoice),
     };
     const auth = await resolveOpenAIQuicksilverBridgeAuth({ ...authParams, model }, context);
     return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
@@ -421,9 +417,7 @@ export function buildOpenAIRealtimeVoiceProvider(
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const model = config.model;
-      if (typeof config.voice === "object" && !isOpenAIGptLiveApiModel(model)) {
-        resolveOpenAIQuicksilverVoice(model ?? OPENAI_REALTIME_DEFAULT_MODEL, config.voice);
-      }
+      assertOpenAIGptLiveCustomVoiceModel(model, config.voice);
       if (model && isOpenAIGptLiveModel(model)) {
         if (config.baseUrl) {
           throw new Error(
@@ -435,14 +429,10 @@ export function buildOpenAIRealtimeVoiceProvider(
             "GPT-Live backend WebSocket sessions do not support Azure endpoints or deployments",
           );
         }
-        const voice: OpenAIGptLiveVoiceSelection = resolveOpenAIQuicksilverVoice(
-          model,
-          config.voice,
-        );
         const bridgeConfig = {
           ...req,
           model,
-          voice,
+          voice: resolveOpenAIQuicksilverVoice(model, config.voice),
           instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
         };
         const authParams = {

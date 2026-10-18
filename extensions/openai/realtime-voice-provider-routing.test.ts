@@ -502,27 +502,44 @@ describe("OpenAI realtime voice provider routing", () => {
     },
   );
 
-  it("passes a saved GPT-Live voice reference to the native broker", async () => {
+  it.each([
+    { source: "provider speakerVoiceId", rawConfig: { speakerVoiceId: "voice_demo123" } },
+    // Talk forwards talk.realtime.speakerVoiceId as the request's string voice override.
+    { source: "Talk speakerVoiceId", rawConfig: {}, voice: "voice_demo123" },
+  ])("passes a $source saved voice reference to the native broker", async (setting) => {
     const { provider, createBrowserSession } = browserFixture();
-    const voice = { id: "voice_demo123" };
     await provider.createBrowserSession?.({
       providerConfig: await provider.resolveConfigAsync?.({
         cfg: {} as never,
-        rawConfig: {
-          apiKey: PLATFORM_KEY,
-          model: "gpt-live-1",
-          speakerVoiceId: voice.id,
-        },
+        rawConfig: { apiKey: PLATFORM_KEY, model: "gpt-live-1", ...setting.rawConfig },
       }),
       ...browserRequest,
+      voice: setting.voice,
       runAgentConsult: vi.fn(async () => ({ text: "Done" })),
     } as never);
 
     expect(createBrowserSession).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-live-1", voice }),
+      expect.objectContaining({ model: "gpt-live-1", voice: { id: "voice_demo123" } }),
       { type: "api-key", token: PLATFORM_KEY },
     );
   });
+
+  it.each([GA_MODEL, SUBSCRIPTION_MODEL])(
+    "rejects a saved voice reference for %s before session creation",
+    async (model) => {
+      const { provider, createBrowserSession } = browserFixture();
+      await expect(
+        provider.createBrowserSession?.({
+          providerConfig: { apiKey: PLATFORM_KEY, model },
+          ...browserRequest,
+          voice: "voice_demo123",
+          runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+        } as never),
+      ).rejects.toThrow("GPT-Live custom voice references require model gpt-live-1");
+      expect(createBrowserSession).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["gpt-live-1"])("rejects OAuth-only %s before broker session creation", async (model) => {
     mockOAuth();

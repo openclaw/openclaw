@@ -52,7 +52,11 @@ export type OpenAIGptLiveVoice =
 export type OpenAIGptLiveCustomVoice = { id: string };
 export type OpenAIGptLiveVoiceSelection = OpenAIGptLiveVoice | OpenAIGptLiveCustomVoice;
 
+const OPENAI_GPT_LIVE_CUSTOM_VOICE_ID_PREFIX = "voice_";
 const OPENAI_GPT_LIVE_CUSTOM_VOICE_ID_RE = /^voice_[A-Za-z0-9_-]+$/;
+// Never echo the configured reference.
+const OPENAI_GPT_LIVE_CUSTOM_VOICE_INVALID =
+  'Invalid GPT-Live custom voice reference: expected { id: "voice_..." }';
 
 export function isOpenAIGptLiveApiModel(model: string | undefined): boolean {
   return model?.trim().toLowerCase() === "gpt-live-1";
@@ -66,25 +70,45 @@ export function isSupportedOpenAIGptLiveModel(model: string | undefined): boolea
   return isOpenAIGptLiveApiModel(model) || isOpenAIGptLiveSubscriptionModel(model);
 }
 
+/**
+ * Normalizes a configured voice name or saved voice reference. Talk and channel callers
+ * pass `speakerVoiceId` through the same string field, so saved IDs are recognized by
+ * OpenAI's `voice_` prefix and keep their case.
+ */
 export function normalizeOpenAIQuicksilverVoiceInput(
   value: unknown,
 ): string | OpenAIGptLiveCustomVoice | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized) {
-    return normalized;
-  }
-  if (value === undefined || value === null || value === "") {
-    return undefined;
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error('Invalid GPT-Live custom voice reference: expected { id: "voice_..." }');
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.startsWith(OPENAI_GPT_LIVE_CUSTOM_VOICE_ID_PREFIX)
+      ? parseOpenAIGptLiveCustomVoiceId(trimmed)
+      : normalizeOptionalLowercaseString(trimmed);
   }
   const record = asOptionalRecord(value);
-  const id = typeof record?.id === "string" ? record.id.trim() : "";
-  if (!record || Object.keys(record).length !== 1 || !OPENAI_GPT_LIVE_CUSTOM_VOICE_ID_RE.test(id)) {
-    throw new Error('Invalid GPT-Live custom voice reference: expected { id: "voice_..." }');
+  if (!record) {
+    return undefined;
+  }
+  if (Object.keys(record).length !== 1 || typeof record.id !== "string") {
+    throw new Error(OPENAI_GPT_LIVE_CUSTOM_VOICE_INVALID);
+  }
+  return parseOpenAIGptLiveCustomVoiceId(record.id.trim());
+}
+
+function parseOpenAIGptLiveCustomVoiceId(id: string): OpenAIGptLiveCustomVoice {
+  if (!OPENAI_GPT_LIVE_CUSTOM_VOICE_ID_RE.test(id)) {
+    throw new Error(OPENAI_GPT_LIVE_CUSTOM_VOICE_INVALID);
   }
   return { id };
+}
+
+/** Prompt-created voices are a public GPT-Live capability; other routes fail closed. */
+export function assertOpenAIGptLiveCustomVoiceModel(
+  model: string | undefined,
+  voice: string | OpenAIGptLiveCustomVoice | undefined,
+): void {
+  if (typeof voice === "object" && !isOpenAIGptLiveApiModel(model)) {
+    throw new Error("GPT-Live custom voice references require model gpt-live-1");
+  }
 }
 
 export function resolveOpenAIQuicksilverVoice(
@@ -95,9 +119,7 @@ export function resolveOpenAIQuicksilverVoice(
   const defaultVoice = isOpenAIGptLiveSubscriptionModel(model) ? "cove" : "marin";
   const normalized = normalizeOpenAIQuicksilverVoiceInput(value);
   if (typeof normalized === "object") {
-    if (!isOpenAIGptLiveApiModel(model)) {
-      throw new Error("GPT-Live custom voice references require model gpt-live-1");
-    }
+    assertOpenAIGptLiveCustomVoiceModel(model, normalized);
     return normalized;
   }
   return voices.find((voice) => voice === normalized) ?? defaultVoice;
