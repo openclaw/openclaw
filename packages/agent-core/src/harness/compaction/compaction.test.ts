@@ -9,13 +9,11 @@ import {
 } from "../types.js";
 import {
   calculateContextTokens,
-  compact,
   compactWithoutSummary,
   MAX_COMPACTION_SUMMARY_CHARS,
   estimateContextTokens,
   estimateTokens,
   findCutPoint,
-  generateSummary,
   getLastAssistantUsage,
   prepareCompaction,
   shouldCompact,
@@ -25,32 +23,23 @@ import {
   createContextUsage as createUsage,
   createMessageEntry,
 } from "./compaction.test-support.js";
+import {
+  assistant,
+  bash,
+  compactWith,
+  custom,
+  decoratedResponse,
+  responseStream,
+  summarize,
+  text,
+  toolCall,
+  toolResult,
+  user,
+} from "./shard-fixtures.test-support.js";
 import { createFileOps } from "./utils.js";
 
-type SummaryArgs = Parameters<typeof generateSummary>;
-function summarize(
-  messages: AgentMessage[],
-  model: Model,
-  streamFn: StreamFn | undefined,
-  options: { previous?: string; thinking?: SummaryArgs[8]; runtime?: SummaryArgs[10] } = {},
-) {
-  return generateSummary(
-    messages,
-    model,
-    1_000,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    options.previous,
-    options.thinking,
-    streamFn,
-    options.runtime,
-  );
-}
-
 function userEntry(content: string, index: number) {
-  return createMessageEntry({ role: "user", content, timestamp: index + 1 }, index);
+  return createMessageEntry(user(content, index + 1), index);
 }
 
 function prepare(
@@ -74,49 +63,30 @@ function resetEntry(index: number, firstKeptEntryId?: string): SessionTreeEntry 
   };
 }
 
-function responseStream(message: AssistantMessage) {
-  const stream = createAssistantMessageEventStream();
-  const reason = message.stopReason;
-  if (reason !== "stop" && reason !== "length" && reason !== "toolUse") {
-    throw new Error("expected completed summary response");
-  }
-  stream.push({ type: "done", reason, message });
-  stream.end();
-  return stream;
-}
-
-function createSummaryModel(reasoning = false): Model {
-  return createCompactionModel({ reasoning });
-}
-
-function createAssistant(text: string, usage: Usage, timestamp: number): AssistantMessage {
+function compactionEntry(
+  index: number,
+  summary: string,
+  firstKeptEntryId: string,
+  overrides: Partial<Extract<SessionTreeEntry, { type: "compaction" }>> = {},
+): SessionTreeEntry {
   return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: "test-api",
-    provider: "test-provider",
-    model: "test-model",
-    usage,
-    stopReason: "stop",
-    timestamp,
+    type: "compaction",
+    id: `entry-${index}`,
+    parentId: `entry-${index - 1}`,
+    timestamp: new Date(index + 1).toISOString(),
+    summary,
+    firstKeptEntryId,
+    tokensBefore: 200_000,
+    ...overrides,
   };
 }
 
-function createBashMessage(
-  output: string,
-  timestamp: number,
-  excludeFromContext: boolean,
-): AgentMessage {
-  return {
-    role: "bashExecution",
-    command: "print output",
-    output,
-    exitCode: 0,
-    cancelled: false,
-    truncated: false,
-    timestamp,
-    excludeFromContext,
-  };
+function createAssistant(value: string, usage: Usage, timestamp: number) {
+  return assistant(value, { usage, timestamp });
+}
+
+function createBashMessage(output: string, timestamp: number, excludeFromContext: boolean) {
+  return bash(output, { command: "print output", timestamp, excludeFromContext });
 }
 
 function createProjectedEntry(
@@ -134,16 +104,14 @@ function createProjectedEntry(
     : { ...common, type, fromId: common.parentId ?? common.id, summary: content };
 }
 
-describe("shouldCompact", () => {
-  it("skips an invalid context window of zero", () => {
-    expect(
-      shouldCompact(1, 0, {
-        enabled: true,
-        reserveTokens: 16_384,
-        keepRecentTokens: 20_000,
-      }),
-    ).toBe(false);
-  });
+it("skips an invalid context window of zero", () => {
+  expect(
+    shouldCompact(1, 0, {
+      enabled: true,
+      reserveTokens: 16_384,
+      keepRecentTokens: 20_000,
+    }),
+  ).toBe(false);
 });
 
 describe("calculateContextTokens", () => {
@@ -182,10 +150,9 @@ describe("calculateContextTokens", () => {
       createAssistant("done", aggregateUsage, 2),
     ]);
 
-    expect(estimate.usageTokens).toBe(149_874);
+    expect(estimate).toMatchObject({ usageTokens: 149_874, lastUsageIndex: 0 });
     expect(estimate.tokens).toBeGreaterThan(149_874);
     expect(estimate.tokens).toBeLessThan(927_907);
-    expect(estimate.lastUsageIndex).toBe(0);
   });
 
   it("does not scan past a zero unavailable context marker", () => {
@@ -201,8 +168,7 @@ describe("calculateContextTokens", () => {
     ];
     const estimate = estimateContextTokens(messages);
 
-    expect(estimate.usageTokens).toBe(0);
-    expect(estimate.lastUsageIndex).toBeNull();
+    expect(estimate).toMatchObject({ usageTokens: 0, lastUsageIndex: null });
     expect(estimate.tokens).toBeGreaterThan(0);
     expect(estimate.tokens).toBeLessThan(950);
     expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBeUndefined();
@@ -220,41 +186,24 @@ describe("calculateContextTokens", () => {
     expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBeUndefined();
   });
 
-  it("ignores an all-zero terminal usage block", () => {
-    const validUsage = createUsage(20);
-    const messages: AgentMessage[] = [
-      createAssistant("complete", validUsage, 1),
-      { role: "user", content: "continue", timestamp: 2 },
-      createAssistant("partial", createUsage(0), 3),
-    ];
-    const entries = messages.map(createMessageEntry);
-
-    expect(getLastAssistantUsage(entries)).toBe(validUsage);
-    expect(estimateContextTokens(messages)).toMatchObject({
-      usageTokens: 20,
-      lastUsageIndex: 0,
-    });
-    expect(estimateContextTokens(messages).trailingTokens).toBeGreaterThan(0);
-  });
-
-  it("scans past a sparse assistant row to retain older valid usage", () => {
+  it.each(["all-zero", "sparse"] as const)("scans past an %s assistant tail", (kind) => {
     const validUsage = createUsage(20);
     const sparseAssistant = {
       role: "assistant",
-      content: [{ type: "text", text: "seeded without provider usage" }],
+      content: [text("seeded without provider usage")],
       api: "test-api",
       provider: "test-provider",
       model: "test-model",
       stopReason: "stop",
       timestamp: 2,
     } as AgentMessage;
-    const messages = [createAssistant("complete", validUsage, 1), sparseAssistant];
-
+    const tail =
+      kind === "all-zero"
+        ? [user("continue", 2), createAssistant("partial", createUsage(0), 3)]
+        : [sparseAssistant];
+    const messages = [createAssistant("complete", validUsage, 1), ...tail];
     expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBe(validUsage);
-    expect(estimateContextTokens(messages)).toMatchObject({
-      usageTokens: 20,
-      lastUsageIndex: 0,
-    });
+    expect(estimateContextTokens(messages)).toMatchObject({ usageTokens: 20, lastUsageIndex: 0 });
     expect(estimateContextTokens(messages).trailingTokens).toBeGreaterThan(0);
   });
 });
@@ -263,18 +212,18 @@ describe("session-entry compaction budgeting", () => {
   it("counts visible shell activity while ignoring excluded activity after provider usage", () => {
     const hidden = createBashMessage("x".repeat(80_000), 2, true);
     const visible = createBashMessage("x".repeat(80_000), 2, false);
-    const assistant = createAssistant("done", createUsage(42), 1);
+    const lastAssistant = createAssistant("done", createUsage(42), 1);
     const latest: AgentMessage = { role: "user", content: "continue", timestamp: 3 };
 
     expect(estimateTokens(hidden)).toBe(0);
     expect(estimateTokens(visible)).toBeGreaterThan(20_000);
-    expect(estimateContextTokens([assistant, hidden, latest])).toMatchObject({
+    expect(estimateContextTokens([lastAssistant, hidden, latest])).toMatchObject({
       tokens: 44,
       usageTokens: 42,
       trailingTokens: 2,
       lastUsageIndex: 0,
     });
-    expect(estimateContextTokens([assistant, visible, latest]).trailingTokens).toBeGreaterThan(
+    expect(estimateContextTokens([lastAssistant, visible, latest]).trailingTokens).toBeGreaterThan(
       20_000,
     );
   });
@@ -365,71 +314,63 @@ describe("session-entry compaction budgeting", () => {
       keepRecentTokens: 20_000,
     });
 
-    expect(result.firstKeptEntryId).toBe("entry-4");
+    expect(result).toMatchObject({ firstKeptEntryId: "entry-4" });
     expect(result.messagesToSummarize.length).toBeGreaterThan(0);
   });
 
-  it("keeps reset-filtered tool rows out of later compaction input", () => {
-    const entries: SessionTreeEntry[] = [
-      userEntry("discarded", 0),
-      userEntry("kept question", 1),
-      createMessageEntry(
-        {
-          role: "toolResult",
-          toolCallId: "call-1",
-          toolName: "read",
-          content: [{ type: "text", text: "hidden tool result" }],
-          isError: false,
-          timestamp: 3,
-        },
-        2,
-      ),
-      createMessageEntry(createAssistant("kept answer", createUsage(2), 4), 3),
-      resetEntry(4, "entry-1"),
-      userEntry("post reset", 5),
-      createMessageEntry(createAssistant("new answer", createUsage(2), 7), 6),
-    ];
-
-    const result = prepare(entries);
-
-    expect(JSON.stringify(result.messagesToSummarize)).not.toContain("hidden tool result");
-    expect(JSON.stringify(result.turnPrefixMessages)).not.toContain("hidden tool result");
-    expect(["entry-5", "entry-6"]).toContain(result.firstKeptEntryId);
-  });
-
-  it("retains only occurrence-paired reset tool results in compaction input", () => {
-    const assistantToolCall = (timestamp: number): AssistantMessage => ({
-      ...createAssistant("", createUsage(2), timestamp),
-      content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+  const readCall = (timestamp: number) =>
+    assistant([toolCall("read", {}, "call-1")], {
+      usage: createUsage(2),
+      timestamp,
       stopReason: "toolUse",
     });
-    const toolResult = (timestamp: number, text: string): AgentMessage => ({
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read",
-      content: [{ type: "text", text }],
-      isError: false,
-      timestamp,
-    });
-    const entries: SessionTreeEntry[] = [
+  it.each([
+    {
+      name: "orphan-only",
+      middle: [
+        toolResult("hidden tool result", { timestamp: 3 }),
+        createAssistant("kept answer", createUsage(2), 4),
+      ],
+      kept: [],
+      excluded: "hidden tool result",
+      checkCut: true,
+    },
+    {
+      name: "occurrence-paired",
+      middle: [
+        readCall(3),
+        toolResult("first result", { timestamp: 4 }),
+        readCall(5),
+        toolResult("second result", { timestamp: 6 }),
+        toolResult("orphan result", { timestamp: 7 }),
+      ],
+      kept: ["first result", "second result"],
+      excluded: "orphan result",
+      checkCut: false,
+    },
+  ])("filters $name reset tool rows before compaction", ({ middle, kept, excluded, checkCut }) => {
+    const resetIndex = middle.length + 2;
+    const entries = [
       userEntry("discarded", 0),
-      userEntry("kept", 1),
-      createMessageEntry(assistantToolCall(3), 2),
-      createMessageEntry(toolResult(4, "first result"), 3),
-      createMessageEntry(assistantToolCall(5), 4),
-      createMessageEntry(toolResult(6, "second result"), 5),
-      createMessageEntry(toolResult(7, "orphan result"), 6),
-      resetEntry(7, "entry-1"),
-      userEntry("post reset", 8),
-      createMessageEntry(createAssistant("new answer", createUsage(2), 10), 9),
+      userEntry("kept question", 1),
+      ...middle.map((message, index) => createMessageEntry(message, index + 2)),
+      resetEntry(resetIndex, "entry-1"),
+      userEntry("post reset", resetIndex + 1),
+      createMessageEntry(
+        createAssistant("new answer", createUsage(2), resetIndex + 3),
+        resetIndex + 2,
+      ),
     ];
-
     const result = prepare(entries);
-
     const summarized = JSON.stringify(result.messagesToSummarize);
-    expect(summarized).toContain("first result");
-    expect(summarized).toContain("second result");
-    expect(summarized).not.toContain("orphan result");
+    for (const value of kept) {
+      expect(summarized).toContain(value);
+    }
+    expect(summarized).not.toContain(excluded);
+    expect(JSON.stringify(result.turnPrefixMessages)).not.toContain(excluded);
+    if (checkCut) {
+      expect(["entry-5", "entry-6"]).toContain(result.firstKeptEntryId);
+    }
   });
 
   it("moves the cut earlier when a reset kept-tail prelude consumes the compaction budget", () => {
@@ -461,11 +402,7 @@ describe("session-entry compaction budgeting", () => {
 });
 
 describe("prepareCompaction when the last entry is a compaction record", () => {
-  const settings = {
-    enabled: true,
-    reserveTokens: 0,
-    keepRecentTokens: 1,
-  };
+  const settings = { enabled: true, reserveTokens: 0, keepRecentTokens: 1 };
   it.each([
     { name: "ordinary", fromHook: false, compactable: true },
     { name: "safeguard", fromHook: true, compactable: false },
@@ -473,29 +410,12 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
     const largeContent = "x".repeat(200_000);
     const entries: SessionTreeEntry[] = [
       userEntry("original request", 0),
-      {
-        type: "compaction",
-        id: "compaction-1",
-        parentId: "entry-0",
-        timestamp: new Date(2).toISOString(),
-        summary: "earlier summary",
-        firstKeptEntryId: "entry-0",
-        tokensBefore: 200_000,
-      },
+      compactionEntry(1, "earlier summary", "entry-0", { id: "compaction-1" }),
       userEntry(largeContent, 2),
       createMessageEntry(createAssistant(largeContent, createUsage(10), 4), 3),
       userEntry(largeContent, 4),
       createMessageEntry(createAssistant("recent reply tail", createUsage(10), 6), 5),
-      {
-        type: "compaction",
-        id: "compaction-2",
-        parentId: "entry-5",
-        timestamp: new Date(7).toISOString(),
-        summary: "later summary",
-        firstKeptEntryId: "entry-2",
-        tokensBefore: 200_000,
-        fromHook,
-      },
+      compactionEntry(6, "later summary", "entry-2", { id: "compaction-2", fromHook }),
     ];
 
     const result = prepareCompaction(entries, settings);
@@ -513,37 +433,23 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
     const nextResult = prepareCompaction(
       [
         ...entries,
-        {
-          type: "compaction",
+        compactionEntry(7, "final summary", result.value.firstKeptEntryId, {
           id: "compaction-3",
           parentId: "compaction-2",
-          timestamp: new Date(8).toISOString(),
-          summary: "final summary",
-          firstKeptEntryId: result.value.firstKeptEntryId,
           tokensBefore: result.value.tokensBefore,
-        },
+        }),
       ],
       settings,
     );
 
-    expect(nextResult.ok).toBe(true);
-    expect(nextResult.ok ? nextResult.value : undefined).toBeUndefined();
+    expect(nextResult).toEqual({ ok: true, value: undefined });
   });
 
   it("ignores missing fields in persisted compaction details", () => {
     const largeContent = "x".repeat(200_000);
     const entries: SessionTreeEntry[] = [
       userEntry("original request", 0),
-      {
-        type: "compaction",
-        id: "entry-1",
-        parentId: "entry-0",
-        timestamp: new Date(2).toISOString(),
-        summary: "earlier summary",
-        firstKeptEntryId: "entry-0",
-        tokensBefore: 200_000,
-        details: { readFiles: ["src/read.ts"] },
-      },
+      compactionEntry(1, "earlier summary", "entry-0", { details: { readFiles: ["src/read.ts"] } }),
       userEntry(largeContent, 2),
       createMessageEntry(createAssistant(largeContent, createUsage(10), 4), 3),
       userEntry("recent tail", 4),
@@ -551,10 +457,10 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
 
     const result = prepare(entries, settings);
 
-    expect(result.previousSummaryDetails).toBeUndefined();
-    expect([...result.fileOps.read]).toEqual([]);
-    expect([...result.fileOps.written]).toEqual([]);
-    expect([...result.fileOps.edited]).toEqual([]);
+    expect(result).toMatchObject({
+      previousSummaryDetails: undefined,
+      fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+    });
   });
 });
 
@@ -563,24 +469,21 @@ describe("generateSummary progress updates", () => {
     const completeSimple = vi.fn(async () => createAssistant("summary", createUsage(1), 4));
     const result = await summarize(
       [
-        { role: "user", content: "Check whether the release is approved.", timestamp: 1 },
+        user("Check whether the release is approved."),
         {
           ...createAssistant("", createUsage(0), 2),
           content: [{ type: "toolCall", id: "check", name: "verify", arguments: {} }],
           stopReason: "toolUse",
         },
-        {
-          role: "toolResult",
+        toolResult("Verification FAILED: missing release approval.", {
           toolCallId: "check",
           toolName: "verify",
-          content: [{ type: "text", text: "Verification FAILED: missing release approval." }],
           isError: true,
           timestamp: 3,
-        },
+        }),
       ],
-      createSummaryModel(),
-      undefined,
-      { previous: "Release approval check: pending.", runtime: { completeSimple } },
+      createCompactionModel(),
+      { previousSummary: "Release approval check: pending.", runtime: { completeSimple } },
     );
 
     expect(result.ok).toBe(true);
@@ -594,42 +497,25 @@ describe("generateSummary progress updates", () => {
 
 describe("generateSummary thinking options", () => {
   it("consumes the decorated stream before reading its result", async () => {
-    const model = createSummaryModel();
-    let consumed = false;
-    const streamFn = vi.fn<StreamFn>(() => ({
-      [Symbol.asyncIterator]() {
-        return {
-          async next() {
-            consumed = true;
-            return { done: true as const, value: undefined };
-          },
-        };
-      },
-      async result() {
-        if (!consumed) {
-          throw new Error("stream result read before iteration");
-        }
-        return createAssistant("summary", createUsage(1), 1);
-      },
-    }));
+    const model = createCompactionModel();
+    const { streamFn, consumed } = decoratedResponse(createAssistant("summary", createUsage(1), 1));
 
-    await summarize([{ role: "user", content: "hello", timestamp: 1 }], model, streamFn);
+    await summarize([user("hello")], model, { streamFn });
 
-    expect(consumed).toBe(true);
+    expect(consumed()).toBe(true);
   });
 
   it("maps explicit Fable off to low effort for compaction", async () => {
     const model: Model = {
-      id: "production-fable",
-      name: "Production Fable",
+      ...createCompactionModel({
+        id: "production-fable",
+        name: "Production Fable",
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      }),
       api: "anthropic-messages",
       provider: "anthropic",
       baseUrl: "https://api.anthropic.com",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
       params: { canonicalModelId: "claude-fable-5" },
     };
     const summaryMessage: AssistantMessage = {
@@ -645,92 +531,68 @@ describe("generateSummary thinking options", () => {
       return responseStream(summaryMessage);
     });
 
-    const result = await summarize(
-      [{ role: "user", content: "hello", timestamp: 1 }],
-      model,
-      streamFn,
-      { thinking: "off" },
-    );
+    const result = await summarize([user("hello")], model, { streamFn, thinkingLevel: "off" });
 
     expect(result).toEqual({ ok: true, value: "summary" });
     expect(streamFn).toHaveBeenCalledOnce();
   });
 
-  it("rejects whitespace-only compaction output", async () => {
-    const content: AssistantMessage["content"] = [{ type: "text", text: " \n\t " }];
-    const model = createSummaryModel(true);
-    const streamFn = vi.fn<StreamFn>(() =>
-      responseStream({ ...createAssistant("", createUsage(1), 1), content, model: model.id }),
-    );
-
-    const result = await summarize(
-      [{ role: "user", content: "hello", timestamp: 1 }],
-      model,
-      streamFn,
-      { thinking: "low" },
-    );
-
-    assert(!result.ok);
-    expect(result.error).toBeInstanceOf(InvalidSummaryOutputError);
-    expect(result.error).toMatchObject({
-      name: "CompactionError",
-      code: "summarization_failed",
-      message: "Summarization failed: model returned no summary text",
-    });
-  });
-
-  it("identifies a length-stopped reasoning-only summary as an exhausted output budget", async () => {
-    const model = createSummaryModel(true);
-    const streamFn = vi.fn<StreamFn>(() =>
-      responseStream({
-        ...createAssistant("", createUsage(800), 1),
-        content: [{ type: "thinking", thinking: "internal summary reasoning" }],
-        stopReason: "length",
-      }),
-    );
-
-    const result = await summarize(
-      [{ role: "user", content: "hello", timestamp: 1 }],
-      model,
-      streamFn,
-      { thinking: "high" },
-    );
-
-    expect(streamFn).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({ error: expect.any(SummaryOutputBudgetError) });
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
+  it.each(["stop", "length"] as const)(
+    "classifies empty summary output after a %s stop",
+    async (stopReason) => {
+      const exhausted = stopReason === "length";
+      const content: AssistantMessage["content"] = exhausted
+        ? [{ type: "thinking", thinking: "internal summary reasoning" }]
+        : [text(" \n\t ")];
+      const model = createCompactionModel({ reasoning: true });
+      const streamFn = vi.fn<StreamFn>(() =>
+        responseStream(
+          assistant(content, {
+            usage: createUsage(exhausted ? 800 : 1),
+            model: model.id,
+            stopReason,
+          }),
+        ),
+      );
+      const result = await summarize([user("hello")], model, {
+        streamFn,
+        thinkingLevel: exhausted ? "high" : "low",
+      });
+      assert(!result.ok);
+      expect(streamFn).toHaveBeenCalledOnce();
+      expect(result.error).toBeInstanceOf(
+        exhausted ? SummaryOutputBudgetError : InvalidSummaryOutputError,
+      );
+      expect(result.error).toMatchObject({
+        name: "CompactionError",
         code: "summarization_failed",
-        message: expect.stringContaining("output budget (800 tokens) was exhausted"),
-      },
-    });
-  });
+        message: exhausted
+          ? expect.stringContaining("output budget (800 tokens) was exhausted")
+          : "Summarization failed: model returned no summary text",
+      });
+    },
+  );
 });
 
 describe("split-turn compaction", () => {
   const operatorFocus = "Preserve API decisions.";
-  const runtimeContext: AgentMessage = {
-    role: "custom",
+  const runtimeContext = custom("PRIVATE_RUNTIME_CONTEXT", {
     customType: "openclaw.runtime-context",
-    content: "PRIVATE_RUNTIME_CONTEXT",
     display: false,
     details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
-    timestamp: 1,
-  };
+  });
   it.each([
-    { name: "prefix-only", history: false, prefix: true, budgets: [500] },
+    { name: "prefix-only", history: false, budgets: [500] },
     {
       name: "caller-owned instructions",
       history: true,
-      prefix: true,
       budgets: [800, 500],
       focus: `<policy>${"preserve generated policy ".repeat(200)}</policy>`,
     },
   ])(
     "forwards focus and serializes $name summaries",
-    async ({ history, prefix, budgets, focus = operatorFocus }) => {
-      const model = createSummaryModel();
+    async ({ history, budgets, focus = operatorFocus }) => {
+      const model = createCompactionModel();
       const prompts: string[] = [];
       const outputBudgets: Array<number | undefined> = [];
       const usageSink = vi.fn();
@@ -760,28 +622,24 @@ describe("split-turn compaction", () => {
         }, 5);
         return stream;
       });
-      const result = await compact(
+      const result = await compactWith(
         {
           firstKeptEntryId: "kept-entry",
           messagesToSummarize: history
             ? [{ role: "user", content: "history", timestamp: 1 }, runtimeContext]
             : [],
-          turnPrefixMessages: prefix
-            ? [{ role: "user", content: "prefix", timestamp: 2 }, runtimeContext]
-            : [],
-          isSplitTurn: prefix,
+          turnPrefixMessages: [user("prefix", 2), runtimeContext],
+          isSplitTurn: true,
           tokensBefore: 100,
           fileOps: createFileOps(),
           settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
         },
         model,
-        undefined,
-        undefined,
-        focus,
-        undefined,
-        undefined,
-        streamFn,
-        { completeSimple: vi.fn(), internalUsageSink: usageSink },
+        {
+          customInstructions: focus,
+          streamFn,
+          runtime: { completeSimple: vi.fn(), internalUsageSink: usageSink },
+        },
       );
 
       expect(result.ok).toBe(true);
@@ -796,10 +654,8 @@ describe("split-turn compaction", () => {
         expect(prompt).not.toContain("PRIVATE_RUNTIME_CONTEXT");
         expect(prompt.indexOf(focus)).toBeGreaterThan(prompt.lastIndexOf("</conversation>"));
       }
-      if (prefix) {
-        expect(prompts.at(-1)).toContain("## Original Request");
-        expect(prompts.at(-1)).not.toContain("## Goal");
-      }
+      expect(prompts.at(-1)).toContain("## Original Request");
+      expect(prompts.at(-1)).not.toContain("## Goal");
       if (history) {
         expect(prompts[0]).toContain("## Goal");
         expect(prompts[0]).not.toContain("## Original Request");
