@@ -62,7 +62,7 @@ export function ToolDataBlock(props: { label?: string; text: string }) {
 
 export function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number }) {
   const label = () =>
-    props.outcome === "failed" && props.exitCode !== undefined
+    props.outcome === "failed" && props.exitCode !== undefined && props.exitCode !== 0
       ? t("chat.toolCards.exitCode", { code: String(props.exitCode) })
       : t(
           `chat.toolCards.${props.outcome === "succeeded" ? "completed" : props.outcome === "unknown" ? "outcomeUnknown" : props.outcome}`,

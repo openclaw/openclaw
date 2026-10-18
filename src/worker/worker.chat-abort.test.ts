@@ -113,6 +113,7 @@ it.each([
       removeChatRun: (...args: Parameters<typeof harness.chat.state.registry.remove>) =>
         harness.chat.state.registry.remove(...args),
     });
+    let deliverCancellation: (() => void) | undefined;
     const authority = getActiveAgentRunDelegatedAuthority(
       descriptor.assignment.operationalRunInstance,
     );
@@ -189,7 +190,12 @@ it.each([
       const worker = await workers.launch({ descriptor, signal });
       cancelWorker = () => {
         cancelRequestedAt = performance.now();
-        worker.cancel();
+        if (fence === "after durable ACK") {
+          // Let the Gateway's inference cancellation arrive before local cancellation.
+          deliverCancellation = () => worker.cancel();
+        } else {
+          worker.cancel();
+        }
       };
       owner.signal.addEventListener("abort", cancelWorker, { once: true });
       command = worker.finish().then((exit) => {
@@ -245,6 +251,7 @@ it.each([
       const publishedAtAbort = publishedEvents;
       previewGate?.release.resolve();
       await waitFor(finishingGate.entered.promise, "cancellation finishing");
+      deliverCancellation?.();
       const cursorAtAbort = cursor();
       if (fence === "claim") {
         await harness.settleRun(RUN_ID);
