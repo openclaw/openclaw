@@ -43,7 +43,7 @@ describe("Matrix monitor credential discovery", () => {
     harness.state.leaseAbortController = new AbortController();
     harness.state.monitorRetirement = null;
     harness.state.monitorRetirementPromise = null;
-    harness.registeredOnRoomMessage = null;
+    harness.callbacks.roomMessage = null;
     harness.client.removeAllListeners();
     Object.assign(harness.client, { getUserId: async () => "@bot:example.org" });
     const stateDir = tempDirs.make("matrix-monitor-credentials-");
@@ -130,8 +130,8 @@ describe("Matrix monitor credential discovery", () => {
             throw new Error("monitor stopped before startup");
           }),
         ]);
-        expect(harness.registeredOnRoomMessage).not.toBeNull();
-        await harness.registeredOnRoomMessage?.("!room:example.org", {
+        expect(harness.callbacks.roomMessage).not.toBeNull();
+        await harness.callbacks.roomMessage?.("!room:example.org", {
           type: "m.room.message",
           event_id: "$synthetic-bot",
           sender: "@ops:example.org",
@@ -189,7 +189,7 @@ describe("Matrix monitor credential discovery", () => {
       await setImmediate();
       expect(settled).toBe(false);
       expect(harness.acquireSharedMatrixClient).not.toHaveBeenCalled();
-      expect(harness.registeredOnRoomMessage).toBeNull();
+      expect(harness.callbacks.roomMessage).toBeNull();
     } finally {
       release.resolve();
       controller.abort();

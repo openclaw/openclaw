@@ -1,16 +1,9 @@
-// Matrix helper module supports handler helpers behavior.
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { vi, type Mock } from "vitest";
-import type {
-  MatrixConfig,
-  MatrixRoomConfig,
-  MatrixStreamingMode,
-  ReplyToMode,
-} from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
@@ -51,41 +44,16 @@ const DEFAULT_ROUTE = {
   matchedBy: "binding.account" as const,
 };
 
-type MatrixHandlerTestHarnessOptions = {
+type MatrixHandlerTestHarnessOptions = Partial<
+  Omit<MatrixMonitorHandlerParams, "core" | "cfg" | "client" | "directTracker">
+> & {
   system?: Pick<MatrixMonitorHandlerParams["core"]["system"], "enqueueSystemEvent">;
-  accountId?: string;
-  accountConfig?: MatrixConfig;
   cfg?: unknown;
   liveCfg?: unknown;
   client?: Partial<MatrixClient>;
-  runtime?: RuntimeEnv;
-  logger?: RuntimeLogger;
   currentConfig?: () => unknown;
-  logVerboseMessage?: (message: string) => void;
-  allowFrom?: string[];
-  allowFromResolvedEntries?: MatrixMonitorHandlerParams["allowFromResolvedEntries"];
-  groupAllowFrom?: string[];
-  groupAllowFromResolvedEntries?: MatrixMonitorHandlerParams["groupAllowFromResolvedEntries"];
-  roomsConfig?: Record<string, MatrixRoomConfig>;
-  accountAllowBots?: boolean | "mentions";
-  configuredBotUserIds?: Set<string>;
   mentionRegexes?: RegExp[];
-  groupPolicy?: "open" | "allowlist" | "disabled";
-  replyToMode?: ReplyToMode;
-  threadReplies?: "off" | "inbound" | "always";
-  dmThreadReplies?: "off" | "inbound" | "always";
-  dmSessionScope?: "per-user" | "per-room";
-  streaming?: MatrixStreamingMode;
-  previewToolProgressEnabled?: boolean;
-  blockStreamingEnabled?: boolean;
-  dmEnabled?: boolean;
-  dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  mediaMaxBytes?: number;
-  startupMs?: number;
-  dropPreStartupMessages?: boolean;
-  needsRoomAliasesForConfig?: boolean;
   isDirectMessage?: boolean;
-  historyLimit?: number;
   readAllowFromStore?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   upsertPairingRequest?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
   buildPairingReply?: () => string;
@@ -105,30 +73,14 @@ type MatrixHandlerTestHarnessOptions = {
   dispatchInboundMessage?: MatrixDispatchInboundMessage;
   runChannelInboundEvent?: MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"];
   runPrepared?: MatrixRunPreparedMock;
-  inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
   shouldAckReaction?: MatrixMonitorHandlerParams["core"]["channel"]["reactions"]["shouldAckReaction"];
-  getRoomInfo?: MatrixMonitorHandlerParams["getRoomInfo"];
-  getMemberDisplayName?: MatrixMonitorHandlerParams["getMemberDisplayName"];
-};
-
-type MatrixHandlerTestHarness = {
-  dispatchInboundMessage: MatrixDispatchInboundMessage;
-  finalizeInboundContext: (ctx: Record<string, unknown>) => unknown;
-  handler: ReturnType<typeof createMatrixRoomMessageHandler>;
-  readAllowFromStore: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
-  recordInboundSession: (...args: unknown[]) => Promise<void>;
-  resolveAgentRoute: () => typeof DEFAULT_ROUTE;
-  runPrepared: MatrixRunPreparedMock;
-  upsertPairingRequest: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
 };
 
 type MatrixRunPreparedInput = channelInbound.PreparedInboundReply<unknown>;
 type MatrixRunPreparedMockFn = (turn: MatrixRunPreparedInput) => Promise<unknown>;
 type MatrixRunPreparedMock = Mock<MatrixRunPreparedMockFn>;
 
-export function createMatrixHandlerTestHarness(
-  options: MatrixHandlerTestHarnessOptions = {},
-): MatrixHandlerTestHarness {
+export function createMatrixHandlerTestHarness(options: MatrixHandlerTestHarnessOptions = {}) {
   vi.spyOn(channelInbound, "createChannelInboundEnvelopeBuilderAsync").mockResolvedValue(
     (input) => input.body,
   );
@@ -267,13 +219,7 @@ export function createMatrixHandlerTestHarness(
     options.cfg ??
     ({
       session: { store: "/tmp/session-store" },
-      channels: {
-        matrix: {
-          dm: {
-            allowFrom,
-          },
-        },
-      },
+      channels: { matrix: { dm: { allowFrom } } },
     } as const);
 
   const handler = createMatrixRoomMessageHandler({
@@ -293,22 +239,14 @@ export function createMatrixHandlerTestHarness(
           upsertPairingRequest,
           buildPairingReply: options.buildPairingReply ?? (() => "pairing"),
         },
-        commands: {
-          shouldHandleTextCommands: options.shouldHandleTextCommands ?? (() => false),
-        },
+        commands: { shouldHandleTextCommands: options.shouldHandleTextCommands ?? (() => false) },
         text: {
           hasControlCommand: options.hasControlCommand ?? (() => false),
           resolveMarkdownTableMode: options.resolveMarkdownTableMode ?? (() => "preserve"),
         },
-        routing: {
-          resolveAgentRoute,
-        },
-        mentions: {
-          buildMentionRegexes: () => options.mentionRegexes ?? [],
-        },
-        session: {
-          recordInboundSession,
-        },
+        routing: { resolveAgentRoute },
+        mentions: { buildMentionRegexes: () => options.mentionRegexes ?? [] },
+        session: { recordInboundSession },
         reply: {
           settleReplyDispatcher: async ({
             dispatcher,
@@ -339,18 +277,9 @@ export function createMatrixHandlerTestHarness(
     cfg: cfgForHandler as never,
     accountId: options.accountId ?? "ops",
     accountConfig: options.accountConfig,
-    runtime:
-      options.runtime ??
-      ({
-        error: () => {},
-      } as RuntimeEnv),
+    runtime: options.runtime ?? ({ error: () => {} } as RuntimeEnv),
     logger:
-      options.logger ??
-      ({
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      } as RuntimeLogger),
+      options.logger ?? ({ info: () => {}, warn: () => {}, error: () => {} } as RuntimeLogger),
     logVerboseMessage: options.logVerboseMessage ?? (() => {}),
     allowFrom,
     allowFromResolvedEntries: options.allowFromResolvedEntries,

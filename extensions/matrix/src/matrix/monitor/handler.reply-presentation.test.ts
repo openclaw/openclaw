@@ -1,6 +1,5 @@
 import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-outbound";
-// Matrix tests cover the handler's reply presentation wiring.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -52,6 +51,11 @@ type DeliverFn = (
   info: { kind: "tool" | "block" | "final" },
 ) => Promise<unknown>;
 
+const approvalButtons = {
+  type: "buttons" as const,
+  buttons: [{ label: "Approve", action: { type: "callback" as const, value: "approve" } }],
+};
+
 describe("matrix monitor handler reply presentation", () => {
   beforeEach(() => {
     installMatrixMonitorTestRuntime();
@@ -72,44 +76,36 @@ describe("matrix monitor handler reply presentation", () => {
     });
   });
 
-  it.each([undefined] as const)(
-    "applies current acknowledgement scope while preserving account override %s",
-    async (accountScope) => {
-      const cfg: CoreConfig = {
-        messages: { ackReaction: "👀", ackReactionScope: "off" },
-        channels: {
-          matrix: {
-            dm: { allowFrom: ["*"] },
-            accounts: { ops: { ackReactionScope: accountScope } },
-          },
+  it("applies the current acknowledgement scope without an account override", async () => {
+    const cfg: CoreConfig = {
+      messages: { ackReaction: "👀", ackReactionScope: "off" },
+      channels: {
+        matrix: {
+          dm: { allowFrom: ["*"] },
+          accounts: { ops: { ackReactionScope: undefined } },
         },
-      };
-      let currentConfig = cfg;
-      const dispatchInboundMessage = vi.fn(async () => ({
-        queuedFinal: false,
-        counts: { final: 0, block: 0, tool: 0 },
-      }));
-      const { handler } = createMatrixHandlerTestHarness({
-        cfg,
-        currentConfig: () => currentConfig,
-        shouldAckReaction,
-        dispatchInboundMessage,
-      });
-      for (const [index, scope] of (["off", "all", "off"] as const).entries()) {
-        currentConfig = { ...cfg, messages: { ...cfg.messages, ackReactionScope: scope } };
-        const eventId = `$reload-${index}`;
-        await handler(
-          "!room:example.org",
-          createMatrixTextMessageEvent({ eventId, body: "hello" }),
-        );
-        const reactions = reactMatrixMessageMock.mock.calls.filter((call) => call[1] === eventId);
-        expect(reactions.some((call) => call[2] === "👀")).toBe(
-          accountScope === undefined && scope === "all",
-        );
-      }
-      expect(dispatchInboundMessage).toHaveBeenCalledTimes(3);
-    },
-  );
+      },
+    };
+    let currentConfig = cfg;
+    const dispatchInboundMessage = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { final: 0, block: 0, tool: 0 },
+    }));
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      currentConfig: () => currentConfig,
+      shouldAckReaction,
+      dispatchInboundMessage,
+    });
+    for (const [index, scope] of (["off", "all", "off"] as const).entries()) {
+      currentConfig = { ...cfg, messages: { ...cfg.messages, ackReactionScope: scope } };
+      const eventId = `$reload-${index}`;
+      await handler("!room:example.org", createMatrixTextMessageEvent({ eventId, body: "hello" }));
+      const reactions = reactMatrixMessageMock.mock.calls.filter((call) => call[1] === eventId);
+      expect(reactions.some((call) => call[2] === "👀")).toBe(scope === "all");
+    }
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(3);
+  });
 
   it("resolves a reply's presentation before the room delivery reads it", async () => {
     const runGate = createDeferred<void>();
@@ -141,13 +137,7 @@ describe("matrix monitor handler reply presentation", () => {
       await deliver(
         {
           presentation: {
-            blocks: [
-              { type: "text", text: "Deploy to production?" },
-              {
-                type: "buttons",
-                buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
-              },
-            ],
+            blocks: [{ type: "text", text: "Deploy to production?" }, approvalButtons],
           },
         },
         { kind: "final" },
@@ -163,10 +153,9 @@ describe("matrix monitor handler reply presentation", () => {
     const reply = delivered?.replies?.[0];
     expect(reply?.text).toContain("Deploy to production?");
     expect(reply?.presentation).toBeUndefined();
-    expect(
-      ((reply?.channelData?.matrix as { extraContent?: Record<string, unknown> } | undefined)
-        ?.extraContent ?? {})["com.openclaw.presentation"],
-    ).toMatchObject({ type: "message.presentation", version: 1 });
+    expect(reply?.channelData?.matrix).toMatchObject({
+      extraContent: { "com.openclaw.presentation": { type: "message.presentation", version: 1 } },
+    });
   });
 
   it.each(["controls", "answer"] as const)("edits a live preview for %s", async (kind) => {
@@ -193,14 +182,7 @@ describe("matrix monitor handler reply presentation", () => {
       start: async () => {},
       onStartError: vi.fn(),
     });
-    const presentation = {
-      blocks: [
-        {
-          type: "buttons" as const,
-          buttons: [{ label: "Approve", action: { type: "callback" as const, value: "approve" } }],
-        },
-      ],
-    };
+    const presentation = { blocks: [approvalButtons] };
     try {
       const payload =
         kind === "controls"
@@ -227,23 +209,21 @@ describe("matrix monitor handler reply presentation", () => {
       });
       const result = await deliverReply(payload, { kind: "final" });
 
+      const extraContent =
+        kind === "controls"
+          ? {
+              "com.openclaw.presentation": expect.objectContaining({
+                type: "message.presentation",
+                version: 1,
+                blocks: presentation.blocks,
+              }),
+            }
+          : undefined;
       expect(editMessageMatrixMock).toHaveBeenCalledExactlyOnceWith(
         context.roomId,
         "$draft1",
         payload.text,
-        expect.objectContaining(
-          kind === "controls"
-            ? {
-                extraContent: {
-                  "com.openclaw.presentation": expect.objectContaining({
-                    type: "message.presentation",
-                    version: 1,
-                    blocks: presentation.blocks,
-                  }),
-                },
-              }
-            : {},
-        ),
+        expect.objectContaining(extraContent ? { extraContent } : {}),
       );
       expect(finalizeLive).not.toHaveBeenCalled();
       expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
