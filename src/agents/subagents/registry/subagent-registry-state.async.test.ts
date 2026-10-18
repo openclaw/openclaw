@@ -47,6 +47,10 @@ afterEach(async () => {
   clearSubagentRunsReadCacheForTest();
   await state.cleanup();
 });
+function snapshot() {
+  return getSubagentSessionListRunsSnapshotForRead(new Map());
+}
+
 function runs(model: string, runId = "one") {
   const run = createSubagentRunRecord({
     runId,
@@ -68,7 +72,7 @@ it.each(["maintenance", "schema"] as const)(
       const prepared = createSubagentSessionListReadView({ env: state.env });
       expect(prepared.snapshotIdentity()).toBe(identity);
       return {
-        current: AsyncLocalStorage.bind(() => getSubagentSessionListRunsSnapshotForRead(new Map())),
+        current: AsyncLocalStorage.bind(() => snapshot()),
         prepared,
       };
     };
@@ -119,57 +123,52 @@ function holdFirstCompactRead(
   return { entered: entered.promise, release: release.resolve, read };
 }
 
-it.each(["requester"] as const)(
-  "hydrates latest controlled payloads with %s descendant topology",
-  async (owner) => {
-    const requesterSessionKey = "agent:main:parent";
-    const latest = createSubagentRunRecord({
-      runId: "latest",
-      childSessionKey: "agent:main:subagent:visible",
-      requesterSessionKey,
-      generation: 2,
-      createdAt: Date.now(),
-      completion: { required: false },
-      delivery: { status: "not_required" },
-    });
-    const old = { ...latest, runId: "old", generation: 1, task: "retained historical payload" };
-    const descendant = createSubagentRunRecord({
-      runId: "descendant",
-      childSessionKey: "agent:main:subagent:descendant",
-      requesterSessionKey: owner === "requester" ? latest.childSessionKey : "agent:main:other",
-      controllerSessionKey: latest.childSessionKey,
-      createdAt: Date.now(),
-      completion: { required: false },
-      delivery: { status: "not_required" },
-    });
-    saveSubagentRegistryToSqlite(
-      new Map([old, latest, descendant].map((entry) => [entry.runId, entry])),
-    );
-    const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+it("hydrates latest controlled payloads with requester descendant topology", async () => {
+  const requesterSessionKey = "agent:main:parent";
+  const latest = createSubagentRunRecord({
+    runId: "latest",
+    childSessionKey: "agent:main:subagent:visible",
+    requesterSessionKey,
+    generation: 2,
+    createdAt: Date.now(),
+    completion: { required: false },
+    delivery: { status: "not_required" },
+  });
+  const old = { ...latest, runId: "old", generation: 1, task: "retained historical payload" };
+  const descendant = createSubagentRunRecord({
+    runId: "descendant",
+    childSessionKey: "agent:main:subagent:descendant",
+    requesterSessionKey: latest.childSessionKey,
+    controllerSessionKey: latest.childSessionKey,
+    createdAt: Date.now(),
+    completion: { required: false },
+    delivery: { status: "not_required" },
+  });
+  saveSubagentRegistryToSqlite(
+    new Map([old, latest, descendant].map((entry) => [entry.runId, entry])),
+  );
+  const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
 
-    const context = await buildControlledSubagentRunsReadContext(requesterSessionKey);
+  const context = await buildControlledSubagentRunsReadContext(requesterSessionKey);
 
-    expect(context.runs.map((entry) => entry.runId)).toEqual([latest.runId]);
-    expect(context.list.pendingDescendants.get(latest.childSessionKey)).toBe(
-      owner === "requester" ? 1 : 0,
-    );
-    expect(context.list.childSessionsByController.get(latest.childSessionKey)).toEqual([
-      descendant.childSessionKey,
-    ]);
-    expect(read.mock.calls.map(([, command]) => command)).toEqual([
-      { type: "subagents.sessionList" },
-      { type: "subagents.runs", scope: { kind: "ids", runIds: [latest.runId] } },
-    ]);
-    const moved = {
-      ...latest,
-      runId: "moved",
-      generation: 3,
-      requesterSessionKey: "agent:main:moved",
-    };
-    persistRegistryFixture(new Map([[moved.runId, moved]]), [moved.runId]);
-    expect((await buildControlledSubagentRunsReadContext(requesterSessionKey)).runs).toEqual([]);
-  },
-);
+  expect(context.runs.map((entry) => entry.runId)).toEqual([latest.runId]);
+  expect(context.list.pendingDescendants.get(latest.childSessionKey)).toBe(1);
+  expect(context.list.childSessionsByController.get(latest.childSessionKey)).toEqual([
+    descendant.childSessionKey,
+  ]);
+  expect(read.mock.calls.map(([, command]) => command)).toEqual([
+    { type: "subagents.sessionList" },
+    { type: "subagents.runs", scope: { kind: "ids", runIds: [latest.runId] } },
+  ]);
+  const moved = {
+    ...latest,
+    runId: "moved",
+    generation: 3,
+    requesterSessionKey: "agent:main:moved",
+  };
+  persistRegistryFixture(new Map([[moved.runId, moved]]), [moved.runId]);
+  expect((await buildControlledSubagentRunsReadContext(requesterSessionKey)).runs).toEqual([]);
+});
 
 it("captures parent and yielded-child facts after the final scoped hydration", async () => {
   const parent = runs("before", "parent").get("parent")!;
@@ -242,7 +241,7 @@ it("rejects newer schema admission before optional compact hints can be omitted"
     db.exec(`PRAGMA user_version = ${version}`);
   }
   await expect(prepareOptionalSubagentSessionListReadCache()).resolves.toBe(true);
-  expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get("one")?.model).toBe("retained");
+  expect(snapshot().get("one")?.model).toBe("retained");
 });
 
 it("preserves an optional read cleanup failure when its caller also cancels", async () => {
@@ -322,7 +321,7 @@ it.each(["update", "delete", "replace"] as const)(
       }
       gate.release();
       await prepared;
-      const current = getSubagentSessionListRunsSnapshotForRead(new Map());
+      const current = snapshot();
       expect([...current].map(([id, row]) => [id, row.model])).toEqual(
         change === "replace"
           ? [["new", "replacement"]]
@@ -357,7 +356,7 @@ it.each(["during", "after a named publication"] as const)(
             await gate.entered;
           } else {
             await prepared;
-            expect(getSubagentSessionListRunsSnapshotForRead(new Map()).size).toBe(0);
+            expect(snapshot().size).toBe(0);
           }
           saveSubagentRegistryToSqlite(runs("created"));
           admission.assertCurrent();
@@ -368,13 +367,9 @@ it.each(["during", "after a named publication"] as const)(
           gate?.release();
           await prepared;
           await prepareSubagentSessionListReadCache();
-          expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get("one")?.model).toBe(
-            "created",
-          );
+          expect(snapshot().get("one")?.model).toBe("created");
           if (creation === "after a named publication") {
-            expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get("own")?.model).toBe(
-              "published",
-            );
+            expect(snapshot().get("own")?.model).toBe("published");
           }
         } finally {
           gate?.release();
@@ -392,15 +387,15 @@ it("does not install private snapshot bytes into canonical compact facts", async
     saveSubagentRegistryToSqlite(runs("canonical"));
     const privateRows = await withSubagentRunReadSnapshot(
       new Map(),
-      (snapshot) => ({ snapshot, runIds: [...snapshot.keys()], sessionKeys: [] }),
-      ({ snapshot }) => snapshot,
+      (rows) => ({ rows, runIds: [...rows.keys()], sessionKeys: [] }),
+      ({ rows }) => rows,
       "all",
     );
     expect(privateRows.get("one")?.model).toBe("snapshot");
     expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
   });
   await prepareSubagentSessionListReadCache();
-  expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get("one")?.model).toBe("canonical");
+  expect(snapshot().get("one")?.model).toBe("canonical");
 });
 
 it("keeps published compact facts through a temporary writer scope without reloading", async () => {
@@ -409,14 +404,12 @@ it("keeps published compact facts through a temporary writer scope without reloa
   changed.createdAt = 20;
   original.get("other")!.createdAt = 10;
   persistRegistryFixture(original);
-  const initial = getSubagentSessionListRunsSnapshotForRead(new Map());
+  const initial = snapshot();
   const admission = captureOpenClawStateWorkerContext().admission;
   const load = vi.spyOn(store, "loadSubagentSessionListRunsFromSqlite");
   const observed: Array<Array<[string, string | undefined]>> = [];
   const stop = subscribeSubagentRunChanges("persistence", () => {
-    observed.push(
-      [...getSubagentSessionListRunsSnapshotForRead(new Map())].map(([id, row]) => [id, row.model]),
-    );
+    observed.push([...snapshot()].map(([id, row]) => [id, row.model]));
   });
   const writer = createOpenClawDatabaseMaintenanceScope();
   try {
@@ -427,7 +420,7 @@ it("keeps published compact facts through a temporary writer scope without reloa
     );
     await writer.close();
     admission.assertCurrent();
-    const current = getSubagentSessionListRunsSnapshotForRead(new Map());
+    const current = snapshot();
     expect(load).not.toHaveBeenCalled();
     expect(observed).toEqual([
       [
