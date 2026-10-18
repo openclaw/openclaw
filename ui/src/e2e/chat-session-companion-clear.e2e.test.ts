@@ -106,6 +106,15 @@ async function clearCompanion(clearButton: Locator): Promise<void> {
   await closeChatLayoutMenu(page);
 }
 
+async function capture(page: Page, name: string, elements: Locator[]) {
+  if (artifactDir) {
+    await writeFile(
+      path.join(artifactDir, `${name}.png`),
+      await takeControlUiViewportScreenshot(page, page.locator(".shell"), elements),
+    );
+  }
+}
+
 suite.define(() => {
   it.each([1200, 390])(
     "preserves the thread on reset failure and a newer draft after a successful retry at %ipx",
@@ -117,12 +126,7 @@ suite.define(() => {
         const alert = page.getByRole("alert").filter({ hasText: resetError });
         await alert.waitFor({ state: "visible" });
         await companion.getByText(answer, { exact: true }).waitFor();
-        if (artifactDir) {
-          await writeFile(
-            path.join(artifactDir, "reset-failure.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [alert, companion]),
-          );
-        }
+        await capture(page, "reset-failure", [alert, companion]);
 
         await openChatDetails(page);
         await closeChatDetails(page);
@@ -140,12 +144,7 @@ suite.define(() => {
         await expect.poll(() => companion.getByText(answer, { exact: true }).count()).toBe(0);
         expect(await input.inputValue()).toBe("Keep the question I typed after Clear");
         expect(await page.getByRole("alert").count()).toBe(0);
-        if (artifactDir) {
-          await writeFile(
-            path.join(artifactDir, "reset-success.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [companion]),
-          );
-        }
+        await capture(page, "reset-success", [companion]);
       }, width);
     },
   );
@@ -283,14 +282,9 @@ suite.define(() => {
 
       const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
       expect(await visiblePane.getByRole("alert").filter({ hasText: resetError }).count()).toBe(0);
-      if (artifactDir) {
-        await writeFile(
-          path.join(artifactDir, "stale-reset-error-suppressed.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-            visiblePane.locator(".agent-chat__composer-combobox textarea"),
-          ]),
-        );
-      }
+      await capture(page, "stale-reset-error-suppressed", [
+        visiblePane.locator(".agent-chat__composer-combobox textarea"),
+      ]);
 
       await navigateToControlUiSession(page, initiatingSessionKey);
       const initiatingPane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
@@ -301,14 +295,9 @@ suite.define(() => {
         .locator("openclaw-chat-session-rail")
         .getByText(answer, { exact: true })
         .waitFor();
-      if (artifactDir) {
-        await writeFile(
-          path.join(artifactDir, "initiating-thread-preserved.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-            initiatingPane.locator("openclaw-chat-session-rail").getByText(answer, { exact: true }),
-          ]),
-        );
-      }
+      await capture(page, "initiating-thread-preserved", [
+        initiatingPane.locator("openclaw-chat-session-rail").getByText(answer, { exact: true }),
+      ]);
     });
   });
 });

@@ -83,25 +83,35 @@ function composerGeometry(composer: Locator) {
   }));
 }
 
+function screenshot(page: Page, name: string, animations: "allow" | "disabled" = "allow") {
+  const dir = captureUiProofEnabled ? createControlUiE2eArtifactDir(name) : null;
+  return async (file: string) => {
+    if (dir) {
+      await page.screenshot({ path: path.join(dir, file), animations });
+    }
+  };
+}
+
+async function withSideChat(
+  run: (
+    gateway: Awaited<ReturnType<typeof openSideChat>>,
+    composer: Locator,
+    page: Page,
+  ) => Promise<void>,
+  shortcut: ChatSendShortcut = "enter",
+) {
+  await suite.withPage({ viewport }, async ({ page }) => {
+    const gateway = await openSideChat(page, shortcut);
+    await run(gateway, page.getByRole("textbox", { name: "Ask in side chat", exact: true }), page);
+  });
+}
+
 suite.define(() => {
   it("keeps a dropped image in Side chat and sends its bytes only to the companion", async () => {
-    await suite.withPage({ viewport }, async ({ page }) => {
-      const gateway = await openSideChat(page);
-      const composer = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
+    await withSideChat(async (gateway, composer, page) => {
       await composer.fill("What does this image show?");
       const image = await dropSideChatImage(page, composer);
-      const preview = page.locator(
-        'openclaw-chat-session-rail .chat-attachment-thumb[aria-busy="false"] img',
-      );
-      await preview.waitFor();
-      await preview.evaluate((element) => (element as HTMLImageElement).decode());
-      await expect
-        .poll(() => page.locator(".chat-session-rail__composer button[type=submit]").isEnabled())
-        .toBe(true);
-      if (captureUiProofEnabled) {
-        const dir = createControlUiE2eArtifactDir("side-chat-image-drop");
-        await page.screenshot({ path: path.join(dir, "dropped.png"), animations: "disabled" });
-      }
+      await screenshot(page, "side-chat-image-drop", "disabled")("dropped.png");
       expect(
         await page.locator("openclaw-chat-session-rail .chat-attachment-thumb img").count(),
       ).toBe(1);
@@ -123,13 +133,9 @@ suite.define(() => {
   });
 
   it("explains an unsupported image and retries its bytes after model recovery", async () => {
-    await suite.withPage({ viewport }, async ({ page }) => {
-      const gateway = await openSideChat(page);
+    await withSideChat(async (gateway, composer, page) => {
       const side = page.locator("openclaw-chat-session-rail");
-      const composer = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
-      const proofDir = captureUiProofEnabled
-        ? createControlUiE2eArtifactDir("side-chat-image-model-retry")
-        : null;
+      const capture = screenshot(page, "side-chat-image-model-retry", "disabled");
       await composer.fill("Describe this image");
       const image = await dropSideChatImage(page, composer, "retry-image.png");
       await gateway.deferNext("sessions.companion.ask");
@@ -160,12 +166,7 @@ suite.define(() => {
       expect(await retry.isEnabled()).toBe(true);
       expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(1);
       await composer.fill("Keep my next question");
-      if (proofDir) {
-        await page.screenshot({
-          path: path.join(proofDir, "unsupported-image.png"),
-          animations: "disabled",
-        });
-      }
+      await capture("unsupported-image.png");
       // The mock now represents the image-capable model selected by the operator.
       await gateway.deferNext("sessions.companion.ask");
       await retry.click();
@@ -184,35 +185,22 @@ suite.define(() => {
       expect(await composer.inputValue()).toBe("Keep my next question");
       expect(await gateway.getRequests("chat.send")).toEqual([]);
       expect(await gateway.getRequests("sessions.companion.reset")).toEqual([]);
-      if (proofDir) {
-        await page.screenshot({
-          path: path.join(proofDir, "recovered-image.png"),
-          animations: "disabled",
-        });
-      }
+      await capture("recovered-image.png");
     });
   });
 
   it("wraps and grows a question, keeps Shift+Enter, then sends and shrinks", async () => {
-    await suite.withPage({ viewport }, async ({ page }) => {
-      const gateway = await openSideChat(page);
-      const composer = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
-      const proofDir = captureUiProofEnabled
-        ? createControlUiE2eArtifactDir("chat-session-companion-composer")
-        : null;
+    await withSideChat(async (gateway, composer, page) => {
+      const capture = screenshot(page, "chat-session-companion-composer");
       const empty = await composerGeometry(composer);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "empty.png") });
-      }
+      await capture("empty.png");
 
       const question = "Explain the next step and the remaining checks for this session. "
         .repeat(4)
         .trim();
       await composer.fill(question);
       const filled = await composerGeometry(composer);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "wrapped.png") });
-      }
+      await capture("wrapped.png");
       expect(filled.scrollWidth).toBeLessThanOrEqual(filled.clientWidth);
       expect(filled.height).toBeGreaterThan(empty.height);
 
@@ -240,9 +228,7 @@ suite.define(() => {
         textarea.dispatchEvent(confirm);
         return confirm.defaultPrevented;
       });
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "ime-confirmation.png") });
-      }
+      await capture("ime-confirmation.png");
       expect(confirmationConsumed).toBe(false);
       expect(await composer.inputValue()).toBe(multiline);
       expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
@@ -252,18 +238,14 @@ suite.define(() => {
       expect(request.params).toMatchObject({ question: multiline });
       await expect.poll(() => composer.inputValue()).toBe("");
       await expect.poll(async () => (await composerGeometry(composer)).height).toBe(empty.height);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "cleared.png") });
-      }
+      await capture("cleared.png");
     });
   });
 
   it.each(["Control", "Meta"])(
     "uses %s+Enter to send when the configured shortcut requires a modifier",
     async (modifier) => {
-      await suite.withPage({ viewport }, async ({ page }) => {
-        const gateway = await openSideChat(page, "modifier-enter");
-        const composer = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
+      await withSideChat(async (gateway, composer, page) => {
         await composer.fill("Explain the next step.");
         await composer.press("Enter");
         await page.keyboard.type("Include the checks.");
@@ -274,7 +256,7 @@ suite.define(() => {
         const request = await gateway.waitForRequest("sessions.companion.ask");
         expect(request.params).toMatchObject({ question });
         await expect.poll(() => composer.inputValue()).toBe("");
-      });
+      }, "modifier-enter");
     },
   );
 });

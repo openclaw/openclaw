@@ -1,5 +1,5 @@
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -14,6 +14,20 @@ import {
 
 const suite = createControlUiE2eSuite({ name: "Manual Side chat opening focus" });
 
+const isFocused = (input: Locator) =>
+  input.evaluate((element) => document.activeElement === element);
+async function holdSideChat(page: Page, name: string) {
+  const artifacts = createControlUiE2eArtifactDir(name);
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const held = await holdModuleResponse(
+    page,
+    controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
+  );
+  const capture = (file: string) => page.screenshot({ path: path.join(artifacts, file + ".png") });
+  return { held, pageErrors, capture };
+}
+
 suite.define(() => {
   it.each(["side chat", "main composer", "another pane", "command palette"])(
     "honors focus intent in %s while a manually opened Side chat loads",
@@ -23,14 +37,9 @@ suite.define(() => {
           ? { width: 2200, height: 1000 }
           : { width: 1440, height: 900 };
       await suite.withPage({ viewport }, async ({ page }) => {
-        const artifacts = createControlUiE2eArtifactDir(
-          `companion-manual-${target.replaceAll(" ", "-")}`,
-        );
-        const pageErrors: string[] = [];
-        page.on("pageerror", (error) => pageErrors.push(error.message));
-        const held = await holdModuleResponse(
+        const { held, pageErrors, capture } = await holdSideChat(
           page,
-          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
+          `companion-manual-${target.replaceAll(" ", "-")}`,
         );
         try {
           const gateway = await installMockGateway(page);
@@ -57,25 +66,17 @@ suite.define(() => {
             await foreground.click();
             await page.keyboard.type("Keep typing here");
             expect(await foreground.inputValue()).toBe("Keep typing here");
-            expect(await foreground.evaluate((element) => document.activeElement === element)).toBe(
-              true,
-            );
+            expect(await isFocused(foreground)).toBe(true);
           }
-          await page.screenshot({ path: path.join(artifacts, "before-rail-arrives.png") });
+          await capture("before-rail-arrives");
           held.release();
           await side.waitFor();
           if (target === "side chat") {
             foreground = side;
           }
-          expect
-            .soft(await main.evaluate((element) => document.activeElement === element))
-            .toBe(target === "main composer");
-          expect
-            .soft(await side.evaluate((element) => document.activeElement === element))
-            .toBe(target === "side chat");
-          const foregroundFocused = await foreground.evaluate(
-            (element) => document.activeElement === element,
-          );
+          expect.soft(await isFocused(main)).toBe(target === "main composer");
+          expect.soft(await isFocused(side)).toBe(target === "side chat");
+          const foregroundFocused = await isFocused(foreground);
           await page.keyboard.type(" continued");
           const foregroundDraft = await foreground.inputValue();
           const mainDrafts = await Promise.all(
@@ -88,24 +89,8 @@ suite.define(() => {
               (input) => input.inputValue(),
             ),
           );
-          await page.screenshot({ path: path.join(artifacts, "after-rail-and-continuation.png") });
+          await capture("after-rail-and-continuation");
           const requests = (await gateway.getRequests()).map(({ method }) => method);
-          await writeFile(
-            path.join(artifacts, "receipt.json"),
-            JSON.stringify(
-              {
-                target,
-                foregroundFocused,
-                foregroundDraft,
-                mainDrafts,
-                sideDrafts,
-                requests,
-                pageErrors,
-              },
-              null,
-              2,
-            ),
-          );
           expect.soft(foregroundFocused).toBe(true);
           expect
             .soft(foregroundDraft)
@@ -135,14 +120,9 @@ suite.define(() => {
     "preserves queued-editor %s while Side chat loads",
     async (intent) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        const artifacts = createControlUiE2eArtifactDir(
-          `companion-manual-queue-${intent.replaceAll(" ", "-")}`,
-        );
-        const pageErrors: string[] = [];
-        page.on("pageerror", (error) => pageErrors.push(error.message));
-        const held = await holdModuleResponse(
+        const { held, pageErrors, capture } = await holdSideChat(
           page,
-          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
+          `companion-manual-queue-${intent.replaceAll(" ", "-")}`,
         );
         try {
           const gateway = await installMockGateway(page);
@@ -183,7 +163,7 @@ suite.define(() => {
           await row.dblclick();
           const editor = page.locator(".chat-queue__edit-input");
           await editor.waitFor();
-          expect(await editor.evaluate((element) => document.activeElement === element)).toBe(true);
+          expect(await isFocused(editor)).toBe(true);
           if (intent === "continued typing") {
             await page.keyboard.press("ControlOrMeta+Shift+s");
           } else {
@@ -194,17 +174,15 @@ suite.define(() => {
             await editor.click();
             await page.keyboard.press("End");
           }
-          expect(await editor.evaluate((element) => document.activeElement === element)).toBe(true);
+          expect(await isFocused(editor)).toBe(true);
           await page.keyboard.type(" changed");
           expect(await editor.inputValue()).toBe("Queued correction changed");
-          await page.screenshot({ path: path.join(artifacts, "before-rail-arrives.png") });
+          await capture("before-rail-arrives");
           held.release();
           const side = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
           await side.waitFor();
           expect(await side.isEnabled()).toBe(true);
-          const editorFocused = await editor.evaluate(
-            (element) => document.activeElement === element,
-          );
+          const editorFocused = await isFocused(editor);
           await page.keyboard.type(" continued");
           const drafts = {
             main: await main.inputValue(),
@@ -212,11 +190,7 @@ suite.define(() => {
             side: await side.inputValue(),
           };
           const requests = (await gateway.getRequests()).map(({ method }) => method);
-          await page.screenshot({ path: path.join(artifacts, "after-rail-and-continuation.png") });
-          await writeFile(
-            path.join(artifacts, "receipt.json"),
-            JSON.stringify({ intent, editorFocused, drafts, requests, pageErrors }, null, 2),
-          );
+          await capture("after-rail-and-continuation");
           expect.soft(editorFocused).toBe(true);
           expect.soft(drafts).toEqual({
             main: "Separate main draft",

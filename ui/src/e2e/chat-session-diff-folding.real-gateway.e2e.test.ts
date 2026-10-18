@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
 import {
@@ -35,6 +36,29 @@ const after = before.map((line) =>
 let instance: OpenClawTestInstance;
 let workspace: string;
 let longBefore: string[], longAfter: string[];
+
+async function writeSources(changed: boolean) {
+  const sources = {
+    "example.ts": changed ? after : before,
+    "large.ts": changed ? longAfter : longBefore,
+    "gapped.ts": [
+      "function unknown() {",
+      ...Array.from(
+        { length: 90 },
+        (_, i) => `  const value${i} = ${changed && i === 0 ? 999 : i};`,
+      ),
+      `  return ${changed ? 2 : 1};`,
+      "}",
+    ],
+  };
+  for (const [name, lines] of Object.entries(sources)) {
+    await writeFile(path.join(workspace, name), lines.join("\n") + "\n");
+  }
+}
+
+async function expectLines(file: Locator, selector: string, lines: (string | undefined)[]) {
+  expect(await file.locator(selector).allTextContents()).toEqual(lines);
+}
 const suite = createControlUiE2eSuite({
   name: "manual code folding through a real Gateway",
   startServerBeforeBrowser: true,
@@ -67,33 +91,10 @@ const suite = createControlUiE2eSuite({
         { length: 64 },
         (_, i) => "const after" + i + ' = "' + identifier() + '";',
       );
-      await writeFile(path.join(workspace, "example.ts"), before.join("\n") + "\n");
-      await writeFile(path.join(workspace, "large.ts"), longBefore.join("\n") + "\n");
-      await writeFile(
-        path.join(workspace, "gapped.ts"),
-        [
-          "function unknown() {",
-          ...Array.from({ length: 90 }, (_, i) => "  const value" + i + " = " + i + ";"),
-          "  return 1;",
-          "}",
-        ].join("\n") + "\n",
-      );
+      await writeSources(false);
       git("add", ".");
       git("commit", "-m", "Synthetic diff baseline");
-      await writeFile(path.join(workspace, "example.ts"), after.join("\n") + "\n");
-      await writeFile(path.join(workspace, "large.ts"), longAfter.join("\n") + "\n");
-      await writeFile(
-        path.join(workspace, "gapped.ts"),
-        [
-          "function unknown() {",
-          ...Array.from(
-            { length: 90 },
-            (_, i) => "  const value" + i + " = " + (i === 0 ? 999 : i) + ";",
-          ),
-          "  return 2;",
-          "}",
-        ].join("\n") + "\n",
-      );
+      await writeSources(true);
       await owner.state.writeConfig({
         agents: {
           defaults: { workspace, skipBootstrap: true, heartbeat: { every: "0m" } },
@@ -200,16 +201,10 @@ suite.define(() => {
         const panel = page.locator(".session-diff");
         const file = panel.locator(".session-diff__file").filter({ hasText: "example.ts" });
         await file.locator(".session-diff__code-toggle").first().waitFor();
-        expect(
-          await file
-            .locator(".session-diff-split__side--left .session-diff-split__text")
-            .allTextContents(),
-        ).toEqual([before[1], before[3]]);
-        expect(
-          await file
-            .locator(".session-diff-split__side--right .session-diff-split__text")
-            .allTextContents(),
-        ).toEqual([after[1], after[3]]);
+        const splitLeft = ".session-diff-split__side--left .session-diff-split__text";
+        const splitRight = ".session-diff-split__side--right .session-diff-split__text";
+        await expectLines(file, splitLeft, [before[1], before[3]]);
+        await expectLines(file, splitRight, [after[1], after[3]]);
         expect(await file.locator(".chat-diff__change--add").count()).toBeGreaterThan(0);
         const take = async (name: string) => {
           const frame = await takeControlUiScreenshotFrame(
@@ -230,9 +225,7 @@ suite.define(() => {
         await file.getByRole("button", { name: "Collapse code at line 1", exact: true }).click();
         await file.locator(".session-diff__code-placeholder").waitFor();
         expect(await file.locator(".session-diff-split__row").count()).toBe(1);
-        expect(await file.locator(".session-diff-split__text").allTextContents()).toEqual([
-          before[0],
-        ]);
+        await expectLines(file, ".session-diff-split__text", [before[0]]);
         expect(await file.locator(".session-diff__code-placeholder").textContent()).toContain("+2");
         expect(await file.locator(".session-diff__code-placeholder").textContent()).toContain("-2");
         await take("after-folded-split");
@@ -247,38 +240,28 @@ suite.define(() => {
           await section.locator(".session-diff__file-toggle").click();
         }
         await file.locator(".session-diff__code-placeholder").click();
-        expect(
-          await file.locator(".chat-diff__row--del .chat-diff__text").allTextContents(),
-        ).toEqual([before[1], before[3]]);
-        expect(
-          await file.locator(".chat-diff__row--add .chat-diff__text").allTextContents(),
-        ).toEqual([after[1], after[3]]);
+        const unifiedDel = ".chat-diff__row--del .chat-diff__text";
+        const unifiedAdd = ".chat-diff__row--add .chat-diff__text";
+        await expectLines(file, unifiedDel, [before[1], before[3]]);
+        await expectLines(file, unifiedAdd, [after[1], after[3]]);
         const large = panel.locator(".session-diff__file").filter({ hasText: "large.ts" });
-        expect(
-          await large.locator(".chat-diff__row--del .chat-diff__text").allTextContents(),
-        ).toEqual(longBefore);
-        expect(
-          await large.locator(".chat-diff__row--add .chat-diff__text").allTextContents(),
-        ).toEqual(longAfter);
+        await expectLines(large, unifiedDel, longBefore);
+        await expectLines(large, unifiedAdd, longAfter);
         const gapped = panel.locator(".session-diff__file").filter({ hasText: "gapped.ts" });
         expect(await gapped.locator(".session-diff__code-toggle").count()).toBe(0);
         await gapped.getByRole("button", { name: /Show all .* unmodified lines/ }).click();
         await gapped.locator(".session-diff__code-toggle").first().waitFor();
         await view("Switch to Split Diff");
-        expect(
-          await large
-            .locator(
-              ".session-diff-split__side--left.session-diff-split__side--filled .session-diff-split__text",
-            )
-            .allTextContents(),
-        ).toEqual(longBefore);
-        expect(
-          await large
-            .locator(
-              ".session-diff-split__side--right.session-diff-split__side--filled .session-diff-split__text",
-            )
-            .allTextContents(),
-        ).toEqual(longAfter);
+        await expectLines(
+          large,
+          ".session-diff-split__side--left.session-diff-split__side--filled .session-diff-split__text",
+          longBefore,
+        );
+        await expectLines(
+          large,
+          ".session-diff-split__side--right.session-diff-split__side--filled .session-diff-split__text",
+          longAfter,
+        );
         await file.getByRole("button", { name: "Collapse code at line 3", exact: true }).click();
         expect(await file.locator(".session-diff__code-placeholder").count()).toBe(1);
         await panel.getByRole("button", { name: "Refresh changes" }).click();

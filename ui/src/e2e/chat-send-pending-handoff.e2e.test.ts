@@ -107,14 +107,16 @@ function analyzeFrameContinuity(
   return keyTimeline;
 }
 
-const BASE_HISTORY = [
-  {
-    content: [{ text: "Ready.", type: "text" }],
-    role: "assistant",
-    timestamp: Date.now() - 5_000,
-    __openclaw: { seq: 1 },
-  },
-];
+function historyMessage<T extends { seq: number }>(
+  role: "user" | "assistant",
+  text: string,
+  metadata: T,
+  timestamp = Date.now(),
+) {
+  return { role, content: [{ type: "text", text }], timestamp, __openclaw: metadata };
+}
+
+const BASE_HISTORY = [historyMessage("assistant", "Ready.", { seq: 1 }, Date.now() - 5_000)];
 
 type ChatSendParams = {
   attachments?: Array<{ content?: string; mimeType?: string }>;
@@ -164,25 +166,10 @@ async function finishRunAndSettle(
   runId: string,
   userEcho: Record<string, unknown>,
 ): Promise<FrameSample[]> {
-  await gateway.setHistoryMessages([
-    ...BASE_HISTORY,
-    userEcho,
-    {
-      content: [{ text: "Run complete.", type: "text" }],
-      role: "assistant",
-      timestamp: Date.now() + 1,
-      __openclaw: { seq: 3 },
-    },
-  ]);
-  // The terminal reconciliation must re-read history; baseline before the
-  // final so either trigger (final event or terminal session row) counts.
+  const finalMessage = historyMessage("assistant", "Run complete.", { seq: 3 }, Date.now() + 1);
+  await gateway.setHistoryMessages([...BASE_HISTORY, userEcho, finalMessage]);
+  // Count either terminal trigger's authoritative history read.
   const historyRequestsBeforeTerminal = (await gateway.getRequests("chat.history")).length;
-  const finalMessage = {
-    content: [{ text: "Run complete.", type: "text" }],
-    role: "assistant",
-    timestamp: Date.now() + 1,
-    __openclaw: { seq: 3 },
-  };
   await gateway.emitChatFinal({ runId, text: "Run complete." });
   await currentPage
     .locator(".chat-bubble")
@@ -226,6 +213,18 @@ async function finishRunAndSettle(
   return stopFrameSampler(currentPage);
 }
 
+function userMessage(runId: string, text = PROBE_TEXT) {
+  return historyMessage("user", text, { id: USER_ECHO_ENTRY_ID, idempotencyKey: runId, seq: 2 });
+}
+
+function captureProof(page: Page) {
+  return async (filename: string) => {
+    if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
+      await page.screenshot({ path: path.join(suite.artifactDir, filename) });
+    }
+  };
+}
+
 function isHealthyImageFrame(frame: FrameSample): boolean {
   return frame.rowKeys.length === 1 && frame.imageCount === 1 && frame.loadedImageCount === 1;
 }
@@ -241,17 +240,13 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
-        const captureProof = async (filename: string) => {
-          if (proofDir) {
-            await page.screenshot({ path: path.join(proofDir, filename) });
-          }
-        };
-        const ready = {
-          role: "assistant",
-          content: [{ type: "text", text: "The PR is ready to land." }],
-          timestamp: Date.now() - 20_000,
-          __openclaw: { id: "ready-to-land", seq: 119 },
-        };
+        const capture = captureProof(page);
+        const ready = historyMessage(
+          "assistant",
+          "The PR is ready to land.",
+          { id: "ready-to-land", seq: 119 },
+          Date.now() - 20_000,
+        );
         const gateway = await installMockGateway(page, {
           agentModel: "openai/gpt-5.5",
           presenceUsers: [],
@@ -269,18 +264,18 @@ suite.define(() => {
         // The sequence-bearing ACK retires the outbox without its transcript
         // payload. Older history must retire the remaining local display copy.
         await gateway.resolveDeferred("chat.send", { runId, status: "started", messageSeq: 120 });
-        const canonicalUser = {
-          role: "user",
-          content: [{ type: "text", text: prompt }],
-          timestamp: Date.now() - 10_000,
-          __openclaw: { id: "canonical-land-request", seq: 120, idempotencyKey: `${runId}:user` },
-        };
-        const tail = {
-          role: "assistant",
-          content: [{ type: "text", text: "All checks passed. Finishing the landing." }],
-          timestamp: Date.now() - 1000,
-          __openclaw: { id: "landing-checks", seq: 200 },
-        };
+        const canonicalUser = historyMessage(
+          "user",
+          prompt,
+          { id: "canonical-land-request", seq: 120, idempotencyKey: `${runId}:user` },
+          Date.now() - 10_000,
+        );
+        const tail = historyMessage(
+          "assistant",
+          "All checks passed. Finishing the landing.",
+          { id: "landing-checks", seq: 200 },
+          Date.now() - 1000,
+        );
         const session = {
           key: "main",
           sessionId,
@@ -359,7 +354,7 @@ suite.define(() => {
         expect(pendingAssistant?.metadata).toBeUndefined();
         expect(before.indexOf(pendingAssistant!)).toBe(before.indexOf(pendingUser!) + 1);
         await waitForChatScrollIdle(page);
-        await captureProof("pending-assistant-before-history.png");
+        await capture("pending-assistant-before-history.png");
 
         const thread = pane.locator(".chat-thread");
         await thread.hover();
@@ -383,7 +378,7 @@ suite.define(() => {
           .locator(".chat-bubble")
           .getByText(fallback, { exact: true })
           .count();
-        await captureProof("pending-assistant-after-history.png");
+        await capture("pending-assistant-after-history.png");
         if (proofDir) {
           await writeFile(
             path.join(proofDir, "pending-assistant-proof.json"),
@@ -409,17 +404,10 @@ suite.define(() => {
   });
 
   it("does not recreate a consumed prompt outside the visible history page after reconnect", async () => {
-    const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
-      ? suite.artifactDir
-      : undefined;
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page: currentPage }) => {
-        const captureProof = async (filename: string) => {
-          if (proofDir) {
-            await currentPage.screenshot({ path: path.join(proofDir, filename) });
-          }
-        };
+        const capture = captureProof(currentPage);
         const sessionId = "consumed-prompt-session";
         const prompt = "land PR";
         const finalText = "Landed the PR. All focused checks passed.";
@@ -441,17 +429,17 @@ suite.define(() => {
           .waitFor();
 
         const timestamp = Date.now() - 60_000;
-        const userEcho = {
-          role: "user",
-          content: [{ type: "text", text: prompt }],
-          timestamp,
-          __openclaw: {
+        const userEcho = historyMessage(
+          "user",
+          prompt,
+          {
             id: USER_ECHO_ENTRY_ID,
             idempotencyKey: `${runId}:user`,
             runId: executionRunId,
             seq: 489,
           },
-        };
+          timestamp,
+        );
         const checks = Array.from({ length: 57 }, (_, index) => {
           const seq = 490 + index * 2;
           const toolCallId = `synthetic-check-${index}`;
@@ -479,12 +467,12 @@ suite.define(() => {
             },
           ];
         }).flat();
-        const finalMessage = {
-          role: "assistant",
-          content: [{ type: "text", text: finalText }],
-          timestamp: timestamp + 605,
-          __openclaw: { id: "consumed-prompt-final", seq: 605, runId: executionRunId },
-        };
+        const finalMessage = historyMessage(
+          "assistant",
+          finalText,
+          { id: "consumed-prompt-final", seq: 605, runId: executionRunId },
+          timestamp + 605,
+        );
         const history = [...BASE_HISTORY, userEcho, ...checks, finalMessage];
         const recent = history.slice(-80);
         const older = history.slice(0, -80);
@@ -544,7 +532,7 @@ suite.define(() => {
         await waitForChatScrollIdle(currentPage);
         // Retain the failed UI too: a phantom source appears below the completed
         // answer even though its only durable copy belongs to an older page.
-        await captureProof("consumed-prompt-latest-page.png");
+        await capture("consumed-prompt-latest-page.png");
         const userBubbles = currentPage.locator(".chat-bubble").getByText(prompt, { exact: true });
         const latestPromptCount = await userBubbles.count();
         await gateway.waitForRequest("chat.history", { match: { offset: 80 } });
@@ -555,7 +543,7 @@ suite.define(() => {
         await currentPage.mouse.wheel(0, -1_000_000);
         await currentPage.locator(`.chat-bubble[data-entry-id="${USER_ECHO_ENTRY_ID}"]`).waitFor();
         await waitForChatScrollIdle(currentPage);
-        await captureProof("consumed-prompt-loaded-history.png");
+        await capture("consumed-prompt-loaded-history.png");
         expect(latestPromptCount).toBe(0);
         expect(await userBubbles.count()).toBe(1);
         expect(await currentPage.locator(".chat-send-status").count()).toBe(0);
@@ -577,25 +565,19 @@ suite.define(() => {
         ...(proofDir ? { recordVideo: { dir: proofDir } } : {}),
       },
       async ({ page: currentPage }) => {
-        const captureProof = (filename: string) =>
-          proofDir ? currentPage.screenshot({ path: path.join(proofDir, filename) }) : undefined;
+        const capture = captureProof(currentPage);
         const gateway = await installMockGateway(currentPage, { historyMessages: BASE_HISTORY });
         const { runId } = await openChatAndSubmitProbe(currentPage, gateway);
-        await captureProof("01-submitted.png");
-        await finishRunAndSettle(currentPage, gateway, runId, {
-          role: "user",
-          content: [{ type: "text", text: PROBE_TEXT }],
-          timestamp: Date.now(),
-          __openclaw: { id: USER_ECHO_ENTRY_ID, idempotencyKey: runId, seq: 2 },
-        });
-        await captureProof("02-canonical.png");
+        await capture("01-submitted.png");
+        await finishRunAndSettle(currentPage, gateway, runId, userMessage(runId));
+        await capture("02-canonical.png");
 
-        const laterMessage = {
-          role: "assistant",
-          content: [{ type: "text", text: "Later history window." }],
-          timestamp: Date.now() + 2,
-          __openclaw: { id: "later-window", seq: 4 },
-        };
+        const laterMessage = historyMessage(
+          "assistant",
+          "Later history window.",
+          { id: "later-window", seq: 4 },
+          Date.now() + 2,
+        );
         await gateway.setHistoryMessages([laterMessage]);
         const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
         await gateway.emitGatewayEvent("session.message", {
@@ -620,7 +602,7 @@ suite.define(() => {
         await currentPage.getByText("Later history window.", { exact: true }).waitFor();
         const probe = currentPage.locator(".chat-bubble").getByText(PROBE_TEXT, { exact: true });
         await expect.poll(() => probe.count()).toBe(0);
-        await captureProof("03-later-page.png");
+        await capture("03-later-page.png");
 
         await startFrameSampler(currentPage);
         await gateway.emitChatFinal({ runId, text: "Run complete." });
@@ -628,7 +610,7 @@ suite.define(() => {
         // retirement and trailing history reconciliation, not just the first tick.
         await currentPage.waitForTimeout(500);
         const frames = await stopFrameSampler(currentPage);
-        await captureProof("04-terminal-replay.png");
+        await capture("04-terminal-replay.png");
         expect(frames.length).toBeGreaterThan(0);
         expect(frames.filter((frame) => frame.present)).toEqual([]);
         expect(await probe.count()).toBe(0);
@@ -713,12 +695,7 @@ suite.define(() => {
         const { runId } = await openChatAndSubmitProbe(currentPage, gateway, { deferSend: true });
 
         // The Gateway persists and broadcasts the user turn before the ack resolves.
-        const userEcho = {
-          content: [{ text: PROBE_TEXT, type: "text" }],
-          role: "user",
-          timestamp: Date.now(),
-          __openclaw: { id: USER_ECHO_ENTRY_ID, idempotencyKey: runId, seq: 2 },
-        };
+        const userEcho = userMessage(runId);
         await gateway.setHistoryMessages([...BASE_HISTORY, userEcho]);
         const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
         await gateway.emitGatewayEvent("session.message", {
