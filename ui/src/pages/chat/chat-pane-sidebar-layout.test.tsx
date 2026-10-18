@@ -7,9 +7,11 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
+import { getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import "./components/chat-sidebar-region.runtime.tsx";
 import {
   closeSlot,
@@ -38,6 +40,7 @@ function callbacks() {
   return {
     activatePanel: vi.fn(),
     togglePanelExpanded: vi.fn(),
+    setDock: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
     reorderPanel: vi.fn(),
@@ -453,6 +456,25 @@ describe("chat pane sidebar layout", () => {
       "companion",
     ]);
     expect(layout.columns[0]?.activePanelId).toBe("companion");
+  });
+
+  it("routes container expansion and docking without changing the selected tab", () => {
+    const { pane, state } = createMountedPanes([]);
+    getPaneTestRuntime(pane).mergedChrome = false;
+    state.updateSidebarLayout(openSlot({ columns: [] }, "detail"));
+    const selectedPanel = state.sidebarLayout.columns[0]?.activePanelId;
+    const controls = () => pane.render().layout!.region.callbacks;
+
+    controls().togglePanelExpanded();
+    expect(state.sidebarLayout).toMatchObject({
+      open: true,
+      expanded: true,
+      expandedSide: true,
+    });
+    expect(state.sidebarLayout.columns[0]?.activePanelId).toBe(selectedPanel);
+    controls().setDock("bottom");
+    expect(state.sidebarLayout.dock).toBe("bottom");
+    expect(state.sidebarLayout.columns[0]?.activePanelId).toBe(selectedPanel);
   });
 
   it("keeps an empty dashboard open and only removes it when dashboard support is unavailable", () => {

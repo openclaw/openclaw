@@ -392,6 +392,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
             callbacks: {
               activatePanel: () => undefined,
               togglePanelExpanded: () => undefined,
+              setDock: () => undefined,
               closeSlot: () => undefined,
               openSlot: () => undefined,
               reorderPanel: () => undefined,

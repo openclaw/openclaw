@@ -335,15 +335,18 @@ suite.define(() => {
       nodes.map((header) => {
         const owner = header.closest("openclaw-chat-pane");
         const main = owner?.querySelector('[data-region="main"]:not([hidden])');
-        if (!main) {
-          throw new Error("Each task toolbar must have visible main content");
+        const frame = header.closest(".sidebar-region__header");
+        if (!main || !frame) {
+          throw new Error("Each task toolbar must have its frame and visible main content");
         }
         const toolbar = header.getBoundingClientRect();
+        const headerFrame = frame.getBoundingClientRect();
         const content = main.getBoundingClientRect();
         return {
           height: toolbar.height,
-          left: Math.abs(toolbar.left - content.left),
-          right: Math.abs(toolbar.right - content.right),
+          toggleReserve: headerFrame.right - toolbar.right,
+          left: Math.abs(headerFrame.left - content.left),
+          right: Math.abs(headerFrame.right - content.right),
           gap: Math.abs(toolbar.bottom - content.top),
         };
       }),

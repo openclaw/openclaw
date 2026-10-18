@@ -83,6 +83,7 @@ describe("chat pane lazy sidebar failures", () => {
             callbacks: {
               activatePanel: vi.fn(),
               togglePanelExpanded: vi.fn(),
+              setDock: vi.fn(),
               closeSlot: vi.fn(),
               openSlot: vi.fn(),
               reorderPanel: vi.fn(),
@@ -140,6 +141,7 @@ describe("chat pane lazy sidebar failures", () => {
             callbacks: {
               activatePanel: vi.fn(),
               togglePanelExpanded: vi.fn(),
+              setDock: vi.fn(),
               closeSlot: (slot) => setLayout((current) => closeSlot(current, slot)),
               openSlot: vi.fn(),
               reorderPanel: vi.fn(),
@@ -228,6 +230,7 @@ describe("chat pane lazy sidebar failures", () => {
             callbacks: {
               activatePanel: vi.fn(),
               togglePanelExpanded: vi.fn(),
+              setDock: vi.fn(),
               closeSlot: vi.fn(),
               openSlot: vi.fn(),
               reorderPanel: vi.fn(),
