@@ -4326,6 +4326,7 @@ export const en: TranslationMap & {
     fa: "فارسی (Persian)",
     ru: "Русский (Russian)",
     sv: "Svenska (Swedish)",
+    he: "עברית (Hebrew)",
   },
   secretsStore: {
     name: "Name",

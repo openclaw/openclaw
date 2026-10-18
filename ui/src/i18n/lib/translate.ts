@@ -31,7 +31,7 @@ type LocaleTranslationLoader = (locale: Locale) => Promise<TranslationMap | null
 
 export { SUPPORTED_LOCALES, isSupportedLocale };
 
-const RTL_LOCALES = new Set<Locale>(["ar", "fa"]);
+const RTL_LOCALES = new Set<Locale>(["ar", "fa", "he"]);
 
 function syncDocumentLocale(locale: Locale): void {
   if (typeof document === "undefined") {
