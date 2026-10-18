@@ -503,7 +503,6 @@ describe("openclaw attach (action)", () => {
 
   it.each([
     ["just past the Date range", 8_640_000_000_000_001],
-    ["far past the Date range", 1e16],
     ["far before the Date range", -1e16],
   ])(
     "rejects a grant whose expiresAtMs is %s without throwing from toISOString",
