@@ -47,10 +47,10 @@ export function createSessionHistoryWorkerReaders(
     return async (input, signal) =>
       runRequest(
         () => {
-          // SAFETY: The direct overload checks kind/input pairing; spread loses that correlation.
-          const request = prepare
-            ? prepare(input)
-            : ({ kind, ...input } as Extract<SessionHistoryWorkerPreparedInput, { kind: K }>);
+          const request =
+            prepare?.(input) ??
+            // SAFETY: The direct overload checks kind/input pairing; spread loses that correlation.
+            ({ kind, ...input } as Extract<SessionHistoryWorkerPreparedInput, { kind: K }>);
           // Windows environments can be Proxies; only plain snapshots cross the worker boundary.
           if ("scope" in request && request.scope.env) {
             return { ...request, scope: { ...request.scope, env: { ...request.scope.env } } };
