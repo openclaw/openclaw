@@ -8,11 +8,11 @@ import {
   runWithOwner,
   Show,
   Switch,
-  untrack,
 } from "solid-js";
 import { registerListener } from "../../../../../src/shared/listeners.js";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { AfterCommitEffect } from "../render-lifecycle.ts";
@@ -89,13 +89,9 @@ function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
 }
 
 function GuardedRow(props: { value: GuardedTranscriptItem }): JSX.Element {
-  const dependencies = createMemo(() => props.value.dependencies, {
-    equals: transcriptArraysEqual,
-  });
-  const current = createMemo(() => {
-    dependencies();
-    // The explicit row dependency vector keeps unrelated streaming snapshots out of this row.
-    return untrack(() => props.value);
+  // Equal dependency vectors preserve the accepted row across unrelated stream updates.
+  const current = createMemo(() => props.value, {
+    equals: (before, next) => transcriptArraysEqual(before.dependencies, next.dependencies),
   });
   return <Show when={current().native}>{(view) => <NativeRow value={view()} />}</Show>;
 }
@@ -138,17 +134,18 @@ function TranscriptRows(props: { snapshot: TranscriptLayoutProps }) {
                   : 0;
               });
               // The keyed row owns one measurement binding for its entire mounted lifetime.
-              const measureRef = untrack(() =>
-                props.snapshot.measureRowRefFor(String(virtualRow().key)),
-              );
-              onCleanup(() => measureRef(undefined));
+              let measureRef: ((element?: Element) => void) | undefined;
+              onCleanup(() => measureRef?.(undefined));
               return (
                 <>
                   <Show when={gap() > 0}>
                     <div aria-hidden="true" style={{ height: `${gap()}px` }} />
                   </Show>
                   <div
-                    ref={(node) => measureRef(node)}
+                    ref={(node) => {
+                      measureRef = props.snapshot.measureRowRefFor(String(virtualRow().key));
+                      measureRef(node);
+                    }}
                     class={[
                       "chat-virtual-row",
                       { "chat-virtual-row--first": virtualRow().index === 0 },
@@ -178,6 +175,7 @@ export class ChatTranscriptRenderer {
   private publishPresentation?: () => void;
   private disposeRoot?: () => void;
   private binding?: PresentationBinding;
+  private stopPresentation?: () => void;
   private commitQueued = false;
   private readonly layoutEffects = new Set<() => void>();
   private readonly mediaDisconnect = new Set<() => void>();
@@ -253,8 +251,7 @@ export class ChatTranscriptRenderer {
     this.lifecycle.afterCommit(
       () => {
         this.commitQueued = false;
-        // Commit observes the accepted DOM snapshot without subscribing its imperative caller.
-        const current = untrack(() => this.lifecycle?.snapshot());
+        const current = this.lifecycle?.snapshot();
         if (!current || !this.element) {
           return;
         }
@@ -279,8 +276,10 @@ export class ChatTranscriptRenderer {
     this.accepted = next;
     const binding = typeof next.presented === "boolean" ? undefined : next.presented;
     if (binding?.owner !== this.binding?.owner) {
-      this.binding?.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, this.presentationChanged);
-      binding?.owner.addEventListener(PRESENTATION_CHANGED_EVENT, this.presentationChanged);
+      this.stopPresentation?.();
+      this.stopPresentation = binding
+        ? listen(binding.owner, PRESENTATION_CHANGED_EVENT, this.presentationChanged)
+        : undefined;
     }
     this.binding = binding;
     if (!this.element) {
@@ -309,8 +308,7 @@ export class ChatTranscriptRenderer {
           this.lifecycle = lifecycle;
           const snapshot = createMemo(lifecycle.snapshot);
           const capture = (event: Event) => snapshot().captureInteractionResize(event);
-          element.addEventListener("click", capture, true);
-          onCleanup(() => element.removeEventListener("click", capture, true));
+          onCleanup(listen(element, "click", capture, true));
           const content = () => (
             <TranscriptMediaDisconnect value={this.mediaDisconnect}>
               <ContentPresentation value={active}>
@@ -340,7 +338,8 @@ export class ChatTranscriptRenderer {
   }
 
   dispose(): void {
-    this.binding?.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, this.presentationChanged);
+    this.stopPresentation?.();
+    this.stopPresentation = undefined;
     this.binding = undefined;
     this.disposeRoot?.();
     this.disposeRoot = undefined;

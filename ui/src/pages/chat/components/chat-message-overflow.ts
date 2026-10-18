@@ -1,3 +1,4 @@
+import { listen } from "../../../lib/reactive/listener.ts";
 import { findMessageDisclosureLine, type MessageTextRect } from "./chat-message-disclosure.ts";
 
 // Character length owns normal disclosure; this high line cap only bounds newline-heavy prompts.
@@ -45,9 +46,13 @@ function scheduleOverflowMeasurement(measurement: MessageOverflowMeasurement): v
   });
 }
 
-export function messageOverflowRef(expanded: boolean, forwarded: boolean) {
+export function messageOverflowRef(
+  expanded: boolean,
+  forwarded: boolean,
+  getNodes: () => { toggle?: HTMLButtonElement; text?: HTMLElement },
+) {
   let resizeObserver: ResizeObserver | null = null;
-  let onFontsLoaded: (() => void) | undefined;
+  let stopFontsLoaded: (() => void) | undefined;
   let measurement: MessageOverflowMeasurement | undefined;
   let generation = 0;
   return (element: Element | undefined) => {
@@ -58,10 +63,8 @@ export function messageOverflowRef(expanded: boolean, forwarded: boolean) {
     }
     resizeObserver?.disconnect();
     resizeObserver = null;
-    if (onFontsLoaded) {
-      document.fonts?.removeEventListener("loadingdone", onFontsLoaded);
-      onFontsLoaded = undefined;
-    }
+    stopFontsLoaded?.();
+    stopFontsLoaded = undefined;
     if (!(element instanceof HTMLElement)) {
       return;
     }
@@ -69,16 +72,12 @@ export function messageOverflowRef(expanded: boolean, forwarded: boolean) {
       if (generation !== currentGeneration) {
         return undefined;
       }
-      const disclosure = element.parentElement;
-      const toggle = disclosure?.querySelector<HTMLButtonElement>(
-        ":scope > .chat-message-disclosure__toggle",
-      );
-      if (!disclosure || !toggle) {
+      const { toggle, text } = getNodes();
+      if (!toggle) {
         return undefined;
       }
       let clamp: string | undefined;
       let fadeSize: string | undefined;
-      const text = element.querySelector<HTMLElement>(":scope > .chat-text");
       // Test the full preview before a partial-line cut can create its own overflow.
       const scrollHeight = element.scrollHeight;
       const overflows = scrollHeight > element.clientHeight + 1;
@@ -170,14 +169,14 @@ export function messageOverflowRef(expanded: boolean, forwarded: boolean) {
         scheduleOverflowMeasurement(currentMeasurement);
       }
     };
-    // Lit resolves refs while siblings are still committing. Measure after the
+    // Refs resolve while siblings are still committing. Measure after the
     // toggle exists; it renders visible so collapsing never shifts row height,
     // and only content that fits the clamp hides it.
     queueMicrotask(() => {
       if (generation !== currentGeneration) {
         return;
       }
-      const text = element.querySelector(":scope > .chat-text");
+      const { text } = getNodes();
       if (text) {
         resizeObserver?.observe(text);
       }
@@ -185,8 +184,9 @@ export function messageOverflowRef(expanded: boolean, forwarded: boolean) {
     update();
     // Font metrics can change without resizing tightly spaced text, including
     // fonts loaded after this retained message's original render.
-    onFontsLoaded = update;
-    document.fonts?.addEventListener("loadingdone", onFontsLoaded);
+    if (document.fonts) {
+      stopFontsLoaded = listen(document.fonts, "loadingdone", update);
+    }
     if (typeof ResizeObserver === "function") {
       resizeObserver = new ResizeObserver(update);
       resizeObserver.observe(element);

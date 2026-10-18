@@ -10,7 +10,6 @@ import {
   Switch,
   onCleanup,
   type Accessor,
-  untrack,
   refresh,
 } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
@@ -94,8 +93,7 @@ export function GroupedMessage(props: GroupedMessageProps) {
     );
   });
   let element: Element | undefined;
-  // Snapshot the initial arrival callback so the DOM ref binds before transcript commit.
-  let currentEntryRef = untrack(() => props.options.entryRef);
+  let currentEntryRef: GroupedMessageOptions["entryRef"];
   // Keep the entry-animation DOM owner bound as its callback changes.
   createEffect(
     () => props.options.entryRef,
@@ -120,6 +118,7 @@ export function GroupedMessage(props: GroupedMessageProps) {
   });
   const entryRef = (next: Element) => {
     element = next;
+    currentEntryRef = props.options.entryRef;
     currentEntryRef?.(next);
   };
   return (
@@ -392,13 +391,12 @@ function MessageText(props: ContentProps) {
 }
 
 function MessageAvatar(props: { render?: () => JSX.Element }) {
-  const render = createMemo(() => props.render);
-  const avatar = createMemo(() => {
-    const factory = render();
-    // The factory owns nested reactive bindings; only replacement remounts the avatar.
-    return factory ? untrack(factory) : undefined;
-  });
-  return <>{avatar()}</>;
+  // Replacing the factory retires its bindings; updates inside it stay with its owner.
+  return (
+    <Show when={props.render} keyed>
+      {(render) => render()}
+    </Show>
+  );
 }
 
 function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | undefined> }) {

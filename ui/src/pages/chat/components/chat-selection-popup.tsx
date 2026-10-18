@@ -1,7 +1,6 @@
 // Document-owned selection toolbar and annotation editor. The transcript owner
 // tears both down together when its session or presentation changes.
-import { render } from "@solidjs/web";
-import { createComponent } from "solid-js";
+import { Portal, render } from "@solidjs/web";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -15,6 +14,7 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../../lib/keyboard-shortcut-contract.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -28,6 +28,7 @@ let activeSelectionPopup: {
   element: HTMLDivElement;
   listeners: AbortController;
   paneId: string;
+  dispose: () => void;
 } | null = null;
 let selectionPopupTimer: { timer: number; paneId: string } | null = null;
 
@@ -39,9 +40,10 @@ export function removeChatSelectionPopup(paneId?: string) {
   if (paneId !== undefined && activeSelectionPopup?.paneId !== paneId) {
     return;
   }
-  activeSelectionPopup?.element.remove();
-  activeSelectionPopup?.listeners.abort();
+  const popup = activeSelectionPopup;
   activeSelectionPopup = null;
+  popup?.listeners.abort();
+  popup?.dispose();
 }
 
 export function isChatSelectionPopupFocused(paneId: string): boolean {
@@ -107,6 +109,7 @@ function mountPopup(
   popup: HTMLDivElement,
   anchor: DOMRect,
   paneId: string,
+  dispose: () => void,
   onEscape?: () => void,
   anchorElement?: HTMLElement,
   // A layout-driven transcript scroll must not dismiss in-progress input. The
@@ -114,14 +117,13 @@ function mountPopup(
   // default scroll dismissal.
   shouldDismissOnScroll: () => boolean = () => true,
 ) {
-  removeChatSelectionPopup();
-  document.body.appendChild(popup);
   const listeners = new AbortController();
-  activeSelectionPopup = { element: popup, listeners, paneId };
+  activeSelectionPopup = { element: popup, listeners, paneId, dispose };
   const { signal } = listeners;
   const position = () => positionPopup(popup, anchorElement?.getBoundingClientRect() ?? anchor);
   position();
-  document.addEventListener(
+  listen(
+    document,
     "pointerdown",
     (event) => {
       if (!popup.contains(event.target as Node | null)) {
@@ -130,7 +132,8 @@ function mountPopup(
     },
     { capture: true, signal },
   );
-  document.addEventListener(
+  listen(
+    document,
     "keydown",
     (event) => {
       if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)) {
@@ -142,7 +145,8 @@ function mountPopup(
     },
     { signal },
   );
-  document.addEventListener(
+  listen(
+    document,
     "scroll",
     (event) => {
       if (!(event.target instanceof Node) || !popup.contains(event.target)) {
@@ -153,18 +157,11 @@ function mountPopup(
     },
     { capture: true, passive: true, signal },
   );
-  window.addEventListener("resize", position, { signal });
-  window.visualViewport?.addEventListener("resize", position, { signal });
+  listen(window, "resize", position, { signal });
+  if (window.visualViewport) {
+    listen(window.visualViewport, "resize", position, { signal });
+  }
   return signal;
-}
-
-function button(label: string, onActivate: () => void): HTMLButtonElement {
-  const control = document.createElement("button");
-  control.type = "button";
-  control.setAttribute("aria-label", label);
-  control.textContent = label;
-  control.addEventListener("click", onActivate);
-  return control;
 }
 
 function showChatSelectionPopup(
@@ -172,29 +169,49 @@ function showChatSelectionPopup(
   selection: ChatSelectionSource,
   actions: ChatSelectionPopupActions,
 ) {
-  const popup = document.createElement("div");
-  popup.className = "chat-selection-popup";
-  popup.setAttribute("role", "toolbar");
-  popup.setAttribute("aria-label", t("chat.messages.selectionActions"));
-  popup.addEventListener("pointerdown", (event) => event.preventDefault());
+  removeChatSelectionPopup();
+  let popup!: HTMLDivElement;
   const activate = (action: () => void) => {
     removeChatSelectionPopup();
     window.getSelection()?.removeAllRanges();
     action();
   };
-  if (actions.onAddToChat) {
-    const onAddToChat = actions.onAddToChat;
-    popup.append(
-      button(t("chat.messages.addToChat"), () => activate(() => onAddToChat(selection, anchor))),
-    );
-  }
-  popup.append(
-    button(t("chat.messages.askInSideChat"), () =>
-      activate(() => actions.onAskSideChat(selection, anchor)),
+  const dispose = render(
+    () => (
+      <Portal mount={document.body}>
+        <div
+          ref={(element) => {
+            popup = element;
+          }}
+          class="chat-selection-popup"
+          role="toolbar"
+          aria-label={t("chat.messages.selectionActions")}
+          onPointerDown={(event) => event.preventDefault()}
+        >
+          {actions.onAddToChat ? (
+            <button
+              type="button"
+              aria-label={t("chat.messages.addToChat")}
+              onClick={() => activate(() => actions.onAddToChat?.(selection, anchor))}
+            >
+              {t("chat.messages.addToChat")}
+            </button>
+          ) : undefined}
+          <button
+            type="button"
+            aria-label={t("chat.messages.askInSideChat")}
+            onClick={() => activate(() => actions.onAskSideChat(selection, anchor))}
+          >
+            {t("chat.messages.askInSideChat")}
+          </button>
+        </div>
+      </Portal>
     ),
+    document.createElement("div"),
   );
-  const signal = mountPopup(popup, anchor, actions.paneId);
-  document.addEventListener(
+  const signal = mountPopup(popup, anchor, actions.paneId, dispose);
+  listen(
+    document,
     "selectionchange",
     () => {
       if (!window.getSelection() || window.getSelection()?.isCollapsed) {
@@ -220,15 +237,13 @@ export function showChatAnnotationEditor(options: {
   if (options.readSignal?.aborted) {
     return undefined;
   }
-  const popup = document.createElement("div");
-  popup.className = "chat-annotation-editor";
-  popup.setAttribute("role", "dialog");
-  popup.setAttribute("aria-label", t("chat.messages.annotationEditor"));
-  const input = document.createElement("textarea");
-  input.value = options.comment;
-  input.rows = 1;
-  input.placeholder = t("chat.messages.annotationComment");
-  input.setAttribute("aria-label", t("chat.messages.annotationComment"));
+  removeChatSelectionPopup();
+  let popup!: HTMLDivElement;
+  let input!: HTMLTextAreaElement;
+  let confirm!: HTMLButtonElement;
+  let remove!: HTMLButtonElement;
+  let cancelButton!: HTMLButtonElement;
+  let saveButton!: HTMLButtonElement;
   const cancel = () => {
     removeChatSelectionPopup();
     options.onCancel?.();
@@ -242,32 +257,14 @@ export function showChatAnnotationEditor(options: {
       removeChatSelectionPopup();
     }
   };
-  const confirm = button(t("chat.messages.saveAnnotation"), save);
-  confirm.className = "btn primary chat-annotation-editor__confirm";
-  confirm.textContent = "";
-  const disposeConfirm = render(() => createComponent(Icon, { name: "cornerDownLeft" }), confirm);
-  const controls = document.createElement("div");
-  controls.className = "chat-annotation-editor__controls";
-  const remove = button(t("chat.messages.deleteAnnotation"), () => {
-    removeChatSelectionPopup();
-    if (!options.readSignal?.aborted) {
-      (options.onDelete ?? options.onCancel)?.();
-    }
-  });
-  remove.className = "btn btn--icon btn--ghost chat-annotation-editor__delete";
-  remove.title = t("chat.messages.deleteAnnotation");
-  remove.textContent = "";
-  const disposeRemove = render(() => createComponent(Icon, { name: "trash" }), remove);
-  const cancelButton = button(t("common.cancel"), cancel);
-  cancelButton.className = "btn";
-  const saveButton = button(t("common.save"), save);
-  saveButton.className = "btn primary";
-  controls.append(remove, cancelButton, saveButton);
-  popup.append(input, confirm, controls);
-  if (options.expanded) {
-    popup.classList.add("chat-annotation-editor--expanded");
-  }
-  popup.addEventListener("keydown", (event) => {
+  const resizeInput = () => {
+    const scrollTop = input.scrollTop;
+    input.style.height = "auto";
+    input.style.height = `${input.scrollHeight}px`;
+    input.scrollTop = scrollTop;
+    positionPopup(popup, options.anchorElement?.getBoundingClientRect() ?? options.anchorRect);
+  };
+  const onKeyDown = (event: KeyboardEvent) => {
     if (
       event.target === input &&
       !isComposingKeyboardEvent(event) &&
@@ -291,7 +288,92 @@ export function showChatAnnotationEditor(options: {
         first?.focus();
       }
     }
-  });
+  };
+  const dispose = render(
+    () => (
+      <Portal mount={document.body}>
+        <div
+          ref={(element) => {
+            popup = element;
+          }}
+          class={[
+            "chat-annotation-editor",
+            { "chat-annotation-editor--expanded": options.expanded },
+          ]}
+          role="dialog"
+          aria-label={t("chat.messages.annotationEditor")}
+          onKeyDown={onKeyDown}
+        >
+          <textarea
+            ref={(element) => {
+              input = element;
+            }}
+            value={options.comment}
+            rows={1}
+            placeholder={t("chat.messages.annotationComment")}
+            aria-label={t("chat.messages.annotationComment")}
+            onInput={resizeInput}
+            onCompositionEnd={recordCompositionEnd}
+            onKeyUp={clearCompositionEnd}
+            onBlur={clearCompositionEnd}
+          />
+          <button
+            ref={(element) => {
+              confirm = element;
+            }}
+            type="button"
+            class="btn primary chat-annotation-editor__confirm"
+            aria-label={t("chat.messages.saveAnnotation")}
+            onClick={save}
+          >
+            <Icon name="cornerDownLeft" />
+          </button>
+          <div class="chat-annotation-editor__controls">
+            <button
+              ref={(element) => {
+                remove = element;
+              }}
+              type="button"
+              class="btn btn--icon btn--ghost chat-annotation-editor__delete"
+              aria-label={t("chat.messages.deleteAnnotation")}
+              title={t("chat.messages.deleteAnnotation")}
+              onClick={() => {
+                removeChatSelectionPopup();
+                if (!options.readSignal?.aborted) {
+                  (options.onDelete ?? options.onCancel)?.();
+                }
+              }}
+            >
+              <Icon name="trash" />
+            </button>
+            <button
+              ref={(element) => {
+                cancelButton = element;
+              }}
+              type="button"
+              class="btn"
+              aria-label={t("common.cancel")}
+              onClick={cancel}
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              ref={(element) => {
+                saveButton = element;
+              }}
+              type="button"
+              class="btn primary"
+              aria-label={t("common.save")}
+              onClick={save}
+            >
+              {t("common.save")}
+            </button>
+          </div>
+        </div>
+      </Portal>
+    ),
+    document.createElement("div"),
+  );
   // A width or height change repositions the editor and makes the transcript
   // follow its end by scrolling. That layout compensation must not discard a
   // comment the user is still writing, so an edited comment survives the
@@ -301,30 +383,12 @@ export function showChatAnnotationEditor(options: {
     popup,
     options.anchorRect,
     options.paneId,
+    dispose,
     options.onCancel,
     options.anchorElement,
     () => input.value === originalComment,
   );
-  signal.addEventListener(
-    "abort",
-    () => {
-      disposeConfirm();
-      disposeRemove();
-    },
-    { once: true },
-  );
-  const resizeInput = () => {
-    const scrollTop = input.scrollTop;
-    input.style.height = "auto";
-    input.style.height = `${input.scrollHeight}px`;
-    input.scrollTop = scrollTop;
-    positionPopup(popup, options.anchorElement?.getBoundingClientRect() ?? options.anchorRect);
-  };
-  input.addEventListener("input", resizeInput, { signal });
-  input.addEventListener("compositionend", recordCompositionEnd, { signal });
-  input.addEventListener("keyup", clearCompositionEnd, { signal });
-  input.addEventListener("blur", clearCompositionEnd, { signal });
-  window.addEventListener("resize", resizeInput, { signal });
+  listen(window, "resize", resizeInput, { signal });
   resizeInput();
   if (options.sourceRange && typeof Highlight !== "undefined") {
     // Keep the passage visible as a selection after focus moves into the textarea.

@@ -1,5 +1,6 @@
 import { dynamic, insert, type JSX } from "@solidjs/web";
 import {
+  children,
   createEffect,
   createMemo,
   createSignal,
@@ -52,7 +53,7 @@ export function MessageJson(props: {
       options={props.options}
       parts={content().parts}
     >
-      <MarkdownText content={content()} />
+      {(elementRef) => <MarkdownText content={content()} elementRef={elementRef} />}
     </TextDisclosure>
   );
 }
@@ -84,11 +85,14 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
         options={props.options}
         parts={presentation().parts}
       >
-        <MarkdownText
-          content={presentation()}
-          media={props.media}
-          direction={detectTextDirection(props.media?.text ?? presentation().source)}
-        />
+        {(elementRef) => (
+          <MarkdownText
+            content={presentation()}
+            media={props.media}
+            direction={detectTextDirection(props.media?.text ?? presentation().source)}
+            elementRef={elementRef}
+          />
+        )}
       </TextDisclosure>
       <Show
         when={
@@ -116,8 +120,16 @@ function TextDisclosure(props: {
   messageKey: string;
   options: MessageTextOptions;
   parts: readonly string[];
-  children: JSX.Element;
+  children: (elementRef: (element: HTMLDivElement) => void) => JSX.Element;
 }) {
+  let text: HTMLDivElement | undefined;
+  let toggle: HTMLButtonElement | undefined;
+  const content = children(() =>
+    props.children((element) => {
+      text = element;
+    }),
+  );
+  const getNodes = () => ({ text, toggle });
   const collapsed = () =>
     Boolean(
       props.options.onToggleUserMessageExpanded &&
@@ -129,7 +141,7 @@ function TextDisclosure(props: {
     `${props.options.isForwarded ? "forwarded" : "user"}-message:${props.messageKey}`;
   const expanded = () => props.options.isUserMessageExpanded?.(disclosureId()) ?? false;
   return (
-    <Show when={collapsed()} fallback={props.children}>
+    <Show when={collapsed()} fallback={content()}>
       <div
         class={[
           "chat-message-disclosure",
@@ -143,11 +155,15 @@ function TextDisclosure(props: {
           parts={props.parts}
           expanded={expanded()}
           forwarded={Boolean(props.options.isForwarded)}
+          getNodes={getNodes}
         >
-          {props.children}
+          {content()}
         </DisclosureContent>
         <button
           class="chat-message-disclosure__toggle"
+          ref={(element) => {
+            toggle = element;
+          }}
           type="button"
           aria-expanded={expanded() ? "true" : "false"}
           onClick={() => props.options.onToggleUserMessageExpanded?.(disclosureId())}
@@ -164,6 +180,7 @@ function DisclosureContent(props: {
   parts: readonly string[];
   expanded: boolean;
   forwarded: boolean;
+  getNodes: () => { text?: HTMLElement; toggle?: HTMLButtonElement };
   children: JSX.Element;
 }) {
   const presented = useContext(ContentPresentation);
@@ -189,7 +206,7 @@ function DisclosureContent(props: {
     if (!connected) {
       return undefined;
     }
-    const overflow = messageOverflowRef(expanded, forwarded);
+    const overflow = messageOverflowRef(expanded, forwarded, props.getNodes);
     overflow(element);
     return () => overflow(undefined);
   });
@@ -268,10 +285,18 @@ export function MarkdownContent(props: MarkdownContentProps) {
 }
 
 export function MarkdownText(
-  props: MarkdownContentProps & { direction?: "ltr" | "rtl" | "auto"; class?: string },
+  props: MarkdownContentProps & {
+    direction?: "ltr" | "rtl" | "auto";
+    class?: string;
+    elementRef?: (element: HTMLDivElement) => void;
+  },
 ) {
   return (
-    <div class={props.class ?? "chat-text"} dir={props.direction}>
+    <div
+      class={props.class ?? "chat-text"}
+      dir={props.direction}
+      ref={(element) => props.elementRef?.(element)}
+    >
       <MarkdownContent {...props} />
     </div>
   );

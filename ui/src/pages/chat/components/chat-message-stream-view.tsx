@@ -263,6 +263,7 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
         },
       ]}
       data-chat-row-key={props.parts[0]?.key}
+      data-chat-streaming={active() ? "true" : undefined}
     >
       <Show when={hasAvatar()}>
         <ChatAvatar role="assistant" assistant={props.options.assistant} />

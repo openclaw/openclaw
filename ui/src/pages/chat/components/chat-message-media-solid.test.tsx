@@ -4,6 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { loadAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
@@ -62,7 +63,7 @@ it("retries a standalone native image after a failed preview", async () => {
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
-it("cancels an offscreen poster request and releases the visible poster on unmount", async () => {
+it("cancels an offscreen poster request and releases a parked poster without replacing its button", async () => {
   const intersections: ((visible: boolean) => void)[] = [];
   vi.stubGlobal(
     "IntersectionObserver",
@@ -94,16 +95,21 @@ it("cancels an offscreen poster request and releases the visible poster on unmou
   const second = createDeferred<Blob | null>();
   vi.mocked(requestVideoPoster)
     .mockReturnValueOnce(first.promise)
-    .mockReturnValueOnce(second.promise);
+    .mockReturnValueOnce(second.promise)
+    .mockResolvedValueOnce(new Blob(["reopened poster"]));
+  const [presented, setPresented] = createSignal(true);
   const view = mountSolid(() => (
-    <MessageVideoPreview
-      key="video"
-      src="/fixture.mp4"
-      label="Fixture video"
-      onOpen={() => {}}
-      fallback={<p>Preview unavailable</p>}
-    />
+    <ContentPresentation value={presented}>
+      <MessageVideoPreview
+        key="video"
+        src="/fixture.mp4"
+        label="Fixture video"
+        onOpen={() => {}}
+        fallback={<p>Preview unavailable</p>}
+      />
+    </ContentPresentation>
   ));
+  const button = view.getByRole("button");
   expect(requestVideoPoster).not.toHaveBeenCalled();
   intersections[0]!(true);
   const request = vi.mocked(requestVideoPoster).mock.calls[0]![0];
@@ -118,8 +124,18 @@ it("cancels an offscreen poster request and releases the visible poster on unmou
   await waitForSolid(() =>
     expect(view.container.querySelector("img")?.getAttribute("src")).toBe("blob:video-poster"),
   );
-  view.unmount();
+  setPresented(false);
+  flush();
+  expect(view.container.querySelector("img")).toBeNull();
+  expect(view.getByRole("button")).toBe(button);
   expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:video-poster");
+  setPresented(true);
+  flush();
+  expect(view.getByRole("button")).toBe(button);
+  intersections[1]!(true);
+  await waitForSolid(() => expect(view.container.querySelector("img")).not.toBeNull());
+  view.unmount();
+  expect(revokeObjectURL).toHaveBeenCalledTimes(2);
 });
 
 it("preserves the playback element when the same attachment snapshot is refreshed", () => {
