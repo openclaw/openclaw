@@ -7,6 +7,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerProcessesEnglish } from "../../i18n/locales/en-processes.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionConnectionScope } from "../../lib/sessions/session-capability.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 
@@ -33,6 +34,7 @@ export class ProcessesPanelData {
   private readonly visibilityDocument = globalThis.document;
   private readonly visibilityChanged = () => this.reconcile();
   private readonly unsubscribe: () => void;
+  private readonly stopVisibility: (() => void) | undefined;
 
   constructor(
     private readonly context: ApplicationContext,
@@ -41,7 +43,9 @@ export class ProcessesPanelData {
     // Connection edges retire polling scopes synchronously, including while the pane is hidden.
     this.unsubscribe = context.gateway.subscribe(() => this.reconcile());
     // This synchronous polling owner binds document visibility until dispose().
-    this.visibilityDocument?.addEventListener("visibilitychange", this.visibilityChanged);
+    this.stopVisibility = this.visibilityDocument
+      ? listen(this.visibilityDocument, "visibilitychange", this.visibilityChanged)
+      : undefined;
   }
 
   sync(input: ProcessesPanelInput): void {
@@ -231,6 +235,6 @@ export class ProcessesPanelData {
     this.disposed = true;
     this.retire();
     this.unsubscribe();
-    this.visibilityDocument?.removeEventListener("visibilitychange", this.visibilityChanged);
+    this.stopVisibility?.();
   }
 }

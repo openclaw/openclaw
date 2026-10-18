@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -83,7 +82,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
     const { createSqliteReadOnlyWorkerScope } =
       await import("../../infra/sqlite-readonly-worker.js");
     const readOnlyWorkers = createSqliteReadOnlyWorkerScope();
-    const work = new AsyncWorkScope();
+    const work = fx.work;
     const { promise: finishRefreshGate, resolve: finishRefresh } = createDeferredCore();
     // Vitest can time out the observer before the accepted refresh finishes.
     fx.settle(async () => {
@@ -228,17 +227,20 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
     const { promise: refreshStarted, resolve: markRefreshStarted } = createDeferredCore();
     const { promise: finishRefreshGate, resolve: finishRefresh } = createDeferredCore();
+    fx.settle(finishRefresh);
     const refreshCredential = vi.fn(async () => {
       markRefreshStarted();
       await finishRefreshGate;
       return oauth("rotated-a", { accountId: "acct-a" });
     });
-    const owner = resolveManaged(refreshCredential, fx.mainDir, original);
+    const owner = fx.work.track(() => resolveManaged(refreshCredential, fx.mainDir, original));
     await refreshStarted;
     writePersistedAuthProfileStoreRaw(originalStore, latePeerAgentDir);
 
     const { promise: observerEntered, resolve: markObserverEntered } = createDeferredCore();
-    const observer = resolveManaged(refreshCredential, fx.mainDir, original, markObserverEntered);
+    const observer = fx.work.track(() =>
+      resolveManaged(refreshCredential, fx.mainDir, original, markObserverEntered),
+    );
     await observerEntered;
     await withOAuthProfileLock({ provider, profileId }, async () => {});
 
@@ -265,6 +267,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
     const { promise: firstRefreshStarted, resolve: markFirstRefreshStarted } = createDeferredCore();
     const { promise: finishFirstRefreshGate, resolve: finishFirstRefresh } = createDeferredCore();
+    fx.settle(finishFirstRefresh);
     const refreshCredential = vi.fn(async () => {
       if (refreshCredential.mock.calls.length === 1) {
         markFirstRefreshStarted();
@@ -272,15 +275,15 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       }
       return oauth("rotated-a", { accountId: "acct-a" });
     });
-    const first = resolveManaged(refreshCredential, firstAgentDir, original);
+    const first = fx.work.track(() => resolveManaged(refreshCredential, firstAgentDir, original));
     await firstRefreshStarted;
     const firstFence = read(firstAgentDir);
     expect(firstFence?.type === "oauth" && isPendingOAuthRefreshFence(firstFence)).toBe(true);
 
     writePersistedAuthProfileStoreRaw(originalStore, secondAgentDir);
-    await expect(resolveManaged(refreshCredential, secondAgentDir, original)).rejects.toThrow(
-      "historical OAuth refresh peer",
-    );
+    await expect(
+      fx.work.track(() => resolveManaged(refreshCredential, secondAgentDir, original)),
+    ).rejects.toThrow("historical OAuth refresh peer");
 
     expect(refreshCredential).toHaveBeenCalledOnce();
     expect(read(firstAgentDir)).toEqual(firstFence);

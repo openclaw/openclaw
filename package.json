@@ -2344,7 +2344,7 @@
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
     "@openclaw/fs-safe": "0.26.7",
-    "@openclaw/proc-safe": "0.3.0",
+    "@openclaw/proc-safe": "0.4.1",
     "@openclaw/proxyline": "0.4.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
     "@resvg/resvg-js": "2.6.2",

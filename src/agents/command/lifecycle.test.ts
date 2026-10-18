@@ -326,6 +326,108 @@ describe("createAgentCommandLifecycle", () => {
     );
   });
 
+  it("replaces a provisional overflow with the final compaction failure", async () => {
+    emitAgentEvent.mockClear();
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: true,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
+    await createAgentAttemptLifecycleCallbacks(state).onAgentEvent({
+      stream: "lifecycle",
+      data: {
+        phase: "finishing",
+        error:
+          "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+        errorObservation: { failoverReason: "context_overflow" },
+      },
+    });
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "compaction-recovery-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      state,
+    });
+    const text =
+      "Auto-compaction failed before the next model request: the model exhausted its summary output budget without producing summary text. Try again or run /compact.";
+    const result = {
+      payloads: [{ text, isError: true }],
+      meta: {
+        durationMs: 0,
+        finalAssistantVisibleText: text,
+        error: { kind: "compaction_failure" as const, message: "Summary output budget exhausted" },
+      },
+    };
+    const terminal = {
+      metadata: {},
+      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+    };
+    expect(lifecycle.resolveResultError(result, false)).toBe(text);
+    expect(lifecycle.resolveTerminalError(result, false, terminal)).toBe(text);
+    lifecycle.emitResultError(result, false, terminal);
+    expect(emitAgentEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ phase: "error", error: text, executionSettled: true }),
+      }),
+    );
+    expect(emitAgentEvent.mock.calls[0]?.[0].data).not.toHaveProperty("errorObservation");
+  });
+
+  it("preserves overflow observations for overflow-shaped compaction failures", async () => {
+    emitAgentEvent.mockClear();
+    const observation = {
+      failoverReason: "context_overflow" as const,
+      provider: "test-provider",
+      model: "test-model",
+    };
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: true,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
+    await createAgentAttemptLifecycleCallbacks(state).onAgentEvent({
+      stream: "lifecycle",
+      data: {
+        phase: "finishing",
+        error: "Context overflow: prompt too large for the model.",
+        errorObservation: observation,
+      },
+    });
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "overflow-shaped-compaction-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      state,
+    });
+    const text =
+      "request_too_large: summarization failed - Request size exceeds model context window";
+    const result = {
+      payloads: [{ text, isError: true }],
+      meta: {
+        durationMs: 0,
+        finalAssistantVisibleText: text,
+        error: { kind: "compaction_failure" as const, message: text },
+      },
+    };
+    const terminal = {
+      metadata: {},
+      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+    };
+
+    lifecycle.emitResultError(result, false, terminal);
+
+    expect(emitAgentEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phase: "error",
+          error: text,
+          errorObservation: observation,
+          executionSettled: true,
+        }),
+      }),
+    );
+  });
+
   it.each([
     "lifecycle callback",
     "fallback payload",

@@ -1532,7 +1532,7 @@ src/claws/project.ts	2
 src/claws/reader.ts	3
 src/claws/schema.ts	2
 src/cli/acp-cli.ts	7
-src/cli/attach-cli.ts	3
+src/cli/attach-cli.ts	2
 src/cli/capability-cli/embedding.ts	2
 src/cli/capability-cli/image.ts	9
 src/cli/capability-cli/model.ts	3
