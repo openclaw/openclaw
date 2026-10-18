@@ -20,6 +20,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../../infra/sqlite-worker-operation-settlement.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -182,25 +183,20 @@ export function withConversationPublication(
       }
     });
     let finished = false;
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (!finished) {
-          finished = true;
-          unsubscribe();
-          notifyListeners(listeners.facts, {
-            kind: "settled",
-            operation,
-            outcome:
-              published && !unknown && owner.admission.settlement?.kind === "completed"
-                ? "published"
-                : "unknown",
-          });
-        }
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      if (!finished) {
+        finished = true;
+        unsubscribe();
+        notifyListeners(listeners.facts, {
+          kind: "settled",
+          operation,
+          outcome:
+            published && !unknown && owner.admission.settlement?.kind === "completed"
+              ? "published"
+              : "unknown",
+        });
       }
-    };
+    });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
       assertCurrent();
       const expected = expectedSource();

@@ -197,8 +197,6 @@ export function createSessionActorWorker(
         working.hot.version = version;
         if (singleStatement) {
           stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
-            stage() {},
-            rollback() {},
             commit() {
               const committedToken = token(
                 database,
@@ -339,8 +337,6 @@ export function createSessionActorWorker(
           const mutationRevision = readSqliteNativeMutationRevision(opened.db);
           if (
             !stageSqliteTransactionState(sqlPublicationAnchor(opened.db), {
-              stage() {},
-              rollback() {},
               commit() {
                 // A later nested writer must not install this intermediate transcript.
                 if (readSqliteNativeMutationRevision(opened.db) === mutationRevision) {
@@ -554,8 +550,6 @@ export function createSessionActorWorker(
             });
             if (
               !stageSqliteTransactionState(sqlPublicationAnchor(opened.db), {
-                stage() {},
-                rollback() {},
                 commit() {
                   committed = true;
                   residents.remember(working);
