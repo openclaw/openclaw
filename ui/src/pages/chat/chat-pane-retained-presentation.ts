@@ -1,7 +1,6 @@
 import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionProgressCardRefreshAction } from "../../components/session-progress-card.ts";
 import { t } from "../../i18n/index.ts";
 import { boardProviderCacheKey } from "../../lib/board/provider.ts";
@@ -35,6 +34,7 @@ import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-session
 import { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import type { PaneSessionHandoff } from "./chat-pane-handoff-lifecycle.ts";
+import { captureProgressActions } from "./chat-pane-progress-actions.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
@@ -191,59 +191,18 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   }
 
   protected captureProgressCardActions(canWrite: boolean) {
-    const state = this.state;
-    if (!state) {
-      return {};
-    }
-    const { sessionKey, currentSessionId } = state;
-    const agentId = resolveChatAgentId(state);
-    const gatewayUrl = state.settings.gatewayUrl;
-    const scope = gatewayPresentationScope(this.context.gateway);
-    const current = () =>
-      this.isConnected &&
-      this.presented &&
-      this.state === state &&
-      state.sessionKey === sessionKey &&
-      state.currentSessionId === currentSessionId &&
-      resolveChatAgentId(state) === agentId &&
-      gatewayPresentationScope(this.context.gateway) === scope;
-    return {
-      onHideTaskProgress: () => {
-        if (!current()) {
-          return;
-        }
-        state.settings = patchSettings({ chatShowTaskProgress: false });
-        showToast({
-          message: t("chat.sessionDetails.progressHidden"),
-          actionLabel: t("common.undo"),
-          onAction: () => {
-            if (
-              loadSettings().gatewayUrl === gatewayUrl &&
-              gatewayPresentationScope(this.context.gateway) === scope
-            ) {
-              patchSettings({ chatShowTaskProgress: true });
-            }
-          },
-        });
+    return captureProgressActions(
+      {
+        state: () => this.state,
+        isConnected: () => this.isConnected,
+        presented: () => this.presented,
+        gateway: () => this.context.gateway,
+        currentCard: () => this.detailsProgressCardPresentation?.card,
+        clearSaved: (card) => this.clearSavedProgressCard(card),
+        openSettings: () => this.context.navigate("appearance"),
       },
-      onCollapseTaskProgressChange: (collapsed: boolean) => {
-        if (current()) {
-          state.settings = patchSettings({ chatCollapseTaskProgress: collapsed });
-        }
-      },
-      onOpenTaskProgressSettings: () => {
-        if (current()) {
-          this.context.navigate("appearance");
-        }
-      },
-      onClearSavedProgressCard: canWrite
-        ? (card: ProgressCard) => {
-            if (current() && this.progressCardPresentation?.card === card) {
-              this.clearSavedProgressCard(card);
-            }
-          }
-        : undefined,
-    };
+      canWrite,
+    );
   }
 
   private currentSessionArchived: boolean | undefined;
@@ -338,7 +297,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       }
     | undefined;
 
-  protected get progressCardPresentation(): {
+  protected get detailsProgressCardPresentation(): {
     card: ProgressCard;
     lifetime: object | undefined;
     identity: string;
@@ -346,7 +305,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const state = this.state;
     if (
       !state ||
-      state.settings.chatShowTaskProgress === false ||
       !this.presented ||
       this.isCurrentSessionArchived(state) ||
       parseCatalogSessionKey(state.sessionKey)
@@ -375,7 +333,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const progress = this.progressCardSnapshot;
     const card = progress.card;
     const target = this.resolveChatReadTarget();
-    if (card && target) {
+    if (card && target && (card.markdown?.trim() || card.steps?.length)) {
       this.retainedProgressCard = {
         gatewayScope,
         client: state.client,
@@ -390,9 +348,24 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     } else if (!progress.loading) {
       this.retainedProgressCard = undefined;
     }
-    // The X only hides this presentation. The Gateway card remains available to
-    // other clients and read-only surfaces; a new card lifetime restores this view.
-    const presented = this.retainedProgressCard;
+    return this.retainedProgressCard ?? null;
+  }
+
+  protected get showTaskProgress(): boolean {
+    return this.state?.settings.chatShowTaskProgress !== false;
+  }
+
+  protected get detailsProgressCardError() {
+    return this.progressCardSnapshot.error;
+  }
+
+  protected get progressCardPresentation() {
+    const presented = this.detailsProgressCardPresentation;
+    if (!this.showTaskProgress) {
+      return null;
+    }
+    // The X only hides the chat presentation. Details still reads the saved plan.
+    // A new card lifetime can restore this local dismissal, never the preference.
     if (!presented) {
       return null;
     }
@@ -444,14 +417,17 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     ) {
       return undefined;
     }
-    // Unlike secondary metadata, the progress card determines transcript geometry.
-    // Consult preferences only after the pane and its history owner are ready.
-    return state.settings.chatShowTaskProgress === false ? undefined : this.resolveChatReadTarget();
+    // Details remains available when the user hides progress from the chat.
+    return this.resolveChatReadTarget();
   }
 
   protected get progressCardInitialLoading(): boolean {
+    return this.showTaskProgress && this.detailsProgressCardInitialLoading;
+  }
+
+  protected get detailsProgressCardInitialLoading(): boolean {
     const state = this.state;
-    if (!state || state.settings.chatShowTaskProgress === false) {
+    if (!state) {
       return false;
     }
     if (this.progressPresentationSessionKey !== state.sessionKey) {
