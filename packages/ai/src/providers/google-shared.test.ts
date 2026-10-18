@@ -30,6 +30,30 @@ const model: Model<"google-generative-ai"> = {
   reasoning: true,
   cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0 },
 };
+const thinkingConfig = (
+  target: typeof model,
+  thinking: Parameters<typeof buildGoogleGenerateContentParams>[2],
+) => buildGoogleGenerateContentParams(target, { messages: [] }, thinking).config?.thinkingConfig;
+const textPart = (text: string, thoughtSignature?: string): Part => ({
+  text,
+  ...(thoughtSignature && { thoughtSignature }),
+});
+const thoughtPart = (text: string, thoughtSignature?: string): Part => ({
+  ...textPart(text, thoughtSignature),
+  thought: true,
+});
+const textOutput = (text: string, textSignature?: string) => ({
+  type: "text",
+  text,
+  textSignature,
+});
+const thoughtOutput = (thinking: string, thinkingSignature?: string) => ({
+  type: "thinking",
+  thinking,
+  thinkingSignature,
+});
+const signature1 = "c2lnXzE=";
+const signature2 = "c2lnXzI=";
 
 describe("buildGoogleSimpleThinking", () => {
   it.each([
@@ -42,10 +66,7 @@ describe("buildGoogleSimpleThinking", () => {
   ] as const)("serializes Gemini 4 %s without a thinking budget", (reasoning, expected) => {
     const target = { ...model, id: "gemini-4-argon" };
     const thinking = buildGoogleSimpleThinking(target, { reasoning });
-    expect(
-      buildGoogleGenerateContentParams(target, { messages: [] }, { thinking }).config
-        ?.thinkingConfig,
-    ).toEqual(expected);
+    expect(thinkingConfig(target, { thinking })).toEqual(expected);
   });
 
   it.each([
@@ -55,18 +76,12 @@ describe("buildGoogleSimpleThinking", () => {
   ])("uses the supported thinking floor for %s", (id, level) => {
     const target = { ...model, id };
     const thinking = buildGoogleSimpleThinking(target, { reasoning: "minimal" });
-    expect(thinking).toEqual({
-      enabled: true,
-      level,
+    expect(thinking).toEqual({ enabled: true, level });
+    expect(thinkingConfig(target, { thinking })).toEqual({
+      includeThoughts: true,
+      thinkingLevel: level,
     });
-    expect(
-      buildGoogleGenerateContentParams(target, { messages: [] }, { thinking }).config
-        ?.thinkingConfig,
-    ).toEqual({ includeThoughts: true, thinkingLevel: level });
-    expect(
-      buildGoogleGenerateContentParams(target, { messages: [] }, disabledThinking).config
-        ?.thinkingConfig,
-    ).toEqual({ thinkingLevel: level });
+    expect(thinkingConfig(target, disabledThinking)).toEqual({ thinkingLevel: level });
   });
 
   it.each([
@@ -79,10 +94,7 @@ describe("buildGoogleSimpleThinking", () => {
   ])("preserves adaptive and disabled thinking for $id", ({ id, enabled, disabled }) => {
     const target = { ...model, id };
     expect(buildGoogleSimpleThinking(target, { reasoning: "adaptive" } as never)).toEqual(enabled);
-    expect(
-      buildGoogleGenerateContentParams(target, { messages: [] }, disabledThinking).config
-        ?.thinkingConfig,
-    ).toEqual(disabled);
+    expect(thinkingConfig(target, disabledThinking)).toEqual(disabled);
   });
 
   it("keeps thinking disabled when low clamps to off for a non-reasoning model", () => {
@@ -228,19 +240,11 @@ describe("Google stream projection", () => {
         },
       }),
     ]);
-    expect(events.map((event) => event.type)).toEqual([
-      "start",
-      "thinking_start",
-      "thinking_delta",
-      "thinking_end",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "toolcall_start",
-      "toolcall_delta",
-      "toolcall_end",
-      "done",
-    ]);
+    expect(events.map((event) => event.type)).toEqual(
+      "start thinking_start thinking_delta thinking_end text_start text_delta text_end toolcall_start toolcall_delta toolcall_end done".split(
+        " ",
+      ),
+    );
     expect(output.responseId).toBe("response-1");
     const toolDelta = events.find((event) => event.type === "toolcall_delta");
     expect(toolDelta?.partial?.content[toolDelta.contentIndex ?? -1]).toMatchObject({
@@ -331,31 +335,27 @@ describe("Google stream projection", () => {
           { thought: true, text: "draft" },
         ],
       ],
-      content: [
-        toolCall(),
-        { type: "thinking", thinking: "", thinkingSignature: "dGhvdWdodF9zaWc=" },
-        { type: "thinking", thinking: "draft", thinkingSignature: undefined },
-      ],
+      content: [toolCall(), thoughtOutput("", "dGhvdWdodF9zaWc="), thoughtOutput("draft")],
     },
     {
       name: "a separate signature never overwrites a signed tool call",
-      parts: [[lookupPart({}, "c2lnXzE="), { thoughtSignature: "c2lnXzI=" }]],
-      content: [toolCall({}, "c2lnXzE="), { type: "text", text: "", textSignature: "c2lnXzI=" }],
+      parts: [[lookupPart({}, signature1), { thoughtSignature: signature2 }]],
+      content: [toolCall({}, signature1), textOutput("", signature2)],
     },
     {
       name: "a signed media part never attaches to a tool call",
       parts: [
         [
           lookupPart(),
-          { inlineData: { mimeType: "image/png", data: "aW1hZ2U=" }, thoughtSignature: "c2lnXzE=" },
+          { inlineData: { mimeType: "image/png", data: "aW1hZ2U=" }, thoughtSignature: signature1 },
         ],
       ],
       content: [toolCall()],
     },
     {
       name: "a same-candidate standalone signature stays separate from a tool call",
-      parts: [[lookupPart(), { thoughtSignature: "c2lnXzE=" }]],
-      content: [toolCall(), { type: "text", text: "", textSignature: "c2lnXzE=" }],
+      parts: [[lookupPart(), { thoughtSignature: signature1 }]],
+      content: [toolCall(), textOutput("", signature1)],
     },
   ])("$name", async ({ parts, content }) => {
     const { output } = await runFixture(
@@ -372,35 +372,18 @@ describe("Google stream projection", () => {
   it.each([
     {
       name: "signed empty thinking and text parts",
-      parts: [
-        { thought: true, text: "", thoughtSignature: "c2lnXzE=" },
-        { text: "", thoughtSignature: "c2lnXzI=" },
-        { text: "answer" },
-      ],
-      content: [
-        { type: "thinking", thinking: "", thinkingSignature: "c2lnXzE=" },
-        { type: "text", text: "", textSignature: "c2lnXzI=" },
-        { type: "text", text: "answer", textSignature: undefined },
-      ],
+      parts: [thoughtPart("", signature1), textPart("", signature2), textPart("answer")],
+      content: [thoughtOutput("", signature1), textOutput("", signature2), textOutput("answer")],
     },
     {
       name: "signed text followed by unsigned text",
-      parts: [{ text: "signed", thoughtSignature: "c2lnXzE=" }, { text: "unsigned" }],
-      content: [
-        { type: "text", text: "signed", textSignature: "c2lnXzE=" },
-        { type: "text", text: "unsigned", textSignature: undefined },
-      ],
+      parts: [textPart("signed", signature1), textPart("unsigned")],
+      content: [textOutput("signed", signature1), textOutput("unsigned")],
     },
     {
       name: "separately signed thoughts with the same signature",
-      parts: [
-        { thought: true, text: "first", thoughtSignature: "c2lnXzE=" },
-        { thought: true, text: "second", thoughtSignature: "c2lnXzE=" },
-      ],
-      content: [
-        { type: "thinking", thinking: "first", thinkingSignature: "c2lnXzE=" },
-        { type: "thinking", thinking: "second", thinkingSignature: "c2lnXzE=" },
-      ],
+      parts: [thoughtPart("first", signature1), thoughtPart("second", signature1)],
+      content: [thoughtOutput("first", signature1), thoughtOutput("second", signature1)],
     },
   ])("round-trips exact provider part ownership for $name", async ({ parts, content }) => {
     const { output, events } = await runFixture([finished(parts)]);
@@ -462,13 +445,9 @@ describe("runGoogleGenerateContentLifecycle", () => {
         finishMessage: "Provider rejected the generated response",
       }),
     ]);
-    expect(events.map((event) => event.type)).toEqual([
-      "start",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "error",
-    ]);
+    expect(events.map((event) => event.type)).toEqual(
+      "start text_start text_delta text_end error".split(" "),
+    );
     expect(result).toMatchObject({
       stopReason: "error",
       errorCode: "SAFETY",
@@ -591,65 +570,53 @@ describe("Google tool declarations", () => {
 });
 
 describe("Google message conversion", () => {
-  it.each([
-    {
-      replay: "managed" as const,
-      required: true,
-      expected: [
-        "c2lnXzE=",
-        "skip_thought_signature_validator",
-        "c2lnXzI=",
-        "c2lnXzE=",
-        "c2lnXzI=",
+  it("preserves managed signature ownership with required signatures", () => {
+    const args = { first: 1, nested: { alpha: 2, beta: 3 } };
+    const reordered = { nested: { beta: 3, alpha: 2 }, first: 1 };
+    const originalBytes = JSON.stringify([args, reordered]);
+    const turn = (content: AssistantMessage["content"]) => ({
+      ...createAssistantOutput(conversionModel),
+      content,
+    });
+    const contents = projectGoogleMessages({
+      model: conversionModel,
+      replay: "managed",
+      requiresToolCallSignature: true,
+      messages: [
+        turn([
+          { ...call, arguments: args, thoughtSignature: signature1 },
+          { ...call, arguments: reordered },
+        ]),
+        result,
+        result,
+        turn([
+          { ...call, arguments: args, thoughtSignature: signature2 },
+          { ...call, arguments: reordered },
+        ]),
+        result,
+        result,
+        turn([{ ...call, arguments: reordered }]),
+        result,
       ],
-    },
-  ])(
-    "preserves $replay signature ownership with required=$required",
-    ({ replay, required, expected }) => {
-      const target = required ? conversionModel : makeModel("gemini-2.5-pro");
-      const args = { first: 1, nested: { alpha: 2, beta: 3 } };
-      const reordered = { nested: { beta: 3, alpha: 2 }, first: 1 };
-      const originalBytes = JSON.stringify([args, reordered]);
-      const turn = (content: AssistantMessage["content"]) => ({
-        ...createAssistantOutput(target),
-        content,
-      });
-      const contents = projectGoogleMessages({
-        model: target,
-        replay,
-        requiresToolCallSignature: required,
-        messages: [
-          turn([
-            { ...call, arguments: args, thoughtSignature: "c2lnXzE=" },
-            { ...call, arguments: reordered },
-          ]),
-          result,
-          result,
-          turn([
-            { ...call, arguments: args, thoughtSignature: "c2lnXzI=" },
-            { ...call, arguments: reordered },
-          ]),
-          result,
-          result,
-          turn([{ ...call, arguments: reordered }]),
-          result,
-        ],
-      });
-      const parts = contents
-        .flatMap((content) => content.parts)
-        .filter((part) => part.functionCall);
-      expect(parts.map((part) => part.thoughtSignature)).toEqual(expected);
-      expect(parts.map((part) => part.functionCall?.args)).toEqual([
-        args,
-        reordered,
-        args,
-        reordered,
-        reordered,
-      ]);
-      expect(parts[1]?.functionCall?.args).toBe(reordered);
-      expect(JSON.stringify([args, reordered])).toBe(originalBytes);
-    },
-  );
+    });
+    const parts = contents.flatMap((content) => content.parts).filter((part) => part.functionCall);
+    expect(parts.map((part) => part.thoughtSignature)).toEqual([
+      signature1,
+      "skip_thought_signature_validator",
+      signature2,
+      signature1,
+      signature2,
+    ]);
+    expect(parts.map((part) => part.functionCall?.args)).toEqual([
+      args,
+      reordered,
+      args,
+      reordered,
+      reordered,
+    ]);
+    expect(parts[1]?.functionCall?.args).toBe(reordered);
+    expect(JSON.stringify([args, reordered])).toBe(originalBytes);
+  });
 
   it("coerces malformed serialized tool arguments to an SDK object", () => {
     const context = {

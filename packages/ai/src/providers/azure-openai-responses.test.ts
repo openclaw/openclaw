@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildProviderReplayContext } from "../transports/provider-replay-context.js";
 import type { Context, Model } from "../types.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "./azure-openai-responses-client-compat.js";
@@ -30,6 +31,8 @@ type CapturedBody = {
   max_output_tokens?: unknown;
   store?: unknown;
   input?: unknown[];
+  reasoning?: { effort?: unknown };
+  temperature?: unknown;
 };
 
 function captureRequests() {
@@ -138,24 +141,14 @@ describe("azure-openai-responses", () => {
   ])(
     "preserves Azure deployment capabilities for $reasoning with compat=$compat",
     async ({ id = "gpt-6-astra", reasoning, compat, effort, temperature }) => {
-      let sentParams: { reasoning?: { effort?: unknown }; temperature?: unknown } | undefined;
-      configureAiTransportHost({
-        buildModelFetch: () => async (input, init) => {
-          sentParams = (await new Request(input, init).json()) as typeof sentParams;
-          return Response.json({ error: { message: "captured" } }, { status: 400 });
-        },
-      });
-      try {
-        await streamSimpleAzureOpenAIResponses({ ...azureResponsesModel, id, compat }, context, {
-          apiKey: "test-api-key",
-          reasoning,
-          temperature: 0.5,
-        }).result();
-        expect(sentParams?.reasoning?.effort).toBe(effort);
-        expect(sentParams?.temperature).toBe(temperature);
-      } finally {
-        configureAiTransportHost({});
-      }
+      const requests = captureRequests();
+      await streamSimpleAzureOpenAIResponses({ ...azureResponsesModel, id, compat }, context, {
+        apiKey: "test-api-key",
+        reasoning,
+        temperature: 0.5,
+      }).result();
+      expect(requests[0]?.body.reasoning?.effort).toBe(effort);
+      expect(requests[0]?.body.temperature).toBe(temperature);
     },
   );
 
@@ -173,11 +166,8 @@ describe("azure-openai-responses", () => {
     const replayMessages = {
       messages: [
         {
-          role: "assistant",
+          ...createAssistantOutput(azureResponsesModel),
           content: [{ type: "text", text: "earlier" }],
-          api: azureResponsesModel.api,
-          provider: azureResponsesModel.provider,
-          model: azureResponsesModel.id,
           providerReplay: {
             v: 1,
             type: "openai-responses-compaction",
@@ -185,15 +175,6 @@ describe("azure-openai-responses", () => {
             ...replayContext,
             baseUrlHash: replayContext.baseUrlHash,
           },
-          usage: {
-            input: 1,
-            output: 1,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 2,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "stop",
           timestamp: 1,
         },
         { role: "user", content: "continue", timestamp: 2 },
@@ -209,16 +190,12 @@ describe("azure-openai-responses", () => {
     }
     const inputs = requests.map(({ body }) => body.input ?? []);
 
-    expect(inputs[0]).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "compaction",
-          encrypted_content: "opaque-compaction-route-a",
-        }),
-      ]),
+    expect(inputs[0]).toContainEqual(
+      expect.objectContaining({
+        type: "compaction",
+        encrypted_content: "opaque-compaction-route-a",
+      }),
     );
-    expect(inputs[1]).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "compaction" })]),
-    );
+    expect(inputs[1]).not.toContainEqual(expect.objectContaining({ type: "compaction" }));
   });
 });

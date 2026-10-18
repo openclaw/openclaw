@@ -1,34 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
-import type { AssistantMessage, Context, Model } from "../types.js";
+import type { AssistantMessage } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
   resetOpenAICodexWebSocketStateForTest,
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
+import {
+  chatgptModel as model,
+  chatgptContext as context,
+  completedResponse,
+} from "./openai-chatgpt-responses.test-helpers.js";
 
-function createJwt(payload: Record<string, unknown>): string {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${header}.${body}.signature`;
+const apiKey = `eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.${Buffer.from(
+  JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } }),
+).toString("base64url")}.signature`;
+
+const run = () => streamOpenAICodexResponses(model, context, { apiKey, transport: "sse" }).result();
+function mockResponse(body: ReadableStream<Uint8Array>, init: ResponseInit = {}) {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(body, init));
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
-
-const model = {
-  id: "gpt-5.5",
-  name: "GPT-5.5",
-  api: "openai-chatgpt-responses",
-  provider: "openai",
-  baseUrl: "https://chatgpt.test/backend-api",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 16_000,
-} satisfies Model<"openai-chatgpt-responses">;
-
-const context = {
-  messages: [{ role: "user", content: "hi", timestamp: 1 }],
-} satisfies Context;
 
 afterEach(() => {
   closeOpenAICodexWebSocketSessions();
@@ -65,22 +58,12 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
         return cancellation.promise;
       },
     });
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(overflowing, { status: 400, statusText: "Bad Request" }));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = mockResponse(overflowing, { status: 400, statusText: "Bad Request" });
 
     let result: AssistantMessage | undefined;
-    const pending = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    })
-      .result()
-      .then((message) => {
-        result = message;
-      });
+    const pending = run().then((message) => {
+      result = message;
+    });
 
     try {
       await vi.advanceTimersByTimeAsync(0);
@@ -108,15 +91,7 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
       `data: ${JSON.stringify({ type: "response.in_progress", pad })}\n\n`.repeat(batchSize),
     );
     const completedFrame = new TextEncoder().encode(
-      `data: ${JSON.stringify({
-        type: "response.completed",
-        response: {
-          id: "resp_long",
-          status: "completed",
-          output: [],
-          usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-        },
-      })}\n\n`,
+      `data: ${JSON.stringify(completedResponse("resp_long"))}\n\n`,
     );
     const progressFrames = 320 / batchSize; // ~20 MiB total
     let sent = 0;
@@ -131,22 +106,8 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
         controller.close();
       },
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>().mockResolvedValueOnce(
-        new Response(longStream, {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        }),
-      ),
-    );
-
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    }).result();
+    mockResponse(longStream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    const result = await run();
 
     expect(sent * progressFrame.byteLength).toBeGreaterThan(16 * 1024 * 1024);
     expect(result.errorMessage).toBeUndefined();
@@ -188,12 +149,8 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
       // Keep the source open until the parser requests EOF so cancellation is observable.
       { highWaterMark: 0 },
     );
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(body)));
-
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } }),
-      transport: "sse",
-    }).result();
+    mockResponse(body);
+    const result = await run();
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("OpenAI ChatGPT Responses SSE frame exceeded 16777216 bytes");
@@ -221,20 +178,11 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
         cancelReason = reason;
       },
     });
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      new Response(overflowing, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    }).result();
+    const fetchMock = mockResponse(overflowing, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+    const result = await run();
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toMatch(

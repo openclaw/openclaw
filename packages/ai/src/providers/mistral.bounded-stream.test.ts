@@ -1,4 +1,3 @@
-// Mistral provider tests cover bounded-stream-read helper (`createBoundedMistralFetcher`).
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { assert, describe, expect, it } from "vitest";
@@ -7,6 +6,18 @@ import { createBoundedMistralFetcher, streamMistral } from "./mistral.js";
 
 const MAX = 16 * 1024 * 1024;
 const TOTAL = 18 * 1024 * 1024;
+
+async function listen(server: http.Server) {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+const close = (server: http.Server) =>
+  new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 
 async function readAllChunks(body: ReadableStream<Uint8Array> | null): Promise<{ total: number }> {
   if (!body) {
@@ -46,7 +57,7 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
     const CHUNK = 1024 * 1024;
     // Pending writes may retain this buffer, so keep its bytes unchanged.
     const chunk = Buffer.alloc(CHUNK);
-    const server = http.createServer((req, res) => {
+    const server = http.createServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/octet-stream" });
       let sent = 0;
       const tick = setInterval(() => {
@@ -59,21 +70,12 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
         }
       }, 1);
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        resolve();
-      });
-    });
-    const port = (server.address() as AddressInfo).port;
+    const url = await listen(server);
 
     let captured: Error | undefined;
     try {
-      const response = await fetcher(`http://127.0.0.1:${port}/`);
-      // Wire framing merges TCP packets, so the reported size at throw time
-      // is between MAX (cap) and TOTAL (cap + last merged packet). Both
-      // bounds prove (a) cap fired (got > MAX) and (b) we did not buffer
-      // beyond the server's full 18 MiB (got < TOTAL).
+      const response = await fetcher(`${url}/`);
+      // TCP merges packets: the overflow must land between the cap and the full body.
       try {
         await readAllChunks(response.body);
       } catch (err) {
@@ -87,16 +89,8 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
       const got = Number(match?.[1]);
       expect(got).toBeGreaterThan(MAX);
       expect(got).toBeLessThan(TOTAL);
-      // Print to vitest stdout for PR-body real behavior proof capture.
-      console.log(
-        `[mistral bounded-stream proof] oversized path: cap=${MAX} reported=${got} server_total=${TOTAL}`,
-      );
     } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
-      });
+      await close(server);
     }
   });
 });
@@ -147,56 +141,43 @@ async function streamMistralTerminalFixture(fixture: MistralTerminalFixture) {
       type: "function",
       function: { name: `tool_${index}`, arguments: args },
     }));
-    response.write(
-      `data: ${JSON.stringify({
-        id: "mistral-terminal-owner-proof",
-        object: "chat.completion.chunk",
-        created: 1,
-        model: "mistral-large-latest",
-        choices: [
-          {
-            index: 0,
-            delta: {
-              content: fixture.text ?? null,
-              ...(toolCalls ? { tool_calls: toolCalls } : {}),
-            },
-            finish_reason: fixture.finishReason,
-          },
-        ],
-        usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
-      })}\n\n`,
-    );
-    for (const content of fixture.followupTexts ?? []) {
+    const write = (content: MistralTerminalFixture["text"], initial = false) =>
       response.write(
         `data: ${JSON.stringify({
           id: "mistral-terminal-owner-proof",
+          ...(initial ? { object: "chat.completion.chunk", created: 1 } : {}),
           model: "mistral-large-latest",
           choices: [
             {
               index: 0,
-              delta: { content },
+              delta: {
+                content: initial ? (content ?? null) : content,
+                ...(initial && toolCalls ? { tool_calls: toolCalls } : {}),
+              },
               finish_reason: fixture.finishReason,
             },
           ],
+          ...(initial
+            ? { usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } }
+            : {}),
         })}\n\n`,
       );
+    write(fixture.text, true);
+    for (const content of fixture.followupTexts ?? []) {
+      write(content);
     }
     if (fixture.abort) {
       return;
     }
     response.end(fixture.done ? "data: [DONE]\n\n" : "");
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const { port } = server.address() as AddressInfo;
+  const baseUrl = await listen(server);
   const model = {
     id: "mistral-large-latest",
     name: "Mistral terminal owner",
     api: "mistral-conversations",
     provider: "mistral",
-    baseUrl: `http://127.0.0.1:${port}`,
+    baseUrl,
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -227,9 +208,7 @@ async function streamMistralTerminalFixture(fixture: MistralTerminalFixture) {
     return { result: await stream.result(), events, textIndexes };
   } finally {
     server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await close(server);
   }
 }
 
@@ -249,19 +228,11 @@ describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE
       { type: "text", text: "after" },
     ]);
     expect(textIndexes).toEqual([0, 2]);
-    expect(events).toEqual([
-      "start",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "toolcall_start",
-      "toolcall_delta",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "toolcall_end",
-      "done",
-    ]);
+    expect(events).toEqual(
+      "start text_start text_delta text_end toolcall_start toolcall_delta text_start text_delta text_end toolcall_end done".split(
+        " ",
+      ),
+    );
   });
 
   it("discards unfinished tool arguments when the operator cancels generation", async () => {
