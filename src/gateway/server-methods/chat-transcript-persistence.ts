@@ -517,10 +517,10 @@ async function touchAssistantTranscriptSessionEntry(
         target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
       },
       operation,
-      { skipMaintenance: true },
+      { result: "none", skipMaintenance: true },
     );
   } else {
-    await applySessionEntryOperation(target, operation, { skipMaintenance: true });
+    await applySessionEntryOperation(target, operation, { result: "none", skipMaintenance: true });
   }
 }
 

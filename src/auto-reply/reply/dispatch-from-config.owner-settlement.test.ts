@@ -46,14 +46,15 @@ import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { bindReplySourceInput, readReplySourceInput } from "./reply-source-binding.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-let listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.js").listActiveReplyRunSessionKeys;
+let listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.queries.js").listActiveReplyRunSessionKeys;
 let runAfterReplyOperationClear: typeof import("../../sessions/session-controller.js").runAfterReplyOperationClear;
 let resetSessionControllerForTest: typeof import("../../sessions/session-controller.test-support.js").testing.resetSessionControllerForTest;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
 beforeAll(async () => {
   await globalBeforeAll0();
-  ({ listActiveReplyRunSessionKeys } = await import("../../sessions/session-controller.js"));
+  ({ listActiveReplyRunSessionKeys } =
+    await import("../../sessions/session-controller.queries.js"));
   ({ runAfterReplyOperationClear } = await import("../../sessions/session-controller.js"));
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   const { testing } = await import("../../sessions/session-controller.test-support.js");

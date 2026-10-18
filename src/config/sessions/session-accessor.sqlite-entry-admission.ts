@@ -29,7 +29,6 @@ import { createSessionWorkerExecutionSource } from "./session-worker-execution-s
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type { SessionAdmissionDatabaseClaim } from "./session-admission-claim.types.js";
-export type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
 
 type SessionAdmissionEntryIdentity = SessionAdmissionTransition["current"];
 

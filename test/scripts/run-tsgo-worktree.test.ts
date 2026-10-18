@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import {
   materializeNativeCompiler,
+  materializeTypeChecker,
   overrideNativeFixtureExecutable,
   resolveInstalledNativeCompiler,
   writeNativeFixtureFile,
@@ -61,6 +62,7 @@ function createLinkedCheckoutFixture() {
   expect(path.relative(primary, root)).toBe(`..${path.sep}linked`);
   expect(fs.lstatSync(path.join(root, ".git")).isFile()).toBe(true);
   materializeNativeCompiler(primary, { javaScriptApi: false });
+  materializeTypeChecker(primary);
   linkCheckoutTools(primary);
   return { primary, root, git };
 }

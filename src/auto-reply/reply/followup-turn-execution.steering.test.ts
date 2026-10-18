@@ -21,8 +21,8 @@ import { getSessionControllerEntryForOperation } from "../../sessions/session-co
 import {
   beginReplyMessageInjectionTarget,
   createReplyOperation,
-  captureCurrentReplyMessageInjectionTarget,
 } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ReplyPayload } from "../types.js";

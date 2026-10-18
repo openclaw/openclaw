@@ -10,9 +10,10 @@ import {
 } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { createAnchoredOverlay } from "../lib/reactive/overlay-anchor.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import { createOverlayAnchor } from "./overlay-anchor.ts";
-import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
+import type { OverlayPlacement } from "./overlay-anchor.ts";
+import { createOverlay } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
@@ -46,7 +47,6 @@ export function PickerContent<Option extends PickerOption>(props: {
   let input: HTMLInputElement | undefined;
   let back: HTMLButtonElement | undefined;
   const optionElements = new Map<string, HTMLDivElement>();
-  let anchor: ReturnType<typeof createOverlayAnchor> | undefined;
   let sheetScroll: { root: Element; top: number } | undefined;
   let hoverTimer: ReturnType<typeof setTimeout> | undefined;
   let hoverOpened = false;
@@ -55,18 +55,15 @@ export function PickerContent<Option extends PickerOption>(props: {
   const [keyboard, setKeyboard] = createSignal(false);
   const [collapsed, setCollapsed] = createSignal(new Set<string>());
   const direction = () => (getComputedStyle(props.host).direction === "rtl" ? "rtl" : "ltr");
-  const updateAnchor = (
+  const resolvePlacement = (
     placement: PickerParams<Option>["placement"],
     variant: PickerParams<Option>["variant"],
-  ) =>
-    anchor?.update(
-      trigger,
-      variant === "submenu"
-        ? direction() === "rtl"
-          ? "left-start"
-          : "right-start"
-        : `${placement ?? "bottom"}-start`,
-    );
+  ): OverlayPlacement =>
+    variant === "submenu"
+      ? direction() === "rtl"
+        ? "left-start"
+        : "right-start"
+      : `${placement ?? "bottom"}-start`;
   const options = createMemo((): readonly Option[] => {
     const { value, options: configuredOptions } = props.params;
     if (
@@ -156,6 +153,15 @@ export function PickerContent<Option extends PickerOption>(props: {
       return props.params.disabled;
     },
   });
+  const anchor = createAnchoredOverlay(
+    overlay,
+    () => trigger,
+    () => {
+      const { placement, variant } = props.params;
+      return { placement: () => resolvePlacement(placement, variant) };
+    },
+    { anchored: !initialSheet, paused: () => !overlay.open },
+  );
   onSettled(() => overlay.bindSurface(surface));
   // The menu refreshes direction on accepted open; closed pickers need no style read.
   const menuDirection: typeof direction = () => (overlay.open ? direction() : "ltr");
@@ -197,7 +203,9 @@ export function PickerContent<Option extends PickerOption>(props: {
       if (!props.host.isConnected) {
         return;
       }
-      updateAnchor(props.params.placement, props.params.variant);
+      if (!initialSheet) {
+        anchor.update(trigger, resolvePlacement(props.params.placement, props.params.variant));
+      }
       if (!overlay.request(true, focus ? (last ? "last" : "first") : "none")) {
         return;
       }
@@ -298,14 +306,6 @@ export function PickerContent<Option extends PickerOption>(props: {
     clearTimeout(hoverTimer);
   });
   createEffect(
-    () => [props.params.placement, props.params.variant] as const,
-    ([placement, variant]) => {
-      if (overlay.open) {
-        updateAnchor(placement, variant);
-      }
-    },
-  );
-  createEffect(
     () => [opened(), active(), query(), rows()] as const,
     ([isOpen, highlighted]) => {
       if (list) {
@@ -338,15 +338,11 @@ export function PickerContent<Option extends PickerOption>(props: {
     }
   }
   onSettled(() => {
-    overlay.bindTrigger(trigger);
-    overlay.setParent(findOverlayParent(trigger));
-    if (!props.params.sheet) {
-      anchor = createOverlayAnchor(surface);
-    }
+    const disconnectAnchor = anchor.connect();
     const stop = control.connect(() => {}, onOpenChange);
     return () => {
       stop();
-      anchor?.dispose();
+      disconnectAnchor();
     };
   });
   const Leading = (row: { option?: Option }) => {

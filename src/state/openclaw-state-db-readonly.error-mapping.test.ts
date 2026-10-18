@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import type { OwnedWorkerTask } from "@openclaw/worker-runtime";
+import type { OwnedWorkerTask, RetainedWorkerTask } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
 import { createOwnedWorkerTaskPoolMock } from "../infra/worker-task-pool.mock.test-support.js";
-import type { RetainedWorkerTask } from "../infra/worker-task-pool.types.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {

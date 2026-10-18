@@ -551,6 +551,13 @@ validates the complete candidate and current caller authority before granting
 COMMIT, then publishes only a confirmed native receipt. FIFO ordering, durability,
 schemas, stored formats, and update behavior are unchanged.
 
+Closed entry operations whose callers discard the result can omit the returned
+entry from that candidate. Commit observers still receive their entry, and required
+publication facts and final authority checks remain unchanged. Exact-row queries
+share one retained row per connection, capped at 1 MiB of estimated string storage.
+A different query or observed admission revision retires that row; oversized rows
+remain readable without caching. Compiled queries survive payload eviction.
+
 Durable heartbeat outcome claims check the current row in their existing worker FIFO.
 Persistence and claims retain the agent executor directly, without opening a native
 database on the Gateway thread. Absent storage has no durable base session or outcome
@@ -6331,6 +6338,11 @@ use; reads also prepare authority before accepting their results. Transcript
 writes retain their interval through the existing writer's commit and settlement.
 Synchronous guards perform no receipt SQL or worker submission. Agent database
 admission refusals remain with their in-memory admission owner.
+
+Cron mutation preparation uses the service's complete resident store and existing
+write-receipt invalidation. The shared planner runs locally without a worker request
+or preparation transaction. The committing worker rereads authoritative rows,
+replans, and retains definition, precondition, and final authority checks.
 
 Cron mutations share host-owned receipt-authority custody for the physical shared
 database, across store partitions and approval writers. Runtime mutations, raw

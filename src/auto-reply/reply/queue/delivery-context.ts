@@ -34,23 +34,12 @@ const queuedAdmissionOwnerState = resolveGlobalSingleton(
   }),
 );
 
-export function hasExclusiveTurnAdmission(
+function hasExclusiveTurnAdmission(
   lifecycle: FollowupRun["turnAdoptionLifecycle"],
 ): lifecycle is NonNullable<FollowupRun["turnAdoptionLifecycle"]> & {
   admission: "exclusive";
 } {
   return lifecycle?.admission === "exclusive";
-}
-
-export function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
-  const owners = new Set(
-    items.flatMap((item) =>
-      hasExclusiveTurnAdmission(item.turnAdoptionLifecycle) ? [item.turnAdoptionLifecycle] : [],
-    ),
-  );
-  if (owners.size > 1) {
-    throw new Error("followup queue cannot aggregate distinct admission lifecycles");
-  }
 }
 
 function resolveTurnAdoptionLifecycleDeliveryKey(
@@ -432,16 +421,7 @@ export function collectRuntimeMetadata(
   };
 }
 
-export function resolveOverflowSummaryInboundEventKind(
-  sources: FollowupRun[],
-): "room_event" | undefined {
-  return sources.length > 0 &&
-    sources.every((source) => source.currentInboundEventKind === "room_event")
-    ? "room_event"
-    : undefined;
-}
-
-export function getFollowupOriginRouting(source: FollowupRun) {
+function getFollowupOriginRouting(source: FollowupRun) {
   return {
     originatingChannel: source.originatingChannel,
     originatingTo: source.originatingTo,
