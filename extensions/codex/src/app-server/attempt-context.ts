@@ -1,6 +1,5 @@
 import { shouldIncludeAgentHarnessRuntimeContext } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
-  classifyAgentToolSource,
   embeddedAgentLog,
   prepareWatchedSessionsHarnessContext,
   type AgentMessage,
@@ -9,6 +8,7 @@ import {
   type EmbeddedContextFile,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { classifyAgentToolSource } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { sha256Hex as sha256Text } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
