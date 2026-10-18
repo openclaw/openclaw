@@ -11,6 +11,7 @@ import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-c
 import type { HealthCheckContext } from "../flows/health-checks.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -478,6 +479,7 @@ describe("runDoctorLintCli", () => {
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
       clearLoadInstalledPluginIndexInstallRecordsCache();
       const before = snapshotDoctorLintSqliteFamily(databasePath);
+      const fork = vi.spyOn(snapshotSource, "forkSqlitePrivateSnapshot");
       mocks.openNodeSqliteDatabase.mockClear();
       const sourceOpenStacks: string[] = [];
       mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) => {
@@ -537,9 +539,9 @@ describe("runDoctorLintCli", () => {
             ]
           : [],
       );
-      expect(
-        mocks.prepareSqliteReadOnlyLocationSync.mock.calls.map(([pathname]) => pathname),
-      ).toEqual([databasePath]);
+      expect(mocks.prepareSqliteReadOnlyLocationSync).not.toHaveBeenCalled();
+      expect(fork).toHaveBeenCalledOnce();
+      expect(fork.mock.calls[0]?.[0]).not.toBe(databasePath);
       expect(sourceOpenStacks).toEqual([]);
       expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
       expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual(sourceConfig);

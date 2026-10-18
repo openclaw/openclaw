@@ -15,9 +15,94 @@ registerProcessesEnglish();
 
 const REFRESH_INTERVAL_MS = 5_000;
 type ProcessesPanelInput = { sessionKey: string; agentId: string; presented: boolean };
+type ProcessSnapshot = Pick<
+  ProcessObservation,
+  "rows" | "loading" | "hasResult" | "truncated" | "error" | "stopping"
+>;
+const EMPTY_PROCESSES: ProcessSnapshot = {
+  rows: [],
+  loading: false,
+  hasResult: false,
+  truncated: false,
+  error: null,
+  stopping: new Set(),
+};
+type SharedObservation = { data: ProcessObservation; listeners: Set<() => void> };
+const observations = new WeakMap<ApplicationContext["sessions"], Map<string, SharedObservation>>();
 
-/** A visible panel observes the process owner without draining agent output. */
+/** Visible presentations of the same session share its snapshot, read and timer. */
 export class ProcessesPanelData {
+  private readonly entries: Map<string, SharedObservation>;
+  private entry: SharedObservation | null = null;
+  private key: string | null = null;
+
+  constructor(
+    private readonly context: ApplicationContext,
+    private readonly changed: () => void,
+  ) {
+    let entries = observations.get(context.sessions);
+    if (!entries) {
+      entries = new Map();
+      observations.set(context.sessions, entries);
+    }
+    this.entries = entries;
+  }
+
+  get snapshot(): ProcessSnapshot {
+    return this.entry?.data ?? EMPTY_PROCESSES;
+  }
+
+  sync(input: ProcessesPanelInput): void {
+    const key =
+      input.presented && input.sessionKey
+        ? JSON.stringify([input.agentId, input.sessionKey])
+        : null;
+    if (key === this.key) {
+      return;
+    }
+    this.dispose();
+    if (key !== null) {
+      let entry = this.entries.get(key);
+      if (!entry) {
+        const listeners = new Set<() => void>();
+        entry = {
+          data: new ProcessObservation(this.context, input, () => {
+            listeners.forEach((listener) => listener());
+          }),
+          listeners,
+        };
+        this.entries.set(key, entry);
+      }
+      this.key = key;
+      this.entry = entry;
+      entry.listeners.add(this.changed);
+    }
+    this.changed();
+  }
+
+  refresh(): Promise<void> {
+    return this.entry?.data.refresh() ?? Promise.resolve();
+  }
+
+  stop(row: SessionProcessSummary): Promise<void> {
+    return this.entry?.data.stop(row) ?? Promise.resolve();
+  }
+
+  dispose(): void {
+    if (this.entry) {
+      this.entry.listeners.delete(this.changed);
+      if (this.entry.listeners.size === 0) {
+        this.entry.data.dispose();
+        this.entries.delete(this.key!);
+      }
+    }
+    this.entry = null;
+    this.key = null;
+  }
+}
+
+/** Observes the process owner without draining agent output. */
+class ProcessObservation {
   rows: readonly SessionProcessSummary[] = [];
   loading = false;
   hasResult = false;
@@ -25,7 +110,6 @@ export class ProcessesPanelData {
   error: string | null = null;
   readonly stopping = new Set<string>();
   private sessionId: string | null = null;
-  private input: ProcessesPanelInput | null = null;
   private scope: SessionConnectionScope | null = null;
   private generation = 0;
   private disposed = false;
@@ -38,6 +122,7 @@ export class ProcessesPanelData {
 
   constructor(
     private readonly context: ApplicationContext,
+    private readonly input: ProcessesPanelInput,
     private readonly changed: () => void,
   ) {
     // Connection edges retire polling scopes synchronously, including while the pane is hidden.
@@ -46,13 +131,6 @@ export class ProcessesPanelData {
     this.stopVisibility = this.visibilityDocument
       ? listen(this.visibilityDocument, "visibilitychange", this.visibilityChanged)
       : undefined;
-  }
-
-  sync(input: ProcessesPanelInput): void {
-    if (input.sessionKey !== this.input?.sessionKey || input.agentId !== this.input?.agentId) {
-      this.retire();
-    }
-    this.input = input;
     this.reconcile();
   }
 
@@ -60,9 +138,9 @@ export class ProcessesPanelData {
     if (this.disposed) {
       return;
     }
-    const visible = this.input?.presented && this.visibilityDocument?.visibilityState !== "hidden";
+    const visible = this.visibilityDocument?.visibilityState !== "hidden";
     const scope = visible ? this.context.sessions.captureConnectionScope() : null;
-    if (!scope || !this.input?.sessionKey) {
+    if (!scope) {
       this.retire();
       this.changed();
       return;
@@ -79,12 +157,12 @@ export class ProcessesPanelData {
   private target() {
     const identity = resolveUiConversationIdentity(
       {
-        assistantAgentId: this.input!.agentId,
+        assistantAgentId: this.input.agentId,
         agentsList: this.context.agents.state.agentsList,
         hello: this.context.gateway.snapshot.hello,
       },
-      this.input!.sessionKey,
-      this.input!.agentId,
+      this.input.sessionKey,
+      this.input.agentId,
     );
     return { key: identity.sessionKey, agentId: identity.agentId };
   }
@@ -94,7 +172,7 @@ export class ProcessesPanelData {
       return this.pending;
     }
     const scope = this.scope;
-    if (!scope || !this.input || !this.current(this.generation)) {
+    if (!scope || !this.current(this.generation)) {
       return Promise.resolve();
     }
     const generation = this.generation;

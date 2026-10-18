@@ -98,6 +98,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
         type: "diagnostic.memory.sample",
         memory: {
           ...memory,
+          anonymousRssBytes: 700,
+          anonymousSwapBytes: 0,
           workerHeaps: [
             {
               script: "code-mode-node.worker.js",
@@ -123,6 +125,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
         },
       });
       const before = metrics.render();
+      expect(before).toContain('openclaw_process_anonymous_memory_bytes{kind="rss"} 700\n');
+      expect(before).toContain('openclaw_process_anonymous_memory_bytes{kind="swap"} 0\n');
       expect(before).toContain(
         'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",reason="forced",slot="1",thread="code-mode-node.worker.js"} 2\n',
       );
@@ -172,6 +176,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
         },
       });
       const after = metrics.render();
+      expect(after).not.toContain("openclaw_process_anonymous_memory_bytes");
       expect(after).toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="1"} 50\n');
       expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="limit"');
       expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="2"}');

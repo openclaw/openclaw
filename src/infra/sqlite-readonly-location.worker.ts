@@ -22,6 +22,10 @@ import {
   formatSqliteReadOnlyInspectionFailure,
   isSqliteLockError,
 } from "./sqlite-error-diagnostics.js";
+import {
+  forkSqlitePrivateSnapshotInProcess,
+  readSqlitePrivateSnapshotFamily,
+} from "./sqlite-private-snapshot-fork.js";
 import { readSqliteAuthSchema } from "./sqlite-readonly-auth-schema.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
 import {
@@ -90,6 +94,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   const stagingRoot = args[2] || undefined;
   if (
     (mode !== "sync" &&
+      mode !== "private-fork" &&
       mode !== "async" &&
       mode !== "metadata" &&
       mode !== "consolidated" &&
@@ -103,11 +108,16 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     };
   }
   try {
-    if (args.length > 4 || (args[3] !== undefined && mode !== "sync" && mode !== "metadata")) {
+    if (
+      args.length > 4 ||
+      (args[3] !== undefined && mode !== "sync" && mode !== "metadata" && mode !== "private-fork")
+    ) {
       throw new Error("SQLite source identity is supported only for sync or metadata snapshots");
     }
     const expectedSourceIdentity =
-      args[3] === undefined ? undefined : readDatabaseFileIdentity(JSON.parse(args[3]));
+      args[3] === undefined || mode === "private-fork"
+        ? undefined
+        : readDatabaseFileIdentity(JSON.parse(args[3]));
     if (mode === "staging-reconcile") {
       reconcileSqliteSnapshotRetirement(pathname);
       return { ok: true, location: pathname };
@@ -167,7 +177,16 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       return { ok: true, warnings };
     }
     let prepared: PreparedSqliteReadOnlyLocation;
-    if (mode === "consolidated") {
+    if (mode === "private-fork") {
+      if (!stagingRoot || args[3] === undefined) {
+        throw new Error("SQLite private fork requires staging and its captured family");
+      }
+      prepared = await forkSqlitePrivateSnapshotInProcess(
+        pathname,
+        readSqlitePrivateSnapshotFamily(JSON.parse(args[3])),
+        stagingRoot,
+      );
+    } else if (mode === "consolidated") {
       if (!stagingRoot || path.dirname(path.resolve(pathname)) !== path.resolve(stagingRoot)) {
         throw new Error(
           "SQLite consolidation requires its caller-owned private snapshot directory",
@@ -441,7 +460,9 @@ function runSession(): void {
       !Number.isSafeInteger(message.id) ||
       !("args" in message) ||
       !isStringArray(message.args) ||
-      (message.args[0] !== "sync" && !isSqliteSnapshotStagingMode(message.args[0]))
+      (message.args[0] !== "sync" &&
+        message.args[0] !== "private-fork" &&
+        !isSqliteSnapshotStagingMode(message.args[0]))
     ) {
       stop(true);
       return;

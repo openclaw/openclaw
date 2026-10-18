@@ -87,7 +87,7 @@ const gatewayChecks = [
   "pnpm openclaw health --verbose --json",
 ];
 const rebuildMac =
-  "env SKIP_TSC=1 SKIP_UI_BUILD=1 bash scripts/restart-mac.sh --sign --wait --target-only";
+  "env OPENCLAW_MAC_REUSE_BUILD=1 SKIP_PNPM_INSTALL=1 bash scripts/restart-mac.sh --sign --wait --target-only";
 const uid = process.getuid?.() ?? 501;
 const bootout = `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`;
 const traceOn = "/bin/launchctl setenv OPENCLAW_GATEWAY_STARTUP_TRACE 1";

@@ -500,7 +500,7 @@ export class WorkerConnection {
     return error;
   }
 
-  private isTerminal(state: WorkerConnectionState = this.stateValue): boolean {
+  isTerminal(state: WorkerConnectionState = this.stateValue): boolean {
     return state.kind === "failed" || state.kind === "fenced" || state.kind === "stopped";
   }
 

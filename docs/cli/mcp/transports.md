@@ -37,6 +37,29 @@ completes normally; a later connection starts a fresh server. Unconfirmed cleanu
 closure facts, elapsed time, and any failed signal delivery. The cleanup deadline
 does not change when shutdown escalates.
 
+For a supported `docker run` command, OpenClaw assigns container ownership labels
+and a temporary Docker CID file. Closing the connection sends the container's
+configured stop signal with the existing two-second stdio grace, then removes
+that exact container through the same Docker daemon, including when initialization
+times out. On Gateway startup, OpenClaw also reclaims labeled containers from a previous
+Gateway whose process is proven to have exited. Containers without this state
+directory's ownership label are left alone; an unavailable daemon or an unknown
+process identity produces a warning and preserves the container.
+
+Connection deadlines stay unchanged. If Docker is still creating a container,
+cleanup retains its client and exclusive state ownership until Docker reports
+the container ID or the client exits. A warning identifies pending cleanup.
+Unconfirmed removal also retains state ownership; inspect Docker and restart the
+owning OpenClaw process before retrying.
+
+This also supports a single literal `sh -c 'exec docker run ...'` wrapper.
+Shell expansions, pipelines, additional commands, unknown Docker options, existing
+CID files, and `openclaw.mcp.*` label conflicts disable automatic container custody
+and produce a warning. The original command still runs. Use a direct `docker run`
+argument array for predictable cleanup. Recovery inspects only Docker daemons
+referenced by the current enabled MCP configuration, so retain the server definition
+until any containers from an interrupted Gateway have been reclaimed.
+
 <Warning>
 **Stdio env safety filter**
 

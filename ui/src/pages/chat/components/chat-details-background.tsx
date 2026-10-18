@@ -169,7 +169,7 @@ export function ChatDetailsBackground(props: Props) {
   const [processesExpanded, setProcessesExpanded] = createSignal(false);
   const subagents = createMemo(() => attentionOrder(listSubagents(props.details), subagentState));
   const subagentTally = createMemo(() => tally(subagents(), subagentState));
-  // The Processes panel's owner polls only while Details is open in a pane that can show it.
+  // Details shares the session's process observation with its other visible panels.
   const processes = context
     ? useSessionPanel(
         {
@@ -187,12 +187,14 @@ export function ChatDetailsBackground(props: Props) {
         () => undefined,
       )
     : () => undefined;
-  const processRows = createMemo(() => attentionOrder(processes()?.rows ?? [], processState));
+  const processRows = createMemo(() =>
+    attentionOrder(processes()?.snapshot.rows ?? [], processState),
+  );
   const processTally = createMemo(() => tally(processRows(), processState));
   const visibleProcesses = createMemo(() =>
     processesExpanded() ? processRows() : processRows().slice(0, PREVIEW_ROWS),
   );
-  const processError = () => (processRows().length === 0 ? processes()?.error : null);
+  const processError = () => (processRows().length === 0 ? processes()?.snapshot.error : null);
   const openSubagents = () => {
     if (props.presented) {
       props.details.onOpenSubagents?.();

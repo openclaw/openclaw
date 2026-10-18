@@ -41,6 +41,7 @@ import {
   normalizeCronRunErrorText,
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
+import { isCronOneShotContinuationJob } from "../service/one-shot-schedule.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun } from "./run-finalize.js";
@@ -53,6 +54,9 @@ import type { CronCompletedPromptRun, RunCronAgentTurnResult } from "./run.types
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
+const cronOperatorSourceLoader = createLazyImportLoader(
+  () => import("../../gateway/cron-operator-source.js"),
+);
 
 // Release the full session snapshot after persistence and delivery to avoid retaining skill prompts.
 async function disposeCronRunContext(params: {
@@ -129,6 +133,7 @@ async function runCronIsolatedAgentTurnInTrace(
     context: PreparedCronRunContext,
   ): Promise<RunCronAgentTurnResult> {
     const prepared = { context };
+    using operatorLease = new DisposableStack();
     await using _ = {
       [Symbol.asyncDispose]: async () => {
         await prepared.context.workspaceLease?.release();
@@ -261,7 +266,14 @@ async function runCronIsolatedAgentTurnInTrace(
                   agentId: prepared.context.agentId,
                   lifecycleGeneration: runLifecycleGeneration,
                   cronRunsByJobId: new Map([
-                    [params.job.id, { pacingEnabled: params.job.pacing !== undefined }],
+                    [
+                      params.job.id,
+                      {
+                        nextCheckEnabled:
+                          params.job.pacing !== undefined ||
+                          isCronOneShotContinuationJob(params.job),
+                      },
+                    ],
                   ]),
                 },
                 {
@@ -270,8 +282,24 @@ async function runCronIsolatedAgentTurnInTrace(
                 },
               );
               const { executeCronRun } = await cronExecutorRuntimeLoader.load();
+              const operator = params.job.operatorSource
+                ? await (
+                    await cronOperatorSourceLoader.load()
+                  ).restoreCronOperatorSource({
+                    job: params.job,
+                    agentId: prepared.context.agentId,
+                    sessionKey: prepared.context.runSessionKey,
+                    entry: prepared.context.cronSession.sessionEntry,
+                    signal: abortSignal,
+                    deliveryAttemptFence: params.deliveryAttemptFence,
+                  })
+                : undefined;
+              if (operator) {
+                operatorLease.defer(operator.release);
+              }
               const executionParams: Parameters<typeof executeCronRun>[0] = {
                 ...prepared.context,
+                operatorAuthority: operator?.authority,
                 runId,
                 cfg: params.cfg,
                 job: params.job,

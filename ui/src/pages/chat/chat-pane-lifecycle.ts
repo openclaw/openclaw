@@ -87,7 +87,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const state = this.state;
         return state && this.active && this.presented
           ? {
-              renderRoot: this.element,
+              sidebarRegion: this.sidebarRegionView,
               state,
               linkReaders: availableLinkReaders(this.context.gateway.snapshot),
               pluginPanels: this.context.plugins.registrations("panels").map((entry) => entry.key),
