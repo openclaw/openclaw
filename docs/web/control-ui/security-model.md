@@ -136,7 +136,15 @@ remains available.
 Assistant `MEDIA:` attachments in local project chats resolve relative paths
 inside the session workspace, including managed worktrees. Absolute paths in
 that workspace are staged for delivery under the same file-access checks.
-Selecting a project does not grant access to sibling worktrees.
+For a managed project running in a local Docker or Podman sandbox, relative and
+absolute container-workspace references (such as `screenshots/result.png` or
+`/workspace/screenshots/result.png`) resolve through that session's worktree
+after pending workspace changes settle.
+The existing sandbox must identify the same visible workspace bind; container-only,
+obscured, or unverifiable backing stays unavailable. Stopped containers retain
+previews when their saved mount metadata still establishes that workspace bind.
+The preview still belongs to the original message and uses the same containment
+and current-access checks. Selecting a project does not grant access to sibling worktrees.
 
 Trusted audio attachments use the same session workspace boundary during playback.
 Mixed replies retain a separate failure card for each rejected attachment alongside

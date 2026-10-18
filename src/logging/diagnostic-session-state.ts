@@ -243,6 +243,7 @@ export function retireDiagnosticSessionObservations(): void {
   }
 }
 
+/** @internal Test-support reset; see diagnostic.test-support.ts. */
 export function resetDiagnosticSessionStateForTest(): void {
   diagnosticSessionStates.clear();
   lastSessionPruneAt = 0;

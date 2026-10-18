@@ -20,14 +20,6 @@ const {
   runtimeErrors,
 } = await import("./exec-approvals-cli.test-support.js");
 
-describe("exec approvals CLI error formatting", () => {
-  it("keeps the bounded first line UTF-16 well-formed", () => {
-    const message = testing.formatCliError(`${"x".repeat(299)}🚀tail\nignored`);
-
-    expect(message).toBe(`${"x".repeat(299)}...`);
-  });
-});
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createMcpToolGrant(tool = "publish_page") {

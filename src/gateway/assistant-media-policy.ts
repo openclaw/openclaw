@@ -5,6 +5,9 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isCloudWorkerPlacementState } from "../../packages/gateway-protocol/src/schema/session-placement-state.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { resolveSandboxPathMapping } from "../agents/path-policy.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -63,6 +66,10 @@ export function assertAssistantMediaPolicyCurrent(
     current.messageId !== policy.messageId ||
     current.remote !== policy.remote ||
     current.executionCwd !== policy.executionCwd ||
+    current.sandboxWorkspace?.hostRoot !== policy.sandboxWorkspace?.hostRoot ||
+    current.sandboxWorkspace?.containerRoot !== policy.sandboxWorkspace?.containerRoot ||
+    current.sandboxWorkspace?.worktreeId !== policy.sandboxWorkspace?.worktreeId ||
+    current.sandboxWorkspace?.lifecycleRevision !== policy.sandboxWorkspace?.lifecycleRevision ||
     current.workspaceOnly !== policy.workspaceOnly ||
     current.localRoots.length !== policy.localRoots.length ||
     current.localRoots.some((root, index) => root !== policy.localRoots[index]) ||
@@ -249,6 +256,9 @@ function resolvePreparedAssistantMediaPolicy(
   let session: AssistantMediaSession | undefined;
   let sessionRoot: string | undefined;
   let executionCwd: string | undefined;
+  let sandboxWorkspace:
+    | { hostRoot: string; containerRoot: string; worktreeId: string; lifecycleRevision?: string }
+    | undefined;
   if (loaded && entry && agentId) {
     if (!auth.operatorScopes.includes("operator.admin")) {
       const profileId = auth.authenticatedUserProfile?.profileId;
@@ -276,6 +286,24 @@ function resolvePreparedAssistantMediaPolicy(
       const workspace = resolveSessionWorkspaceRoots(config, agentId, entry);
       sessionRoot = entry.sessionRoot ?? workspace.root;
       executionCwd = workspace.diffCwd;
+      if (entry.worktree && sessionRoot) {
+        const runtime = resolvePreparedSandboxRuntimeStatus({
+          cfg: config,
+          agentId,
+          sessionKey: loaded.canonicalKey,
+          preparedSessionEntry: entry,
+        });
+        const sandbox = resolveSandboxConfigForAgent(config, agentId);
+        if (runtime.sandboxed && (sandbox.backend === "docker" || sandbox.backend === "podman")) {
+          // Managed local sandboxes checkpoint into this session's canonical worktree.
+          sandboxWorkspace = {
+            hostRoot: sessionRoot,
+            containerRoot: sandbox.docker.workdir,
+            worktreeId: entry.worktree.id,
+            lifecycleRevision: entry.lifecycleRevision,
+          };
+        }
+      }
     }
   }
   const workspaceOnly =
@@ -299,6 +327,7 @@ function resolvePreparedAssistantMediaPolicy(
     messageId,
     session,
     executionCwd,
+    sandboxWorkspace,
     remote,
     localRoots,
     workspaceOnly,
@@ -351,6 +380,7 @@ const controlUiAssistantMediaTicketSecret = randomBytes(32);
 export type AssistantMediaTicketPayload = {
   scope: typeof CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE;
   source: string;
+  workspaceKey?: string;
   exp: number;
   session?: AssistantMediaSession;
   messageId?: string;
@@ -363,6 +393,18 @@ function signAssistantMediaTicketPayload(encodedPayload: string): string {
   return createHmac("sha256", controlUiAssistantMediaTicketSecret)
     .update(encodedPayload)
     .digest("base64url");
+}
+
+/** Bind virtual paths to their current workspace without exposing its host path. */
+export function resolveAssistantMediaWorkspaceTicketKey(
+  source: string,
+  policy: NonNullable<Awaited<ReturnType<typeof resolveAssistantMediaPolicy>>>,
+): string | undefined {
+  const workspace = policy.sandboxWorkspace;
+  if (policy.remote || !workspace || !resolveSandboxPathMapping([workspace], source)) {
+    return undefined;
+  }
+  return signAssistantMediaTicketPayload(JSON.stringify(workspace));
 }
 
 export function createAssistantMediaTicket(
@@ -419,6 +461,7 @@ export function verifyAssistantMediaTicket(
     const valid =
       payload.scope === CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE &&
       typeof payload.source === "string" &&
+      (payload.workspaceKey === undefined || typeof payload.workspaceKey === "string") &&
       (source === undefined || payload.source === source) &&
       payload.agentId === agentId &&
       typeof payload.reader?.authMethod === "string" &&

@@ -2553,12 +2553,18 @@ importers:
 
   extensions/whatsapp:
     dependencies:
+      '@solidjs/web':
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
       audio-decode:
         specifier: 3.12.0
         version: 3.12.0
       baileys:
         specifier: 7.0.0-rc14
         version: 7.0.0-rc14(patch_hash=c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded)(audio-decode@3.12.0)(supports-color@10.2.2)
+      solid-js:
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       typebox:
         specifier: 1.3.36
         version: 1.3.36
@@ -2566,6 +2572,12 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@solidjs/compiler':
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       openclaw:
         specifier: workspace:*
         version: link:../..
