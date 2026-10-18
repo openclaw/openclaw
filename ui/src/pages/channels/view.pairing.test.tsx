@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 import type { SelectPicker } from "../../components/select-picker.ts";
-import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import {
   renderChannelPairingDetail,
   renderChannelPairingPrompt,
@@ -194,6 +194,7 @@ describe("channel DM access request views", () => {
     const account = selects.item(1);
     expect(selects).toHaveLength(2);
     expect(container.querySelectorAll("select.settings-select")).toHaveLength(0);
+    await openPicker(account);
     expect(
       account.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
     ).toBe("personal");

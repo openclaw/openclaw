@@ -149,7 +149,10 @@ function renderCatalogHostGroup(
           </span>
           <span class="sidebar-session-catalog-host__label">{readHost().label}</span>
           <span
-            class={`sidebar-session-catalog-host__count ${readHost().error ? "sidebar-session-catalog-host__count--error" : ""}`}
+            class={[
+              "sidebar-session-catalog-host__count",
+              { "sidebar-session-catalog-host__count--error": Boolean(readHost().error) },
+            ]}
             aria-hidden="true"
           >
             {readHost().error ? <Icon name="alertTriangle" /> : readHost().sessions.length}
@@ -234,6 +237,7 @@ function renderCatalogGroup(
   const activity = createMemo(() =>
     catalogSessionActivity(rows(), readLiveRowsByKey(), params.isRunVisuallyActive),
   );
+  let viewMenuTrigger: HTMLButtonElement | undefined;
   const hasActiveRun = createMemo(() => activity().running);
   const hasUnread = createMemo(() => activity().unread);
   const hasBrandIcon = createMemo(() => hasProviderBrandIcon(readCatalog().id));
@@ -248,23 +252,17 @@ function renderCatalogGroup(
       error: errorMessage(),
     }),
   );
-  const sectionClass = createMemo(() => {
-    const collapsedValue = collapsed();
-    return [
-      "sidebar-recent-sessions__group",
-      "sidebar-recent-sessions__group--zone-coding",
-      collapsedValue ? "sidebar-recent-sessions__group--collapsed" : "",
-      params.draggingSectionId === sectionId ? "sidebar-recent-sessions__group--dragging" : "",
-      params.sectionDropTarget?.sectionId === sectionId
-        ? `sidebar-recent-sessions__group--section-drop-${params.sectionDropTarget.position}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-  });
   return (
     <div
-      class={sectionClass()}
+      class={[
+        "sidebar-recent-sessions__group sidebar-recent-sessions__group--zone-coding",
+        params.sectionDropTarget?.sectionId === sectionId &&
+          `sidebar-recent-sessions__group--section-drop-${params.sectionDropTarget.position}`,
+        {
+          "sidebar-recent-sessions__group--collapsed": collapsed(),
+          "sidebar-recent-sessions__group--dragging": params.draggingSectionId === sectionId,
+        },
+      ]}
       data-session-section={sectionId}
       onDragOver={(event: DragEvent) => {
         if (!params.sectionDragDisabledReason) {
@@ -293,7 +291,10 @@ function renderCatalogGroup(
                 onToggle: () => params.onToggleSection(sectionId),
                 content: (
                   <span
-                    class={`sidebar-session-group-count ${hasError() ? "sidebar-session-group-count--error" : ""}`}
+                    class={[
+                      "sidebar-session-group-count",
+                      { "sidebar-session-group-count--error": hasError() },
+                    ]}
                     data-session-catalog-error={hasError() ? readCatalog().id : undefined}
                     aria-hidden="true"
                   >
@@ -313,10 +314,7 @@ function renderCatalogGroup(
         }}
         onContextMenu={(event) => {
           event.preventDefault();
-          const header = event.currentTarget;
-          const trigger =
-            header.querySelector<HTMLElement>("[data-session-catalog-view-menu]") ?? header;
-          params.onOpenViewMenu(readCatalog().id, trigger, {
+          params.onOpenViewMenu(readCatalog().id, viewMenuTrigger ?? event.currentTarget, {
             x: event.clientX,
             y: event.clientY,
           });
@@ -334,7 +332,10 @@ function renderCatalogGroup(
               onClick={() => params.onToggleSection(sectionId)}
             >
               <span
-                class={`sidebar-session-group-toggle__lead ${hasBrandIcon() ? "sidebar-session-group-toggle__lead--branded" : ""}`}
+                class={[
+                  "sidebar-session-group-toggle__lead",
+                  { "sidebar-session-group-toggle__lead--branded": hasBrandIcon() },
+                ]}
                 aria-hidden="true"
               >
                 {hasBrandIcon() ? (
@@ -360,8 +361,12 @@ function renderCatalogGroup(
               ) : undefined}
             </button>
             <button
+              ref={(element) => (viewMenuTrigger = element)}
               type="button"
-              class={`sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.ownerFilterActive ? "sidebar-session-sort--filtered" : ""}`}
+              class={[
+                "sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping",
+                { "sidebar-session-sort--filtered": params.ownerFilterActive },
+              ]}
               data-session-catalog-view-menu={readCatalog().id}
               title={t("chat.sidebar.catalogViewOptions")}
               aria-label={t("chat.sidebar.catalogViewOptions")}
@@ -387,7 +392,7 @@ function renderCatalogGroup(
                       catalogId: readCatalog().id,
                     };
                   },
-                  get className() {
+                  get class() {
                     return "sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new";
                   },
                   get label() {

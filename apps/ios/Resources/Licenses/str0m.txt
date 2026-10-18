@@ -778,7 +778,7 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
 LICENSE-MIT: L102
 
-zerocopy 0.8.60
+zerocopy 0.8.61
 Source: https://github.com/google/zerocopy
 Declared license: BSD-2-Clause OR Apache-2.0 OR MIT
 LICENSE-APACHE: L103

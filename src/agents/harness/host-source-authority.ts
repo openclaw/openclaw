@@ -1,5 +1,4 @@
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -10,6 +9,7 @@ import {
   getAgentRunLifecycleGeneration,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -19,6 +19,7 @@ import {
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import {
   captureGatewayToolReceiptAssertion,
   type getGatewayToolCallerIdentity,
@@ -95,6 +96,30 @@ export function bindHarnessHostSourceAuthority(params: {
       checkCaller(() => (assertReceipt?.assertScopeCurrent ?? assertReceipt)?.());
     },
   });
+}
+
+export function bindHarnessSettledTurnCallback(
+  onSettledTurn: EmbeddedRunAttemptParams["onSettledTurn"],
+  assertActive: () => void,
+  signal?: AbortSignal,
+): EmbeddedRunAttemptParams["onSettledTurn"] {
+  if (!onSettledTurn) {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    assertActive();
+  };
+  return async (attempt, captureContext) => {
+    assertCurrent();
+    await onSettledTurn(attempt, async () => {
+      assertCurrent();
+      const context = await captureContext();
+      assertCurrent();
+      return context;
+    });
+    assertCurrent();
+  };
 }
 
 /** Native delegation cannot select a person, so its live turn must remain unambiguous. */

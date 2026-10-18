@@ -35,6 +35,31 @@ const hasHistoricalExpected = (raw: string, dimensions = TERMINAL) =>
   oracle.hasHistoricalSynchronizedFrameRow(raw, MARKERS, EXPECTED, dimensions);
 
 describe("hasSynchronizedFrameRow", () => {
+  it("accepts only exact program-status records without authenticating visible output", () => {
+    const osc = (body: string) => `\x1b]7501;${body}\x1b\\`;
+    for (const body of [
+      "?",
+      "state=clear",
+      "state=idle:app=openclaw",
+      "state=working:app=openclaw",
+      "state=done:app=openclaw",
+      "state=error:app=openclaw",
+    ]) {
+      expect(parse(osc(body))).toEqual([]);
+      expect(hasExpected(osc(body) + frame(EXPECTED) + osc(body))).toBe(true);
+      expect(hasExpected(EXPECTED + osc(body) + frame(""))).toBe(false);
+    }
+    for (const invalid of [
+      osc("state=unknown:app=openclaw"),
+      osc("state=done:app=other"),
+      osc("state=clear:app=openclaw"),
+      osc("state=done:app=openclaw:extra=1"),
+      "\x1b]7501;state=done:app=openclaw\x07",
+      "\x1b]7502;state=done:app=openclaw\x1b\\",
+    ]) {
+      expect(() => parse(invalid + frame(EXPECTED))).toThrow();
+    }
+  });
   it("accepts only the exact cell-size query outside frames without authenticating output", () => {
     const query = "\x1b[16t";
     expect(parse(query)).toEqual([]);
@@ -132,22 +157,16 @@ describe("hasSynchronizedFrameRow", () => {
     expect(hasExpected(frame(EXPECTED))).toBe(true);
     expect(hasExpected(frame("T08A safe\r\nT08B"))).toBe(false);
     expect(hasExpected(frame("T08A\tsafe T08B"))).toBe(false);
-    expect(
-      oracle.hasSynchronizedFrameRow(
-        frame("\x1b[2J\x1b[H1234567\tsafe T08B"),
-        ["1234567", "T08B"],
-        "1234567 safe T08B",
-        TERMINAL,
-      ),
-    ).toBe(false);
-    expect(
-      oracle.hasSynchronizedFrameRow(
-        frame("\x1b[2J\x1b[H1234567X\b safe T08B"),
-        ["1234567", "T08B"],
-        "1234567 safe T08B",
-        TERMINAL,
-      ),
-    ).toBe(false);
+    for (const text of ["1234567\tsafe T08B", "1234567X\b safe T08B"]) {
+      expect(
+        oracle.hasSynchronizedFrameRow(
+          frame(`\x1b[2J\x1b[H${text}`),
+          ["1234567", "T08B"],
+          "1234567 safe T08B",
+          TERMINAL,
+        ),
+      ).toBe(false);
+    }
     expect(hasExpected(frame("T08A  safe T08B"))).toBe(false);
     expect(parse(frame("界X\r\x1b[2G?"))[0]).toEqual([" ?X"]);
     expect(parse(frame("界X\r\x1b[2G\x1b[K"))[0]).toEqual([""]);

@@ -38,13 +38,12 @@ import {
   resolveDeferredPluginSessionStoreSource,
 } from "./deferred-plugin-session-sources.js";
 import { expandHomePrefix } from "./home-dir.js";
+import { readDirectoryEntriesSync } from "./path-existence.js";
+import { safeStatSync } from "./path-guards.js";
 import { importLegacyAcpSessionMetadata } from "./state-migrations.acp-session-metadata.js";
 import {
-  existsDir,
-  migrationFileExists,
   parseSessionStoreJson5,
   readSessionStoreJson5,
-  safeReadDir,
   type SessionEntryLike,
 } from "./state-migrations.fs.js";
 import { saveLegacySessionStore } from "./state-migrations.legacy-session-store.js";
@@ -377,7 +376,7 @@ export function listLegacySessionKeys({
 }
 
 export function removeDirIfEmpty(dir: string) {
-  if (!existsDir(dir) || safeReadDir(dir).length > 0) {
+  if (!safeStatSync(dir)?.isDirectory() || readDirectoryEntriesSync(dir).length > 0) {
     return;
   }
   try {
@@ -468,8 +467,8 @@ export async function migrateOrphanedSessionKeys(params: {
   // orphaned stores left behind by older configs. Active custom-template paths
   // are already covered by the configured-agents loop above.
   const agentsDir = path.join(stateDir, "agents");
-  if (existsDir(agentsDir)) {
-    for (const dirEntry of safeReadDir(agentsDir)) {
+  if (safeStatSync(agentsDir)?.isDirectory()) {
+    for (const dirEntry of readDirectoryEntriesSync(agentsDir)) {
       if (dirEntry.isDirectory()) {
         const diskAgentId = normalizeAgentId(dirEntry.name);
         if (diskAgentId) {
@@ -497,7 +496,7 @@ export async function migrateOrphanedSessionKeys(params: {
     // An unknown relationship may have grouped a readable store behind an
     // inaccessible pathname. Read from a usable alias so the group still gets
     // the unresolved-identity warning before any rewrite is attempted.
-    const storePath = [...storePaths].find((candidate) => migrationFileExists(candidate));
+    const storePath = [...storePaths].find((candidate) => safeStatSync(candidate)?.isFile());
     if (!storePath) {
       continue;
     }
@@ -691,7 +690,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
 
   for (const target of targets) {
     // Core import may archive the index while its ACP metadata still awaits the plugin.
-    const sourcePath = migrationFileExists(target.storePath)
+    const sourcePath = safeStatSync(target.storePath)?.isFile()
       ? target.storePath
       : resolveDeferredPluginSessionStoreSource({ target, env });
     if (!sourcePath) {
@@ -917,7 +916,7 @@ export function resolveSessionStoreOwnership(params: {
   const preserveAmbiguousKeys = targetStoreOwnerCount > 1;
   const candidateStorePaths = [...configuredOwnerStorePaths];
   const agentsDir = path.join(params.stateDir, "agents");
-  for (const entry of safeReadDir(agentsDir)) {
+  for (const entry of readDirectoryEntriesSync(agentsDir)) {
     if (entry.isDirectory()) {
       candidateStorePaths.push(path.join(agentsDir, entry.name, "sessions", "sessions.json"));
     }

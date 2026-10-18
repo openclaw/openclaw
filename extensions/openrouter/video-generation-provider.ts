@@ -97,23 +97,22 @@ function readOpenRouterVideoResponse(payload: Record<string, unknown>): OpenRout
     generation_id: normalizeOptionalString(payload.generation_id) ?? null,
     polling_url: normalizeOptionalString(payload.polling_url),
     status: normalizeOptionalString(payload.status),
-    unsigned_urls: Array.isArray(unsignedUrls)
-      ? unsignedUrls.map((url) => {
-          const normalized = normalizeOptionalString(url);
-          if (!normalized) {
-            throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
-          }
-          return normalized;
-        })
-      : undefined,
+    unsigned_urls: unsignedUrls?.map((url) => {
+      const normalized = normalizeOptionalString(url);
+      if (!normalized) {
+        throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
+      }
+      return normalized;
+    }),
     error: normalizeOptionalString(payload.error) ?? null,
     model: normalizeOptionalString(payload.model) ?? null,
-    usage: isRecord(usage)
-      ? {
-          cost: typeof usage.cost === "number" ? usage.cost : null,
-          is_byok: typeof usage.is_byok === "boolean" ? usage.is_byok : undefined,
-        }
-      : undefined,
+    usage:
+      usage == null
+        ? undefined
+        : {
+            cost: typeof usage.cost === "number" ? usage.cost : null,
+            is_byok: typeof usage.is_byok === "boolean" ? usage.is_byok : undefined,
+          },
   };
 }
 

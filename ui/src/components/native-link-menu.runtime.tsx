@@ -1,7 +1,7 @@
 import { createMemo, createUniqueId, onCleanup } from "solid-js";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { activateMenuShortcut } from "./menu-shortcuts.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";

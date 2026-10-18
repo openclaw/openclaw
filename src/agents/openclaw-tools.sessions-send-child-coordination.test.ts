@@ -8,6 +8,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
   loadSessionEntryReadOnly,
+  persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -19,7 +20,7 @@ import { resolveGatewaySessionStoreTargetWithStoreAsync } from "../gateway/sessi
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import * as requesterTransfer from "./subagents/registry/subagent-registry-requester-wake-commit.js";
+import * as requesterTransfer from "./subagents/registry/subagent-registry-requester-yield.js";
 
 const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEntryMock } =
   vi.hoisted(() => ({
@@ -104,8 +105,11 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
+import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import {
   registerSessionsSendRequesterRetirementTests,
@@ -144,12 +148,20 @@ function mockGatewayReply(
     terminalReply: { disposition: "visible", text: "Requested result" },
   },
 ) {
+  let targetSessionKey: string | undefined;
   callGatewayMock.mockImplementation(async (request: GatewayCall) => {
     calls.push(request);
     if (request.method === "agent") {
+      targetSessionKey = String(request.params?.sessionKey);
       return { runId: "coordination-run", status: "accepted" };
     }
-    return request.method === "agent.wait" ? waitResult : {};
+    if (request.method === "agent.wait") {
+      if (waitResult.status === "ok" && targetSessionKey) {
+        await writeFinal(targetSessionKey, "coordination-run", "Requested result");
+      }
+      return waitResult;
+    }
+    return {};
   });
 }
 function agentParams(call: GatewayCall): AgentCallParams {
@@ -204,6 +216,44 @@ async function writeEntry(sessionKey: string, entry: SessionEntry, storePath?: s
       storePath: storePath ?? resolveSessionStorePathCore(config.session?.store, { agentId }),
     },
     entry,
+  );
+}
+
+async function writeFinal(sessionKey: string, runId: string, text: string) {
+  const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
+    cfg: config,
+    key: sessionKey,
+    readOnly: true,
+    exactRead: true,
+  });
+  const sessionId = target.store[target.canonicalKey]?.sessionId;
+  if (!sessionId) {
+    throw new Error(`Expected a fixture session for ${sessionKey}`);
+  }
+  await persistSessionTranscriptTurn(
+    {
+      agentId: target.agentId,
+      storePath: target.storePath,
+      sessionKey: target.canonicalKey,
+      sessionId,
+    },
+    {
+      config,
+      runId,
+      expectedSessionId: sessionId,
+      touchSessionEntry: false,
+      updateMode: "none",
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            phase: "final_answer",
+            stopReason: "stop",
+            content: [{ type: "text", text }],
+          },
+        },
+      ],
+    },
   );
 }
 
@@ -420,7 +470,11 @@ describe("sessions_send child coordination", () => {
         expectsCompletionMessage: true,
         createdAt: 1,
         execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
-        completion: { required: true, resultText: "Original result" },
+        completion: {
+          required: true,
+          resultText: "Original result",
+          terminalReply: { disposition: "visible", text: "Original result" },
+        },
         delivery: { status: "delivered" },
         cleanupCompletedAt: 3,
         requesterTurnRunId: undefined,
@@ -442,6 +496,7 @@ describe("sessions_send child coordination", () => {
         }
         if (request.method === "agent.wait" && request.params?.runId === runId) {
           await childPending;
+          await writeFinal(childSessionKey, runId, "Follow-up result");
           return {
             runId,
             status: "ok",
@@ -581,6 +636,7 @@ describe("sessions_send child coordination", () => {
         const index = runIds.indexOf(String(request.params?.runId));
         if (index >= 0) {
           await replies[index]!.promise;
+          await writeFinal(childSessionKey, runIds[index]!, "FOLLOWUP-" + (index + 1));
           return {
             status: "ok",
             startedAt: 10,
@@ -601,21 +657,25 @@ describe("sessions_send child coordination", () => {
     announceTesting.setDepsForTest({ callGateway: callGatewayMock });
     const enteredPreparation = createDeferredCore();
     const releasePreparation = createDeferredCore();
-    const commit = requesterTransfer.commitRequesterInitialTransfer;
+    const commit = requesterTransfer.commitRequesterTransfer;
     const barrier = vi
-      .spyOn(requesterTransfer, "commitRequesterInitialTransfer")
-      .mockImplementation((context, params) =>
-        commit(context, {
-          ...params,
-          prepare: async () => {
-            await params.prepare?.();
-            if (params.kind === "intent") {
-              enteredPreparation.resolve();
-              await releasePreparation.promise;
-            }
-          },
-        }),
-      );
+      .spyOn(requesterTransfer, "commitRequesterTransfer")
+      .mockImplementation((params, options) => {
+        const prepareYield = params.prepare;
+        return commit(
+          prepareYield
+            ? {
+                ...params,
+                prepare: async () => {
+                  await prepareYield();
+                  enteredPreparation.resolve();
+                  await releasePreparation.promise;
+                },
+              }
+            : params,
+          options,
+        );
+      });
     let stopObserving = () => {};
     try {
       const tool = createSessionsSendTool({
@@ -714,6 +774,7 @@ describe("sessions_send child coordination", () => {
     callGatewayMock,
     calls,
     writeEntry,
+    writeFinal,
     settleSessionWork,
     drainRootWork: () => settleRootWork(true),
   });
@@ -834,7 +895,7 @@ describe("sessions_send child coordination", () => {
       // The separate lookup can observe another entry snapshot; classification must
       // join its metadata against the entry already selected by sessions_send.
       readAcpSessionMetaMock.mockImplementation(
-        (params: Parameters<typeof metadata.readAcpSessionEntry>[0]) =>
+        (params: Parameters<typeof metadata.readAcpSessionEntryAsync>[0]) =>
           metadataRead.readAcpSessionMetaForEntryAsync({
             ...params,
             databasePath,

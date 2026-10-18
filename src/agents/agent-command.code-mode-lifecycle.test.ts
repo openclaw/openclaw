@@ -5,9 +5,8 @@ import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
-import * as admissions from "../sessions/session-lifecycle-admission.js";
+import { withSessionControllerOwner } from "../sessions/session-controller.lifecycle.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { COMMAND_ADMISSION_OWNER } from "./agent-command-admission-owner.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
@@ -53,22 +52,25 @@ it("retains command admission through Code Mode disposal, not detached external 
     const cleanupStarted = createDeferred();
     const releaseCleanup = createDeferred();
     const waiting = createDeferred();
-    const successorQueued = createDeferred();
+    const successorPrepared = createDeferred();
     const events: string[] = [];
     const updates = vi.fn();
     let rawWork: Promise<ReturnType<typeof jsonResult>> | undefined;
     let first: Promise<unknown> | undefined;
     let next: Promise<unknown> | undefined;
-    let firstSettled = false;
-    let rawSettled = false;
-    let cleanupSettled = false;
+    const expectOrder = (...names: string[]) => {
+      let previous = -1;
+      for (const eventName of names) {
+        const index = events.indexOf(eventName);
+        expect(index).toBeGreaterThan(previous);
+        previous = index;
+      }
+    };
     const lifecycle = vi.spyOn(harness.subscription, "runToolLifecycle");
     const held = pluginToolWithExecute("held_target", "Ignore cancellation", async () => {
       rawWork = (async () => {
-        events.push("raw:start");
         rawStarted.resolve();
         await releaseRaw.promise;
-        rawSettled = true;
         events.push("raw:settled");
         return jsonResult({ late: true });
       })();
@@ -81,6 +83,7 @@ it("retains command admission through Code Mode disposal, not detached external 
       "successor_target",
       "Record a successor effect",
       async () => {
+        expect(events).toContain("cleanup:settled");
         events.push("successor:effect");
         return jsonResult({ successor: true });
       },
@@ -88,95 +91,81 @@ it("retains command admission through Code Mode disposal, not detached external 
     applyCodeModeCatalog({ ...harness, tools: [...harness.tools, held, late] });
     applyCodeModeCatalog({ ...successor.ctx, tools: [...successor.tools, effect] });
 
-    const stopObservingRelease = admissions.observeSessionWorkAdmissionReleases(
-      target.storePath,
-      () => events.push("admission:released"),
-    );
-    const beginAdmission = admissions.beginSessionWorkAdmission;
-    let commandAdmissions = 0;
-    const admissionObserver = vi
-      .spyOn(admissions, "beginSessionWorkAdmission")
-      .mockImplementation((params) => {
-        const acquisition = beginAdmission(params);
-        if (params.owner === COMMAND_ADMISSION_OWNER && params.scope === target.storePath) {
-          commandAdmissions += 1;
-          if (commandAdmissions === 2) {
-            events.push("successor:queued");
-            successorQueued.resolve();
-          }
-        }
-        return acquisition;
-      });
     const execute = <T>(runId: string, run: () => Promise<T>, abortSignal?: AbortSignal) =>
       runWithAgentCommandRecoveryOwner({
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
         mode: "claim",
         opts: { message: "Check command isolation", runId, abortSignal },
-        prepare: async () => target,
+        prepare: async () => {
+          if (runId === successorRunId) {
+            successorPrepared.resolve();
+          }
+          return target;
+        },
         run,
       });
     try {
-      first = execute(
-        harness.runId,
-        async () => {
-          try {
-            const parked = resultDetails(
-              await expectDefined(harness.tools[0], "exec").execute(
-                "first-exec",
-                {
-                  code: `const pending = held_target({});
+      first = withSessionControllerOwner(harness.replyOperation, () =>
+        execute(
+          harness.runId,
+          async () => {
+            try {
+              const parked = resultDetails(
+                await expectDefined(harness.tools[0], "exec").execute(
+                  "first-exec",
+                  {
+                    code: `const pending = held_target({});
                     await yield_control();
                     await pending;
                     console.log("late guest output");
                     return await late_target({});`,
-                },
+                  },
+                  undefined,
+                  updates,
+                ),
+              );
+              expect(parked.status).toBe("waiting");
+              const owner = expectDefined(
+                testing.activeRuns.get(String(parked.runId)),
+                "retained Code Mode owner",
+              );
+              const dispose = owner.continuation.dispose.bind(owner.continuation);
+              // Hold the actual worker cleanup, not an unrelated command callback.
+              // runWait must join this disposal before command admission can release.
+              vi.spyOn(owner.continuation, "dispose").mockImplementation(async () => {
+                events.push("cleanup:start");
+                cleanupStarted.resolve();
+                await releaseCleanup.promise;
+                await dispose();
+                events.push("cleanup:settled");
+              });
+              await withinTest(rawStarted.promise, signal);
+              const result = expectDefined(harness.tools[1], "wait").execute(
+                "first-wait",
+                { runId: parked.runId },
                 undefined,
                 updates,
-              ),
-            );
-            expect(parked.status).toBe("waiting");
-            const owner = expectDefined(
-              testing.activeRuns.get(String(parked.runId)),
-              "retained Code Mode owner",
-            );
-            const dispose = owner.continuation.dispose.bind(owner.continuation);
-            // Hold the actual worker cleanup, not an unrelated command callback.
-            // runWait must join this disposal before command admission can release.
-            vi.spyOn(owner.continuation, "dispose").mockImplementation(async () => {
-              events.push("cleanup:start");
-              cleanupStarted.resolve();
-              await releaseCleanup.promise;
-              await dispose();
-              cleanupSettled = true;
-              events.push("cleanup:settled");
-            });
-            await withinTest(rawStarted.promise, signal);
-            const result = expectDefined(harness.tools[1], "wait").execute(
-              "first-wait",
-              { runId: parked.runId },
-              undefined,
-              updates,
-            );
-            // Cancel in this stack before wait can resume the retained guest.
-            events.push("command:cancel");
-            harness.runAbortController.abort(new Error("Stop this command"));
-            waiting.resolve();
-            const completed = await result;
-            expect(cleanupSettled).toBe(true);
-            return resultDetails(completed);
-          } finally {
-            harness.dispose();
-          }
-        },
-        harness.runAbortController.signal,
+              );
+              // Cancel in this stack before wait can resume the retained guest.
+              events.push("command:cancel");
+              harness.runAbortController.abort(new Error("Stop this command"));
+              waiting.resolve();
+              const completed = await result;
+              expect(events).toContain("cleanup:settled");
+              return resultDetails(completed);
+            } finally {
+              harness.dispose();
+            }
+          },
+          harness.runAbortController.signal,
+        ),
       ).finally(() => {
-        firstSettled = true;
         events.push("command:settled");
       });
       void first.catch(() => {});
       await withinTest(waiting.promise, signal);
       await withinTest(cleanupStarted.promise, signal);
-      expect(events.indexOf("cleanup:start")).toBeGreaterThan(events.indexOf("command:cancel"));
+      expectOrder("command:cancel", "cleanup:start");
 
       next = execute(successorRunId, () =>
         runUntilCompleted({
@@ -186,15 +175,16 @@ it("retains command admission through Code Mode disposal, not detached external 
         }),
       );
       void next.catch(() => {});
-      await withinTest(successorQueued.promise, signal);
-      expect(firstSettled).toBe(false);
+      await withinTest(successorPrepared.promise, signal);
+      expect(events).not.toContain("command:settled");
       expect(effect.execute).not.toHaveBeenCalled();
-      const busy = createGatewayActiveWorkSnapshot();
-      expect(busy.idle).toBe(false);
-      expect(busy.counts.sessionAdmissions).toBe(1);
-      expect(busy.blockers).toContainEqual(
-        expect.objectContaining({ kind: "session-admission", count: 1 }),
-      );
+      expect(createGatewayActiveWorkSnapshot()).toMatchObject({
+        idle: false,
+        counts: { sessionAdmissions: 1 },
+        blockers: expect.arrayContaining([
+          expect.objectContaining({ kind: "session-admission", count: 1 }),
+        ]),
+      });
 
       releaseCleanup.resolve();
       expect(await withinTest(first, signal)).toMatchObject({ status: "failed", code: "aborted" });
@@ -202,18 +192,10 @@ it("retains command admission through Code Mode disposal, not detached external 
         status: "completed",
         value: { successor: true },
       });
-      expect(rawSettled).toBe(false);
+      expect(events).not.toContain("raw:settled");
       expect(effect.execute).toHaveBeenCalledOnce();
       expect(createGatewayActiveWorkSnapshot().counts.sessionAdmissions).toBe(0);
-      expect(events).toEqual(
-        expect.arrayContaining(["cleanup:settled", "admission:released", "successor:effect"]),
-      );
-      expect(events.indexOf("admission:released")).toBeGreaterThan(
-        events.indexOf("cleanup:settled"),
-      );
-      expect(events.indexOf("successor:effect")).toBeGreaterThan(
-        events.indexOf("admission:released"),
-      );
+      expectOrder("cleanup:settled", "successor:effect");
 
       const publishedUpdates = updates.mock.calls.length;
       releaseRaw.resolve();
@@ -223,8 +205,7 @@ it("retains command admission through Code Mode disposal, not detached external 
       expect(events.filter((event) => event === "raw:settled")).toHaveLength(1);
       expect(late.execute).not.toHaveBeenCalled();
       expect(updates).toHaveBeenCalledTimes(publishedUpdates);
-      expect(testing.activeRuns.size).toBe(0);
-      expect(testing.resumingRunIds.size).toBe(0);
+      expect([testing.activeRuns.size, testing.resumingRunIds.size]).toEqual([0, 0]);
     } finally {
       try {
         releaseCleanup.resolve();
@@ -236,8 +217,6 @@ it("retains command admission through Code Mode disposal, not detached external 
         await Promise.allSettled(lifecycle.mock.results.map((result) => result.value));
         await resetCodeModeTestState();
       } finally {
-        stopObservingRelease();
-        admissionObserver.mockRestore();
         vi.restoreAllMocks();
       }
     }

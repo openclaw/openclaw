@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   deferSqlitePostCommitPublication,
@@ -109,10 +109,10 @@ type Activity = Parameters<typeof getSessionMaintenanceActivityAt>[0];
 export const SESSION_ENTRY_MAINTENANCE_INTERVAL_MS = 30 * 60 * 1_000;
 
 // Ordinary updates retain this age lower bound across entry-cache revision churn.
-const ageFacts = new WeakMap<DatabaseSync, SessionEntryMaintenanceAgeCapture>();
+const ageFacts = new WeakMap<EngineConnection, SessionEntryMaintenanceAgeCapture>();
 
 export function stageSessionEntryMaintenanceAgeFact(
-  db: DatabaseSync,
+  db: EngineConnection,
   fact: SessionEntryMaintenanceAgeFact | undefined,
 ): void {
   if (
@@ -129,12 +129,12 @@ export function stageSessionEntryMaintenanceAgeFact(
   }
 }
 
-export function invalidateSessionEntryMaintenanceAgeFact(db: DatabaseSync): void {
+export function invalidateSessionEntryMaintenanceAgeFact(db: EngineConnection): void {
   ageFacts.delete(db);
 }
 
 export function readSessionEntryMaintenanceAgeFact(
-  db: DatabaseSync,
+  db: EngineConnection,
   maintenance: ResolvedSessionMaintenanceConfig,
 ): SessionEntryMaintenanceAgeFact | undefined {
   const fact = ageFacts.get(db)?.fact;
@@ -159,7 +159,7 @@ function isDashboardKey(key: string): boolean {
 
 /** Tracked writes can only bring the conservative age boundary forward. */
 export function advanceSessionEntryMaintenanceAgeFact(
-  db: DatabaseSync,
+  db: EngineConnection,
   update: SessionEntryMaintenanceAgeChange,
 ): void {
   if (changeObservers.size) {
@@ -179,7 +179,7 @@ export function advanceSessionEntryMaintenanceAgeFact(
 }
 
 export function applySessionEntryMaintenanceAgeChange(
-  db: DatabaseSync,
+  db: EngineConnection,
   update: SessionEntryMaintenanceAgeChange,
 ): void {
   const fact = updateSessionEntryMaintenanceAgeFact(ageFacts.get(db)?.fact, update);

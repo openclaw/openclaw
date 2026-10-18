@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { onSettled } from "solid-js";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import panelStyles from "../../styles/panel-empty-state.css?inline";
 
 export type PanelEmptyStateProps = {

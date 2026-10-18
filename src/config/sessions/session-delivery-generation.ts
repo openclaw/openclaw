@@ -1,14 +1,15 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { hasPendingSqliteNativeExecution } from "../../infra/sqlite-native-observer.js";
 import {
   readSqliteNativeMutationRevision,
   registerSqliteSchemaMutationListener,
 } from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { isSessionMutationActive } from "../../sessions/session-controller.lifecycle.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../../sessions/session-key-utils.js";
-import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
 import {
   isSessionStoreTopologyChange,
   sessionChanges,
@@ -310,7 +311,7 @@ async function prepareSessionGenerationLease(
           const schemaChanged = () => {
             invalidated = true;
           };
-          if (native) {
+          if (native && !isPostgresSqlConnection(native.db)) {
             releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
           }
           assertNativeCurrent = (current) => {
@@ -318,7 +319,9 @@ async function prepareSessionGenerationLease(
             if (!native && opened) {
               native = opened;
               nativeRevision = undefined;
-              releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
+              if (!isPostgresSqlConnection(native.db)) {
+                releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
+              }
             } else if (opened !== native) {
               invalidated = true;
               throw new SessionDeliveryGenerationUnavailableError();
@@ -327,7 +330,7 @@ async function prepareSessionGenerationLease(
               return;
             }
             // Native callbacks and unfinished cursors cannot certify a committed write set.
-            if (hasPendingSqliteNativeExecution(native.db)) {
+            if (!isPostgresSqlConnection(native.db) && hasPendingSqliteNativeExecution(native.db)) {
               throw new SessionDeliveryGenerationUnavailableError();
             }
             const revision = readSqliteNativeMutationRevision(native.db);
@@ -404,7 +407,7 @@ async function prepareSessionGenerationLease(
         if (
           delivery &&
           [...paths].some((scope) =>
-            isSessionLifecycleMutationActive(
+            isSessionMutationActive(
               scope,
               generation.sessionId
                 ? [generation.sessionKey, generation.sessionId]

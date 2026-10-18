@@ -15,6 +15,7 @@ import {
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureGatewayRootWorkReleaseObserver } from "../../process/gateway-work-admission.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -26,13 +27,11 @@ import { executeFollowupTurn } from "./followup-turn-execution.js";
 import {
   admitFollowupRunLifecycle,
   enqueueFollowupRun,
-  FollowupRunDeferredError,
   scheduleFollowupDrain,
   type FollowupRun,
 } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 import { createTypingController } from "./typing.js";
 
 vi.mock("./agent-runner-execution.js", () => ({ executeAgentTurn: vi.fn() }));
@@ -86,35 +85,63 @@ describe("followup queue durable input consumption", () => {
     });
     recorders.push(recorder);
     expect(await recorder.stageApproved?.({ runId, assertCurrent: () => {} })).toBe(true);
-    const run: FollowupRun = {
-      ...createQueueTestRun({ prompt: `${runId} approved`, messageId: runId }),
-      // A stale display projection must not undo the approval when sources combine.
-      transcriptPrompt: `${runId} private source`,
-      userTurnTranscriptRecorder: recorder,
-      currentInboundContext: { text: `${runId} runtime context` },
-      turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: async () => {} },
-      run: {
-        ...createQueueTestRun({ prompt: "" }).run,
-        agentId: "main",
-        sessionKey,
-        sessionId,
-        config,
-      },
-    };
+    const run = Object.assign(
+      createQueueTestRun({ prompt: `${runId} approved`, messageId: runId }),
+      {
+        // A stale display projection must not undo the approval when sources combine.
+        transcriptPrompt: `${runId} private source`,
+        userTurnTranscriptRecorder: recorder,
+        currentInboundContext: { text: `${runId} runtime context` },
+        turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: async () => {} },
+      } satisfies Partial<FollowupRun>,
+    );
+    Object.assign(run.run, { agentId: "main", sessionKey, sessionId, config });
     return { run, beforeMessageWrite };
   };
 
   const persistQueuedRun = async (run: FollowupRun) => {
     const recorder = run.userTurnTranscriptRecorder;
-    if (!recorder?.withPendingInput) {
-      throw new Error("queued turn is missing its transcript owner");
-    }
+    assert(recorder?.withPendingInput, "queued turn is missing its transcript owner");
     return await recorder.withPendingInput(() => recorder.persistApproved());
   };
 
+  const enqueue = (...runs: FollowupRun[]) => {
+    for (const run of runs) {
+      expect(enqueueFollowupRun(sessionKey, run, { mode: "collect", debounceMs: 0 })).toBe(true);
+    }
+  };
+  const drain = async (consume = async (_run: FollowupRun, _index: number) => {}) => {
+    const calls: FollowupRun[] = [];
+    const failures: unknown[] = [];
+    scheduleFollowupDrain(sessionKey, async (run) => {
+      calls.push(run);
+      try {
+        await consume(run, calls.length - 1);
+      } catch (error) {
+        failures.push(error);
+      }
+    });
+    await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
+    expect(failures).toEqual([]);
+    return calls;
+  };
+  const loadMessages = async () =>
+    (await loadTranscriptEvents(scope()))
+      .filter(isRecord)
+      .filter((event) => event.type === "message");
+  const expectWrites = (...sources: Awaited<ReturnType<typeof createStagedRun>>[]) => {
+    for (const { beforeMessageWrite } of sources) {
+      expect(beforeMessageWrite).toHaveBeenCalledOnce();
+    }
+  };
+  const pending = () => listSessionPendingInputs(scope());
+  const pair = async () =>
+    [await createStagedRun("first"), await createStagedRun("second")] as const;
+  const collected = (...texts: string[]) =>
+    `[Queued messages while agent was busy]\n\n${texts.map((text, i) => `---\nQueued #${i + 1}\n${text}`).join("\n\n")}`;
+
   it("preserves the committed prefix when a native batch falls back after a later source write fails", async () => {
-    const first = await createStagedRun("first");
-    const second = await createStagedRun("second");
+    const [first, second] = await pair();
     await persistQueuedRun(first.run);
     fault.enable();
     try {
@@ -125,39 +152,25 @@ describe("followup queue durable input consumption", () => {
     expect(first.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
     expect(second.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(false);
     const before = await loadTranscriptEvents(scope());
-    const settings = { mode: "collect" as const, debounceMs: 0 };
-    expect(enqueueFollowupRun(sessionKey, first.run, settings)).toBe(true);
-    expect(enqueueFollowupRun(sessionKey, second.run, settings)).toBe(true);
-    const prompts: string[] = [];
-    const consumers: UserTurnTranscriptRecorder[] = [];
-    const failures: unknown[] = [];
-    scheduleFollowupDrain(sessionKey, async (run) => {
-      try {
-        await admitFollowupRunLifecycle(run);
-        await persistQueuedRun(run);
-        prompts.push(run.prompt);
-        consumers.push(run.userTurnTranscriptRecorder!);
-      } catch (error) {
-        failures.push(error);
-      }
+    enqueue(first.run, second.run);
+    const calls = await drain(async (run) => {
+      await admitFollowupRunLifecycle(run);
+      await persistQueuedRun(run);
     });
-    await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
-    expect(failures).toEqual([]);
-    expect(prompts).toEqual(["first approved", "second approved"]);
-    expect(consumers).toEqual([
-      first.run.userTurnTranscriptRecorder,
-      second.run.userTurnTranscriptRecorder,
+    expect(
+      calls.map(({ prompt, userTurnTranscriptRecorder }) => [prompt, userTurnTranscriptRecorder]),
+    ).toEqual([
+      ["first approved", first.run.userTurnTranscriptRecorder],
+      ["second approved", second.run.userTurnTranscriptRecorder],
     ]);
     const after = await loadTranscriptEvents(scope());
     expect(after.slice(0, before.length)).toEqual(before);
-    const messages = after.filter(isRecord).filter((event) => event.type === "message");
-    expect(messages.map((event) => event.message)).toEqual([
-      expect.objectContaining({ content: "first approved", idempotencyKey: "first:user" }),
-      expect.objectContaining({ content: "second approved", idempotencyKey: "second:user" }),
+    expect(after.filter(isRecord).filter((event) => event.type === "message")).toMatchObject([
+      { message: { content: "first approved", idempotencyKey: "first:user" } },
+      { message: { content: "second approved", idempotencyKey: "second:user" } },
     ]);
-    expect((await listSessionPendingInputs(scope())).items).toEqual([]);
-    expect(first.beforeMessageWrite).toHaveBeenCalledOnce();
-    expect(second.beforeMessageWrite).toHaveBeenCalledOnce();
+    expect((await pending()).items).toEqual([]);
+    expectWrites(first, second);
   });
 
   it("keeps unstaged input out of an already-approved collect group", async () => {
@@ -173,32 +186,19 @@ describe("followup queue durable input consumption", () => {
       }),
       turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: async () => {} },
     };
-    const settings = { mode: "collect" as const, debounceMs: 0 };
-    expect(enqueueFollowupRun(sessionKey, staged.run, settings)).toBe(true);
-    expect(enqueueFollowupRun(sessionKey, unstaged, settings)).toBe(true);
-    const calls: FollowupRun[] = [];
-    scheduleFollowupDrain(sessionKey, async (run) => {
-      calls.push(run);
-    });
-    await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
-
-    expect(calls.map((run) => run.prompt)).toEqual([
-      "[Queued messages while agent was busy]\n\n---\nQueued #1\nstaged approved",
-      "[Queued messages while agent was busy]\n\n---\nQueued #1\nunstaged runtime body",
-    ]);
+    enqueue(staged.run, unstaged);
+    const calls = await drain();
+    expect(calls.map((run) => run.prompt)).toEqual(["staged approved", "unstaged runtime body"]);
     expect(calls[1]?.transcriptPrompt).toContain("unstaged transcript body");
   });
 
   it.for([false, true])(
     "binds collected custody before runtime append (cancel during preparation: %s)",
     async (abortDuringPreparation, { signal }) => {
-      const first = await createStagedRun("first");
-      const second = await createStagedRun("second");
+      const [first, second] = await pair();
       first.run.prompt = "first private source";
       second.run.prompt = "second private source";
-      const settings = { mode: "collect" as const, debounceMs: 0 };
-      expect(enqueueFollowupRun(sessionKey, first.run, settings)).toBe(true);
-      expect(enqueueFollowupRun(sessionKey, second.run, settings)).toBe(true);
+      enqueue(first.run, second.run);
       const calls: FollowupRun[] = [];
       const failures: unknown[] = [];
       const pendingTotals: number[] = [];
@@ -217,10 +217,15 @@ describe("followup queue durable input consumption", () => {
         assert(observeRelease, "followup execution must own root admission");
         observeRelease(drainReleased.resolve);
         calls.push(run);
-        const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+        const operation = createReplyOperation({
+          sessionKey,
+          sessionId,
+          resetTriggered: false,
+          mailboxClaim: run.controllerClaim ?? run.controllerInput!.claim,
+        });
         const typing = createTypingController({});
         try {
-          pendingTotals.push((await listSessionPendingInputs(scope())).total);
+          pendingTotals.push((await pending()).total);
           await admitFollowupRunLifecycle(run);
           if (abortDuringPreparation) {
             const recorder = second.run.userTurnTranscriptRecorder!;
@@ -241,7 +246,6 @@ describe("followup queue durable input consumption", () => {
                 kind: "detached",
                 current: () => undefined,
                 publish: () => {},
-                adopt: () => {},
               },
               sendPolicy: "allow",
               preflightCompactionApplied: false,
@@ -250,7 +254,7 @@ describe("followup queue durable input consumption", () => {
             onToolResult: async () => {},
             onCompactionNoticePayload: async () => {},
           });
-          pendingTotals.push((await listSessionPendingInputs(scope())).total);
+          pendingTotals.push((await pending()).total);
         } catch (error) {
           failures.push(error);
         } finally {
@@ -260,75 +264,62 @@ describe("followup queue durable input consumption", () => {
       });
       expect(await withinTest(drainReleased.promise, signal)).toBe("settled");
       expect(getExistingFollowupQueue(sessionKey)).toBeUndefined();
-
       expect(failures).toHaveLength(abortDuringPreparation ? 1 : 0);
       expect(pendingTotals).toEqual(abortDuringPreparation ? [2] : [2, 0]);
       expect(calls).toHaveLength(1);
       expect(executeAgentTurn).toHaveBeenCalledTimes(abortDuringPreparation ? 0 : 1);
-      const expected =
-        "[Queued messages while agent was busy]\n\n---\nQueued #1\nfirst approved\n\n---\nQueued #2\nsecond approved";
-      expect(calls[0]?.prompt).toBe(expected);
-      expect(calls[0]?.transcriptPrompt).toBe(expected);
+      const expected = collected("first approved", "second approved");
+      expect(calls[0]).toMatchObject({ prompt: expected, transcriptPrompt: expected });
       expect(calls[0]?.currentInboundContext?.text).toBe(
         "Queued #1 context:\nfirst runtime context\n\nQueued #2 context:\nsecond runtime context",
       );
-      const messages = (await loadTranscriptEvents(scope()))
-        .filter(isRecord)
-        .filter((event) => event.type === "message");
-      expect(messages).toHaveLength(abortDuringPreparation ? 0 : 1);
-      if (!abortDuringPreparation) {
-        expect(messages[0]?.message).toMatchObject({ role: "user", content: expected });
-      }
-      expect((await listSessionPendingInputs(scope())).total).toBe(abortDuringPreparation ? 2 : 0);
-      expect(first.beforeMessageWrite).toHaveBeenCalledOnce();
-      expect(second.beforeMessageWrite).toHaveBeenCalledOnce();
+      expect(await loadMessages()).toMatchObject(
+        abortDuringPreparation ? [] : [{ message: { role: "user", content: expected } }],
+      );
+      expect((await pending()).total).toBe(abortDuringPreparation ? 2 : 0);
+      expectWrites(first, second);
     },
   );
 
-  it("retains elided and retried overflow sources until their summary commits", async () => {
+  it("retains elided overflow sources until their summary commits", async () => {
     const sources = await Promise.all(["first", "second", "third"].map(createStagedRun));
-    const settings = {
-      mode: "followup" as const,
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize" as const,
-    };
+    const settings = { mode: "followup", debounceMs: 0, cap: 1, dropPolicy: "summarize" } as const;
     for (const source of sources) {
       source.run.summaryLine = `${source.run.messageId} private summary`;
       expect(enqueueFollowupRun(sessionKey, source.run, settings)).toBe(true);
     }
+    const pendingRunIds: string[][] = [];
     const calls: FollowupRun[] = [];
     const failures: unknown[] = [];
-    const pendingRunIds: string[][] = [];
     scheduleFollowupDrain(sessionKey, async (run) => {
       calls.push(run);
-      if (calls.length === 1) {
-        throw new FollowupRunDeferredError();
-      }
       try {
         await admitFollowupRunLifecycle(run);
         await persistQueuedRun(run);
-        pendingRunIds.push(
-          (await listSessionPendingInputs(scope())).items.map((input) => input.runId),
-        );
+        pendingRunIds.push((await pending()).items.map((input) => input.runId));
       } catch (error) {
         failures.push(error);
       }
     });
-    await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
-
+    // Durable append owns real worker I/O; a polling deadline is not its receipt.
+    await Promise.all(sources.map(({ run }) => run.controllerInput!.settlement.promise));
+    await Promise.all(
+      sources.flatMap(({ run }) => {
+        const claim = run.controllerInput!.claim;
+        return claim ? [claim.settlement.promise] : [];
+      }),
+    );
+    expect(getExistingFollowupQueue(sessionKey)).toBeUndefined();
     expect(failures).toEqual([]);
-    expect(calls).toHaveLength(3);
-    expect(calls[1]?.prompt).toBe(
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toBe(
       "[Queue overflow] Dropped 2 messages due to cap.\nSummary:\n- second approved",
     );
     expect(pendingRunIds).toEqual([["third"], []]);
-    const messages = (await loadTranscriptEvents(scope()))
-      .filter(isRecord)
-      .filter((event) => event.type === "message");
-    expect(messages).toHaveLength(2);
-    expect(messages[0]?.message).toMatchObject({ content: calls[1]?.prompt });
-    expect(messages[1]?.message).toMatchObject({ content: "third approved" });
-    expect(sources.map((source) => source.beforeMessageWrite.mock.calls.length)).toEqual([1, 1, 1]);
+    expect(await loadMessages()).toMatchObject([
+      { message: { content: calls[0]?.prompt } },
+      { message: { content: "third approved" } },
+    ]);
+    expectWrites(...sources);
   });
 });

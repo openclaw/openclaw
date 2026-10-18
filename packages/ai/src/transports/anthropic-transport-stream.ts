@@ -30,6 +30,7 @@ import { buildGuardedModelFetch } from "./host-policy.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
+  iterateSseFrames,
   mergeTransportHeaders,
 } from "./transport-stream-shared.js";
 import {
@@ -133,39 +134,24 @@ async function* parseAnthropicSseBody(
   signal?: AbortSignal,
 ): AsyncIterable<Record<string, unknown>> {
   const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let completed = false;
-  // CRLF must remain one line ending even when the delimiter expression backtracks.
-  const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
-  let scanOffset = 0;
   try {
-    while (!completed) {
-      const { done, value } = await readAnthropicSseChunk(reader, signal);
-      completed = done;
-      buffer += decoder.decode(value, { stream: !done });
-      delimiter.lastIndex = scanOffset;
-      for (;;) {
-        const boundary = delimiter.exec(buffer);
-        if (!boundary && (!completed || !buffer)) {
-          break;
-        }
-        const frameEnd = boundary?.index ?? buffer.length;
-        assertAnthropicSsePendingBufferWithinLimit(frameEnd);
-        const frame = boundary ? buffer.slice(0, frameEnd) : buffer.trim();
-        buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
-        delimiter.lastIndex = 0;
-        const data = frame
-          .split(/\r\n|\n|\r/)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trimStart())
-          .join("\n");
-        if (data && data !== "[DONE]") {
-          yield parseAnthropicSseEventData(data);
-        }
+    for await (const { frame, terminated } of iterateSseFrames(
+      async () => {
+        const chunk = await readAnthropicSseChunk(reader, signal);
+        completed = chunk.done;
+        return chunk;
+      },
+      (pending) => assertAnthropicSsePendingBufferWithinLimit(pending.length),
+    )) {
+      const data = (terminated ? frame : frame.trim())
+        .split(/\r\n|\n|\r/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (data && data !== "[DONE]") {
+        yield parseAnthropicSseEventData(data);
       }
-      assertAnthropicSsePendingBufferWithinLimit(buffer.length);
-      scanOffset = Math.max(0, buffer.length - 3);
     }
   } finally {
     if (!completed) {

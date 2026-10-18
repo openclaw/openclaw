@@ -109,8 +109,18 @@ suite.define(() => {
   });
 
   it("explains invalid media and unavailable browser codecs without sending", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page, context }) => {
       const gateway = await installMockGateway(page, { attachmentMaxBytes: limit });
+      // Exercise the real worker and codec negotiation with a missing WebCodecs
+      // capability, not a mocked successful/failed compression implementation.
+      // Route at context scope before the first worker caches its script.
+      await context.route("**/chat-attachment-video.worker-*.js", async (route) => {
+        const response = await route.fetch();
+        await route.fulfill({
+          response,
+          body: "globalThis.VideoEncoder = undefined;\n" + (await response.text()),
+        });
+      });
       await page.goto(suite.server.baseUrl + "chat");
       await page.locator(".agent-chat__composer-combobox textarea").fill("Keep this draft.");
       const picker = page.locator(".agent-chat__file-input").first();
@@ -120,33 +130,28 @@ suite.define(() => {
         buffer: Buffer.alloc(256 * 1024),
       });
       await page.getByRole("button", { name: "Compress to fit", exact: true }).click();
+      const invalidError = "Could not compress this video. Try again or choose a smaller file.";
       await page
-        .getByText("Could not compress this video. Try again or choose a smaller file.", {
-          exact: true,
-        })
+        .locator(".chat-attachment-thumb")
+        .getByRole("status")
+        .filter({ hasText: invalidError })
         .waitFor();
+      await page.getByRole("alert").getByText(invalidError, { exact: true }).waitFor();
       await page.getByRole("button", { name: "Remove invalid.mp4", exact: true }).click();
-      // Exercise the real worker and codec negotiation with a missing WebCodecs
-      // capability, not a mocked successful/failed compression implementation.
-      await page.route("**/chat-attachment-video.worker-*.js", async (route) => {
-        const response = await route.fetch();
-        await route.fulfill({
-          response,
-          body: "globalThis.VideoEncoder = undefined;\n" + (await response.text()),
-        });
-      });
       await picker.setInputFiles({
         name: "unsupported.mp4",
         mimeType: "video/mp4",
         buffer: oversized,
       });
       await page.getByRole("button", { name: "Compress to fit", exact: true }).click();
+      const unsupportedError =
+        "This browser cannot compress this video with its audio. Try another browser or a smaller file.";
       await page
-        .getByText(
-          "This browser cannot compress this video with its audio. Try another browser or a smaller file.",
-          { exact: true },
-        )
+        .locator(".chat-attachment-thumb")
+        .getByRole("status")
+        .filter({ hasText: unsupportedError })
         .waitFor();
+      await page.getByRole("alert").getByText(unsupportedError, { exact: true }).waitFor();
       expect(await gateway.getRequests("chat.send")).toEqual([]);
       expect(
         await page.getByRole("button", { name: "Send message", exact: true }).isEnabled(),

@@ -1,18 +1,32 @@
-import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
-import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
+import { joinOwnedWorkerTasks, type ResourceOwningPool } from "@openclaw/worker-runtime";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { assertOpenClawAgentWriterReleased } from "../state/openclaw-agent-write-admission-state.js";
 
-type ResourceOwningPool = { startCloseResources(key?: string): RetainedOperation<void> };
-
 const livePools = resolveGlobalSingleton(
   Symbol.for("openclaw.workerTaskPools"),
-  () => new Set<ResourceOwningPool>(),
+  () => new Set<WeakRef<ResourceOwningPool>>(),
 );
+
+// Broadcast discovery must not keep an abandoned pool and its module graph alive.
+function* reachablePools() {
+  for (const reference of livePools) {
+    const pool = reference.deref();
+    if (pool) {
+      yield { pool, reference };
+    } else {
+      livePools.delete(reference);
+    }
+  }
+}
 
 export const liveWorkerTaskPools = {
   register<T extends ResourceOwningPool>(pool: T): T {
-    livePools.add(pool);
+    for (const entry of reachablePools()) {
+      if (entry.pool === pool) {
+        return pool;
+      }
+    }
+    livePools.add(new WeakRef(pool));
     return pool;
   },
   async close(
@@ -22,13 +36,17 @@ export const liveWorkerTaskPools = {
   ): Promise<void> {
     await joinOwnedWorkerTasks(closures);
     await finish();
-    livePools.delete(pool);
+    for (const entry of reachablePools()) {
+      if (entry.pool === pool) {
+        livePools.delete(entry.reference);
+      }
+    }
   },
 };
 
 async function closeResources(key: string): Promise<void> {
   const results = await Promise.allSettled(
-    [...livePools].map((pool) => pool.startCloseResources(key).result),
+    [...reachablePools()].map(({ pool }) => pool.startCloseResources(key).result),
   );
   const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   if (errors.length === 1) {

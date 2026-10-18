@@ -111,6 +111,7 @@ describe("terminal reply recovery", () => {
           "chat.history",
           {
             sessionKey: state.sessionKey,
+            knownState: {},
             ...historyBudget,
           },
           { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
@@ -285,10 +286,14 @@ describe("terminal reply recovery", () => {
     };
     const staleHistory = createDeferred<ChatHistoryResult>();
     const freshHistory = createDeferred<ChatHistoryResult>();
+    const freshHistoryStarted = createDeferred();
     const request = vi
       .fn()
       .mockReturnValueOnce(staleHistory.promise)
-      .mockReturnValueOnce(freshHistory.promise);
+      .mockImplementationOnce(() => {
+        freshHistoryStarted.resolve();
+        return freshHistory.promise;
+      });
     const { state } = createSessionEventState({
       chatMessages: [prompt],
       chatHistoryPagination: { hasMore: false },
@@ -317,8 +322,8 @@ describe("terminal reply recovery", () => {
 
     expect(request).toHaveBeenCalledTimes(1);
     staleHistory.resolve({ messages: [prompt], sessionId: "selected-session", sessionInfo });
-    await preFinalLoad;
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await freshHistoryStarted.promise;
+    expect(request).toHaveBeenCalledTimes(2);
     expect(renderedTranscript(state)).toEqual([
       { role: "user", text: "Finish after the stale snapshot" },
     ]);
@@ -328,7 +333,8 @@ describe("terminal reply recovery", () => {
       sessionId: "selected-session",
       sessionInfo,
     });
-    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+    await preFinalLoad;
+    expect(state.chatLoading).toBe(false);
     expect(renderedTranscript(state)).toEqual([
       { role: "user", text: "Finish after the stale snapshot" },
       { role: "assistant", text: "The post-final snapshot contains this reply." },

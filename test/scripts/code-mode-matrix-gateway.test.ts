@@ -237,6 +237,90 @@ describe("Gateway matrix transcript evidence", () => {
     expect(incomplete.usage).toBeUndefined();
     expect(incomplete.costUsd).toBeUndefined();
   });
+
+  it.each([
+    { label: "zero placeholders", input: 0, output: 0, known: "none" },
+    { label: "provisional counters", input: 20, output: 3, known: "none" },
+    { label: "known then unavailable", input: 20, output: 3, known: "before" },
+    { label: "unavailable then known", input: 20, output: 3, known: "after" },
+  ])("does not qualify $label as measured savings", ({ input, output, known }) => {
+    const unavailable = {
+      message: {
+        ...assistantCall("unavailable", "return await matrix_read({});").message,
+        usage: {
+          input,
+          output,
+          totalTokens: input + output,
+          cost: { total: 0.5 },
+          usageReport: { state: "unavailable" },
+        },
+      },
+    };
+    const observed = {
+      message: {
+        ...assistantCall("observed", "return 1;").message,
+        usage: {
+          input: 100,
+          output: 10,
+          totalTokens: 110,
+          cost: { total: 0.002 },
+          usageReport: { state: "available" },
+        },
+      },
+    };
+    const trace = collectGatewayMatrixTrace([
+      ...(known === "before" ? [observed] : []),
+      unavailable,
+      nestedActivity("unavailable", "matrix_read", {}, { value: 1 }),
+      toolOutcome("unavailable", { status: "completed", value: 1 }),
+      ...(known === "after" ? [observed] : []),
+    ]);
+    expect(trace.assistantTurns).toBe(known === "none" ? 1 : 2);
+    expect(trace.models).toEqual(["openai/gpt-5.6-sol"]);
+    expect(trace.calls).toHaveLength(known === "none" ? 1 : 2);
+    expect(trace.outcomes).toHaveLength(1);
+    expect(trace.activities).toHaveLength(1);
+    expect(trace.activities[0]).toMatchObject({ name: "matrix_read", result: { value: 1 } });
+    expect(trace.usage).toBeUndefined();
+    expect(trace.costUsd).toBeUndefined();
+
+    const compared = compareCodeModeMatrixResults(
+      [{ ...comparisonRow(), usage: { input: 100, output: 10 }, costUsd: 0.002 }],
+      [
+        {
+          ...comparisonRow(),
+          gitSha: "candidate-sha",
+          usage: trace.usage,
+          costUsd: trace.costUsd,
+        },
+      ],
+    );
+    expect(expectDefined(compared.cells[0], "paired comparison cell").deltas).toMatchObject({
+      inputTokens: null,
+      outputTokens: null,
+      costUsd: null,
+    });
+  });
+
+  it("retains genuinely measured zero usage and cost", () => {
+    const trace = collectGatewayMatrixTrace([
+      {
+        message: {
+          ...assistantCall("zero", "return 0;").message,
+          usage: {
+            input: 0,
+            output: 0,
+            totalTokens: 0,
+            cost: { total: 0, totalOrigin: "provider-billed" },
+            usageReport: { state: "available" },
+          },
+        },
+      },
+    ]);
+    expect(trace.usage).toEqual({ input: 0, output: 0, total: 0 });
+    expect(trace.costUsd).toBe(0);
+    expect(trace.assistantTurns).toBe(1);
+  });
 });
 
 describe("Gateway matrix capability preflight", () => {
@@ -310,17 +394,14 @@ describe("Gateway matrix task oracles", () => {
     expect(Object.values(checks).every(Boolean)).toBe(accepted);
   });
 
-  it.each(["retained"] as const)(
-    "grades %s retention while preserving the correct-answer observation",
-    () => {
-      const { events, receipts } = invoiceEvidence();
-      const trace = collectGatewayMatrixTrace(events);
+  it("grades retained retention while preserving the correct-answer observation", () => {
+    const { events, receipts } = invoiceEvidence();
+    const trace = collectGatewayMatrixTrace(events);
 
-      const checks = evaluate("invoices-auto-retention", INVOICES, trace, receipts);
-      expect(checks.answer).toBe(true);
-      expect(Object.values(checks).every(Boolean)).toBe(true);
-    },
-  );
+    const checks = evaluate("invoices-auto-retention", INVOICES, trace, receipts);
+    expect(checks.answer).toBe(true);
+    expect(Object.values(checks).every(Boolean)).toBe(true);
+  });
 });
 
 const AUTOMATION = {
@@ -471,18 +552,15 @@ describe("terminal automation evidence", () => {
     expect(Object.values(checks).every(Boolean)).toBe(false);
   });
 
-  it.each(["recurring"] as const)(
-    "rejects a %s job even when its name and final cleanup match",
-    () => {
-      const trace = automationEvidence("complete");
-      const created = automationActivity(trace, "add");
-      created.result.schedule = { kind: "every", everyMs: 86400000 };
-      const checks = evaluate("automation-contracts", AUTOMATION, trace);
-      expect(checks.answer).toBe(true);
-      expect(checks.createdRemoved).toBe(true);
-      expect(checks.createdFacts).toBe(false);
-    },
-  );
+  it("rejects a recurring job even when its name and final cleanup match", () => {
+    const trace = automationEvidence("complete");
+    const created = automationActivity(trace, "add");
+    created.result.schedule = { kind: "every", everyMs: 86400000 };
+    const checks = evaluate("automation-contracts", AUTOMATION, trace);
+    expect(checks.answer).toBe(true);
+    expect(checks.createdRemoved).toBe(true);
+    expect(checks.createdFacts).toBe(false);
+  });
 
   it.each(["partial"] as const)(
     "rejects %s inventories as proof of clean, isolated removal",
@@ -588,18 +666,15 @@ describe("serialization probe evidence", () => {
     },
   );
 
-  it.each(["invented-value"] as const)(
-    "rejects %s despite a correct final serialization claim",
-    () => {
-      for (const task of ["return-value-effects", "result-save-invalid-json"] as const) {
-        const evidence = serializationEvidence(task);
-        expectDefined(evidence.trace.outcomes[0], "probe outcome").details.value = null;
-        const checks = evaluateGatewayMatrixTask(evidence);
-        expect(checks.answer).toBe(true);
-        expect(Object.values(checks).every(Boolean)).toBe(false);
-      }
-    },
-  );
+  it("rejects invented-value despite a correct final serialization claim", () => {
+    for (const task of ["return-value-effects", "result-save-invalid-json"] as const) {
+      const evidence = serializationEvidence(task);
+      expectDefined(evidence.trace.outcomes[0], "probe outcome").details.value = null;
+      const checks = evaluateGatewayMatrixTask(evidence);
+      expect(checks.answer).toBe(true);
+      expect(Object.values(checks).every(Boolean)).toBe(false);
+    }
+  });
 });
 
 function configReadEvidence() {
@@ -691,7 +766,7 @@ function processEvidence(recovery = false) {
 }
 
 describe("process lifecycle evidence", () => {
-  it.each(["single-helper"] as const)("requires exactly one successful helper launch: %s", () => {
+  it("requires exactly one successful helper launch: single-helper", () => {
     const trace = processEvidence();
 
     const checks = evaluate("process-contracts", PROCESS, trace);
@@ -1087,17 +1162,12 @@ it("includes the exact process-helper bytes in the fixed workload fingerprint", 
 });
 
 describe("fixed Gateway matrix comparisons", () => {
-  it.each(["timeout"] as const)(
-    "rejects a changed %s instead of comparing different workloads",
-    () => {
-      const baseline = comparisonRow();
-      const candidate = comparisonRow();
-      candidate.workload.settings.timeoutSeconds = 121;
-      expect(() => compareCodeModeMatrixResults([baseline], [candidate])).toThrow(
-        "workload changed",
-      );
-    },
-  );
+  it("rejects a changed timeout instead of comparing different workloads", () => {
+    const baseline = comparisonRow();
+    const candidate = comparisonRow();
+    candidate.workload.settings.timeoutSeconds = 121;
+    expect(() => compareCodeModeMatrixResults([baseline], [candidate])).toThrow("workload changed");
+  });
 
   it("rejects duplicate or missing paired cells", () => {
     const row = comparisonRow();

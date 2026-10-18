@@ -37,9 +37,11 @@ export type GatewayClient = Pick<
   | "remoteControlUiIngress"
   | "browserOrigin"
   | "presenceKey"
+  | "presenceSnapshot"
   | "clientIp"
   | "pairedClientId"
   | "authenticatedUserId"
+  | "authenticatedFactoryGitHubAccountId"
   | "authenticatedUserIsTailscaleProvider"
   | "authenticatedGitHubIdentitySync"
   | "preparedSessionProfile"
@@ -69,6 +71,9 @@ export type GatewayClient = Pick<
     /** Trusted built-in agent tool caller; never accepted from Gateway wire params. */
     agentToolCaller?: TrustedAgentToolCaller;
     allowModelOverride?: boolean;
+    approvalRuntime?: boolean;
+    /** Host-bound owner for one plugin approval request, without reviewer authority. */
+    pluginApprovalRequestOwnerId?: string;
     cronRunContinuation?: boolean;
     pluginRuntimeOwnerId?: string;
     /** Host-attested session provenance for a trusted official plugin node invocation. */
@@ -78,10 +83,7 @@ export type GatewayClient = Pick<
     agentRunTracking?: GatewayAgentRunTaskOwner;
     /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
     pluginSubagentRequester?: PluginSubagentRequesterContext;
-    /** Host-owned exact media set for a scoped automatic recovery delivery. */
-    internalDeliveryMediaUrls?: string[];
     runtimeContextFragments?: RuntimeContextFragment[];
-    internalDeliverySuppressText?: boolean;
     /** Host-owned: deliver only authored output, never runtime error payloads. */
     internalDeliverySuppressErrors?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */

@@ -8,7 +8,11 @@ import {
   resolveDiscordModalEntryWithPersistence,
 } from "../components-registry.js";
 import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
-import { ButtonInteraction, createInteraction, type ComponentData } from "../internal/discord.js";
+import {
+  BaseComponentInteraction,
+  createInteraction,
+  type ComponentData,
+} from "../internal/discord.js";
 import {
   attachRestMock,
   createInternalComponentInteractionPayload,
@@ -79,7 +83,7 @@ async function createModalScenario(readPolicy: DiscordLivePolicyReader) {
         },
       }),
     );
-    if (!(interaction instanceof ButtonInteraction)) {
+    if (!(interaction instanceof BaseComponentInteraction)) {
       throw new Error("expected Discord button interaction");
     }
     return { interaction, patch, post };

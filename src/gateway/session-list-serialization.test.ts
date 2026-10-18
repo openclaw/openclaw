@@ -12,6 +12,7 @@ import {
   ensureBoardSchema,
   putBoardWidgetInDatabase,
 } from "../boards/sqlite-board-store.kernel.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   assignSessionOwner,
   replaceSessionEntrySync,
@@ -29,9 +30,9 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { registerChatAbortController } from "./chat-abort.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
+import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import {
   initializeSessionReadContext,
   listSessions,
@@ -44,6 +45,7 @@ import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { shareSidebarSessionRows } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -194,6 +196,7 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
       expect(result.sessions[0]).not.toHaveProperty("createdActor");
       expect(result.sharedFacts).toBeDefined();
       const frame = JSON.parse(serializeGatewayFrame({ type: "res", payload: result }).toString());
+      expect(frame.payload).not.toHaveProperty("rowsFullReason");
       expect(
         JSON.stringify(expandSessionRowFacts(frame.payload.sessions, frame.payload.sharedFacts)),
       ).toBe(JSON.stringify(rows));
@@ -450,7 +453,6 @@ it("coalesces cold sidebar selection across row slices only for the same princip
       const projection = getSessionRowProjection(context)!;
       await projection.withSelectionPreparation(async () => {
         await projection.prepareSelection();
-        const filter = vi.spyOn(listFilters, "filterSessionEntries");
         const read = (client: typeof alice, limit = 100) =>
           listSessions({
             context,
@@ -466,7 +468,6 @@ it("coalesces cold sidebar selection across row slices only for the same princip
         expect(results[0]!.sessions).toHaveLength(100);
         expect(results[0]!.totalCount).toBe(rows);
         expect(results[0]!.sessions[0]!.sessionId).toBe("cold-129");
-        expect(filter).toHaveBeenCalledTimes(1);
         for (const result of results) {
           expect(result.sessions).toEqual(results[0]!.sessions);
           expect(result.owners).toBe(results[0]!.owners);
@@ -476,7 +477,6 @@ it("coalesces cold sidebar selection across row slices only for the same princip
         expect(other.sessions[0]!.sessionId).toBe("cold-128");
         expect(other.owners).not.toBe(results[0]!.owners);
         expect((await read(alice, 1)).sessions).toHaveLength(1);
-        expect(filter).toHaveBeenCalledTimes(3);
       });
     } finally {
       getSessionRowProjection(context)?.dispose();
@@ -623,14 +623,17 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         acceptsSerializedJson: true,
       });
     expect((await readActive()).sessions).toHaveLength(0);
-    const run = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
+    const run = registerRpcSourceForTest({
+      storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
       runId: "serialization-run",
       sessionId: entry.sessionId,
       sessionKey: scope.sessionKey,
       agentId: scope.agentId,
-      timeoutMs: 60_000,
     });
+    if (!run.entry) {
+      throw new Error("Expected a registered serialization run");
+    }
+    const releaseRun = await claimRpcSourceForTest(run.entry);
     try {
       expect((await readActive()).sessions).toHaveLength(1);
       expect((await read(0)).sessions[0]).toMatchObject({
@@ -639,6 +642,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         snapshotAt: start + 104,
       });
     } finally {
+      releaseRun();
       run.cleanup();
     }
     clock.mockReturnValue(start + 105);

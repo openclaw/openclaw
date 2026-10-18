@@ -2,6 +2,9 @@ import { createComponent, createSignal, getOwner, merge } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
+import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import {
   createApplicationContextProvider,
@@ -26,17 +29,55 @@ const composers = new Map<
 >();
 
 export function renderComposerInto(container: HTMLElement, props: ComposerProps) {
-  const next = { ...props, renderRevision: {} };
   const mounted = composers.get(container);
   if (mounted) {
-    mounted.update(next);
+    mounted.update(props);
   } else {
-    const [current, update] = createSignal<NativeComposerProps>(next, { ownedWrite: true });
+    let owner = props;
+    const draftSource = createComposerDraftSource(() => ({
+      draft: owner.getDraft?.() ?? owner.draft,
+      mentions: owner.getMentions?.() ?? owner.mentions ?? [],
+      attachments: owner.getAttachments?.() ?? owner.attachments ?? [],
+      pendingAttachmentReads:
+        owner.getPendingAttachmentReads?.() ?? owner.pendingAttachmentReads ?? 0,
+      goalDraftMode: owner.goalDraftMode,
+    }));
+    const bind = (): NativeComposerProps => ({
+      ...owner,
+      draftSource: owner.draftSource ?? draftSource,
+      onGoalDraftModeChange: (mode) => {
+        owner.onGoalDraftModeChange?.(mode);
+        if (!owner.draftSource) {
+          owner.goalDraftMode = mode;
+          draftSource.publish();
+        }
+      },
+      onDraftChange: (value: string, mentions?: readonly HumanMention[]) => {
+        const previous = owner.getDraft?.() ?? owner.draft;
+        owner.onDraftChange(value, mentions);
+        if (!owner.draftSource) {
+          owner.mentions =
+            owner.getMentions?.() ??
+            mentions ??
+            updateHumanMentions(previous, value, owner.mentions);
+          owner.draft = owner.getDraft?.() ?? value;
+          draftSource.publish();
+        }
+      },
+    });
+    const [current, update] = createSignal<NativeComposerProps>(bind(), { ownedWrite: true });
     const view = mountSolid(() => createComponent(ChatComposer, merge(current)), {
       container,
       wrapper: providers.get(container)!.wrapper,
     });
-    composers.set(container, { update, unmount: view.unmount });
+    composers.set(container, {
+      update: (next) => {
+        owner = next;
+        update(bind());
+        draftSource.publish();
+      },
+      unmount: view.unmount,
+    });
     onTestFinished(() => disposeComposer(container));
   }
   if (!getOwner()) {
@@ -73,6 +114,31 @@ export function createComposerProps(overrides: Partial<ComposerProps> = {}): Com
     onSend: vi.fn(),
     onQueueRemove: vi.fn(),
     ...overrides,
+  };
+}
+
+export function createComposerControlsFixture(): NonNullable<ComposerProps["composerControls"]> {
+  return {
+    component: () =>
+      Object.assign(document.createElement("button"), {
+        type: "button",
+        className: "chat-composer-model-control",
+        textContent: "Model",
+      }),
+    model: {
+      activeRunId: null,
+      connected: true,
+      gatewayAvailable: false,
+      loading: false,
+      modelCatalog: [],
+      modelCatalogState: { hasSnapshot: false, status: "idle" },
+      modelSwitching: false,
+      sending: false,
+      sessionKey: "main",
+      selectedSession: undefined,
+      sessionsResult: null,
+      stream: null,
+    },
   };
 }
 

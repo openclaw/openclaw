@@ -381,6 +381,42 @@ describe("buildModelProviderCards", () => {
 });
 
 describe("model provider configuration data", () => {
+  it("keeps a fresh restricted catalog's default authoritative over a draft", () => {
+    const configured = {
+      primary: "openai/configured-model",
+      fallbacks: [],
+      utilityModel: null,
+      thinkingLevel: undefined,
+      thinkingOverridden: false,
+      fastMode: undefined,
+      fastModeOverridden: false,
+    };
+    const presentation = resolveDefaultModelPresentation(
+      {
+        models: [
+          catalogEntry({ provider: "openai", id: "allowed-model", available: true }),
+          catalogEntry({
+            provider: "openai",
+            id: "hidden-model",
+            manualSelectionAllowed: false,
+          }),
+        ],
+        hasSnapshot: true,
+        retired: false,
+        modelSelectionPolicy: { restricted: true, defaultModel: "openai/allowed-model" },
+      },
+      configured,
+      { ...configured, primary: "openai/draft-model", fallbacks: ["openai/draft-fallback"] },
+    );
+
+    expect(presentation.defaults).toEqual({
+      ...configured,
+      primary: "openai/allowed-model",
+      decisionModel: null,
+    });
+    expect(presentation.configuredModels.map(modelCatalogRef)).toEqual(["openai/allowed-model"]);
+  });
+
   it("offers usable defaults while preserving saved unavailable refs", () => {
     const models = [
       catalogEntry({ provider: "openai", id: "gpt-ready", available: true }),
@@ -389,12 +425,14 @@ describe("model provider configuration data", () => {
     const selectable = defaultModelChoices(models, {
       primary: "openai/gpt-saved",
       fallbacks: ["openai/gpt-disabled"],
-      utilityModel: null,
+      utilityModel: { primary: "openai/utility", fallbacks: ["openai/utility-backup"] },
     });
     expect(selectable.map((model) => `${model.provider}/${model.id}`)).toEqual([
       "openai/gpt-ready",
       "openai/gpt-disabled",
       "openai/gpt-saved",
+      "openai/utility",
+      "openai/utility-backup",
     ]);
   });
 

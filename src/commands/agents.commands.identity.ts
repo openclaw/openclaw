@@ -144,8 +144,7 @@ export async function agentsSetIdentityCommand(
     }
   }
 
-  const fileTheme =
-    identityFromFile?.theme ?? identityFromFile?.creature ?? identityFromFile?.vibe ?? undefined;
+  const fileTheme = identityFromFile?.theme ?? identityFromFile?.creature ?? identityFromFile?.vibe;
   const incomingIdentity: IdentityConfig = {
     ...(nameRaw || identityFromFile?.name ? { name: nameRaw ?? identityFromFile?.name } : {}),
     ...(emojiRaw || identityFromFile?.emoji ? { emoji: emojiRaw ?? identityFromFile?.emoji } : {}),

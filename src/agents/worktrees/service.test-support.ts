@@ -1,11 +1,19 @@
 import { execFile } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import { hostname } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, beforeAll } from "vitest";
+import { afterAll, assert, beforeAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withWorktreeMutationLease } from "./allocation.js";
 import { insertRegistryWorktree } from "./registry.js";
+import {
+  listTemplatesAsync,
+  markTemplateReadyAsync,
+  releaseTemplateReaderAsync,
+  retainTemplateReaderAsync,
+} from "./template-registry-async.js";
 import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -149,6 +157,34 @@ export async function materializeManagedWorktreeFixtures(
     await insertRegistryWorktree(params.env, record, { provisionedPaths });
   }
   return records;
+}
+
+export async function ageManagedWorktreeTemplates(
+  env: NodeJS.ProcessEnv,
+  lastUsedAt: number,
+): Promise<void> {
+  for (const template of await listTemplatesAsync(env)) {
+    await withWorktreeMutationLease({ env, id: `template:${template.cacheKey}` }, async (guard) => {
+      const key = `age-template:${template.id}`;
+      assert(
+        await retainTemplateReaderAsync(
+          env,
+          {
+            id: template.id,
+            key,
+            owner: { pid: process.pid, host: hostname(), startedAt: null },
+            unpublish: true,
+          },
+          guard.commitGuard,
+        ),
+      );
+      try {
+        assert(await markTemplateReadyAsync(env, template.id, lastUsedAt, guard.commitGuard));
+      } finally {
+        await releaseTemplateReaderAsync(env, key, guard.commitGuard);
+      }
+    });
+  }
 }
 
 export async function materializeManagedWorktreeFixture(

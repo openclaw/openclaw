@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { registerListener } from "../../../src/shared/listeners.js";
+import { listen } from "../lib/reactive/listener.ts";
 import { webKitHostWindow, type WebKitHostMessages } from "./native-webkit-bridge.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 
@@ -82,7 +83,8 @@ function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
   }
   let snapshot = embedded ? null : snapshotFrom(nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"]);
   const listeners = new Set<(snapshot: NativeGatewaysSnapshot) => void>();
-  window.addEventListener(embedded ? "message" : NATIVE_GATEWAYS_CHANGED_EVENT, (event: Event) => {
+  // This singleton and its transport listener share the document's lifetime.
+  listen(window, embedded ? "message" : NATIVE_GATEWAYS_CHANGED_EVENT, (event: Event) => {
     let next: NativeGatewaysSnapshot | null;
     if (embedded) {
       // SAFETY: The selected event name matches the embedded transport.

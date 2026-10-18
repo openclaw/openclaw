@@ -2,13 +2,12 @@ import type { CDPSession } from "@vitest/browser-playwright";
 import { createSignal, type Setter } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cdp } from "vitest/browser";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../components/tooltip.ts";
 import { buildCompactionDividerItem } from "../chat-progress.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
-import { renderChatDivider } from "./chat-divider.ts";
+import { ChatDivider } from "./chat-divider.tsx";
 import baseStyles from "../../../styles/base.css?inline";
 import composerStatusStyles from "../../../styles/chat/composer-status.css?inline";
 import chatComposerStyles from "../../../styles/chat/composer.css?inline";
@@ -22,9 +21,7 @@ function mountCompaction(container: HTMLElement) {
     () => {
       const [phase, updatePhase] = createSignal<"active" | "complete">("active");
       setPhase = updatePhase;
-      return (
-        <LitContent value={renderChatDivider(buildCompactionDividerItem({}, 1_000, 0, phase()))} />
-      );
+      return <ChatDivider item={buildCompactionDividerItem({}, 1_000, 0, phase())} />;
     },
     { container },
   );

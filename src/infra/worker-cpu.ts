@@ -1,4 +1,5 @@
 import "../../worker-heap-flag.mjs";
+import { channel } from "node:diagnostics_channel";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainThread, MessagePort, Worker } from "node:worker_threads";
@@ -22,7 +23,12 @@ import {
 type WorkerMemorySample = Pick<
   NodeJS.MemoryUsage,
   "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
-> & { heapSizeLimitBytes?: number; gc?: GcSample[] };
+> & {
+  heapSizeLimitBytes?: number;
+  heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
+  retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
+  gc?: GcSample[];
+};
 
 type WorkerCpuHandle = {
   readonly threadId: number;
@@ -44,6 +50,8 @@ type WorkerSource = {
     value: Pick<NodeJS.MemoryUsage, "heapUsed" | "heapTotal" | "external"> & {
       arrayBuffers?: number;
       heapSizeLimitBytes?: number;
+      heapSpaces?: WorkerMemorySample["heapSpaces"];
+      retainedData?: WorkerMemorySample["retainedData"];
     };
     sampledAt: number;
   };
@@ -253,6 +261,12 @@ function trackWorker(worker: WorkerCpuHandle): void {
     // oxlint-disable-next-line typescript/unbound-method -- call preserves custom own/subclass methods and the receiver.
     const emit = !nativePrototype || Object.hasOwn(worker, "emit") ? worker.emit : undefined;
     worker.emit = function (this: Worker, event: string | symbol, ...args: unknown[]) {
+      if (event === "error" && source.script === "code-mode-node.worker.js") {
+        // Capture native failure before the pool's generic failure/close cleanup runs.
+        const error = args[0];
+        source.retirementReason ??=
+          isRecord(error) && error.code === "ERR_CODE_MODE_GC_THRASH" ? "gc-thrash" : "crash";
+      }
       if (event === "message") {
         if (source.lifecycleMessages) {
           recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]));
@@ -372,26 +386,83 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
   };
   port.on(
     "message",
-    (record: WorkerMemorySample | { gc: GcSample[] } | { gcStorm: WorkerGcStorm }) => {
+    (
+      record:
+        | WorkerMemorySample
+        | { gc: GcSample[] }
+        | { gcStorm: WorkerGcStorm }
+        | { retireWorkerId: string },
+    ) => {
+      if ("retireWorkerId" in record) {
+        recordWorkerMessage("memory", "from_worker");
+        channel("openclaw.code-mode.gc-storm").publish(record.retireWorkerId);
+        return;
+      }
       if ("gcStorm" in record) {
         recordWorkerMessage("memory", "from_worker");
         // Capture registry-owned identity before a native exit can free this slot.
         const workerThreadId = worker.threadId;
         const workerSlot = source.workerSlot;
-        void import("../logging/subsystem.js").then(({ createSubsystemLogger }) =>
-          createSubsystemLogger("agents/code-mode").warn("Code Mode worker GC storm", {
-            ...record.gcStorm,
+        void import("../logging/subsystem.js").then(async ({ createSubsystemLogger }) => {
+          const { profiles, ...storm } = record.gcStorm;
+          const metadata = {
+            ...storm,
             workerThreadId,
             workerSlot,
-          }),
-        );
+          };
+          const log = createSubsystemLogger("agents/code-mode");
+          if (profiles) {
+            try {
+              const { writeWorkerGcProfiles } =
+                await import("../logging/diagnostic-worker-gc-profile.js");
+              const profileFiles = await writeWorkerGcProfiles(profiles);
+              log.warn("Code Mode worker GC storm", { ...metadata, profileFiles });
+            } catch {
+              log.warn("Code Mode worker GC storm", {
+                ...metadata,
+                captureStatus: "unavailable",
+                captureReason: "profile-write-failed",
+              });
+            }
+          } else {
+            log.warn("Code Mode worker GC storm", metadata);
+          }
+          if (storm.captureStatus === "requested") {
+            // Workers cannot query process-wide tracing. Admit here before enabling their profiler.
+            const { getEnabledCategories } = await import("node:trace_events");
+            if (getEnabledCategories()) {
+              log.warn("Code Mode worker GC storm", {
+                ...metadata,
+                captureStatus: "unavailable",
+                captureReason: "tracing-active",
+              });
+            } else if (source.memoryPort === port) {
+              port.postMessage({ captureGcProfile: storm });
+            }
+          }
+        });
         return;
       }
-      // Known numeric payload bytes; object envelopes and GC kind labels are excluded.
+      // Known numeric payload bytes; object envelopes and diagnostic labels are excluded.
       recordWorkerMessage(
         "memory",
         "from_worker",
         ("heapUsed" in record ? 32 + (record.heapSizeLimitBytes === undefined ? 0 : 8) : 0) +
+          ("heapUsed" in record ? (record.heapSpaces?.length ?? 0) * 8 : 0) +
+          ("heapUsed" in record
+            ? (record.retainedData?.reduce(
+                (bytes, entry) =>
+                  bytes +
+                  16 +
+                  (entry.stringBytes === undefined ? 0 : 8) +
+                  (entry.objects === undefined ? 0 : 8) +
+                  (entry.generations === undefined ? 0 : 8) +
+                  (entry.providers === undefined ? 0 : 8) +
+                  (entry.accounts === undefined ? 0 : 8) +
+                  (entry.truncated === undefined ? 0 : 1),
+                0,
+              ) ?? 0)
+            : 0) +
           (record.gc?.length ?? 0) * 8,
       );
       // This private port is handed off by our isolate telemetry owner, not task input.

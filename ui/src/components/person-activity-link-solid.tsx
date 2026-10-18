@@ -8,7 +8,7 @@ export function PersonName(props: { label: string; link: ActivityLink; class: st
   return (
     <Show when={props.link} fallback={<span class={props.class}>{props.label}</span>}>
       <a
-        class={`${props.class} person-activity-link`}
+        class={[props.class, "person-activity-link"]}
         href={props.link?.href}
         onClick={(event) => props.link?.open(event)}
       >

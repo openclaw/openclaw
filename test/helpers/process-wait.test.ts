@@ -1,15 +1,10 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fsSync from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  waitForChildClose,
-  waitForDead,
-  waitForFile,
-  waitForFixtureFile,
-  waitForPidFile,
-} from "./process-wait.js";
+import { waitForDead, waitForFile, waitForFixtureFile, waitForPidFile } from "./process-wait.js";
 import { createDeferred, withinTest } from "./promise.js";
 import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
 
@@ -98,54 +93,25 @@ it("diagnoses a live process on abort", async ({ signal }) => {
   await rejected;
 });
 
-it("observes real process death and child close after registration", async ({
-  signal,
-  onTestFinished,
-}) => {
+it("observes real process death before and after abort", async ({ signal, onTestFinished }) => {
   const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],
   });
   onTestFinished(() => {
     child.kill("SIGKILL");
   });
-  const closed = waitForChildClose(child, signal);
+  const closed = once(child, "close", { signal });
   if (child.pid === undefined) {
     throw new Error("child has no PID");
   }
   const dead = waitForDead(child.pid, signal);
   child.stdin.end();
-  await expect(closed).resolves.toEqual({ code: 0, signal: null });
+  await expect(closed).resolves.toEqual([0, null]);
   await expect(dead).resolves.toBeUndefined();
   // Already-observed death must also win over an already-aborted signal.
   await expect(
     waitForDead(child.pid, AbortSignal.any([signal, AbortSignal.abort("cancelled")])),
   ).resolves.toBeUndefined();
-});
-
-it("diagnoses child close cancellation and releases its listener", async ({
-  signal,
-  onTestFinished,
-}) => {
-  const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
-    stdio: ["pipe", "ignore", "ignore"],
-  });
-  onTestFinished(() => {
-    child.kill("SIGKILL");
-  });
-  const closed = waitForChildClose(child, signal);
-  const controller = new AbortController();
-  const reason = new Error("test cancelled");
-  const waiting = waitForChildClose(child, AbortSignal.any([signal, controller.signal]));
-  const rejected = expect(waiting).rejects.toMatchObject({
-    message: expect.stringContaining(`child ${child.pid}`),
-    cause: reason,
-  });
-  controller.abort(reason);
-  await rejected;
-  expect(child.listenerCount("close")).toBe(1);
-  child.stdin.end();
-  await closed;
-  expect(child.listenerCount("close")).toBe(0);
 });
 
 it("stops waiting when a Linux process is a zombie", async ({ signal }) => {

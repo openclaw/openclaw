@@ -4,7 +4,6 @@ import {
   assistantVisibleTextFilters,
   minimaxToolCallTextFilter,
   plainToolCallTextFilter,
-  sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
@@ -45,7 +44,7 @@ it.each([
   "\ufe0f",
 ])("does not present invisible-only assistant output %j as an answer", (text) => {
   expect(sanitizeAssistantVisibleText(text)).toBe("");
-  expect(sanitizeAssistantFinalAnswerText(text)).toBe("");
+  expect(sanitizeAssistantVisibleTextWithProfile(text, "final-answer-delivery")).toBe("");
 });
 
 it.each(["word\u200bbreak", "👩‍💻", "می‌روم"])(
@@ -186,6 +185,25 @@ describe("stripAssistantInternalScaffolding", () => {
 });
 
 describe("stripToolCallXmlTags", () => {
+  it.each(["<tool_call>", " \n<tool_call>\n ", "<TOOL_CALL>"])(
+    "hides a bare unfinished tool-call transport marker: %j",
+    (text) => {
+      expect(stripToolCallXmlTags(text)).toBe("");
+    },
+  );
+
+  it.each([
+    "`<tool_call>`",
+    "```xml\n<tool_call>\n```",
+    "    <tool_call>",
+    "\t<tool_call>",
+    "The marker is <tool_call>.",
+    "<tool_call> is a transport marker.",
+  ])("preserves literal tool-call documentation: %j", (text) => {
+    expect(stripToolCallXmlTags(text)).toBe(text);
+    expect(sanitizeAssistantVisibleTextWithProfile(text, "delivery")).toBe(text);
+  });
+
   it("strips compact function_response after a newline-separated stripped function_calls block", () => {
     const input =
       'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls>\n<function_response>ok</function_response>\nAfter';
@@ -282,13 +300,22 @@ describe("sanitizeAssistantVisibleText", () => {
 
   it("keeps literal reasoning-looking tags in final-answer prose while hiding internal reflection", () => {
     expect(
-      sanitizeAssistantFinalAnswerText("<think>hidden</think>Use <think> literally here"),
+      sanitizeAssistantVisibleTextWithProfile(
+        "<think>hidden</think>Use <think> literally here",
+        "final-answer-delivery",
+      ),
     ).toBe("Use <think> literally here");
-    expect(sanitizeAssistantFinalAnswerText("Before <think>literal tag text after")).toBe(
-      "Before <think>literal tag text after",
-    );
     expect(
-      sanitizeAssistantFinalAnswerText("Visible prefix <thinking><internal>private reflection"),
+      sanitizeAssistantVisibleTextWithProfile(
+        "Before <think>literal tag text after",
+        "final-answer-delivery",
+      ),
+    ).toBe("Before <think>literal tag text after");
+    expect(
+      sanitizeAssistantVisibleTextWithProfile(
+        "Visible prefix <thinking><internal>private reflection",
+        "final-answer-delivery",
+      ),
     ).toBe("Visible prefix");
   });
 });

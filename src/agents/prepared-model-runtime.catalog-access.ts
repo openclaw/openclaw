@@ -1,6 +1,5 @@
 import pLimit from "p-limit";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
-import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { createPreparedRuntimeAuthProfileUsageReader } from "./auth-profiles/runtime-snapshots.js";
 import {
   augmentPreparedModelCatalogWithAgentHarness,
@@ -10,6 +9,7 @@ import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-pr
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
+  createPreparedModelCatalogUsageReader,
   getPreparedModelFullCatalogAuth,
   setPreparedModelFullCatalogAuth,
   type PreparedModelCatalogAuth,
@@ -37,13 +37,13 @@ import {
   retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.catalog-publication.js";
 import {
+  listChangedPreparedCatalogProviders,
   preparedProviderCatalogCredentials,
+  preparedProviderCatalogSource,
   prepareRetainedProviderCatalog,
 } from "./prepared-model-runtime.catalog-source.js";
 import * as retry from "./prepared-model-runtime.discovery-retry.js";
 import { assertPreparedModelRuntimeInputCurrent } from "./prepared-model-runtime.errors.js";
-import { preparedModelInventoryKey } from "./prepared-model-runtime.facts.js";
-import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 import {
   isPreparedModelCatalogFull,
   markPreparedModelCatalogFull,
@@ -106,22 +106,20 @@ export async function createFullModelCatalogAccess(
     params.agentFacts.input.agentDir,
     params.agentFacts.input.inheritedAuthDir,
   );
+  const readCurrentUsage = createPreparedModelCatalogUsageReader(params.isCurrent, readUsage);
   const setCatalogAuth = (catalog: ModelCatalogSnapshot, auth: PreparedModelCatalogAuth) =>
-    setPreparedModelFullCatalogAuth(catalog, auth, (store) =>
-      params.isCurrent() ? readUsage(store) : store,
-    );
+    setPreparedModelFullCatalogAuth(catalog, auth, readCurrentUsage);
   const projectInventory = createPreparedModelCatalogProjection({ ...params, normalizeProvider });
   const project = (...args: Parameters<typeof projectInventory>) =>
     attempt.withRefreshStatus(projectInventory(...args));
-  const inventoryKey = preparedModelInventoryKey(params.agentFacts.input);
-  const nativeSource = fingerprintPreparedRuntimeFacts({
-    runtimePluginSelections: params.agentFacts.input.runtimePluginSelections,
-    config: params.nativeConfigFingerprint,
-    configuredModelRefs: params.agentFacts.configuredModelRefs,
-  });
-  const pluginFingerprint = resolveInstalledManifestRegistryIndexFingerprint(
-    params.pluginGeneration.pluginMetadataSnapshot.index,
-  );
+  const {
+    retainedInventory,
+    providerSources,
+    unretainedProviders,
+    inventoryKey,
+    nativeSource,
+    pluginFingerprint,
+  } = prepareRetainedProviderCatalog(params, normalizeProvider, eligibleProviders);
   const attempt = createCatalogAttemptReporter(
     params.inventoryOwner,
     { key: inventoryKey, pluginFingerprint, credentials: params.agentFacts.credentials },
@@ -137,14 +135,6 @@ export async function createFullModelCatalogAccess(
     },
     params.isPublished,
   );
-  const { providerSource, retainedInventory, listChangedProviders } =
-    prepareRetainedProviderCatalog(
-      params,
-      normalizeProvider,
-      eligibleProviders,
-      pluginFingerprint,
-      nativeSource,
-    );
   if (retainedInventory) {
     setCatalogAuth(retainedInventory.catalog, currentAuth);
   }
@@ -324,7 +314,12 @@ export async function createFullModelCatalogAccess(
           return [
             provider,
             {
-              source: providerSource(provider),
+              source: preparedProviderCatalogSource(
+                params.agentFacts,
+                params.pluginGeneration,
+                provider,
+                normalizeProvider,
+              ),
               credentials: preparedProviderCatalogCredentials(auth, provider, normalizeProvider),
               ...retry.discoveryDeadline(failed, expiresAt, retained?.providers.get(provider)),
               ...(legacyProviders.has(provider) ? { legacyAcquired: true } : {}),
@@ -615,7 +610,14 @@ export async function createFullModelCatalogAccess(
       ...new Set((options.providerIds ?? eligibleProviders).map(normalizeProvider)),
     ];
     const providers = options.changedOnly
-      ? listChangedProviders(published.inventory, options.providerIds)
+      ? listChangedPreparedCatalogProviders(
+          params.agentFacts,
+          normalizeProvider,
+          providerSources,
+          unretainedProviders,
+          published.inventory,
+          options.providerIds,
+        )
       : requestedProviders;
     // A changed-only pass without provider inventory is a cold start: acquire what a refresh
     // would, including hosted rows for providers without credentials.

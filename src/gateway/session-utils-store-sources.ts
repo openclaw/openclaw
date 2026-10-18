@@ -2,14 +2,11 @@ import path from "node:path";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
-  assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
 } from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
-import { createExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets-discovery.native.js";
 import { shouldSkipDiscoveryError } from "../config/sessions/targets-path-validation.js";
 import {
   listConfiguredSessionStoreAgentIds,
@@ -30,7 +27,10 @@ import {
   openClawStateDatabaseCache,
   registerOpenClawStateDatabaseAsyncResource,
 } from "../state/openclaw-state-db-cache.js";
-import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-candidates.js";
+import {
+  resolveGatewaySessionStoreReadSources,
+  sessionStoreRoutingConfig,
+} from "./session-utils-store-candidates.js";
 import type {
   GatewaySessionStoreReadSources,
   GatewaySessionStoreSourceRequest,
@@ -46,107 +46,8 @@ function captureSessionStoreRouting(cfg: OpenClawConfig): SessionStoreRouting {
   }));
 }
 
-function sessionStoreRoutingConfig(routing: SessionStoreRouting): OpenClawConfig {
-  return {
-    agents: {
-      ownership: "explicit",
-      entries: Object.fromEntries(routing.agentIds.map((agentId) => [agentId, {}])),
-      defaults: { sessionStore: { agentId: routing.compatibilityAgentId } },
-    },
-    session: { store: routing.store },
-  };
-}
-
 function storeChanged(): Error {
   return new Error("Session store changed while preparing its metadata. Retry the request.");
-}
-
-/** Native discovery policy shared by synchronous readers and the admitted history worker. */
-export function resolveGatewaySessionStoreReadSources(params: GatewaySessionStoreSourceRequest) {
-  const cfg = sessionStoreRoutingConfig(params.routing);
-  return withAgentRosterFactsBatch(cfg, () => {
-    const registered = params.registeredDatabases.filter(
-      (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
-    );
-    const agentIds = new Set([
-      ...listConfiguredSessionStoreAgentIds(cfg),
-      ...registered.map((entry) => entry.agentId),
-    ]);
-    const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
-    const resolveExistingTargets = createExistingAgentSessionStoreTargetResolver(cfg, {
-      env: params.env,
-      registeredDatabases: registered,
-      readCandidates: params.candidates,
-      isSameDatabasePath,
-    });
-    const sources = new Map<string, readonly SessionEntryReadSource[]>();
-    const bindCurrentSource = (source: SessionEntryReadSource): SessionEntryReadSource => {
-      if (params.candidates) {
-        assertSessionStoreReadCandidate(source.path, params.candidates);
-      }
-      isSameDatabasePath(source.path, source.path);
-      return source.agentId === params.currentSource.agentId &&
-        isSameDatabasePath(source.path, params.currentSource.path)
-        ? params.currentSource
-        : source;
-    };
-    for (const agentId of agentIds) {
-      let resolved: SessionEntryReadSource[];
-      let exactRegisteredSources = false;
-      try {
-        const { candidates, readSources } = resolveGatewaySessionStoreLookupCandidates({
-          ...params,
-          cfg,
-          agentId,
-          registeredDatabases: registered,
-          resolveExistingTargets,
-        });
-        resolved = [];
-        if (readSources) {
-          exactRegisteredSources = true;
-          resolved = readSources;
-        } else {
-          for (const candidate of candidates) {
-            const target = resolveSqliteTargetFromSessionStorePath(candidate.storePath, {
-              agentId: candidate.agentId,
-              defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
-              env: params.env,
-              registeredDatabases: registered,
-              readCandidates: params.candidates,
-              isSameDatabasePath,
-            });
-            if (target.ownerSource === "ambiguous-registry") {
-              resolved.length = 0;
-              break;
-            }
-            resolved.push({ agentId: target.agentId ?? candidate.agentId, path: target.path });
-          }
-        }
-        const bound: SessionEntryReadSource[] = [];
-        for (const source of resolved) {
-          const current = bindCurrentSource(source);
-          if (
-            !bound.some(
-              (previous) =>
-                (!exactRegisteredSources || previous.agentId === current.agentId) &&
-                isSameDatabasePath(previous.path, current.path),
-            )
-          ) {
-            bound.push(current);
-          }
-        }
-        sources.set(agentId, bound);
-      } catch {
-        // Auxiliary lineage follows the existing unavailable-store-as-no-rows contract.
-        sources.set(agentId, []);
-        continue;
-      }
-    }
-    return {
-      sources: Object.fromEntries(sources),
-      isCurrent: () => isSameDatabasePath.isCurrent(),
-    };
-  });
 }
 
 /** Bind candidate addresses once; registry metadata uses its existing invalidation owner. */
@@ -244,35 +145,31 @@ function observeSourcePath(memo: SourceMemo, pathname: string): void {
     if (!memo.observations.has(observationKey)) {
       memo.observations.set(
         observationKey,
-        observeOwnedDirectory(
-          directory,
-          (filename) => {
-            if (!memo.current || memo.observedThisTurn) {
-              return;
-            }
-            if (
-              filename === undefined ||
-              (process.platform === "win32"
-                ? filename.toLowerCase() === name.toLowerCase()
-                : filename === name)
-            ) {
-              // One fallback sweep can notify every ancestor of the same source.
-              memo.observedThisTurn = true;
-              queueMicrotask(() => {
-                memo.observedThisTurn = false;
-              });
-              // Invalidate only; the next preparation inherits these watches.
-              try {
-                if (memo.pathsCurrent && !memo.pathsCurrent()) {
-                  memo.current = false;
-                }
-              } catch {
+        observeOwnedDirectory(directory, (filename) => {
+          if (!memo.current || memo.observedThisTurn) {
+            return;
+          }
+          if (
+            filename === undefined ||
+            (process.platform === "win32"
+              ? filename.toLowerCase() === name.toLowerCase()
+              : filename === name)
+          ) {
+            // One fallback sweep can notify every ancestor of the same source.
+            memo.observedThisTurn = true;
+            queueMicrotask(() => {
+              memo.observedThisTurn = false;
+            });
+            // Invalidate only; the next preparation inherits these watches.
+            try {
+              if (memo.pathsCurrent && !memo.pathsCurrent()) {
                 memo.current = false;
               }
+            } catch {
+              memo.current = false;
             }
-          },
-          { recoveryIntervalMs: 30_000 },
-        ),
+          }
+        }),
       );
     }
     child = directory;

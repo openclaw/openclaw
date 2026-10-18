@@ -155,7 +155,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     validateSystemAgentSetupDetectParams,
     async ({ params, respond }) => {
       const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
-      respond(true, await detectSetupInference({}, params.agentId), undefined);
+      respond(true, await detectSetupInference(params.agentId), undefined);
     },
   ),
   "openclaw.setup.auto": defineValidatedGatewayHandler(

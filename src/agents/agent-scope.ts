@@ -3,7 +3,10 @@ import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveSelectedModelFallbacksOverride,
+} from "../config/model-input.js";
 import {
   resolveCollapsedSessionAuthPinSource,
   resolveSessionAuthProfileOverrideSource,
@@ -90,7 +93,7 @@ function pruneAutoFallbackPrimaryProbeState(params: {
   const maxKeys = Math.max(1, Math.trunc(params.maxKeys ?? AUTO_FALLBACK_PRIMARY_PROBE_MAX_KEYS));
   const staleBefore = params.now - params.minIntervalMs;
   for (const [key, lastProbeAt] of params.state) {
-    if (!Number.isFinite(lastProbeAt) || lastProbeAt < staleBefore) {
+    if (lastProbeAt < staleBefore) {
       params.state.delete(key);
     }
   }
@@ -195,11 +198,7 @@ export function resolveAutoFallbackPrimaryProbe(params: {
     primaryModel: originModel,
   });
   const lastProbeAt = state.get(key);
-  if (
-    typeof lastProbeAt === "number" &&
-    Number.isFinite(lastProbeAt) &&
-    now - lastProbeAt < minIntervalMs
-  ) {
+  if (lastProbeAt !== undefined && now - lastProbeAt < minIntervalMs) {
     return undefined;
   }
   const fallbackAuthProfileId = normalizeOptionalString(entry.authProfileOverride);
@@ -453,22 +452,6 @@ export function resolveAgentModelFallbacksOverride(
   return resolveSelectedModelFallbacksOverride(
     resolveAgentModelConfigForRuntime(resolveAgentConfig(cfg, agentId)),
   );
-}
-
-function resolveSelectedModelFallbacksOverride(
-  raw: AgentModelConfig | undefined,
-): string[] | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  if (typeof raw === "string") {
-    return resolvePrimaryStringValue(raw) ? [] : undefined;
-  }
-  // Important: treat an explicitly provided empty array as an override to disable global fallbacks.
-  if (!Object.hasOwn(raw, "fallbacks")) {
-    return Object.hasOwn(raw, "primary") && resolvePrimaryStringValue(raw) ? [] : undefined;
-  }
-  return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
 }
 
 function resolveFirstModelFallbacksOverride(

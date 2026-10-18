@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -7,6 +7,7 @@ import { withSessionActor } from "../config/sessions/session-actor-scope.js";
 import { buildRestartRecoveryExpectedState } from "../config/sessions/session-transcript-turn-state.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -217,6 +218,8 @@ describe("live model switch worker persistence", () => {
 });
 
 it("propagates model-guard read cancellation instead of treating it as missing metadata", async () => {
+  const warnings = createWarnLogCapture("model-guard-read-cancel");
+  onTestFinished(() => warnings.cleanup());
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const scope = {
@@ -241,5 +244,39 @@ it("propagates model-guard read cancellation instead of treating it as missing m
       }),
     ).rejects.toBe(reason);
     expect(cancelledAtAdmission).toBe(true);
+    expect(await warnings.findText("model rollback preparation unavailable")).toBeUndefined();
+  });
+});
+
+it("warns when model rollback preparation fails, not when its marker is absent", async () => {
+  const warnings = createWarnLogCapture("model-guard-read-failure");
+  onTestFinished(() => warnings.cleanup());
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const scope = {
+      agentId: "main",
+      storePath: database.path,
+      sessionKey: "agent:main:model-guard-read-error",
+    };
+    replaceSessionEntrySync(scope, { sessionId: "model-guard-session", updatedAt: 1 });
+    for (const sessionKey of [scope.sessionKey, "agent:main:model-guard-missing"]) {
+      await createAgentPatchedSessionModelRunGuard({ ...scope, sessionKey, cfg: {} });
+    }
+    expect(await warnings.findText("model rollback preparation unavailable")).toBeUndefined();
+
+    const failure = new Error("model marker read unavailable");
+    probe.admission(workerAdmission, () => {
+      throw failure;
+    });
+    const guard = await createAgentPatchedSessionModelRunGuard({
+      ...scope,
+      sessionKey: "agent:main:model-guard-unread",
+      cfg: {},
+    });
+    expect(await warnings.findText("model rollback preparation unavailable")).toContain(
+      failure.message,
+    );
+    expect(guard.captureFailure(new Error("model not found"), "model_not_found")).toBe(false);
+    await guard.finish(false);
   });
 });

@@ -27,7 +27,7 @@ import { createPluginRecord } from "./status.test-helpers.js";
 
 const emptyResult = { cleanupCount: 0, failures: [] };
 
-async function collect() {
+async function collect(...released: WeakRef<object>[]) {
   const gc = globalThis.gc;
   assert.ok(gc, "The retention child requires --expose-gc");
   const control = new WeakRef({ unowned: true });
@@ -38,6 +38,22 @@ async function collect() {
         gc();
         resolve();
       });
+    });
+  }
+  // JavaScriptCore also scans native stacks conservatively. Bun's immediate
+  // dispatcher can keep a stale pointer to a completed fixture graph across
+  // every immediate; a timer-phase collection runs from other native frames.
+  // These passes are bounded and do not delay a graph that already collected.
+  for (
+    let pass = 0;
+    pass < 4 && released.some((reference) => reference.deref() !== undefined);
+    pass += 1
+  ) {
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        gc();
+        resolve();
+      }, 0);
     });
   }
   assert.equal(control.deref(), undefined, "Unowned control must collect");
@@ -307,7 +323,7 @@ switch (process.argv[2]) {
       () => recoverOwner(root, kind),
       async (result) => {
         try {
-          await collect();
+          await collect(result.owner, result.registry);
           assert.equal(
             result.owner.deref(),
             undefined,

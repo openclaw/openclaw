@@ -53,9 +53,9 @@ export function ConfirmDialogView(props: {
           <button
             type="button"
             class={["btn", options.danger ? "danger" : "primary"]}
-            disabled={!acknowledged()}
+            disabled={!acknowledged() || options.canConfirm?.() === false}
             onClick={() => {
-              if (!acknowledged()) {
+              if (!acknowledged() || options.canConfirm?.() === false) {
                 return;
               }
               if (skipRequested) {
@@ -70,9 +70,9 @@ export function ConfirmDialogView(props: {
             <button
               type="button"
               class="btn"
-              disabled={!acknowledged()}
+              disabled={!acknowledged() || options.canConfirm?.() === false}
               onClick={() => {
-                if (acknowledged()) {
+                if (acknowledged() && options.canConfirm?.() !== false) {
                   props.finish("alternative");
                 }
               }}

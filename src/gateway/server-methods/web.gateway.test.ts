@@ -27,6 +27,7 @@ describe("web QR login Gateway dispatch", () => {
           source: "test",
           plugin: {
             id: "whatsapp",
+            config: { listAccountIds: () => ["default"] },
             meta: { aliases: [] },
             gatewayMethods: ["web.login.start", "web.login.wait"],
             gateway: {
@@ -40,6 +41,7 @@ describe("web QR login Gateway dispatch", () => {
           source: "test",
           plugin: {
             id: "openclaw-weixin",
+            config: { listAccountIds: () => ["default"] },
             meta: { aliases: ["weixin", "wechat"] },
             gatewayMethods: ["web.login.start", "web.login.wait"],
             gateway: {
@@ -50,8 +52,10 @@ describe("web QR login Gateway dispatch", () => {
         },
       ]),
     );
+    const cfg = {};
     const context = {
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => cfg,
+      isConfigReloadSettled: () => true,
       getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
       stopChannel: vi.fn(),
       startChannel: vi.fn(),
@@ -96,6 +100,7 @@ describe("web QR login Gateway dispatch", () => {
       force: false,
       timeoutMs: undefined,
       verbose: false,
+      assertCredentialPersistenceCurrent: expect.any(Function),
     });
     expect(weixinWait).toHaveBeenCalledWith({
       accountId: undefined,
@@ -124,6 +129,7 @@ describe("web QR login Gateway dispatch", () => {
         source: "test",
         plugin: {
           id: "whatsapp",
+          config: { listAccountIds: () => ["default"] },
           meta: { aliases: [] },
           gatewayMethods: ["web.login.start"],
           gateway: { loginWithQrStart: globalWhatsappStart },
@@ -136,6 +142,7 @@ describe("web QR login Gateway dispatch", () => {
         source: "test",
         plugin: {
           id: "openclaw-weixin",
+          config: { listAccountIds: () => ["default"] },
           meta: { aliases: ["wechat"] },
           gatewayMethods: ["web.login.start"],
           gateway: { loginWithQrStart: scopedWeixinStart },
@@ -148,8 +155,10 @@ describe("web QR login Gateway dispatch", () => {
       pluginRegistry: scopedRegistry,
     };
     const respond = vi.fn();
+    const cfg = {};
     const context = {
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => cfg,
+      isConfigReloadSettled: () => true,
       getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
       stopChannel: vi.fn(),
       startChannel: vi.fn(),
@@ -175,6 +184,7 @@ describe("web QR login Gateway dispatch", () => {
       force: false,
       timeoutMs: undefined,
       verbose: false,
+      assertCredentialPersistenceCurrent: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, { connected: true }, undefined);
   });

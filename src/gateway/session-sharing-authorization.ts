@@ -51,7 +51,6 @@ import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
-import { assertTalkSessionStorageTarget } from "./talk/session-target.js";
 import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
 
 export type SessionMutationAuthorizationParams = {
@@ -387,7 +386,7 @@ export function resolvePreparedTalkAuthorizationTarget(
       throw new Error("Talk session authorization requires prepared session facts");
     }
     if (talkSessionTarget) {
-      assertTalkSessionStorageTarget(getCfg(), talkSessionTarget);
+      talkSessionTarget.assertCurrent(getCfg());
     }
     return { error: null, talkInput, talkSessionTarget };
   } catch (error) {

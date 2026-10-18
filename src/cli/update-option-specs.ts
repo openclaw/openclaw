@@ -5,8 +5,9 @@ export const UPDATE_OPTION_SPECS: readonly [
   defaultValue?: boolean,
 ][] = [
   ["--json", "Output result as JSON", false],
-  ["--no-restart", "Skip restarting the gateway service after a successful update"],
+  ["--no-restart", "Skip updater restart (package Gateways may restart themselves)"],
   ["--dry-run", "Preview update actions without making changes", false],
+  ["--full-integrity-check", "Run full database integrity checks during migrations", false],
   [
     "--admission <auto|installed>",
     "Select candidate or installed admission checks (default: auto)",

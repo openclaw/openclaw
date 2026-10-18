@@ -193,11 +193,6 @@ export const gatewayDirectStopEntrypoints = {
     sourceWorkerName: "gateway-cli/run-loop.model-acquisition.test-support",
     distWorkerPath: "cli/gateway-cli/run-loop.model-acquisition.test-support.js",
   },
-  fileLogTransport: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../logging/logger-file-transport",
-    distWorkerPath: "logging/logger-file-transport.js",
-  },
   ingressDrain: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../channels/message/ingress-drain",
@@ -213,10 +208,15 @@ export const gatewayDirectStopEntrypoints = {
     sourceWorkerName: "../agents/embedded-agent-runner/runs",
     distWorkerPath: "agents/embedded-agent-runner/runs.js",
   },
-  activeRunProjections: {
+  sessionControllerAdmission: {
     currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../agents/embedded-agent-runner/active-run-projections",
-    distWorkerPath: "agents/embedded-agent-runner/active-run-projections.js",
+    sourceWorkerName: "../sessions/session-controller.admission",
+    distWorkerPath: "sessions/session-controller.admission.js",
+  },
+  sessionControllerQueries: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../sessions/session-controller.queries",
+    distWorkerPath: "sessions/session-controller.queries.js",
   },
   runLoop: {
     currentModuleUrl: import.meta.url,

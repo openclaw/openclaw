@@ -9,6 +9,7 @@ import { tryRouteCli } from "../route.js";
 
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const runDaemonStatusMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
@@ -21,6 +22,11 @@ vi.mock("../../commands/models/list.status-command.js", () => ({
 
 vi.mock("../../commands/status-json.js", () => ({
   statusJsonCommand: statusJsonCommandMock,
+}));
+
+// mock-isolation: Route dispatch stops at the daemon entrypoint without opening service state.
+vi.mock("../daemon-cli/status.js", () => ({
+  runDaemonStatus: runDaemonStatusMock,
 }));
 
 function routeArgv(args = ""): string[] {
@@ -46,6 +52,20 @@ describe("program routes", () => {
 
   it("defers gateway status SSH identity resolution to Commander", async () => {
     await expectRunFalse(routeArgv("gateway status --ssh-identity ~/.ssh/id_test"));
+  });
+
+  it("routes local runtime intent with config and plugin startup disabled", async () => {
+    await expect(
+      tryRouteCli(routeArgv("gateway status --runtime-intent-only --json")),
+    ).resolves.toBe(true);
+    expect(runDaemonStatusMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeIntentOnly: true, json: true }),
+    );
+    expect(ensureCliExecutionBootstrap).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startupPolicy: expect.objectContaining({ skipConfigGuard: true, loadPlugins: false }),
+      }),
+    );
   });
 
   it("routes status --json through the lean JSON command", async () => {

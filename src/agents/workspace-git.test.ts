@@ -33,7 +33,7 @@ it("retains workspace Git presentation while current admission and external chan
 
   await promisify(execFile)(process.execPath, [
     "-e",
-    "require('node:fs').mkdirSync(process.argv[1])",
+    "require('node:fs').writeFileSync(process.argv[1], 'gitdir: missing-worktree\\n')",
     metadata,
   ]);
   expect(findGitCheckoutRoot(workspace)).toBe(workspace);
@@ -42,7 +42,7 @@ it("retains workspace Git presentation while current admission and external chan
 
   await promisify(execFile)(process.execPath, [
     "-e",
-    "require('node:fs').rmdirSync(process.argv[1])",
+    "require('node:fs').unlinkSync(process.argv[1])",
     metadata,
   ]);
   expect(findGitCheckoutRoot(workspace)).toBeNull();

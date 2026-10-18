@@ -2,6 +2,7 @@ import { createMemo, Show } from "solid-js";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import { getChatComposerState } from "../chat/components/chat-composer-state.ts";
 import { ChatComposer, resetChatComposerState } from "../chat/components/chat-composer.tsx";
@@ -37,6 +38,7 @@ function prepareCreationComposer(
     stream: null,
     queue: composer.inputs,
     draft: composer.message,
+    draftSource: composer.composerDraft,
     getDraft: () => composer.message,
     mentions: composer.mentions,
     getMentions: () => composer.mentions,
@@ -67,38 +69,40 @@ function prepareCreationComposer(
     },
     onQueueRemove: (id) => composer.remove(id),
     onOpenImage,
-    onRequestUpdate: composer.notify,
   };
 }
 
 export function CreationComposer(props: {
   composer: CreationComposerOwner | undefined;
   onOpenImage: (item: ImageLightboxItem) => void;
-  renderRevision?: object;
 }) {
+  const owner = createMemo(() => {
+    const composer = props.composer;
+    return composer ? projectOwner(composer, (current) => current) : undefined;
+  });
   const visible = createMemo(() => {
-    void props.renderRevision;
-    return props.composer?.canDisplay() ? props.composer : undefined;
+    const composer = owner()?.read();
+    return composer?.canDisplay() ? composer : undefined;
   });
   return (
     <Show when={visible()}>
       {(composer) => {
         const prepared = createMemo(() => {
-          void props.renderRevision;
+          owner()?.read();
           return prepareCreationComposer(composer(), props.onOpenImage);
         });
         const error = createMemo(() => {
-          void props.renderRevision;
+          owner()?.read();
           return composer().error;
         });
         return (
           <section class="creation-composer" aria-label={t("newSession.followUps")}>
             <Show when={error()}>
               <div class="callout danger" role="alert">
-                {composer().error}
+                {error()}
               </div>
             </Show>
-            <ChatComposer {...prepared()} renderRevision={props.renderRevision} />
+            <ChatComposer {...prepared()} />
           </section>
         );
       }}

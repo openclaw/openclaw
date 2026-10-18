@@ -599,24 +599,23 @@ describe("comfy image-generation provider", () => {
     }
   });
 
-  it("rejects generated image downloads that exceed the configured media cap", async () => {
+  it("keeps generated image downloads above the configured media cap", async () => {
     mockLocalImageResponses("local-prompt-1", {
-      body: Buffer.from("too-large"),
+      body: Buffer.from("over-cap"),
       contentType: "image/png",
     });
 
     const provider = buildComfyImageGenerationProvider();
-    await expect(
-      provider.generateImage({
-        provider: "comfy",
-        model: "workflow",
-        prompt: "draw a lobster",
-        cfg: {
-          ...buildComfyConfig(testWorkflowConfig()),
-          agents: { defaults: { mediaMaxMb: 0.000001 } },
-        } as never,
-      }),
-    ).rejects.toThrow("Comfy image output download exceeds 1 bytes");
+    const result = await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: {
+        ...buildComfyConfig(testWorkflowConfig()),
+        agents: { defaults: { mediaMaxMb: 0.000001 } },
+      } as never,
+    });
+    expect(result.images[0]?.buffer.toString()).toBe("over-cap");
   });
 
   it("reports malformed local workflow submit JSON as a provider error", async () => {

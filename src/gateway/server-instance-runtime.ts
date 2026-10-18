@@ -251,9 +251,7 @@ export function createGatewayInstanceRuntime(
           dispatchOptions.allowModelOverride === true ||
           dispatchOptions.allowSyntheticModelOverride === true ||
           dispatchOptions.allowSyntheticCronRunContinuation === true ||
-          dispatchOptions.internalDeliveryMediaUrls ||
           dispatchOptions.runtimeContextFragments ||
-          dispatchOptions.internalDeliverySuppressText === true ||
           dispatchOptions.internalDeliverySuppressErrors === true ||
           delegatedToolPolicyHandoffId ||
           restoredOperator ||
@@ -271,9 +269,7 @@ export function createGatewayInstanceRuntime(
                   dispatchOptions.allowModelOverride === true ||
                   dispatchOptions.allowSyntheticModelOverride === true,
                 cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
-                internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
                 runtimeContextFragments: dispatchOptions.runtimeContextFragments,
-                internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
                 internalDeliverySuppressErrors: dispatchOptions.internalDeliverySuppressErrors,
                 delegatedToolPolicyHandoffId,
                 scopes: restoredOperator
@@ -290,6 +286,7 @@ export function createGatewayInstanceRuntime(
             })
           : recoveryAgentTurns;
         return await agentTurns.dispatch<T>(payload, {
+          controllerInput: dispatchOptions.controllerInput,
           assertAdmissionCurrent: assertRecoveryCurrent,
           prepareDispatchCurrent: dispatchOptions.prepareDispatchCurrent,
           expectFinal: dispatchOptions.expectFinal,

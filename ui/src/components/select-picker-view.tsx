@@ -10,7 +10,6 @@ import {
 } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { emptyLegacyContent, LitContent } from "../lit/solid-content.tsx";
 import { createOverlayAnchor } from "./overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
@@ -43,6 +42,8 @@ export function PickerContent<Option extends PickerOption>(props: {
   let surface!: HTMLDivElement;
   let list!: HTMLDivElement;
   let input: HTMLInputElement | undefined;
+  let back: HTMLButtonElement | undefined;
+  const optionElements = new Map<string, HTMLDivElement>();
   let anchor: ReturnType<typeof createOverlayAnchor> | undefined;
   let sheetScroll: { root: Element; top: number } | undefined;
   let hoverTimer: ReturnType<typeof setTimeout> | undefined;
@@ -53,6 +54,18 @@ export function PickerContent<Option extends PickerOption>(props: {
   const [keyboard, setKeyboard] = createSignal(false);
   const [collapsed, setCollapsed] = createSignal(new Set<string>());
   const direction = () => (getComputedStyle(props.host).direction === "rtl" ? "rtl" : "ltr");
+  const updateAnchor = (
+    placement: PickerParams<Option>["placement"],
+    variant: PickerParams<Option>["variant"],
+  ) =>
+    anchor?.update(
+      trigger,
+      variant === "submenu"
+        ? direction() === "rtl"
+          ? "left-start"
+          : "right-start"
+        : `${placement ?? "bottom"}-start`,
+    );
   const options = createMemo((): readonly Option[] => {
     const { value, options: configuredOptions } = props.params;
     if (
@@ -109,17 +122,13 @@ export function PickerContent<Option extends PickerOption>(props: {
   const visible = createMemo(() => new Set(rows().map((option) => option.value)));
   const optionId = (value: string) => `${id}:${value}`;
   const overlay = createOverlay(id, undefined, {
+    // Native presentation mode belongs to this mounted overlay lifetime.
     native: untrack(() => props.params.sheet) ? sheetAdapter : undefined,
     exclusiveGroup: "menu",
     isValid: () => !props.params.disabled,
     acquireOcclusion: acquireNativeOverlaySurface,
     onInitialFocus(intent) {
-      const target =
-        props.params.sheet && !keyboard()
-          ? surface.querySelector<HTMLElement>(".picker-select__back")
-          : searching()
-            ? input
-            : list;
+      const target = props.params.sheet && !keyboard() ? back : searching() ? input : list;
       if (
         intent === "last" &&
         !rows().some((option) => option.value === props.params.value && !option.disabled)
@@ -140,7 +149,9 @@ export function PickerContent<Option extends PickerOption>(props: {
     },
   });
   onSettled(() => overlay.bindSurface(surface));
-  const menu = useMenuMachine(overlay, direction, commit, undefined, {
+  // The menu refreshes direction on accepted open; closed pickers need no style read.
+  const menuDirection: typeof direction = () => (overlay.open ? direction() : "ltr");
+  const menu = useMenuMachine(overlay, menuDirection, commit, undefined, {
     ids: { content: contentId, trigger: () => untrack(triggerId) },
     surface: "listbox",
     focus: "retain",
@@ -174,28 +185,26 @@ export function PickerContent<Option extends PickerOption>(props: {
       props.params.searchable === "always" ||
         Boolean(props.params.searchable && (props.params.groupBy || options().length > 8)),
     );
-    queueMicrotask(() =>
-      untrack(() => {
-        if (
-          !props.host.isConnected ||
-          !overlay.request(true, focus ? (last ? "last" : "first") : "none")
-        ) {
-          return;
-        }
-        if (initialKey) {
-          queueMicrotask(() =>
-            untrack(() => {
-              if (searching()) {
-                setQuery(initialKey);
-              } else {
-                menu.service.send({ type: "TYPEAHEAD", key: initialKey });
-              }
-            }),
-          );
-        }
-      }),
-    );
+    queueMicrotask(() => {
+      if (!props.host.isConnected) {
+        return;
+      }
+      updateAnchor(props.params.placement, props.params.variant);
+      if (!overlay.request(true, focus ? (last ? "last" : "first") : "none")) {
+        return;
+      }
+      if (initialKey) {
+        queueMicrotask(() => {
+          if (searching()) {
+            setQuery(initialKey);
+          } else {
+            menu.service.send({ type: "TYPEAHEAD", key: initialKey });
+          }
+        });
+      }
+    });
   }
+
   function scrollFade() {
     list.toggleAttribute("data-fade-start", list.scrollTop > 0);
     list.toggleAttribute(
@@ -211,7 +220,8 @@ export function PickerContent<Option extends PickerOption>(props: {
     if (!editing || event.key.startsWith("Arrow")) {
       setKeyboard(true);
     }
-    const forward = direction() === "rtl" ? "ArrowLeft" : "ArrowRight";
+    const forward =
+      props.params.variant === "submenu" && direction() === "rtl" ? "ArrowLeft" : "ArrowRight";
     if (!overlay.open) {
       const printable = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
       if (
@@ -291,58 +301,43 @@ export function PickerContent<Option extends PickerOption>(props: {
   createEffect(
     () => [props.params.placement, props.params.variant] as const,
     ([placement, variant]) => {
-      anchor?.update(
-        trigger,
-        variant === "submenu"
-          ? direction() === "rtl"
-            ? "left-start"
-            : "right-start"
-          : `${placement ?? "bottom"}-start`,
-      );
+      if (overlay.open) {
+        updateAnchor(placement, variant);
+      }
     },
   );
   createEffect(
     () => [opened(), active(), query(), rows()] as const,
-    () => {
-      if (!list) {
-        return;
+    ([isOpen, highlighted]) => {
+      if (list) {
+        const node = optionElements.get(highlighted ?? "");
+        if (isOpen && node) {
+          revealInScrollRegion(list, node);
+        }
+        scrollFade();
       }
-      const node = list.querySelector<HTMLElement>("[data-active]");
-      if (overlay.open && node) {
-        revealInScrollRegion(list, node);
-      }
-      scrollFade();
     },
   );
   onSettled(() => {
     overlay.bindTrigger(trigger);
     overlay.setParent(findOverlayParent(trigger));
-    if (!untrack(() => props.params.sheet)) {
+    if (!props.params.sheet) {
       anchor = createOverlayAnchor(surface);
-      untrack(() =>
-        anchor!.update(
-          trigger,
-          props.params.variant === "submenu"
-            ? direction() === "rtl"
-              ? "left-start"
-              : "right-start"
-            : `${props.params.placement ?? "bottom"}-start`,
-        ),
-      );
     }
     const stop = overlay.subscribe((next) => {
       setOpened(next);
       if (next) {
-        untrack(() => props.params.onOpen?.());
+        props.params.onOpen?.();
         const root = surface.offsetParent;
-        if (untrack(() => props.params.sheet) && root) {
+        if (props.params.sheet && root) {
           sheetScroll = { root, top: root.scrollTop };
           root.scrollTop = 0;
         }
       } else {
         setQuery("");
         setSearching(false);
-        setCollapsed(new Set<string>());
+        // Disabled overlays can retire repeatedly as unrelated DOM content changes.
+        setCollapsed((current) => (current.size ? new Set<string>() : current));
         hoverOpened = false;
         if (sheetScroll) {
           sheetScroll.root.scrollTop = sheetScroll.top;
@@ -358,64 +353,69 @@ export function PickerContent<Option extends PickerOption>(props: {
   const Leading = (row: { option?: Option }) => {
     const content = createMemo(() => row.option && props.params.renderLeading?.(row.option));
     return (
-      <Show
-        when={content() !== undefined && content() !== null && content() !== emptyLegacyContent}
-      >
-        <span class="picker-select__leading">
-          <LitContent value={content()} />
-        </span>
+      <Show when={content() !== undefined && content() !== null}>
+        <span class="picker-select__leading">{content()}</span>
       </Show>
     );
   };
-  const OptionRow = (row: { option: () => Option; grouped: boolean }) => (
-    <div
-      {...menu.item(
-        row.option().value,
-        row.option().disabled || !visible().has(row.option().value),
-        undefined,
-        false,
-        row.option().label,
-      )}
-      class="picker-select__option"
-      role="option"
-      id={optionId(row.option().value)}
-      data-value={row.option().value}
-      hidden={!visible().has(row.option().value)}
-      title={props.params.showOptionTooltips === false ? undefined : row.option().value}
-      aria-selected={row.option().value === props.params.value ? "true" : "false"}
-      aria-disabled={row.option().disabled ? "true" : "false"}
-      data-active={row.option().value === active() ? "" : undefined}
-      onMouseDown={(event) => event.preventDefault()}
-      onMouseMove={() => {
-        setKeyboard(false);
-        if (!row.option().disabled) {
-          menu.read().setHighlightedValue(row.option().value);
-        }
-      }}
-      onClick={() => commit(row.option().value)}
-    >
-      {!row.grouped && <Leading option={row.option()} />}
-      <span class="picker-select__copy">
-        <span class="picker-select__label" style={row.option().labelStyle}>
-          {row.option().label}
+  const OptionRow = (row: { option: () => Option; grouped: boolean }) => {
+    // The parent For keys each mounted row by value.
+    const value = untrack(() => row.option().value);
+    let element: HTMLDivElement;
+    onCleanup(() => {
+      if (optionElements.get(value) === element) {
+        optionElements.delete(value);
+      }
+    });
+    return (
+      <div
+        ref={(node) => optionElements.set(value, (element = node))}
+        {...menu.item(
+          row.option().value,
+          row.option().disabled || !visible().has(row.option().value),
+          undefined,
+          false,
+          row.option().label,
+        )}
+        class="picker-select__option"
+        role="option"
+        id={optionId(row.option().value)}
+        data-value={row.option().value}
+        hidden={!visible().has(row.option().value)}
+        title={props.params.showOptionTooltips === false ? undefined : row.option().value}
+        aria-selected={row.option().value === props.params.value ? "true" : "false"}
+        aria-disabled={row.option().disabled ? "true" : "false"}
+        data-active={row.option().value === active() ? "" : undefined}
+        onMouseDown={(event) => event.preventDefault()}
+        onMouseMove={() => {
+          setKeyboard(false);
+          if (!row.option().disabled) {
+            menu.read().setHighlightedValue(row.option().value);
+          }
+        }}
+        onClick={() => commit(row.option().value)}
+      >
+        {!row.grouped && <Leading option={row.option()} />}
+        <span class="picker-select__copy">
+          <span class="picker-select__label" style={row.option().labelStyle}>
+            {row.option().label}
+          </span>
+          <Show when={row.option().description}>
+            <span class="picker-select__description">{row.option().description}</span>
+          </Show>
         </span>
-        <Show when={row.option().description}>
-          <span class="picker-select__description">{row.option().description}</span>
-        </Show>
-      </span>
-      <span class="picker-select__check" aria-hidden="true">
-        <Show when={row.option().value === props.params.value}>
-          <Icon name="check" />
-        </Show>
-      </span>
-    </div>
-  );
+        <span class="picker-select__check" aria-hidden="true">
+          <Show when={row.option().value === props.params.value}>
+            <Icon name="check" />
+          </Show>
+        </span>
+      </div>
+    );
+  };
   return (
     <div onPointerEnter={hover} onPointerLeave={hover} data-keyboard={keyboard() ? "" : undefined}>
       <button
-        ref={(element) => {
-          trigger = element;
-        }}
+        ref={(element) => (trigger = element)}
         onKeyDown={handleKeydown}
         data-menu-trigger={id}
         id={triggerId()}
@@ -471,9 +471,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         role={undefined}
         aria-label={undefined}
         aria-labelledby={undefined}
-        ref={(element) => {
-          surface = element;
-        }}
+        ref={(element) => (surface = element)}
         id={contentId}
         class={[
           "picker-select__menu",
@@ -489,6 +487,7 @@ export function PickerContent<Option extends PickerOption>(props: {
           <div class="picker-select__page-header">
             <button
               type="button"
+              ref={(element) => (back = element)}
               class="picker-select__back"
               aria-label={t("common.back")}
               onClick={() => overlay.request(false, "return")}
@@ -500,9 +499,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         </Show>
         <Show when={searching()}>
           <input
-            ref={(element) => {
-              input = element;
-            }}
+            ref={(element) => (input = element)}
             class="picker-select__search settings-input"
             type="search"
             role="combobox"
@@ -524,9 +521,7 @@ export function PickerContent<Option extends PickerOption>(props: {
           />
         </Show>
         <div
-          ref={(element) => {
-            list = element;
-          }}
+          ref={(element) => (list = element)}
           class="picker-select__options"
           role={props.params.groupBy ? undefined : "listbox"}
           onScroll={scrollFade}
@@ -535,10 +530,10 @@ export function PickerContent<Option extends PickerOption>(props: {
           data-picker-focus={!searching() ? "" : undefined}
           tabindex={searching() ? -1 : 0}
           aria-activedescendant={
-            !searching() && active() !== null ? optionId(active()!) : undefined
+            opened() && !searching() && active() !== null ? optionId(active()!) : undefined
           }
         >
-          <For each={sections()} keyed={(section) => section.position}>
+          <For each={opened() ? sections() : []} keyed={(section) => section.position}>
             {(section, index) => (
               <Show
                 when={section().group}
@@ -578,7 +573,7 @@ export function PickerContent<Option extends PickerOption>(props: {
                         })
                       }
                     >
-                      <LitContent value={group().leading} />
+                      {group().leading}
                       <span class="picker-select__group-label">{group().label}</span>
                       <span>{section().options.length}</span>
                       <span class="picker-select__chevron" aria-hidden="true">

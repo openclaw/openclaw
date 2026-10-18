@@ -15,15 +15,13 @@ import {
   contextHandoffMatches,
   type ChannelIngressResolutionScope,
 } from "./admission-evidence-scope-key.js";
+import type { ChannelAdmissionEvidence } from "./admission-evidence.types.js";
 import type { ChannelIngressHostOwner, ChannelParticipantInput } from "./ingress-host-owner.js";
 import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
 } from "./runtime-types.js";
-
-export type ChannelAdmissionEvidence = Readonly<{
-  kind: "channel-admission-evidence";
-}>;
+export type { ChannelAdmissionEvidence } from "./admission-evidence.types.js";
 
 type ChannelAdmissionContribution = Readonly<{
   participant:
@@ -479,11 +477,8 @@ function activePayload(
   if (!stored || stored.consumed) {
     return undefined;
   }
-  const { payload, audit } = stored;
-  return (!audit || audit.enabled) &&
-    now - payload.createdAt <= CHANNEL_ADMISSION_EVIDENCE_MAX_AGE_MS
-    ? payload
-    : undefined;
+  const { payload } = stored;
+  return now - payload.createdAt <= CHANNEL_ADMISSION_EVIDENCE_MAX_AGE_MS ? payload : undefined;
 }
 
 /** Preserve one source exactly; collected sources get one new bounded opaque aggregate. */

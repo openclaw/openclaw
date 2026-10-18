@@ -6,7 +6,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { sessionRowAttention } from "../../../lib/session-attention.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { isSubagentsPanelSession } from "../chat-spawned-subagent.ts";
 
 type Props = {

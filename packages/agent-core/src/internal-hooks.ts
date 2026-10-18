@@ -11,6 +11,18 @@ import type {
   ToolResultContentSource,
 } from "./types.js";
 
+type RepetitionGuardPolicy = (model: AgentLoopConfig["model"]) => boolean;
+const repetitionGuardByAgent = new WeakMap<object, RepetitionGuardPolicy>();
+
+/** Host policy only: no plugin-facing option or user setting. */
+export function setInternalRepetitionGuard(agent: object, policy: RepetitionGuardPolicy): void {
+  repetitionGuardByAgent.set(agent, policy);
+}
+
+export function getInternalRepetitionGuard(agent: object): RepetitionGuardPolicy | undefined {
+  return repetitionGuardByAgent.get(agent);
+}
+
 export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToolBatch"]>;
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
@@ -18,6 +30,26 @@ const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>(
 export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
 
 const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
+const toolTurnInputScopeByHook = new WeakMap<InternalToolTurnCompletionHook, object>();
+
+/** Keep the accepted input identity across same-input Agent.continue() calls. */
+export function getInternalToolTurnInputScope(hook: InternalToolTurnCompletionHook): object {
+  let scope = toolTurnInputScopeByHook.get(hook);
+  if (!scope) {
+    scope = {};
+    toolTurnInputScopeByHook.set(hook, scope);
+  }
+  return scope;
+}
+
+/** Queueing, cancellation and context-only updates do not commit a new input. */
+export function commitInternalToolTurnInput(
+  hook: InternalToolTurnCompletionHook | undefined,
+): void {
+  if (hook) {
+    toolTurnInputScopeByHook.set(hook, {});
+  }
+}
 
 type InternalReadyToolCall = { toolCallId: string; args: unknown };
 

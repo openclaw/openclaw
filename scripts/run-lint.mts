@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { main as runLitRatchet } from "./check-control-ui-lit-ratchet.mts";
+import { main as runControllerGuard } from "./check-control-ui-controllers.mts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
@@ -33,9 +33,12 @@ await runWithFailedTrailer("lint", async () => {
   };
   if (
     collect(
-      runLitRatchet(process.cwd(), [
+      runControllerGuard(process.cwd(), [
         ...(args.staged ? ["--staged"] : []),
         ...(base ? ["--base", base] : []),
+        // The CI checkout owner supplies the actual tested tree's comparison
+        // commit. An explicit caller base still means a local branch fork.
+        ...(!args.base && !args.staged && base ? ["--no-merge-base"] : []),
       ]),
     )
   ) {
@@ -66,8 +69,6 @@ await runWithFailedTrailer("lint", async () => {
   if (collect(await runOxlintShards(args.oxlint))) {
     return;
   }
-  // Oxlint cannot see plain stylesheets or css`` templates in Lit components.
-  collect(
-    await runStylelint(["ui/src/**/*.css", "ui/src/**/*.{ts,tsx}", "ui/public/themes/*.css"]),
-  );
+  // Oxlint does not check stylesheets.
+  collect(await runStylelint(["ui/src/**/*.css", "ui/public/themes/*.css"]));
 });

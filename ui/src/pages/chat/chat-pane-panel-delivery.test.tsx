@@ -2,6 +2,8 @@
 
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
+import { rememberSessionPanelToggle } from "../../components/session-panel-toggle-buffer.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import {
@@ -18,7 +20,7 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 
-it("opens the requested desktop through a cold native pane panel", async () => {
+it("replays an initial panel intent through its Solid pane and retires delivery on removal", async () => {
   installTranscriptDomMocks();
   onTestFinished(resetTranscriptTestDom);
   const sessionKey = "agent:main:panel-delivery";
@@ -54,6 +56,12 @@ it("opens the requested desktop through a cold native pane panel", async () => {
   onTestFinished(() => {
     client.request = originalRequest;
   });
+  rememberSessionPanelToggle(
+    "desktop",
+    new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, {
+      detail: { open: true, environmentId: "requested-desktop", sessionKey },
+    }),
+  );
   const container = document.body.appendChild(createApplicationContextProvider(fixture.context));
   onTestFinished(() => container.remove());
   const view = mountSolid(
@@ -67,12 +75,6 @@ it("opens the requested desktop through a cold native pane panel", async () => {
   await waitForSolid(() => {
     expect(view.container.querySelector(".agent-chat__composer-combobox textarea")).not.toBeNull();
   });
-  expect(view.container.querySelector("openclaw-desktop-panel")).toBeNull();
-  window.dispatchEvent(
-    new CustomEvent("openclaw:desktop-toggle", {
-      detail: { open: true, environmentId: "requested-desktop", sessionKey },
-    }),
-  );
   await vi.dynamicImportSettled();
   await waitForSolid(() => {
     expect(request).toHaveBeenCalledWith("environments.status", {
@@ -86,5 +88,26 @@ it("opens the requested desktop through a cold native pane panel", async () => {
       view.container.querySelector(".desktop-credentials input[type='password']"),
     ).not.toBeNull();
   });
+  window.dispatchEvent(
+    new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: false, sessionKey } }),
+  );
+  await waitForSolid(() => {
+    expect(view.container.querySelector("openclaw-desktop-panel")).toBeNull();
+  });
+
   view.unmount();
+  request.mockClear();
+  window.dispatchEvent(
+    new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, {
+      detail: { open: true, environmentId: "retired-desktop", sessionKey },
+    }),
+  );
+  await vi.dynamicImportSettled();
+  expect(request).not.toHaveBeenCalledWith("environments.status", {
+    environmentId: "retired-desktop",
+  });
+  expect(request).not.toHaveBeenCalledWith("desktop.observe", {
+    source: { kind: "environment", environmentId: "retired-desktop" },
+    control: false,
+  });
 });

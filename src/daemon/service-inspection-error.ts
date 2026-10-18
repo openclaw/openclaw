@@ -84,7 +84,7 @@ function formatServiceInspectionDiagnostic(
 
 export class ServiceInspectionError extends Error {
   constructor(
-    readonly reason: ServiceInspectionReason,
+    readonly reason: ServiceInspectionReason | undefined,
     diagnostic?: ServiceInspectionDiagnostic,
   ) {
     const detail =
@@ -92,7 +92,7 @@ export class ServiceInspectionError extends Error {
         ? formatServiceInspectionDiagnostic(diagnostic)
         : undefined;
     super(
-      [detail, formatServiceInspectionReason(reason)].filter(Boolean).join(" "),
+      [detail, reason && formatServiceInspectionReason(reason)].filter(Boolean).join(" "),
       diagnostic ? { cause: diagnostic } : undefined,
     );
     this.name = "ServiceInspectionError";

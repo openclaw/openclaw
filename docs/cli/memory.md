@@ -91,6 +91,9 @@ configured, falls back to the default agent.
 With local llama.cpp embeddings, `--deep` and `--index` also show available
 server, model, capability, and endpoint diagnostics.
 
+Repair preserves recorded recall days, including local dates that differ from
+UTC. It fills in a day from the last recall timestamp only when no day is recorded.
+
 If the `Dreaming` line stays `off` even with `dreaming.enabled: true`, or
 scheduled sweeps never seem to run, the managed dreaming cron depends on the
 default agent's heartbeat firing to trigger reconciliation. See
@@ -239,6 +242,9 @@ If automatic indexing failed, or the index identity is incompatible, human
 output warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields. Treat an empty `results`
 array as authoritative only when `stale` is absent.
+
+If recording a search for later memory promotion fails, search still returns
+its matches with a warning naming the recording error.
 
 The Control UI's Memories tab shows the same warning and recovery guidance
 alongside stale search results, and clears them after a fresh search.

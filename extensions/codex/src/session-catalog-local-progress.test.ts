@@ -1,16 +1,8 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { observe } from "./session-catalog-list-operation.test-support.js";
-import {
-  commandRpcMocks,
-  config,
-  createCodexSessionCatalogControlFactory,
-  createCodexTestBindingStore,
-  createGatewayApi,
-  createRuntime,
-  idleThread,
-  registerCodexSessionCatalog,
-} from "./session-catalog.test-helpers.js";
+import { catalogFactory, catalogProvider } from "./session-catalog-resident.test-support.js";
+import { commandRpcMocks, config, idleThread } from "./session-catalog.test-helpers.js";
 
 beforeAll(async () => {
   // Keep paired-node module loading outside the local-page fake-timer measurement.
@@ -20,18 +12,10 @@ beforeAll(async () => {
 afterEach(() => vi.useRealTimers());
 
 function fixture() {
-  const { runtime } = createRuntime();
-  const { api, getProvider } = createGatewayApi(runtime, config);
-  const control = createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({ supervision: { enabled: true } }),
+  const control = catalogFactory({
     getRuntimeConfig: () => config,
   });
-  registerCodexSessionCatalog({
-    api,
-    control,
-    bindingStore: createCodexTestBindingStore(),
-    getRuntimeConfig: () => config,
-  });
+  const provider = catalogProvider(control);
   const started = createDeferred<void>();
   const response = createDeferred<unknown>();
   commandRpcMocks.codexControlRequest.mockImplementation(() => {
@@ -42,7 +26,7 @@ function fixture() {
   const controller = new AbortController();
   const publications: Promise<void>[] = [];
   const list = (allowPartialResults = true) =>
-    getProvider()!.list({
+    provider.list({
       agentId: "main",
       limitPerHost: 1,
       allowPartialResults,

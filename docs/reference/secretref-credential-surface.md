@@ -27,6 +27,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 #### `agents`
 
 - `agents.entries.*.memory.search.remote.apiKey`
+- `agents.entries.*.tools.github.app.privateKey`
 - `agents.entries.*.tts.personas.*.providers.*.apiKey`
 - `agents.entries.*.tts.providers.*.apiKey`
 
@@ -146,6 +147,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `plugins.entries.codex.config.appServer.authToken`
 - `plugins.entries.codex.config.appServer.headers.*`
 - `plugins.entries.comfy.config.headers.*`
+- `plugins.entries.deepseek.config.webSearch.apiKey`
 - `plugins.entries.exa.config.webSearch.apiKey`
 - `plugins.entries.facetime.config.realtime.providers.*.apiKey`
 - `plugins.entries.firecrawl.config.webFetch.apiKey`
@@ -176,6 +178,10 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 
 - `talk.providers.*.apiKey`
 - `talk.realtime.providers.*.apiKey`
+
+#### `tools`
+
+- `tools.github.app.privateKey`
 
 #### `tts`
 

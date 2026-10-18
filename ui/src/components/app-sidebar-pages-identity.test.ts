@@ -122,7 +122,7 @@ describe("Pages navigation identity", () => {
       usage.link.focus();
       expect(document.activeElement).toBe(usage.link);
       if (update === "revision") {
-        sidebar.requestUpdate();
+        sidebar.invalidate();
       } else if (update === "session") {
         const result = sessions.sessions.state.result!;
         sessions.publish({

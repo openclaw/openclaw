@@ -6,7 +6,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { encodeSessionArchiveContent } from "../../config/sessions/archive-compression.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.native.js";
 import {
   listSessionTranscriptInstances,
   loadSessionEntryReadOnly,
@@ -15,17 +15,17 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   historyLane,
   projectionLane,
   targetDiscoveryLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
 import { prepareCronSession } from "../../cron/isolated-agent/session.js";
 import { refreshCostUsageCacheForAgent } from "../../infra/session-cost-usage-aggregation.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
-import type { AssistantMessage } from "../../llm/types.js";
 import { buildUsageOverview } from "../../shared/usage-overview.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -38,10 +38,15 @@ import {
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createResidentSessionRowReader } from "../session-row-projection.test-support.js";
-import type { RespondFn } from "./types.js";
 import { loadUsageSessionSummaries } from "./usage-session-loading.js";
 import * as usageSessionSelection from "./usage-session-selection.js";
-import { usageHandlers } from "./usage.js";
+import {
+  contextReport,
+  invokeUsage,
+  usageMessage,
+  usageReply,
+  writeUsage,
+} from "./usage.test-support.js";
 
 let sessionRows: ReturnType<typeof createResidentSessionRowReader>;
 
@@ -51,43 +56,60 @@ beforeEach(() => {
   onTestFinished(() => reader.dispose());
 });
 
-function usageMessage(tokens: number, timestamp: number): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: "Recorded usage" }],
-    api: "openai-responses",
-    provider: "fixture",
-    model: "usage-model",
-    stopReason: "stop",
-    timestamp,
-    usage: {
-      input: tokens,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: tokens,
-      cost: { input: 0.01, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
-    },
-  };
+function sessionScope(state: OpenClawTestState, agentId: string, sessionKey: string) {
+  return { agentId, sessionKey, storePath: path.join(state.sessionsDir(agentId), "sessions.json") };
+}
+
+async function warmUsage(agentIds: string[]) {
+  for (const agentId of agentIds) {
+    for (const { sessionId, sessionFile } of await discoverAllSessions({ agentId })) {
+      await loadSessionCostSummary({ agentId, sessionId, sessionFile, config: getRuntimeConfig() });
+    }
+  }
+}
+
+function warmTarget(scope: ReturnType<typeof sessionScope>, sessionId: string) {
+  return loadSessionCostSummary({
+    config: getRuntimeConfig(),
+    agentId: scope.agentId,
+    sessionId,
+    sessionTarget: { ...scope, sessionId },
+  });
+}
+
+async function seedUsage(
+  state: OpenClawTestState,
+  scope: ReturnType<typeof sessionScope>,
+  sessionId: string,
+  tokens: number,
+  timestamp: number,
+  entry: Partial<SessionEntry> = {},
+) {
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: timestamp, ...entry });
+  await writeUsage({ ...scope, sessionId }, state.workspaceDir, tokens, timestamp);
+}
+
+async function withoutSql<T>(read: () => Promise<T>): Promise<T> {
+  const sql = observeHostDataSql();
+  try {
+    const result = await read();
+    expect(sql.queries).toEqual([]);
+    return result;
+  } finally {
+    sql.restore();
+  }
 }
 
 async function requestUsage(params: Record<string, unknown>, method = "sessions.usage") {
-  const respond = vi.fn<RespondFn>();
-  const handler = expectDefined(usageHandlers[method], "usage handler");
   const projection = await sessionRows.ready();
-  await handler({
-    req: { type: "req", id: "usage", method },
-    params,
-    respond,
-    client: null,
-    isWebchatConnect: () => false,
-    context: bindSessionRowProjection(
-      createDirectChatContext({ getRuntimeConfig }),
-      () => projection,
-    ),
-  });
-  expect(respond).toHaveBeenCalledOnce();
-  return expectDefined(respond.mock.calls[0], "usage response");
+  return usageReply(
+    await invokeUsage(method, params, getRuntimeConfig(), {
+      context: bindSessionRowProjection(
+        createDirectChatContext({ getRuntimeConfig }),
+        () => projection,
+      ),
+    }),
+  );
 }
 
 async function readUsage(params: Record<string, unknown>) {
@@ -111,21 +133,6 @@ async function withUsageState(run: (state: OpenClawTestState) => Promise<void>) 
   });
 }
 
-function contextReport(generatedAt: number, ordinal = 0): SessionSystemPromptReport {
-  return {
-    source: "run",
-    generatedAt,
-    systemPrompt: {
-      chars: 100 + ordinal,
-      projectContextChars: ordinal,
-      nonProjectContextChars: 100,
-    },
-    injectedWorkspaceFiles: [],
-    skills: { promptChars: 65_536, entries: [] },
-    tools: { listChars: ordinal, schemaChars: 0, entries: [] },
-  };
-}
-
 it("preserves global session addition order across agents before overview pagination", async () => {
   await withUsageState(async (state) => {
     const config = getRuntimeConfig();
@@ -141,17 +148,7 @@ it("preserves global session addition order across agents before overview pagina
           type: "message",
           id: sessionId,
           parentId: null,
-          message: {
-            role: "assistant",
-            timestamp: startMs,
-            provider: "fixture",
-            model: "same-model",
-            usage: {
-              input: 1,
-              totalTokens: 1,
-              cost: { total: cost, input: cost, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
-          },
+          message: usageMessage(1, startMs, cost),
         })}\n`,
       );
       sessions.push({
@@ -214,23 +211,11 @@ it("keeps same-key overview context reports with their selected agent", async ()
     const reports = [contextReport(timestamp, 1), contextReport(timestamp, 2)];
     for (const [index, agentId] of ["main", "opus"].entries()) {
       const sessionId = `${agentId}-global-context`;
-      const scope = {
-        agentId,
-        sessionId,
-        sessionKey: "global",
-        storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
-      };
-      await upsertSessionEntryCore(scope, {
-        sessionId,
-        updatedAt: timestamp,
+      const scope = sessionScope(state, agentId, "global");
+      await seedUsage(state, scope, sessionId, index + 1, timestamp, {
         systemPromptReport: reports[index],
       });
-      await persistSessionTranscriptTurn(scope, {
-        cwd: state.workspaceDir,
-        updateMode: "none",
-        messages: [{ message: usageMessage(index + 1, timestamp), now: timestamp }],
-      });
-      await loadSessionCostSummary({ agentId, sessionId, sessionTarget: scope, config });
+      await warmTarget(scope, sessionId);
       candidates.push(
         ...(await usageSessionSelection.selectUsageSessions({
           config,
@@ -292,42 +277,25 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
         cronSession,
         agentSessionKey: sessionKey,
         workspaceDir: state.workspaceDir,
-        persistSessionEntry: async ({ storePath, fallbackEntry, update }) => {
-          await patchSessionEntryCore(
-            { ...scope, storePath },
-            (_entry, context) => update(context.existingEntry),
-            { fallbackEntry, replaceEntry: true },
-          );
+        persistSessionEntry: async ({ storePath, operation }) => {
+          return await applySessionEntryOperation({ ...scope, storePath }, operation, {
+            fallbackEntry: operation.next,
+            replaceEntry: true,
+          });
         },
       })();
       const sessionId = cronSession.sessionEntry.sessionId;
       sessionIds.push(sessionId);
-      await persistSessionTranscriptTurn(
-        { ...scope, sessionId },
-        {
-          cwd: state.workspaceDir,
-          updateMode: "none",
-          messages: [{ message: usageMessage(tokens, timestamp), now: timestamp }],
-        },
-      );
+      await writeUsage({ ...scope, sessionId }, state.workspaceDir, tokens, timestamp);
     }
     expect(loadSessionEntryReadOnly(scope)).toMatchObject({
       usageFamilyKey: sessionKey,
       usageFamilySessionIds: sessionIds,
       createdActor: { type: "system" },
     });
-    for (const { sessionId, sessionFile } of await discoverAllSessions({ agentId: "main" })) {
-      await loadSessionCostSummary({ agentId: "main", sessionId, sessionFile, config });
-    }
+    await warmUsage(["main"]);
     for (const groupBy of ["instance", "family"]) {
-      const sql = observeHostDataSql();
-      let result: SessionsUsageResult;
-      try {
-        result = await readUsage({ range: "all", agentId: "main", groupBy });
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-      }
+      const result = await withoutSql(() => readUsage({ range: "all", agentId: "main", groupBy }));
       expect(result.totals.totalTokens).toBe(60);
       expect(result.totals.totalCost).toBeCloseTo(0.03);
       expect(result.sessions).toHaveLength(groupBy === "instance" ? 3 : 1);
@@ -337,53 +305,25 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
       ]);
     }
     for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
-      const sql = observeHostDataSql();
-      try {
-        const [ok, payload] = await requestUsage({ key: sessionKey }, method);
-        expect(ok).toBe(true);
-        expect(payload).toMatchObject(
-          method === "sessions.usage.timeseries"
-            ? { points: [expect.objectContaining({ totalTokens: 30 })] }
-            : { logs: [expect.objectContaining({ role: "assistant", tokens: 30 })] },
-        );
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-      }
+      const [ok, payload] = await withoutSql(() => requestUsage({ key: sessionKey }, method));
+      expect(ok).toBe(true);
+      expect(payload).toMatchObject(
+        method === "sessions.usage.timeseries"
+          ? { points: [expect.objectContaining({ totalTokens: 30 })] }
+          : { logs: [expect.objectContaining({ role: "assistant", tokens: 30 })] },
+      );
     }
   });
 });
 
 it("uses committed metadata for selected usage and families with an empty current window", async () => {
   await withUsageState(async (state) => {
-    const config = getRuntimeConfig();
     const key = "agent:main:usage-receipts";
-    const scope = {
-      agentId: "main",
-      sessionKey: key,
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-    };
+    const scope = sessionScope(state, "main", key);
     const timestamp = Date.now() - 60_000;
     const firstId = "usage-receipts-first";
-    await upsertSessionEntryCore(scope, {
-      sessionId: firstId,
-      updatedAt: timestamp,
-      label: "Before rename",
-    });
-    await persistSessionTranscriptTurn(
-      { ...scope, sessionId: firstId },
-      {
-        cwd: state.workspaceDir,
-        updateMode: "none",
-        messages: [{ message: usageMessage(17, timestamp), now: timestamp }],
-      },
-    );
-    await loadSessionCostSummary({
-      config,
-      agentId: scope.agentId,
-      sessionId: firstId,
-      sessionTarget: { ...scope, sessionId: firstId },
-    });
+    await seedUsage(state, scope, firstId, 17, timestamp, { label: "Before rename" });
+    await warmTarget(scope, firstId);
     const params = { range: "all", key };
     expect((await readUsage(params)).sessions).toMatchObject([
       { key, sessionId: firstId, label: "Before rename", usage: { totalTokens: 17 } },
@@ -400,12 +340,7 @@ it("uses committed metadata for selected usage and families with an empty curren
       updatedAt: timestamp + 1,
       label: "Replacement",
     });
-    await loadSessionCostSummary({
-      config,
-      agentId: scope.agentId,
-      sessionId: currentId,
-      sessionTarget: { ...scope, sessionId: currentId },
-    });
+    await warmTarget(scope, currentId);
     for (const selector of [{ key }, { agentId: "main" }]) {
       const result = await readUsage({ range: "all", groupBy: "family", ...selector });
       expect(result.sessions).toMatchObject([
@@ -425,7 +360,6 @@ it("uses committed metadata for selected usage and families with an empty curren
 
 it("hydrates context metadata only for emitted usage rows while aggregating every match", async () => {
   await withUsageState(async (state) => {
-    const config = getRuntimeConfig();
     const ada = ensureProfileForEmail("ada@example.test");
     const bob = ensureProfileForEmail("bob@example.test");
     const timestamp = Date.now() - 60_000;
@@ -446,29 +380,18 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
     );
     for (const fixture of fixtures) {
       const scope = {
-        agentId: fixture.agentId,
+        ...sessionScope(state, fixture.agentId, fixture.key),
         sessionId: fixture.sessionId,
-        sessionKey: fixture.key,
-        storePath: path.join(state.sessionsDir(fixture.agentId), "sessions.json"),
       };
-      await upsertSessionEntryCore(scope, {
-        sessionId: fixture.sessionId,
+      await seedUsage(state, scope, fixture.sessionId, fixture.tokens, fixture.updatedAt, {
         label: fixture.label,
         createdActor: {
           type: "human",
           source: "profile",
           id: fixture.agentId === "main" ? ada.id : bob.id,
         },
-        updatedAt: fixture.updatedAt,
         skillsSnapshot: { prompt: fixture.promptMarker + "x".repeat(65_536), skills: [] },
         systemPromptReport: fixture.report,
-      });
-      await persistSessionTranscriptTurn(scope, {
-        cwd: state.workspaceDir,
-        updateMode: "none",
-        messages: [
-          { message: usageMessage(fixture.tokens, fixture.updatedAt), now: fixture.updatedAt },
-        ],
       });
       fixture.updatedAt = expectDefined(
         loadSessionEntryReadOnly({ ...scope, projection: "list" }),
@@ -476,33 +399,25 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
       ).updatedAt;
     }
     // Refresh outside the observation window so transcript work cannot hide metadata overreads.
-    for (const agentId of ["main", "opus"]) {
-      for (const { sessionId, sessionFile } of await discoverAllSessions({ agentId })) {
-        await loadSessionCostSummary({ agentId, sessionId, sessionFile, config });
-      }
-    }
-    const newest = expectDefined(fixtures.at(-1), "newest usage row");
-    const secondNewest = expectDefined(fixtures.at(-2), "second newest usage row");
-    const older = expectDefined(fixtures[3], "older main usage row");
-    const withoutReport = expectDefined(fixtures[0], "usage row without context report");
+    await warmUsage(["main", "opus"]);
     const adaFixtures = fixtures.filter((fixture) => fixture.agentId === "main");
+    const row = (index: number) => expectDefined(fixtures.at(index), `usage row ${index}`);
+    const newest = row(-1);
     const adaNewest = expectDefined(adaFixtures.at(-1), "newest Ada usage row");
     const adaCreatorKey = JSON.stringify(["profile", ada.id]);
-    for (const scenario of [
-      { selected: [newest], includeContextWeight: false },
-      { selected: [newest], includeContextWeight: true },
-      { selected: [older], includeContextWeight: true, key: older.key },
-      { selected: [withoutReport], includeContextWeight: true, key: withoutReport.key },
-      { selected: [newest, secondNewest], includeContextWeight: false },
-      { selected: [adaNewest], includeContextWeight: false, creatorKey: adaCreatorKey },
-      { selected: [adaNewest], includeContextWeight: true, creatorKey: adaCreatorKey },
-      {
-        selected: adaFixtures.toReversed(),
-        includeContextWeight: true,
-        creatorKey: adaCreatorKey,
-        projection: "overview" as const,
-      },
-    ]) {
+    const scenarios: Array<
+      [typeof fixtures, boolean, { key?: string; creatorKey?: string; projection?: "overview" }?]
+    > = [
+      [[newest], false],
+      [[newest], true],
+      [[row(3)], true, { key: row(3).key }],
+      [[row(0)], true, { key: row(0).key }],
+      [[newest, row(-2)], false],
+      [[adaNewest], false, { creatorKey: adaCreatorKey }],
+      [[adaNewest], true, { creatorKey: adaCreatorKey }],
+      [adaFixtures.toReversed(), true, { creatorKey: adaCreatorKey, projection: "overview" }],
+    ];
+    for (const [selected, includeContextWeight, filters = {}] of scenarios) {
       let payload: unknown;
       const transferredPrompts = new Set<string>();
       const transfers = [historyLane, projectionLane, targetDiscoveryLane].map(({ pool }) => {
@@ -520,25 +435,20 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
       });
       try {
         payload = await readUsage({
-          ...(scenario.key ? { key: scenario.key } : { agentScope: "all" }),
+          ...(filters.key ? {} : { agentScope: "all" }),
           range: "all",
-          limit: scenario.selected.length,
-          includeContextWeight: scenario.includeContextWeight,
-          creatorKey: scenario.creatorKey,
-          projection: scenario.projection,
+          limit: selected.length,
+          includeContextWeight,
+          ...filters,
         });
       } finally {
         for (const transfer of transfers) {
           transfer.mockRestore();
         }
       }
-      const matches = scenario.key
-        ? scenario.selected
-        : scenario.creatorKey
-          ? adaFixtures
-          : fixtures;
+      const matches = filters.key ? selected : filters.creatorKey ? adaFixtures : fixtures;
       expect(payload).toMatchObject({
-        sessions: scenario.selected.map((fixture) => ({
+        sessions: selected.map((fixture) => ({
           key: fixture.key,
           agentId: fixture.agentId,
           sessionId: fixture.sessionId,
@@ -546,15 +456,15 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
           updatedAt: fixture.updatedAt,
           usage: { totalTokens: fixture.tokens, totalCost: 0.01 },
           hasContextWeight: Boolean(fixture.report),
-          ...(scenario.includeContextWeight ? { contextWeight: fixture.report ?? null } : {}),
+          ...(includeContextWeight ? { contextWeight: fixture.report ?? null } : {}),
         })),
         totals: { totalTokens: matches.reduce((total, fixture) => total + fixture.tokens, 0) },
         aggregates: { sessionCount: matches.length },
       });
-      if (!scenario.includeContextWeight) {
+      if (!includeContextWeight) {
         expect(JSON.stringify(payload)).not.toContain('"contextWeight":');
       }
-      const emittedPrompts = new Set(scenario.selected.map((fixture) => fixture.promptMarker));
+      const emittedPrompts = new Set(selected.map((fixture) => fixture.promptMarker));
       expect
         .soft(
           [...transferredPrompts].filter((marker) => !emittedPrompts.has(marker)),
@@ -708,13 +618,8 @@ it.each(["direct owner", "compressed history", "current JSONL"])(
       const secondId = "family-second";
       const currentId = currentArtifact ? archiveManager.getSessionId() : "family-current";
       const timestamp = Date.now();
-      const scopeFor = (agentId: string, sessionKey: string) => ({
-        agentId,
-        sessionKey,
-        storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
-      });
-      const mainScope = scopeFor("main", mainKey);
-      const opusScope = scopeFor("opus", opusKey);
+      const mainScope = sessionScope(state, "main", mainKey);
+      const opusScope = sessionScope(state, "opus", opusKey);
       const writeArtifact = async (tokens: number) => {
         archiveManager.appendMessage(usageMessage(tokens, timestamp));
         const content = [archiveManager.getHeader(), ...archiveManager.getEntries()]
@@ -746,14 +651,7 @@ it.each(["direct owner", "compressed history", "current JSONL"])(
           await writeArtifact(tokens);
           continue;
         }
-        await persistSessionTranscriptTurn(
-          { ...scope, sessionId },
-          {
-            cwd: state.workspaceDir,
-            updateMode: "none",
-            messages: [{ message: usageMessage(tokens, timestamp), now: timestamp }],
-          },
-        );
+        await writeUsage({ ...scope, sessionId }, state.workspaceDir, tokens, timestamp);
       }
       const current = await upsertSessionEntryCore(mainScope, {
         sessionId: currentId,
@@ -766,7 +664,7 @@ it.each(["direct owner", "compressed history", "current JSONL"])(
       }
       if (directOwner) {
         // Exact-run continuation nodes retain an instance while their logical root rotates.
-        await upsertSessionEntryCore(scopeFor("main", directKey), {
+        await upsertSessionEntryCore(sessionScope(state, "main", directKey), {
           sessionId: firstId,
           label: "retained run",
           updatedAt: timestamp,
@@ -789,12 +687,7 @@ it.each(["direct owner", "compressed history", "current JSONL"])(
           await loadSessionCostSummary({ agentId, sessionId, sessionFile, config });
         }
       }
-      await loadSessionCostSummary({
-        agentId: mainScope.agentId,
-        sessionId: currentId,
-        sessionTarget: { ...mainScope, sessionId: currentId },
-        config,
-      });
+      await warmTarget(mainScope, currentId);
 
       for (const specificKey of [undefined, mainKey]) {
         const result = await readUsage({
@@ -813,20 +706,20 @@ it.each(["direct owner", "compressed history", "current JSONL"])(
           sessionId: currentId,
           scope: "family",
           includedSessionIds: directOwner ? [currentId, secondId] : [currentId, firstId, secondId],
-          usage: expect.objectContaining({ totalTokens: mainTokens }),
+          usage: { totalTokens: mainTokens },
         });
         if (!specificKey) {
           expect(result.sessions.find(({ key }) => key === opusKey)).toMatchObject({
             key: opusKey,
             agentId: "opus",
             sessionId: firstId,
-            usage: expect.objectContaining({ totalTokens: 100 }),
+            usage: { totalTokens: 100 },
           });
           if (directOwner) {
             expect(result.sessions.find(({ key }) => key === directKey)).toMatchObject({
               agentId: "main",
               sessionId: firstId,
-              usage: expect.objectContaining({ totalTokens: 10 }),
+              usage: { totalTokens: 10 },
             });
           }
         }

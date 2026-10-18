@@ -1,8 +1,9 @@
-import { createEffect, createMemo, onCleanup, untrack, type Accessor } from "solid-js";
+import { createEffect, createMemo, onCleanup, type Accessor } from "solid-js";
 import { retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 
-export type IdentityAvatarImageProps = {
-  view: { imageUrl: string | Promise<string | null> | null; sourceUrl?: string };
+type IdentityAvatarImageProps = {
+  view: { imageUrl: string | Promise<string | null> | null };
   fallbackSelector: string;
   class?: string;
   alt?: string;
@@ -10,10 +11,10 @@ export type IdentityAvatarImageProps = {
   onImageError?: () => void;
 };
 
-export function setIdentityAvatarState(
-  element: Element,
-  state: "none" | "pending" | "loaded" | "failed",
-) {
+function setIdentityAvatarState(element: Element, state: "none" | "pending" | "loaded" | "failed") {
+  if (element.getAttribute("data-avatar-state") === state) {
+    return;
+  }
   element.setAttribute("data-avatar-state", state);
   element.classList.toggle("is-pending", state === "pending");
   element.classList.toggle("is-fallback", state === "none" || state === "failed");
@@ -38,12 +39,12 @@ export function identityAvatarState(
   };
 }
 
-/** Shared by native JSX and the Lit adapter; the existing loader owns all image resources. */
-export function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
+/** The existing loader owns image resources; this binding owns DOM state and events. */
+export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
   let image: HTMLImageElement;
   let release: (() => void) | undefined;
   const state = (value: "pending" | "loaded" | "failed") => {
-    const frame = image.closest(untrack(() => input().fallbackSelector));
+    const frame = image.closest(props.fallbackSelector);
     if (frame) {
       setIdentityAvatarState(frame, value);
     }
@@ -51,10 +52,10 @@ export function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps
   const load = () => state("loaded");
   const error = () => {
     state("failed");
-    input().onImageError?.();
+    props.onImageError?.();
   };
   // Keep the pending resource opaque: returning its Promise would make this an async memo.
-  const source = createMemo(() => ({ result: input().view.imageUrl }), {
+  const source = createMemo(() => ({ result: props.view.imageUrl }), {
     equals: (previous, next) => previous.result === next.result,
   });
   createEffect(source, ({ result }) => {
@@ -66,56 +67,47 @@ export function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps
       if (!active) {
         return;
       }
-      if (image.getAttribute("src") !== url || !url) {
+      if (!url || image.getAttribute("src") !== url) {
         state(url ? "pending" : "failed");
+        if (url) {
+          image.setAttribute("src", url);
+        } else {
+          image.removeAttribute("src");
+        }
       }
-      if (url) {
-        image.setAttribute("src", url);
-      } else {
-        image.removeAttribute("src");
-      }
-      // Lit can supply an image before inserting it into its wrapper; cached decodes emit no event.
-      queueMicrotask(() =>
-        untrack(() => {
-          if (
-            active &&
-            url &&
-            image.getAttribute("src") === url &&
-            image.complete &&
-            image.naturalWidth > 0
-          ) {
-            load();
-          }
-        }),
-      );
+      // Refs run before their wrapper is inserted; cached decodes emit no event.
+      queueMicrotask(() => {
+        if (
+          active &&
+          url &&
+          image.getAttribute("src") === url &&
+          image.complete &&
+          image.naturalWidth > 0
+        ) {
+          load();
+        }
+      });
     };
     if (typeof result === "string" || result === null) {
       apply(result);
     } else {
       image.removeAttribute("src");
       state("pending");
-      void result.then((url) => untrack(() => apply(url)));
+      void result.then(apply);
     }
     return () => {
       active = false;
     };
   });
-  onCleanup(() => {
-    image.removeEventListener("load", load);
-    image.removeEventListener("error", error);
-    release?.();
-  });
-  return (element: HTMLImageElement) => {
-    image = element;
-    image.addEventListener("load", load);
-    image.addEventListener("error", error);
-  };
-}
-
-export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
+  // Retired image nodes can still emit errors after a replacement owns the avatar.
+  const cleanup = [() => release?.()];
+  onCleanup(() => cleanup.forEach((stop) => stop()));
   return (
     <img
-      ref={bindIdentityAvatarImage(() => props)}
+      ref={(element) => {
+        image = element;
+        cleanup.push(listen(image, "load", load), listen(image, "error", error));
+      }}
       class={props.class}
       alt={props.alt ?? ""}
       aria-hidden={props.ariaHidden ? "true" : undefined}

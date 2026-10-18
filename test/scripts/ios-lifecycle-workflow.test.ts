@@ -28,7 +28,14 @@ function isTestCommand(command: Command) {
   );
 }
 
-type Step = { id?: string; name?: string; run?: string; if?: string };
+type Step = {
+  id?: string;
+  name?: string;
+  run?: string;
+  if?: string;
+  "continue-on-error"?: boolean;
+  "timeout-minutes"?: number;
+};
 const workflow: {
   jobs: Record<
     string,
@@ -57,6 +64,88 @@ const configureStep = workflow.jobs["ios-build"]?.steps?.find(
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+describe("iOS incremental build-cache admission", () => {
+  it("reads only current main-tier products and publishes only after successful scheduled main tests", () => {
+    const step = (name: string) => {
+      const found = workflow.jobs["ios-build"]?.steps?.find((candidate) => candidate.name === name);
+      if (!found) {
+        throw new Error(`Missing iOS cache step: ${name}`);
+      }
+      return found;
+    };
+    const restore = step("Restore iOS test build products");
+    const record = step("Record iOS build-cache input metadata");
+    const save = step("Save iOS test build products");
+    const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+      eventName: "schedule",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      ref: "refs/heads/main",
+      matrix: { phase: "tests" },
+      env: { IOS_MAIN_TIER: "true" },
+      preflightOutputs: { cache_mode: "restore", cache_write_allowed: "true" },
+      steps: {
+        "ios-cache-inputs": { outputs: { xcode: "toolchain" } },
+        "ios-build-cache": {
+          outputs: { "cache-primary-key": "native-inputs", "cache-hit": "false" },
+        },
+        "record-ios-build-cache-metadata": { outputs: {}, outcome: "success" as const },
+      },
+    };
+    const selected = (owner: Step, overrides: Partial<typeof context> = {}) =>
+      evaluateWorkflowExpression(`\${{ ${owner.if} }}`, { ...context, ...overrides });
+    expect(selected(restore)).toBe(true);
+    expect(selected(record)).toBe(true);
+    expect(selected(save)).toBe(true);
+    for (const overrides of [
+      { matrix: { phase: "smoke" } },
+      { env: { IOS_MAIN_TIER: "false" } },
+      { preflightOutputs: { cache_mode: "off", cache_write_allowed: "true" } },
+      { steps: { ...context.steps, "ios-cache-inputs": { outputs: { xcode: "" } } } },
+    ]) {
+      expect(selected(restore, overrides)).toBe(false);
+    }
+    expect(
+      selected(save, {
+        preflightOutputs: { cache_mode: "restore", cache_write_allowed: "false" },
+      }),
+    ).toBe(false);
+    expect(selected(record, { eventName: "pull_request" })).toBe(false);
+    expect(selected(record, { ref: "refs/heads/feature" })).toBe(false);
+    expect(
+      selected(record, {
+        preflightOutputs: { cache_mode: "restore", cache_write_allowed: "false" },
+      }),
+    ).toBe(false);
+    for (const outputs of [
+      { "cache-primary-key": "", "cache-hit": "false" },
+      { "cache-primary-key": "native-inputs", "cache-hit": "true" },
+    ]) {
+      expect(
+        selected(record, { steps: { ...context.steps, "ios-build-cache": { outputs } } }),
+      ).toBe(false);
+    }
+    expect(evaluateWorkflowExpression(`\${{ ${record.if} }}`, { ...context, failed: true })).toBe(
+      false,
+    );
+    expect(
+      selected(save, {
+        steps: {
+          ...context.steps,
+          "record-ios-build-cache-metadata": { outputs: {}, outcome: "failure" },
+        },
+      }),
+    ).toBe(false);
+    for (const [owner, minutes] of [
+      [record, 1],
+      [save, 3],
+    ] as const) {
+      expect(owner["continue-on-error"]).toBe(true);
+      expect(owner["timeout-minutes"]).toBe(minutes);
+    }
+  });
+});
+
 function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<string, string> = {}) {
   const root = tempDirs.make("openclaw-watch-workflow-");
   const bin = path.join(root, "bin");
@@ -67,6 +156,10 @@ function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<strin
   copyFileSync("scripts/lib/swift-toolchain.sh", path.join(harnessLib, "swift-toolchain.sh"));
   copyFileSync("scripts/lib/ci-ios-smoke-plan.mjs", path.join(harnessLib, "ci-ios-smoke-plan.mjs"));
   copyFileSync("scripts/ci-xcodebuild.py", path.join(harnessLib, "..", "ci-xcodebuild.py"));
+  copyFileSync(
+    "scripts/swift-build-cache-metadata.py",
+    path.join(harnessLib, "..", "swift-build-cache-metadata.py"),
+  );
   copyFileSync("scripts/ci-collect-checks.sh", path.join(harnessLib, "..", "ci-collect-checks.sh"));
   mkdirSync(product, { recursive: true });
   const runner = path.join(root, "tools.mjs");
@@ -192,6 +285,7 @@ exec '${python.stdout.trim()}' "$@"
       IOS_SIMULATOR_SELECTION: JSON.stringify(resolveIosSimulatorTestSelection(null)),
       IOS_CI_PHASE: "smoke",
       IOS_MAIN_TIER: "false",
+      IOS_FROZEN_TARGET: "false",
       HISTORICAL_TARGET: "false",
       IOS_DEST: "",
       XCODE_XCCONFIG_FILE: "",
@@ -210,6 +304,7 @@ exec '${python.stdout.trim()}' "$@"
     commands,
     product,
     summary: readFileSync(summaryFile, "utf8"),
+    environment: readFileSync(environmentFile, "utf8"),
   };
 }
 
@@ -337,12 +432,15 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
     "executes cleanup and sibling suites with normal Debug signing: %s, main=%s",
     (phase, main) => {
       const manual = phase === "tests" && main === "false";
-      const { result, commands } = runSimulatorStep(
+      const { result, commands, environment } = runSimulatorStep(
         "voice",
         [configureStep, prepareStep, buildStep, voiceStep, ...(manual ? [] : [iosStep])],
         { IOS_CI_PHASE: phase, IOS_MAIN_TIER: main },
       );
       expect(result.status, result.stderr).toBe(0);
+      expect(environment.includes("IOS_TEST_BUILD_PREPARED=true")).toBe(
+        phase === "smoke" || main === "true",
+      );
       const appBuild = commands.find((command) => command.tool === "pnpm");
       if (manual) {
         expect(appBuild?.destination).toBe("");
@@ -375,11 +473,7 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
             ["build", "build-for-testing", "test", "test-without-building"].includes(arg),
           ),
         ),
-      ).toEqual(
-        phase === "smoke"
-          ? ["build-for-testing", "test-without-building", "test-without-building"]
-          : ["build", "test", "test"],
-      );
+      ).toEqual(["build-for-testing", "test-without-building", "test-without-building"]);
       for (const command of builds) {
         expect(command.args).toEqual(expect.arrayContaining(["-configuration", "Debug"]));
         expect(command.args).toContain(appBuild?.destination);
@@ -650,7 +744,7 @@ describe.skipIf(process.platform === "win32")("iOS selected simulator workflow",
   });
 });
 
-function runRestartProof(mode = "ready", format = 1) {
+function runRestartProof(mode = "ready", format = 1, prepared = false) {
   const root = tempDirs.make("openclaw-access-restart-");
   const result = spawnSync(
     "python3",
@@ -659,7 +753,8 @@ function runRestartProof(mode = "ready", format = 1) {
       "-c",
       String.raw`
 import contextlib, datetime, importlib.util, io, json, os, pathlib, plistlib, subprocess, sys
-helper, root, mode, format = sys.argv[1:]
+helper, root, mode, format, prepared = sys.argv[1:]
+os.environ["IOS_TEST_BUILD_PREPARED"] = prepared
 format = int(format)
 root = pathlib.Path(root)
 os.chdir(root)
@@ -802,6 +897,7 @@ print(json.dumps({"error": error, "commands": commands, "runs": runs, "bootTimeo
       root,
       mode,
       String(format),
+      String(prepared),
     ],
     { encoding: "utf8", timeout: 5_000 },
   );
@@ -824,10 +920,18 @@ print(json.dumps({"error": error, "commands": commands, "runs": runs, "bootTimeo
 }
 
 describe("iOS Access process restart proof", () => {
-  it.each([0, 1, 2])("preserves format %s for two fixed process repetitions", (format) => {
+  it.each([
+    { format: 0, prepared: false },
+    { format: 1, prepared: false },
+    { format: 2, prepared: false },
+    { format: 0, prepared: true },
+    { format: 1, prepared: true },
+    { format: 2, prepared: true },
+  ])("preserves two fixed process repetitions (%j)", ({ format, prepared }) => {
     const { error, commands, runs, bootTimeouts, receiptRetained } = runRestartProof(
       "ready",
       format,
+      prepared,
     );
     expect(error).toBeNull();
     expect(runs).toHaveLength(1);
@@ -865,7 +969,9 @@ describe("iOS Access process restart proof", () => {
         "-only-testing:OpenClawTests/GatewayAccessRestartTests/testAcknowledgedSignOutSurvivesProcessRestart",
       ]),
     );
-    expect(commands.filter((args) => args.includes("build-for-testing"))).toHaveLength(1);
+    expect(commands.filter((args) => args.includes("build-for-testing"))).toHaveLength(
+      prepared ? 0 : 1,
+    );
     for (const operation of [
       "install",
       "uninstall",

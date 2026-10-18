@@ -1,7 +1,7 @@
+import { createSignal, onCleanup } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
-import type { PanelLifecycleController, SolidPanelController } from "../solid-panel-controller.ts";
-import type { DesktopPanelState } from "./desktop-panel-state.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 
 registerDesktopEnglish();
 
@@ -12,116 +12,91 @@ type PictureInPictureWindow = Window & {
   };
 };
 
-type DesktopPictureInPictureHost = Pick<
-  SolidPanelController,
-  "addController" | "requestUpdate" | "isConnected" | "ownerDocument" | "renderRoot"
-> & {
-  available: boolean;
-  embedded: boolean;
-  presented: boolean;
-  documentMode: boolean;
-};
-
 /** View-only pixels from the existing RFB connection; never owns a socket or input. */
-export class DesktopPictureInPicture implements PanelLifecycleController {
-  errorText: string | null = null;
-  private popup: Window | null = null;
-  pending = false;
-  private generation = 0;
-  private stopMirror: (() => void) | null = null;
-
-  constructor(
-    private readonly host: DesktopPictureInPictureHost,
-    private readonly state: () => DesktopPanelState,
-  ) {
-    host.addController(this);
-  }
-
-  hostDisconnected(): void {
-    this.close();
-  }
-
-  private get opener(): PictureInPictureWindow | null {
-    return this.host.ownerDocument.defaultView;
-  }
-
-  private source(): HTMLCanvasElement | null {
-    return this.host.available &&
-      this.state() === "connected" &&
-      (!this.host.embedded || this.host.presented)
-      ? this.host.renderRoot.querySelector<HTMLCanvasElement>(".desktop-surface canvas")
-      : null;
-  }
-
-  get active(): boolean {
-    return this.popup !== null;
-  }
-
-  get supported(): boolean {
-    return (
-      this.opener?.isSecureContext === true &&
-      typeof this.opener.documentPictureInPicture?.requestWindow === "function"
-    );
-  }
-
-  close(): void {
-    ++this.generation;
-    this.stopMirror?.();
-    this.stopMirror = null;
-    const popup = this.popup;
-    this.popup = null;
+export function createDesktopPictureInPicture(
+  host: Pick<HTMLElement, "ownerDocument" | "isConnected">,
+  readSource: () => HTMLCanvasElement | null,
+) {
+  const [feedback, setFeedback] = createSignal<{
+    active?: boolean;
+    pending?: boolean;
+    errorText?: string;
+  }>({});
+  let activePopup: Window | null = null;
+  let pending: { cancelled: boolean } | undefined;
+  let stopMirror: (() => void) | null = null;
+  const opener = (): PictureInPictureWindow | null => host.ownerDocument.defaultView;
+  const supported = () =>
+    opener()?.isSecureContext === true &&
+    typeof opener()?.documentPictureInPicture?.requestWindow === "function";
+  const release = () => {
+    stopMirror?.();
+    stopMirror = null;
+    const popup = activePopup;
+    activePopup = null;
     popup?.close();
-    this.errorText = null;
-    this.host.requestUpdate();
-  }
-
-  async toggle(): Promise<void> {
-    if (this.popup) {
-      this.close();
+  };
+  onCleanup(() => {
+    pending = undefined;
+    release();
+  });
+  const close = () => {
+    // A cancelled native request stays busy until the browser settles it.
+    if (pending) {
+      pending.cancelled = true;
+    }
+    release();
+    setFeedback({ pending: Boolean(pending) });
+  };
+  const toggle = async () => {
+    if (activePopup) {
+      close();
       return;
     }
-    const opener = this.opener;
-    const api = opener?.documentPictureInPicture;
-    const source = this.source();
-    if (this.pending || !opener?.isSecureContext || !api || !source || !this.host.isConnected) {
+    const window = opener();
+    const api = window?.documentPictureInPicture;
+    const source = readSource();
+    if (pending || !window?.isSecureContext || !api || !source || !host.isConnected) {
       return;
     }
-    const generation = ++this.generation;
-    this.pending = true;
-    this.errorText = null;
-    this.host.requestUpdate();
+    const request = { cancelled: false };
+    pending = request;
+    setFeedback({ pending: true });
     let popup: Window | null = null;
+    let errorText: string | undefined;
     try {
       // Must happen directly in the click's user activation, before any await.
       popup = await api.requestWindow({ width: 640, height: 400 });
-      // The user can close the native window before the request promise settles.
       if (
         popup.closed ||
-        generation !== this.generation ||
-        !this.host.isConnected ||
-        this.source() !== source
+        pending !== request ||
+        request.cancelled ||
+        !host.isConnected ||
+        readSource() !== source
       ) {
         popup.close();
         return;
       }
-      this.popup = popup;
-      this.startMirror(popup, source);
+      activePopup = popup;
+      startMirror(popup, source);
     } catch {
       popup?.close();
-      if (generation === this.generation) {
-        this.close();
-        this.errorText = t("desktop.errors.pictureInPictureFailed");
+      if (pending === request && !request.cancelled) {
+        release();
+        errorText = t("desktop.errors.pictureInPictureFailed");
       }
     } finally {
-      this.pending = false;
-      this.host.requestUpdate();
+      if (pending === request) {
+        pending = undefined;
+        setFeedback({ active: activePopup !== null, errorText });
+      }
     }
-  }
+  };
 
-  private startMirror(popup: Window, source: HTMLCanvasElement): void {
+  const startMirror = (popup: Window, source: HTMLCanvasElement) => {
     const doc = popup.document;
     doc.title = t("desktop.pictureInPictureTitle");
-    doc.documentElement.lang = this.host.ownerDocument.documentElement.lang;
+    doc.documentElement.lang = host.ownerDocument.documentElement.lang;
     const canvas = doc.createElement("canvas");
     canvas.setAttribute("role", "img");
     canvas.setAttribute("aria-label", t("desktop.pictureInPictureTitle"));
@@ -135,7 +110,7 @@ export class DesktopPictureInPicture implements PanelLifecycleController {
     if (!context) {
       throw new Error("Picture-in-Picture canvas is unavailable");
     }
-    const openerRoot = this.host.ownerDocument.documentElement;
+    const openerRoot = host.ownerDocument.documentElement;
     const syncTheme = () => {
       const style = getComputedStyle(openerRoot);
       doc.documentElement.style.setProperty("--bg", style.getPropertyValue("--bg"));
@@ -153,23 +128,23 @@ export class DesktopPictureInPicture implements PanelLifecycleController {
     let frame = 0;
     let lastPaint = -Infinity;
     const onClose = () => {
-      if (this.popup === popup) {
-        this.close();
+      if (activePopup === popup) {
+        close();
       }
     };
-    popup.addEventListener("pagehide", onClose, { once: true });
-    this.stopMirror = () => {
+    const stopClose = listen(popup, "pagehide", onClose, { once: true });
+    stopMirror = () => {
       themeObserver.disconnect();
       popup.cancelAnimationFrame(frame);
-      popup.removeEventListener("pagehide", onClose);
+      stopClose();
       canvas.remove();
     };
     const paint = (now: number) => {
-      if (this.popup !== popup) {
+      if (activePopup !== popup) {
         return;
       }
-      if (popup.closed || this.source() !== source || !source.isConnected) {
-        this.close();
+      if (popup.closed || readSource() !== source || !source.isConnected) {
+        close();
         return;
       }
       try {
@@ -194,11 +169,14 @@ export class DesktopPictureInPicture implements PanelLifecycleController {
         frame = popup.requestAnimationFrame(paint);
       } catch {
         // Never leave a frozen image presented as a connected viewer.
-        this.close();
-        this.errorText = t("desktop.errors.pictureInPictureFailed");
-        this.host.requestUpdate();
+        close();
+        setFeedback({ errorText: t("desktop.errors.pictureInPictureFailed") });
       }
     };
     frame = popup.requestAnimationFrame(paint);
-  }
+  };
+
+  return { feedback, supported, close, toggle };
 }
+
+export type DesktopPictureInPicture = ReturnType<typeof createDesktopPictureInPicture>;

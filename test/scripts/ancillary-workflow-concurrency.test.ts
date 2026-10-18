@@ -61,6 +61,28 @@ const WORKFLOWS: {
     manual: { mode: "same-SHA cancels", group: `shared-openclawkit-periphery-${"a".repeat(40)}` },
   },
   {
+    file: ".github/workflows/node-runtime-conformance.yml",
+    prGroup: "node-runtime-conformance-pull_request-123",
+    convertToDraft: true,
+    manual: {
+      mode: "same-SHA cancels",
+      group: `node-runtime-conformance-workflow_dispatch-${"a".repeat(40)}`,
+    },
+  },
+  {
+    file: ".github/workflows/linux-app.yml",
+    prGroup: "linux-app-Linux App-123",
+    convertToDraft: true,
+    manual: { mode: "same-SHA cancels", group: `linux-app-Linux App-${"a".repeat(40)}` },
+  },
+  {
+    file: ".github/workflows/website-installer-sync.yml",
+    prGroup: "website-installer-sync-refs/pull/123/merge",
+    convertToDraft: true,
+    manual: { mode: "isolated per-run", group: "website-installer-sync-201" },
+    manualAdmission: "sync-website",
+  },
+  {
     file: ".github/workflows/opengrep-precise.yml",
     prGroup: "opengrep-pr-diff-OpenGrep — PR Diff-123",
     manual: { mode: "absent" },
@@ -87,7 +109,14 @@ type Job = {
   if?: string | boolean;
   concurrency?: Concurrency;
   outputs?: Record<string, string>;
-  steps: { id?: string; name?: string; if?: string; uses?: string; with?: { script?: string } }[];
+  steps: {
+    id?: string;
+    name?: string;
+    if?: string;
+    uses?: string;
+    env?: Record<string, string>;
+    with?: { script?: string };
+  }[];
 };
 type Concurrency = { group: string; "cancel-in-progress": string | boolean };
 type Workflow = {
@@ -199,7 +228,7 @@ function workflowConcurrency(workflow: Workflow): Concurrency {
 function expression(source: string, context: Record<string, unknown>): unknown {
   return runInNewContext(
     source.replace(
-      /\b(?:github|needs|steps|vars)(?:\.[A-Za-z_][\w-]*)+/gu,
+      /\b(?:github|needs|steps|vars|inputs)(?:\.[A-Za-z_][\w-]*)+/gu,
       (reference) => `lookup(${JSON.stringify(reference)})`,
     ),
     {
@@ -256,7 +285,7 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
   let checkouts = 0;
   const scope = workflow.jobs.scope;
   if (scope) {
-    const context = { github, needs, vars };
+    const context = { github, needs, vars, steps: { checkout: { outcome: "success" } } };
     jobs.scope = Boolean(evaluate(scope.if ?? true, context, true));
     const outputs: Record<string, string> = {};
     if (jobs.scope) {
@@ -277,7 +306,14 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
         await runInNewContext(`(async () => {\n${step.with.script}\n})()`, {
           require: createRequire(import.meta.url),
           context: { eventName: github.event_name, payload: github.event },
+          process: {
+            env: Object.fromEntries(
+              Object.entries(step.env ?? {}).map(([key, value]) => [key, evaluate(value, context)]),
+            ),
+          },
           core: {
+            info() {},
+            warning() {},
             setOutput: (key: string, value: string) => {
               outputs[key] = value;
             },
@@ -285,7 +321,13 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
           exec: {
             getExecOutput: async (command: string, args: string[]) => {
               expect(command).toBe("git");
-              expect(args.slice(0, 5)).toEqual(["diff", "--quiet", "HEAD^1", "HEAD", "--"]);
+              expect(args.filter((arg) => arg !== "--no-renames").slice(0, 5)).toEqual([
+                "diff",
+                "--quiet",
+                "HEAD^1",
+                "HEAD",
+                "--",
+              ]);
               diffCalls++;
               return { exitCode: 1 }; // A scoped change; path selection has its own suite.
             },
@@ -658,7 +700,7 @@ describe("Auto response admission", () => {
   );
 });
 
-it("isolates supported useful, passive, manual and push events across all nine workflows", () => {
+it("isolates supported useful, passive, manual and push events across the tracked workflows", () => {
   for (const event of ["ready_for_review", "opened", "workflow_dispatch", "push"] as const) {
     const groups = WORKFLOWS.flatMap(({ file }) => {
       const workflow = parse(readFileSync(file, "utf8")) as Workflow;

@@ -7,6 +7,10 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  clearMemoryPluginState,
+  registerTestMemoryPromptBuilder,
+} from "../../../plugins/memory-state.test-fixtures.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
@@ -15,6 +19,7 @@ import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
+import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 // Prompt assembly consumes a prepared provider handle; discovery belongs to attempt setup.
@@ -58,6 +63,7 @@ afterEach(() => {
     admission.close();
   }
   vi.restoreAllMocks();
+  clearMemoryPluginState();
   providerRegistryMocks.isPluginProvidersLoadInFlight.mockClear();
   providerRegistryMocks.resolvePluginProvidersCore.mockClear();
 });
@@ -71,6 +77,7 @@ async function preparePermissionPrompt(
   session?: Pick<EmbeddedRunAttemptParams, "sessionKey" | "sandboxSessionKey">,
   skills?: { prompt: string; toolsAllow?: string[]; initialToolNames?: string[] },
   webSearchUnconfigured?: () => boolean,
+  attemptOverrides?: Partial<EmbeddedRunAttemptParams>,
 ) {
   const tool = (name: string): AgentTool => ({
     name,
@@ -110,6 +117,8 @@ async function preparePermissionPrompt(
     toolsAllow: skills?.toolsAllow,
     sourceReplyDeliveryMode:
       requireExplicitMessageTarget === undefined ? undefined : "message_tool_only",
+    requireExplicitMessageTarget,
+    ...attemptOverrides,
   } as EmbeddedRunAttemptParams;
   const capabilityToolNames = new Set(tools.map(({ name }) => name));
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
@@ -124,7 +133,6 @@ async function preparePermissionPrompt(
       workspaceNotes: [],
     },
     capabilityToolNames,
-    requireExplicitMessageTarget,
     effectiveTools: skills?.initialToolNames
       ? tools.filter(({ name }) => skills.initialToolNames?.includes(name))
       : tools,
@@ -413,6 +421,34 @@ describe("buildAttemptSystemPrompt", () => {
     },
   );
 
+  it("leaves project annotation guidance to the selected memory plugin", async () => {
+    const seenProjectKeys: Array<string | undefined> = [];
+    registerTestMemoryPromptBuilder((params) => {
+      seenProjectKeys.push(params.projectKey);
+      return ["## Provider Memory", "PROVIDER_MEMORY_MARKER"];
+    });
+    const { prepared } = await preparePermissionPrompt(
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        preparedModelRuntime: {
+          projectKey: "github.com/acme/Alpha",
+          activeProjectKeys: [],
+          configuredModelAliases: [],
+          isCurrent: () => true,
+        } as unknown as EmbeddedRunAttemptParams["preparedModelRuntime"],
+      },
+    );
+
+    expect(seenProjectKeys).toContain("github.com/acme/Alpha");
+    expect(prepared.systemPromptText).toContain("PROVIDER_MEMORY_MARKER");
+    expect(prepared.systemPromptText).not.toContain("<!-- project:");
+  });
+
   it("filters first-turn curated context to global and active-project entries", async () => {
     const result = await buildAttemptSystemPrompt({
       isRawModelRun: false,
@@ -526,14 +562,55 @@ describe("buildAttemptSystemPrompt", () => {
   });
 });
 
-describe("embedded prepared message-target guidance", () => {
-  it.each([false, true])(
-    "carries the prepared target requirement (%s) through prompt assembly",
-    async (required) => {
-      const { prepared } = await preparePermissionPrompt(false, undefined, required);
-      expect(prepared.systemPromptText).toContain(
-        required ? "target required this turn" : "current source is default target",
-      );
-    },
-  );
+describe("embedded session prompt delivery", () => {
+  // Provider prefix caches need one system prompt per session; turn delivery rules
+  // that differ (heartbeats, completions) travel in the turn's runtime context.
+  it.each([
+    [
+      "source-only completion",
+      {
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+        requireExplicitMessageTarget: false,
+      },
+    ],
+    [
+      "explicit-target heartbeat",
+      { sourceReplyDeliveryMode: "message_tool_only" as const, requireExplicitMessageTarget: true },
+    ],
+  ])("keeps the user turn's system prompt on a %s turn", async (_kind, turn) => {
+    const user = await preparePermissionPrompt(
+      false,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        sourceReplyDeliveryMode: "automatic",
+      },
+    );
+    const synthetic = await preparePermissionPrompt(
+      false,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      turn,
+    );
+    expect(synthetic.prepared.systemPromptText).toBe(user.prepared.systemPromptText);
+    expect(
+      buildTurnDeliveryContextFragments({
+        sessionKey: synthetic.attempt.sessionKey,
+        sourceReplyDeliveryMode: turn.sourceReplyDeliveryMode,
+        requireExplicitMessageTarget: turn.requireExplicitMessageTarget,
+      })
+        .map((fragment) => fragment.text)
+        .join("\n"),
+    ).toMatch(
+      turn.requireExplicitMessageTarget
+        ? /final text is private[\s\S]*target required this turn/u
+        : /final text is private/u,
+    );
+  });
 });

@@ -1,5 +1,4 @@
 import { closeAuthProfileUsage } from "../agents/auth-profiles/usage-lifecycle.js";
-import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { prepareSandboxRegistryClose } from "../agents/sandbox/registry-lifecycle.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { prepareWorktreeRunEndClose } from "../agents/worktrees/run-end-lifecycle.js";
@@ -89,8 +88,6 @@ export async function prepareGatewayLifecycle(params: {
     readinessEventLoopHealth,
     browserAuthRateLimiter,
     chatRunState,
-    chatAbortControllers,
-    chatQueuedTurns,
     removeChatRun,
     agentRunSeq,
     listActiveGatewayMethods,
@@ -506,8 +503,6 @@ export async function prepareGatewayLifecycle(params: {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
         preparePluginRegistryClose: () => pluginRuntime.prepareClose(),
         chatRunState,
-        chatAbortControllers,
-        chatQueuedTurns,
         restartRecoveryCandidates,
         removeChatRun,
         agentRunSeq,
@@ -520,7 +515,6 @@ export async function prepareGatewayLifecycle(params: {
         ) => {
           void nodeSendToSession(sessionKey, event, payload, opts);
         },
-        resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
         markMainSessionsAbortedForRestart: async (restart) => {
           await shutdownRuntime.markRestartAbortedMainSessions({
             cfg: getRuntimeConfig(),

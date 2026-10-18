@@ -77,7 +77,6 @@ export function SessionsCard(props: {
           <SettingsSegmented
             mode="buttons"
             variant="accent"
-            ariaPressed={false}
             class="small"
             value={props.usage.display.sessionsTab}
             onChange={(tab) => props.usage.callbacks.display.onChange({ sessionsTab: tab })}
@@ -141,11 +140,10 @@ export function SessionsCard(props: {
           </div>
         ) : (
           <div
-            class={
-              props.usage.display.sessionsTab === "recent"
-                ? "session-bars session-bars--recent"
-                : "session-bars"
-            }
+            class={[
+              "session-bars",
+              { "session-bars--recent": props.usage.display.sessionsTab === "recent" },
+            ]}
           >
             <SessionRows
               sessions={props.sessions}

@@ -11,8 +11,10 @@ import {
   isSessionAutoResetReason,
 } from "../hooks/session-auto-reset.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookSessionEndReason } from "../plugins/hook-types.js";
 import type { SessionEndTranscriptSource } from "../plugins/session-end-transcript.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
+import { runWithSessionControllerCleanup } from "../sessions/session-controller.owner-context.js";
 import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
@@ -32,16 +34,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   sessionFile?: string;
   agentId: string;
   workspaceDir?: string;
-  reason:
-    | "new"
-    | "reset"
-    | "idle"
-    | "daily"
-    | "compaction"
-    | "deleted"
-    | "shutdown"
-    | "restart"
-    | "unknown";
+  reason: PluginHookSessionEndReason;
   archivedTranscripts?: ArchivedSessionTranscript[];
   nextSessionId?: string;
   nextSessionKey?: string;
@@ -113,9 +106,12 @@ export function emitGatewaySessionEndPluginHook(params: {
         ? { available: false as const, reason: "no-stable-cutoff" as const }
         : { available: false as const, reason: "unsupported-source" as const });
   const payload = buildSessionEndHookPayload({ ...hookParams, endedTranscript });
-  void runWithGatewayDetachedWorkContinuation(async () => {
-    await hookRunner.runSessionEnd(payload.event, payload.context);
-  }, "hooks:session-end").catch((err: unknown) => {
+  // Detached hooks outlive the emitting turn and must not retain its mutation ownership.
+  void runWithSessionControllerCleanup(() =>
+    runWithGatewayDetachedWorkContinuation(async () => {
+      await hookRunner.runSessionEnd(payload.event, payload.context);
+    }, "hooks:session-end"),
+  ).catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
   });
 }
@@ -147,9 +143,11 @@ export function emitGatewaySessionStartPluginHook(params: {
     return;
   }
   const payload = buildSessionStartHookPayload({ ...params, sessionId: params.sessionId });
-  void runWithGatewayDetachedWorkContinuation(async () => {
-    await hookRunner.runSessionStart(payload.event, payload.context);
-  }, "hooks:session-start").catch((err: unknown) => {
+  void runWithSessionControllerCleanup(() =>
+    runWithGatewayDetachedWorkContinuation(async () => {
+      await hookRunner.runSessionStart(payload.event, payload.context);
+    }, "hooks:session-start"),
+  ).catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
 }

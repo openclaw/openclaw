@@ -3,7 +3,7 @@ import { Show, createEffect, createSignal, untrack, useContext } from "solid-js"
 import { Icon } from "../../../components/solid/icon.tsx";
 import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 
 export type VideoPreviewProps = {
@@ -23,7 +23,7 @@ export function MessageVideoPreview(props: VideoPreviewProps): JSX.Element {
 }
 
 function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   const [posterUrl, setPosterUrl] = createSignal<string>();
   const [failed, setFailed] = createSignal(false);
   let controller: AbortController | undefined;

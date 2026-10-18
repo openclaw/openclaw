@@ -11,6 +11,7 @@ import {
   resolveGatewayServiceDescription,
 } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
+import { assertServiceInspectionFallbackAllowed } from "./service-inspection-error.js";
 import {
   hasEnvironmentFileSource,
   hasInlineEnvironmentSource,
@@ -426,7 +427,10 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
   let existingFile: Awaited<ReturnType<typeof readSystemdEnvironmentFile>>;
   try {
     existingFile = await readSystemdEnvironmentFile(envFilePath);
-  } catch {
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
     return;
   }
   const remaining = Object.fromEntries(
@@ -522,7 +526,12 @@ export async function installSystemdService(
   const { unitPath, backedUp } = await writeSystemdUnit(args, load);
   if (
     args.warn &&
-    hasGatewayServiceLauncherOverride(await readSystemdServiceExecStart(args.env).catch(() => null))
+    hasGatewayServiceLauncherOverride(
+      await readSystemdServiceExecStart(args.env).catch((error: unknown) => {
+        assertServiceInspectionFallbackAllowed(error);
+        return null;
+      }),
+    )
   ) {
     args.warn(
       "Systemd drop-in overrides the managed service command or working directory; inspect, update, or remove the drop-in because reinstalling the base unit does not change the effective launcher.",
@@ -559,6 +568,9 @@ export async function uninstallSystemdService({
   await removeNodeSystemdManagedEnvironmentKeys(env);
   if (removed) {
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
+    // The manager keeps a deleted unit loaded until it reloads. A retry after a
+    // failed reload finds no unit file and skips this; accepted, rare.
+    await reloadSystemdUserManager(env);
   } else {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
   }

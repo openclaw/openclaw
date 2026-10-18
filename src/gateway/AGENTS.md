@@ -28,7 +28,7 @@ Gateway startup/tests needing only static descriptors must not load bundled plug
 
 - Run liveness: `src/infra/agent-run-registry.ts`; worker-turn liveness: `src/gateway/worker-environments/placement-turn-claims.ts`. Validate both at use time; HMAC, TTL, matching IDs ≠ live authority.
 - After awaits: compose all applicable live-authority assertions in owner's synchronous pre-commit guard, never after mutation.
-- Sessionless runs: retain prepared admission authority without session projection; canonical reservation owns deduplication. Source-specific RPC waits end only on that source's replay publication, never lifecycle completion/another source. Bind abort maps only for registered projected runs.
+- Sessionless runs: retain prepared admission authority without session projection; canonical reservation owns deduplication. Source-specific RPC waits end only on that source's replay publication, never lifecycle completion/another source. Cancellation targets captured controller source ownership.
 - Worker launch/recovery/reclaim/RPC: exact live placement, environment, owner epoch, placement generation, turn claim required.
 - Incompatible execution-context dialects: Reject/reprovision; never legacy payloads, local downgrade, or revived pre-restart claims.
 

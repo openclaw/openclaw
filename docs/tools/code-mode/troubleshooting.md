@@ -132,9 +132,10 @@ guest code or nested tool calls; earlier actions in the cell may have completed.
 Node worker heap exhaustion reports `runtime_unavailable` with the configured
 heap allowance and guidance to paginate results or retain less guest data.
 Check completed actions before retrying: worker termination does not undo
-dispatched tools. Worker lifecycle retirement reason `failure` records native
-worker failure, including heap exhaustion; it is separate from an ordinary
-tool rejection reported with `failurePhase: "bridge"`.
+dispatched tools. Worker lifecycle retirement reason `crash` records native
+worker errors, including heap exhaustion; `gc-thrash` identifies retirement by
+the near-limit GC watchdog. Both are separate from an ordinary tool rejection
+reported with `failurePhase: "bridge"`.
 
 JavaScript failure frames labeled `openclaw-code-mode:user.js` use line numbers
 from the submitted JavaScript, excluding internal wrappers and headless setup,
@@ -154,10 +155,10 @@ openclaw gateway
 ```
 
 For payload-shape debugging, use `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted`.
-This logs a capped, redacted JSON snapshot of the model request; use it only
-while debugging, since prompts and message text can still appear.
+This logs request shape and the complete tool-name list, without prompt,
+message, or tool content.
 
-For stream debugging, use `OPENCLAW_DEBUG_SSE=peek` to log the first five
-redacted SSE events. Code mode also rejects the final provider
+For stream debugging, use `OPENCLAW_DEBUG_SSE=events` or `peek` for timing
+diagnostics without SSE event bodies. Code mode also rejects the final provider
 payload if it does not contain exactly one `exec`, one `wait`, and only approved
 direct-only tools after the code-mode surface has activated.

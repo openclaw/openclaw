@@ -332,7 +332,7 @@ describe("Checkout chip state", () => {
     },
   );
 
-  it("shows the actual branch name and only confirms valid input", async () => {
+  it("keeps suggestion identities current and only confirms valid input", async () => {
     const onConfirm = vi.fn();
     const onPopoverShow = vi.fn();
     const onPopoverHide = vi.fn();
@@ -418,5 +418,36 @@ describe("Checkout chip state", () => {
       .querySelectorAll("input")[1]!
       .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(onConfirm).toHaveBeenCalledOnce();
+
+    const renderBranches = (names: string[]) =>
+      update({
+        ...params,
+        branches: {
+          repoRoot: "/repo",
+          branches: names.map((name) => ({ name, kind: "local" })),
+        },
+      });
+    const baseRef = container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!;
+    const keydown = (key: string) =>
+      baseRef.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    renderBranches(["main", "release"]);
+    keydown("ArrowDown");
+    renderBranches(["release", "main"]);
+    keydown("Enter");
+    expect(params.onBaseRefInput).toHaveBeenLastCalledWith("main");
+
+    keydown("ArrowDown");
+    const retired = container.querySelector<HTMLButtonElement>(
+      '[data-worktree-suggestion="release"]',
+    )!;
+    renderBranches(["main", "next"]);
+    expect(baseRef.hasAttribute("aria-activedescendant")).toBe(false);
+    vi.mocked(params.onBaseRefInput).mockClear();
+    retired.click();
+    expect(params.onBaseRefInput).not.toHaveBeenCalled();
+    keydown("ArrowDown");
+    keydown("ArrowDown");
+    keydown("Enter");
+    expect(params.onBaseRefInput).toHaveBeenCalledExactlyOnceWith("next");
   });
 });

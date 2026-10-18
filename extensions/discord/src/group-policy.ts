@@ -2,7 +2,6 @@ import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
-  scopeKey,
   type GroupToolPolicyConfig,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
@@ -14,11 +13,6 @@ import {
   findDiscordGuildPolicyKey,
   getDiscordChannelPolicyBinding,
 } from "./channel-policy-state.js";
-
-// Length-prefixed segments keep arbitrary config keys, including slashes, collision-free.
-const guildScopeKey = (guildKey: string) => scopeKey(["guild", guildKey]);
-const channelScopeKey = (guildKey: string, channelKey: string) =>
-  scopeKey(["guild", guildKey], ["channel", channelKey]);
 
 function resolveDiscordGuildKey(
   guilds: DiscordConfig["guilds"],
@@ -72,25 +66,22 @@ function resolveDiscordChannelKey(
   return groupChannel && channelEntries[channelSlug] ? channelSlug : undefined;
 }
 
-function resolveDiscordPolicyScope(params: ChannelGroupContext) {
+function resolveDiscordPolicyScope(params: ChannelGroupContext): {
+  tree: ScopeTree;
+  path: string[];
+} {
   const guilds =
     (params.accountId
       ? params.cfg.channels?.discord?.accounts?.[params.accountId]?.guilds
       : undefined) ?? params.cfg.channels?.discord?.guilds;
-  const tree: ScopeTree = { scopes: {} };
-  for (const [guildKey, guild] of Object.entries(guilds ?? {})) {
-    tree.scopes[guildScopeKey(guildKey)] = guild;
-    for (const [channelKey, channel] of Object.entries(guild.channels ?? {})) {
-      tree.scopes[channelScopeKey(guildKey, channelKey)] = channel;
-    }
-  }
   // Guild "*" is selected only after every guild candidate misses; matched guilds hide it.
   // Within the selected guild, channel fields still cascade to guild fields.
   const guildKey = resolveDiscordGuildKey(guilds, params.groupSpace, params.accountId);
-  if (!guildKey) {
-    return { tree, path: [] };
+  const guild = guildKey ? guilds?.[guildKey] : undefined;
+  if (!guildKey || !guild) {
+    return { tree: { scopes: {} }, path: [] };
   }
-  const channels = guilds?.[guildKey]?.channels;
+  const channels = guild.channels;
   let channelKey = resolveDiscordChannelKey(channels, params);
   if (channelKey !== params.groupId) {
     // Resolved name keys bind to their channel id: the bound channel keeps its entry after a
@@ -107,12 +98,10 @@ function resolveDiscordPolicyScope(params: ChannelGroupContext) {
       channelKey = undefined;
     }
   }
+  const channel = channelKey !== undefined ? channels?.[channelKey] : undefined;
   return {
-    tree,
-    path: [
-      guildScopeKey(guildKey),
-      ...(channelKey !== undefined ? [channelScopeKey(guildKey, channelKey)] : []),
-    ],
+    tree: { scopes: { guild, ...(channel ? { channel } : {}) } },
+    path: channel ? ["guild", "channel"] : ["guild"],
   };
 }
 

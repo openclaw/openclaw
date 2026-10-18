@@ -113,7 +113,7 @@ function preserveNonAutoModelOverride(target: Partial<SessionEntry>, entry: Sess
 
 function preserveUserAuthOverride(target: Partial<SessionEntry>, entry: SessionEntry): void {
   const source = resolveSessionAuthProfileOverrideSource(entry);
-  if (source === "user") {
+  if (source === "user" || source === "user-link") {
     if (entry.authProfileOverride !== undefined) {
       target.authProfileOverride = entry.authProfileOverride;
     }

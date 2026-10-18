@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { WizardStepControls } from "../pages/model-setup/wizard-step-controls.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { LinkReaderHovercardProvider as LinkHovercardProvider } from "./link-reader-hovercard.ts";
@@ -12,6 +11,7 @@ import {
   LINK_READER_HOVERCARD_PROVIDER_TAG as LINK_HOVERCARD_TAG,
   resolveHoverPreviewTarget,
 } from "./link-reader-target.ts";
+import { WizardStepControls } from "./wizard-step-controls.tsx";
 
 function linkHovercardUrl(anchor: HTMLAnchorElement) {
   const owner = anchor.closest<LinkHovercardProvider>(LINK_HOVERCARD_TAG)!;
@@ -242,7 +242,7 @@ describe("generic link hovercards", () => {
     expect(view.request).toHaveBeenCalledOnce();
   });
 
-  it.each(["config", "client", "generation", "scope", "href", "removed", "hidden", "file"])(
+  it.each(["config", "client", "scope", "href", "removed", "hidden", "file"])(
     "retires pending metadata when %s changes",
     async (change) => {
       const view = fixture();
@@ -255,9 +255,6 @@ describe("generic link hovercards", () => {
       }
       if (change === "client") {
         view.context.gateway.snapshot.client = { ...view.client };
-      }
-      if (change === "generation") {
-        view.client.connectionGeneration++;
       }
       if (change === "scope") {
         view.client.recoveryScope = "next";
@@ -283,6 +280,28 @@ describe("generic link hovercards", () => {
       expect(view.anchor.hasAttribute("aria-controls")).toBe(false);
     },
   );
+
+  it("keeps the page preview across a transport blip but retires it after an account change", async () => {
+    const view = fixture();
+    await hover(view.anchor);
+    const original = card();
+    view.client.connected = false;
+    view.client.connectionGeneration++;
+    view.context.gateway.snapshot.phase = "reconnecting";
+    view.notify();
+    expect(card()).toBe(original);
+    expect(card()?.textContent).toContain("Field guide");
+    view.client.connected = true;
+    view.client.connectionGeneration++;
+    view.context.gateway.snapshot.phase = "connected";
+    view.notify();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card()).toBe(original);
+    expect(view.request).toHaveBeenCalledTimes(2);
+    view.client.recoveryScope = "another-account";
+    view.notify();
+    expect(card()).toBeNull();
+  });
 
   it("keeps fallback usable on failure and hides broken images", async () => {
     const view = fixture();

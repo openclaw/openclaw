@@ -7,7 +7,6 @@ import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
@@ -40,27 +39,22 @@ class SecretsPageState {
   formError: string | null = null;
   notice: string | null = null;
 
-  readonly gateway;
-  readonly lifecycle;
+  readonly lifecycle = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
 
   constructor(
     readonly context: ApplicationContext,
     readonly notify: () => void,
-  ) {
-    this.gateway = projectGateway(context.gateway);
-    this.lifecycle = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
-  }
+  ) {}
 
   bindGateway(source: ApplicationContext["gateway"]) {
-    this.gateway.replaceSource(source);
     this.lifecycle.invalidate();
     this.lifecycle.transition(source.snapshot);
     this.resetGatewayState(source.snapshot);
-    const release = this.gateway.subscribe(() => {
+    // Gateway receipts replace secret request state and close dialogs before old requests can settle.
+    const release = source.subscribe((snapshot) => {
       if (this.context.gateway !== source) {
         return;
       }
-      const snapshot = this.gateway.read().snapshot;
       if (this.lifecycle.transition(snapshot)) {
         this.resetGatewayState(snapshot);
         this.ensureInitialData();
@@ -77,7 +71,6 @@ class SecretsPageState {
   }
 
   dispose() {
-    this.gateway.dispose();
     this.lifecycle.dispose();
     this.resetGatewayState();
   }
@@ -301,6 +294,7 @@ class SecretsPageState {
 export function SecretsPage() {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  // This mount owns one secrets request state; Gateway replacement is bound below.
   const model = untrack(
     () => new SecretsPageState(context, () => setRevision((value) => value + 1)),
   );

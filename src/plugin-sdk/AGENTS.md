@@ -54,6 +54,7 @@ Public contract between plugins/core; changes can affect bundled + third-party p
 
 ## Expanding The Boundary
 
+- Before deprecation, removal, or an incompatible behavior/security change, use [plugin-sdk-impact](../../.agents/skills/plugin-sdk-impact/SKILL.md) to query public ClawHub consumers and interpret coverage alongside local callers.
 - SDK surface too large. No convenience compat barrels, aliases, fallback exports. Replace old entrypoints when cleaner.
 - Public third-party API = only compat exception: document/version breaks, migrate ALL bundled/internal plugins first, then aggressively deprecate unused exports.
 - Adding/changing public subpath: align:

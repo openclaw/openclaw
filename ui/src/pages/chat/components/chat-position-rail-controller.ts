@@ -1,3 +1,4 @@
+import { createMemo, flush, onCleanup, refresh } from "solid-js";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import {
   syncPositionRailPreview,
@@ -40,278 +41,258 @@ function initialInteraction(): RailInteraction {
 }
 
 // Transient DOM interaction stays here; the transcript session owns reader position.
-export class ChatPositionRailController {
-  private connected = true;
+export function createPositionRail(props: PositionRailParams) {
+  let connected = true;
 
-  constructor(private readonly requestRender: () => void) {}
-  private session: ChatTranscriptSession | null = null;
-  private interaction = initialInteraction();
-  private previewElement: HTMLElement | undefined;
-  private previewWindow: Window | null = null;
-  private scrollElement: HTMLElement | undefined;
-  private resizeObserver: ResizeObserver | undefined;
-  private observationPending = false;
-  private refreshingWindow = false;
-  private layoutFrame: number | undefined;
-  private activeId: string | undefined;
-  private markerIds: string[] = [];
-  private markerIndexes = new Map<string, number>();
-  private renderedIndexes: number[] = [];
-  private viewportHeight: number | undefined;
-  private viewportVisible = false;
-  private viewportOffset = 0;
-  private viewportInset = 0;
-  private reservedOffset = 0;
-  private viewportResizePending = false;
-  private observedActiveId: string | undefined;
-  private pendingFocusId: string | undefined;
-  private restoringFocus = false;
-  private projectionChanged = false;
-  private mountedMarkersChanged = true;
-  private markerIdsByMessageId: ReadonlyMap<string, string> = new Map();
-  private positionMessageIds: string[] = [];
-  private markersChanged = true;
-  private readonly markerElements = new Map<string, HTMLElement>();
-  private transcriptElement: HTMLElement | undefined;
-  private intersectionObserver: IntersectionObserver | undefined;
-  private mutationObserver: MutationObserver | undefined;
-  private stopTranscriptScroll: (() => void) | undefined;
-  private readonly observedMessages = new Map<
-    Element,
-    { id: string; messageId: string; visible: boolean }
-  >();
-  private visibleIds = new Set<string>();
-  private initialVisibilityPending = true;
-  private targetsChanged = true;
-  private layoutVisible = false;
-  private reader: PositionRailReaderState = { followingResize: false, followActive: false };
-  private readonly stopScrollInput = {
+  let session: ChatTranscriptSession | null = null;
+  let interactionState = initialInteraction();
+  let previewElement: HTMLElement | undefined;
+  let previewWindow: Window | null = null;
+  let scrollElement: HTMLElement | undefined;
+  let resizeObserver: ResizeObserver | undefined;
+  let observationPending = false;
+  let refreshingWindow = false;
+  let layoutFrame: number | undefined;
+  let currentActiveId: string | undefined;
+  let markerIds: string[] = [];
+  let markerIndexes = new Map<string, number>();
+  let renderedIndexes: number[] = [];
+  let viewportHeight: number | undefined;
+  let viewportVisible = false;
+  let viewportOffset = 0;
+  let viewportInset = 0;
+  let reservedOffset = 0;
+  let viewportResizePending = false;
+  let observedActiveId: string | undefined;
+  let pendingFocusId: string | undefined;
+  let restoringFocus = false;
+  let pendingProjectionChange = false;
+  let markerIdsByMessageId: ReadonlyMap<string, string> = new Map();
+  let positionMessageIds: string[] = [];
+  let markersChanged = true;
+  const markerElements = new Map<string, HTMLElement>();
+  let transcriptElement: HTMLElement | undefined;
+  let intersectionObserver: IntersectionObserver | undefined;
+  let mutationObserver: MutationObserver | undefined;
+  let stopTranscriptScroll: (() => void) | undefined;
+  const observedMessages = new Map<Element, { id: string; messageId: string; visible: boolean }>();
+  let visibleIds = new Set<string>();
+  let initialVisibilityPending = true;
+  let targetsChanged = true;
+  let layoutVisible = false;
+  let reader: PositionRailReaderState = { followingResize: false, followActive: false };
+  const stopScrollInput = {
     handleEvent: (event: Event) => {
-      this.reader.followActive = false;
+      reader.followActive = false;
       event.stopPropagation();
     },
     passive: true,
   };
 
-  private readonly scheduleLayout = () => {
-    if (this.layoutFrame !== undefined || !this.scrollElement) {
+  const scheduleLayout = () => {
+    if (layoutFrame !== undefined || !scrollElement) {
       return;
     }
-    this.layoutFrame = requestAnimationFrame(() => {
-      this.layoutFrame = undefined;
-      this.syncLayout();
+    layoutFrame = requestAnimationFrame(() => {
+      layoutFrame = undefined;
+      syncLayout();
     });
   };
 
-  private readonly observeLayout = () => {
-    const scroller = this.scrollElement;
+  const observeLayout = () => {
+    const scroller = scrollElement;
     if (!scroller) {
       return;
     }
     // Observer and scroll delivery supply clean geometry; the frame only publishes it.
     const height = scroller.clientHeight;
-    this.viewportVisible = height > 0;
-    if (!this.viewportVisible) {
+    viewportVisible = height > 0;
+    if (!viewportVisible) {
       // Hidden rails retain their mounted window and scroll reserve until they return.
-      this.layoutVisible = false;
+      layoutVisible = false;
       return;
     }
-    this.viewportHeight = height;
-    this.viewportOffset = scroller.scrollTop;
-    this.viewportInset = Number.parseFloat(getComputedStyle(scroller).scrollPaddingTop) || 0;
-    this.viewportResizePending = this.session?.layout.viewportResizePending ?? false;
-    const root = this.transcriptElement ?? scroller.closest<HTMLElement>(".chat-thread");
+    viewportHeight = height;
+    viewportOffset = scroller.scrollTop;
+    viewportInset = Number.parseFloat(getComputedStyle(scroller).scrollPaddingTop) || 0;
+    viewportResizePending = session?.layout.viewportResizePending ?? false;
+    const root = transcriptElement ?? scroller.closest<HTMLElement>(".chat-thread");
     if (root) {
-      this.syncReaderViewport(readTranscriptViewport(root));
+      syncReaderViewport(readTranscriptViewport(root));
     }
     const visibleMessageIds = new Set(
-      [...this.observedMessages.values()]
+      [...observedMessages.values()]
         .filter((message) => message.visible)
         .map((message) => message.messageId),
     );
-    const visibleOrder = this.positionMessageIds.filter((id) => visibleMessageIds.has(id));
-    const activeMessageId = this.session?.activeMessageId(
-      visibleOrder.length ? visibleOrder : this.positionMessageIds,
+    const visibleOrder = positionMessageIds.filter((id) => visibleMessageIds.has(id));
+    const activeMessageId = session?.activeMessageId(
+      visibleOrder.length ? visibleOrder : positionMessageIds,
     );
-    this.observedActiveId = activeMessageId
-      ? this.markerIdsByMessageId.get(activeMessageId)
-      : undefined;
-    this.scheduleLayout();
+    observedActiveId = activeMessageId ? markerIdsByMessageId.get(activeMessageId) : undefined;
+    scheduleLayout();
   };
 
-  private requestObservation() {
-    if (this.scrollElement && this.resizeObserver && !this.observationPending) {
-      this.observationPending = true;
+  function requestObservation() {
+    if (scrollElement && resizeObserver && !observationPending) {
+      observationPending = true;
       // Same-size content and programmatic offsets still need a clean measurement.
-      this.resizeObserver.unobserve(this.scrollElement);
-      this.resizeObserver.observe(this.scrollElement);
+      resizeObserver.unobserve(scrollElement);
+      resizeObserver.observe(scrollElement);
     }
   }
 
-  private revealMarker(id: string) {
-    const scroller = this.scrollElement;
-    const index = this.markerIndexes.get(id);
-    const height = this.viewportHeight ?? 0;
-    if (!scroller || !this.viewportVisible || index === undefined) {
+  function revealMarker(id: string) {
+    const scroller = scrollElement;
+    const index = markerIndexes.get(id);
+    const height = viewportHeight ?? 0;
+    if (!scroller || !viewportVisible || index === undefined) {
       return;
     }
     const top = index * MARKER_HEIGHT;
     const bottom = top + MARKER_HEIGHT;
-    if (
-      top < this.viewportOffset + this.viewportInset ||
-      bottom > this.viewportOffset + height - this.viewportInset
-    ) {
+    if (top < viewportOffset + viewportInset || bottom > viewportOffset + height - viewportInset) {
       // Scroll only the rail: scrollIntoView would also move the transcript.
-      const maxOffset = Math.max(
-        this.markerIds.length * MARKER_HEIGHT - height,
-        this.reservedOffset,
-      );
-      this.viewportOffset = Math.max(0, Math.min((top + bottom - height) / 2, maxOffset));
-      scroller.scrollTop = this.viewportOffset;
+      const maxOffset = Math.max(markerIds.length * MARKER_HEIGHT - height, reservedOffset);
+      viewportOffset = Math.max(0, Math.min((top + bottom - height) / 2, maxOffset));
+      scroller.scrollTop = viewportOffset;
     }
   }
 
-  private windowIndexes(): number[] {
+  function windowIndexes(): number[] {
     return positionRailWindowIndexes(
-      this.markerIds.length,
-      this.markerIndexes,
-      this.viewportOffset,
-      this.viewportHeight ?? window.innerHeight,
-      this.activeId ?? this.markerIds[0],
-      this.interaction.focusedId,
-      this.interaction.hoveredId,
-      this.pendingFocusId,
+      markerIds.length,
+      markerIndexes,
+      viewportOffset,
+      viewportHeight ?? window.innerHeight,
+      currentActiveId ?? markerIds[0],
+      interactionState.focusedId,
+      interactionState.hoveredId,
+      pendingFocusId,
     );
   }
 
-  private refreshWindow(): void {
-    if (this.connected && this.session) {
-      const scroller = this.scrollElement;
+  function refreshWindow(): void {
+    if (connected && session) {
+      const scroller = scrollElement;
       const focused = scroller?.ownerDocument.activeElement;
       const focusedId =
         focused instanceof HTMLElement ? focused.dataset.positionMarkerId : undefined;
-      this.refreshingWindow = true;
+      refreshingWindow = true;
       try {
-        this.requestRender();
+        void refresh(view);
+        // Keyboard navigation commits the retained target before focusing it.
+        flush();
       } finally {
-        this.refreshingWindow = false;
+        refreshingWindow = false;
       }
       // A virtual window change can move the retained marker out of DOM order.
       // Restore that focus without treating it as new navigation or recentering.
       if (
-        !this.pendingFocusId &&
+        !pendingFocusId &&
         focusedId &&
         focused instanceof HTMLElement &&
         scroller?.contains(focused) &&
         scroller.ownerDocument.activeElement === scroller.ownerDocument.body
       ) {
-        this.interaction.focusedId = focusedId;
-        this.restoringFocus = true;
+        interactionState.focusedId = focusedId;
+        restoringFocus = true;
         try {
           focused.focus({ preventScroll: true });
         } finally {
-          this.restoringFocus = false;
+          restoringFocus = false;
         }
       }
     }
   }
 
-  private syncMountedMarkers(): void {
-    if (!this.mountedMarkersChanged) {
-      return;
-    }
-    this.mountedMarkersChanged = false;
-    this.markerElements.clear();
-    for (const marker of this.scrollElement?.querySelectorAll<HTMLElement>(
-      ".chat-position-rail__marker",
-    ) ?? []) {
-      this.markerElements.set(marker.dataset.positionMarkerId!, marker);
-    }
+  function createMarkerRef(id: string) {
+    onCleanup(() => markerElements.delete(id));
+    return (element: HTMLButtonElement) => {
+      markerElements.set(id, element);
+    };
   }
 
-  private focusMarker(id: string): void {
-    this.pendingFocusId = id;
-    this.revealMarker(id);
-    this.refreshWindow();
-    this.syncMountedMarkers();
-    this.markerElements.get(id)?.focus({ preventScroll: true });
-    this.pendingFocusId = undefined;
+  function focusMarker(id: string): void {
+    pendingFocusId = id;
+    revealMarker(id);
+    refreshWindow();
+    markerElements.get(id)?.focus({ preventScroll: true });
+    pendingFocusId = undefined;
   }
 
-  private disconnectVisibility() {
-    this.stopTranscriptScroll?.();
-    this.stopTranscriptScroll = undefined;
-    this.scrollElement?.closest(".chat-position-rail")?.removeAttribute("data-overflow");
-    this.intersectionObserver?.disconnect();
-    this.mutationObserver?.disconnect();
-    this.transcriptElement?.removeEventListener("scroll", this.observeLayout);
-    this.intersectionObserver = undefined;
-    this.mutationObserver = undefined;
-    this.transcriptElement = undefined;
-    this.reader = { followingResize: false, followActive: this.reader.followActive };
-    this.observedMessages.clear();
-    for (const id of this.visibleIds) {
-      this.markerElements.get(id)?.removeAttribute("data-visible");
+  function disconnectVisibility() {
+    stopTranscriptScroll?.();
+    stopTranscriptScroll = undefined;
+    scrollElement?.closest(".chat-position-rail")?.removeAttribute("data-overflow");
+    intersectionObserver?.disconnect();
+    mutationObserver?.disconnect();
+    transcriptElement?.removeEventListener("scroll", observeLayout);
+    intersectionObserver = undefined;
+    mutationObserver = undefined;
+    transcriptElement = undefined;
+    reader = { followingResize: false, followActive: reader.followActive };
+    observedMessages.clear();
+    for (const id of visibleIds) {
+      markerElements.get(id)?.removeAttribute("data-visible");
     }
-    this.scrollElement
-      ?.querySelector('[aria-current="true"]')
-      ?.setAttribute("aria-current", "false");
-    this.visibleIds.clear();
-    this.initialVisibilityPending = true;
-    this.activeId = undefined;
-    this.observedActiveId = undefined;
+    markerElements.get(currentActiveId ?? "")?.setAttribute("aria-current", "false");
+    visibleIds.clear();
+    initialVisibilityPending = true;
+    currentActiveId = undefined;
+    observedActiveId = undefined;
   }
 
-  private syncVisibilityTargets() {
-    const root = this.scrollElement?.closest<HTMLElement>(".chat-thread");
+  function syncVisibilityTargets() {
+    const root = scrollElement?.closest<HTMLElement>(".chat-thread");
     if (!root) {
       return;
     }
-    if (root !== this.transcriptElement) {
-      if (this.transcriptElement) {
-        this.disconnectVisibility();
+    if (root !== transcriptElement) {
+      if (transcriptElement) {
+        disconnectVisibility();
       }
-      this.transcriptElement = root;
-      root.addEventListener("scroll", this.observeLayout, { passive: true });
-      this.stopTranscriptScroll = subscribeTranscriptScroll(root, (observation) => {
+      transcriptElement = root;
+      root.addEventListener("scroll", observeLayout, { passive: true });
+      stopTranscriptScroll = subscribeTranscriptScroll(root, (observation) => {
         if (observation.type === "offset") {
           // The reading position can cross a landmark without changing the
           // rendered rows; follow it here instead of re-rendering the pane.
-          this.requestObservation();
+          requestObservation();
         } else if (observation.type === "input") {
-          if (this.reader.followingResize) {
-            this.reader.followActive = true;
-            this.scheduleLayout();
+          if (reader.followingResize) {
+            reader.followActive = true;
+            scheduleLayout();
           }
-          this.reader.followingResize = false;
-          this.reader.resizeTarget = undefined;
-        } else if (observation.type === "resize" && this.layoutVisible && this.viewportHeight) {
+          reader.followingResize = false;
+          reader.resizeTarget = undefined;
+        } else if (observation.type === "resize" && layoutVisible && viewportHeight) {
           // Retain the committed viewport before another composer change can replace it.
-          this.syncReaderViewport(observation.viewport);
-          this.requestObservation();
+          syncReaderViewport(observation.viewport);
+          requestObservation();
         }
       });
       // Publish the first visible pixel after an initially zero-area edge touch.
-      this.intersectionObserver = new IntersectionObserver(
+      intersectionObserver = new IntersectionObserver(
         (entries) => {
           for (const entry of entries) {
-            const message = this.observedMessages.get(entry.target);
+            const message = observedMessages.get(entry.target);
             if (message) {
               message.visible = entry.isIntersecting && entry.intersectionRatio > 0;
             }
           }
           // Publish current position, retained markers, and Tab entry in one layout commit.
-          this.observeLayout();
+          observeLayout();
         },
         { root, threshold: [0, Number.EPSILON, 1] },
       );
-      // Virtualization replaces message nodes without replacing the rail.
+      // The transcript owns bubble nodes; virtualization replaces them independently.
       // Streaming descendants keep the same observed bubble targets.
       const isPositionTarget = (element: Element) =>
         element.matches(MESSAGE_SELECTOR) ||
         (element.matches(PROVISIONAL_MESSAGE_SELECTOR) &&
-          this.markerIdsByMessageId.has(element.getAttribute("data-message-id")!));
-      this.mutationObserver = new MutationObserver((records) => {
+          markerIdsByMessageId.has(element.getAttribute("data-message-id")!));
+      mutationObserver = new MutationObserver((records) => {
         if (
           records.some((record) => {
             if (record.target instanceof Element && record.target.closest(".chat-position-rail")) {
@@ -332,215 +313,209 @@ export class ChatPositionRailController {
             );
           })
         ) {
-          this.targetsChanged = true;
-          this.scheduleLayout();
+          targetsChanged = true;
+          scheduleLayout();
         }
       });
-      this.mutationObserver.observe(root, {
+      mutationObserver.observe(root, {
         childList: true,
         subtree: true,
         attributes: true,
         attributeFilter: ["data-entry-id", "data-message-id"],
       });
-      this.targetsChanged = true;
+      targetsChanged = true;
     }
-    if (!this.targetsChanged) {
+    if (!targetsChanged) {
       return;
     }
-    this.targetsChanged = false;
+    targetsChanged = false;
     const targets = new Set([
       ...root.querySelectorAll(MESSAGE_SELECTOR),
       ...root.querySelectorAll(PROVISIONAL_MESSAGE_SELECTOR),
     ]);
     const messageIdFor = (element: Element) =>
       element.getAttribute("data-entry-id") ?? element.getAttribute("data-message-id");
-    for (const [element, message] of this.observedMessages) {
+    for (const [element, message] of observedMessages) {
       if (
         !targets.has(element) ||
         messageIdFor(element) !== message.messageId ||
-        this.markerIdsByMessageId.get(message.messageId) !== message.id
+        markerIdsByMessageId.get(message.messageId) !== message.id
       ) {
-        this.intersectionObserver?.unobserve(element);
-        this.observedMessages.delete(element);
+        intersectionObserver?.unobserve(element);
+        observedMessages.delete(element);
       }
     }
     for (const element of targets) {
       const messageId = messageIdFor(element);
-      const id = messageId ? this.markerIdsByMessageId.get(messageId) : undefined;
-      if (messageId && id && !this.observedMessages.has(element)) {
-        this.observedMessages.set(element, { id, messageId, visible: false });
-        this.intersectionObserver?.observe(element);
+      const id = messageId ? markerIdsByMessageId.get(messageId) : undefined;
+      if (messageId && id && !observedMessages.has(element)) {
+        observedMessages.set(element, { id, messageId, visible: false });
+        intersectionObserver?.observe(element);
       }
     }
   }
 
-  private syncReaderViewport(measured: TranscriptViewportMeasurement) {
+  function syncReaderViewport(measured: TranscriptViewportMeasurement) {
     const overflowing =
       measured.clientHeight > 0 && measured.scrollHeight - measured.clientHeight > 1;
-    if (syncPositionRailVisibility(this.scrollElement, overflowing) && !overflowing) {
+    if (syncPositionRailVisibility(scrollElement, overflowing) && !overflowing) {
       // Guarded marker callbacks retain this object while the rail is hidden.
-      Object.assign(this.interaction, initialInteraction());
-      this.refreshWindow();
+      Object.assign(interactionState, initialInteraction());
+      refreshWindow();
     }
-    const { state, scheduleLayout } = resolvePositionRailReaderViewport(
-      this.reader,
+    const { state, scheduleLayout: needsLayout } = resolvePositionRailReaderViewport(
+      reader,
       measured,
-      this.markerElements.get(this.interaction.focusedId ?? "")?.matches(":focus-visible") ?? false,
+      markerElements.get(interactionState.focusedId ?? "")?.matches(":focus-visible") ?? false,
     );
-    this.reader = state;
-    if (scheduleLayout) {
-      this.scheduleLayout();
+    reader = state;
+    if (needsLayout) {
+      scheduleLayout();
     }
   }
 
-  private syncVisibleMarks() {
+  function syncVisibleMarks() {
     const visible = new Set<string>();
-    for (const message of this.observedMessages.values()) {
+    for (const message of observedMessages.values()) {
       if (message.visible) {
         visible.add(message.id);
       }
     }
-    for (const id of this.visibleIds) {
+    for (const id of visibleIds) {
       if (!visible.has(id)) {
-        this.markerElements.get(id)?.removeAttribute("data-visible");
+        markerElements.get(id)?.removeAttribute("data-visible");
       }
     }
     for (const id of visible) {
-      if (!this.visibleIds.has(id)) {
-        this.markerElements.get(id)?.setAttribute("data-visible", "");
+      if (!visibleIds.has(id)) {
+        markerElements.get(id)?.setAttribute("data-visible", "");
       }
     }
-    this.visibleIds = visible;
-    if (this.initialVisibilityPending && visible.size > 0) {
+    visibleIds = visible;
+    if (initialVisibilityPending && visible.size > 0) {
       // Startup resizes can precede the first measured message. Anchor that
       // initial position before preserving rail offsets through later resizes.
-      this.reader.followActive = true;
-      this.scheduleLayout();
+      reader.followActive = true;
+      scheduleLayout();
     }
     // A continuation, folded tool row, or virtualized jump still belongs to a transcript position.
-    const activeId = this.observedActiveId ?? this.markerIds[0];
-    if (activeId !== this.activeId) {
-      this.markerElements.get(this.activeId ?? "")?.setAttribute("aria-current", "false");
-      this.activeId = activeId;
-      this.markerElements.get(activeId ?? "")?.setAttribute("aria-current", "true");
-      this.syncTabStop();
-      if (!this.reader.followingResize) {
-        this.reader.followActive = true;
+    const activeId = observedActiveId ?? markerIds[0];
+    if (activeId !== currentActiveId) {
+      markerElements.get(currentActiveId ?? "")?.setAttribute("aria-current", "false");
+      currentActiveId = activeId;
+      markerElements.get(activeId ?? "")?.setAttribute("aria-current", "true");
+      syncTabStop();
+      if (!reader.followingResize) {
+        reader.followActive = true;
       }
-      this.scheduleLayout();
+      scheduleLayout();
     }
   }
 
-  private syncLayout() {
-    const scroller = this.scrollElement;
-    const height = this.viewportHeight ?? 0;
-    if (!scroller || !this.viewportVisible || height === 0) {
-      this.layoutVisible = false;
+  function syncLayout() {
+    const scroller = scrollElement;
+    const height = viewportHeight ?? 0;
+    if (!scroller || !viewportVisible || height === 0) {
+      layoutVisible = false;
       return;
     }
-    this.syncMountedMarkers();
-    this.syncVisibilityTargets();
-    const projectionChanged = this.projectionChanged;
-    this.projectionChanged = false;
-    const initialize = !this.layoutVisible || projectionChanged;
-    this.layoutVisible = true;
+    syncVisibilityTargets();
+    const projectionChanged = pendingProjectionChange;
+    pendingProjectionChange = false;
+    const initialize = !layoutVisible || projectionChanged;
+    layoutVisible = true;
     if (initialize) {
-      this.reader.resizeTarget = undefined;
-      this.reader.followingResize = false;
+      reader.resizeTarget = undefined;
+      reader.followingResize = false;
     }
-    if (this.markersChanged) {
+    if (markersChanged) {
       // Appends keep existing offsets valid; filtering or reordering retires that scroll room.
       if (projectionChanged) {
         scroller.style.removeProperty("--chat-position-scroll-top");
-        this.reservedOffset = 0;
+        reservedOffset = 0;
       }
-      this.markersChanged = false;
-      this.targetsChanged = true;
+      markersChanged = false;
+      targetsChanged = true;
     }
     // Reader offsets can move the anchor without changing any intersections.
-    this.syncVisibleMarks();
-    this.syncTabStop();
-    if (initialize || this.reader.followActive) {
+    syncVisibleMarks();
+    syncTabStop();
+    if (initialize || reader.followActive) {
       // Navigation must reach the final viewport, even if its slot resized before this frame.
-      this.reader.followActive = this.viewportResizePending;
-      const focused = this.markerElements.get(this.interaction.focusedId ?? "");
+      reader.followActive = viewportResizePending;
+      const focused = markerElements.get(interactionState.focusedId ?? "");
       const current =
         (initialize || focused?.matches(":focus-visible")
-          ? this.interaction.focusedId
-          : undefined) ?? this.activeId;
+          ? interactionState.focusedId
+          : undefined) ?? currentActiveId;
       if (current) {
-        this.revealMarker(current);
-        if (this.visibleIds.size > 0) {
-          this.initialVisibilityPending = false;
+        revealMarker(current);
+        if (visibleIds.size > 0) {
+          initialVisibilityPending = false;
         }
       }
     }
-    const indexes = this.windowIndexes();
-    if (!transcriptArraysEqual(indexes, this.renderedIndexes)) {
-      this.refreshWindow();
-      this.syncMountedMarkers();
-      this.syncTabStop();
+    const indexes = windowIndexes();
+    if (!transcriptArraysEqual(indexes, renderedIndexes)) {
+      refreshWindow();
+      syncTabStop();
     }
     // Reserve only the trailing space needed to keep this offset when the viewport grows.
-    this.reservedOffset = this.viewportOffset;
-    scroller.style.setProperty("--chat-position-scroll-top", `${this.viewportOffset}px`);
-    const contentBottom = this.markerIds.length * MARKER_HEIGHT;
-    scroller.toggleAttribute("data-overflow-top", this.viewportOffset > 1);
-    scroller.toggleAttribute(
-      "data-overflow-bottom",
-      contentBottom - height - this.viewportOffset > 1,
-    );
-    const previewId = this.interaction.hoveredId ?? this.interaction.focusedId;
+    reservedOffset = viewportOffset;
+    scroller.style.setProperty("--chat-position-scroll-top", `${viewportOffset}px`);
+    const contentBottom = markerIds.length * MARKER_HEIGHT;
+    scroller.toggleAttribute("data-overflow-top", viewportOffset > 1);
+    scroller.toggleAttribute("data-overflow-bottom", contentBottom - height - viewportOffset > 1);
+    const previewId = interactionState.hoveredId ?? interactionState.focusedId;
     syncPositionRailPreview(
-      this.previewElement,
-      this.markerElements.get(previewId ?? ""),
-      ((this.markerIndexes.get(previewId ?? "") ?? 0) + 0.5) * MARKER_HEIGHT - this.viewportOffset,
+      previewElement,
+      markerElements.get(previewId ?? ""),
+      ((markerIndexes.get(previewId ?? "") ?? 0) + 0.5) * MARKER_HEIGHT - viewportOffset,
       height,
     );
   }
 
-  private syncTabStop() {
+  function syncTabStop() {
     // Reenter at the reader position; arrow navigation owns focus only while inside the rail.
-    const rovingId = this.interaction.focusedId ?? this.activeId ?? this.markerIds[0];
-    syncPositionRailTabStop(this.scrollElement, this.markerElements.get(rovingId ?? ""));
+    const rovingId = interactionState.focusedId ?? currentActiveId ?? markerIds[0];
+    syncPositionRailTabStop(markerElements.values(), markerElements.get(rovingId ?? ""));
   }
 
-  private readonly bindScroller = (element?: Element) => {
-    this.resizeObserver?.disconnect();
-    this.observationPending = false;
-    this.disconnectVisibility();
-    this.markersChanged = true;
-    this.mountedMarkersChanged = true;
-    this.layoutVisible = false;
-    this.viewportHeight = undefined;
-    this.viewportVisible = false;
-    this.viewportOffset = 0;
-    this.viewportInset = 0;
-    this.reservedOffset = 0;
-    this.viewportResizePending = false;
-    if (this.layoutFrame !== undefined) {
-      cancelAnimationFrame(this.layoutFrame);
-      this.layoutFrame = undefined;
+  const bindScroller = (element?: Element) => {
+    resizeObserver?.disconnect();
+    observationPending = false;
+    disconnectVisibility();
+    markersChanged = true;
+    layoutVisible = false;
+    viewportHeight = undefined;
+    viewportVisible = false;
+    viewportOffset = 0;
+    viewportInset = 0;
+    reservedOffset = 0;
+    viewportResizePending = false;
+    if (layoutFrame !== undefined) {
+      cancelAnimationFrame(layoutFrame);
+      layoutFrame = undefined;
     }
-    this.scrollElement = element instanceof HTMLElement ? element : undefined;
-    if (this.scrollElement) {
-      this.reader.followActive = true;
-      this.observationPending = true;
-      this.resizeObserver = new ResizeObserver(() => {
-        this.observationPending = false;
-        this.observeLayout();
+    scrollElement = element instanceof HTMLElement ? element : undefined;
+    if (scrollElement) {
+      reader.followActive = true;
+      observationPending = true;
+      resizeObserver = new ResizeObserver(() => {
+        observationPending = false;
+        observeLayout();
       });
-      this.resizeObserver.observe(this.scrollElement);
-      this.scheduleLayout();
+      resizeObserver.observe(scrollElement);
+      scheduleLayout();
     }
   };
 
-  private readonly dismissPreview = (event: KeyboardEvent) => {
-    const rail = this.scrollElement?.closest(".chat-position-rail");
+  const dismissPreview = (event: KeyboardEvent) => {
+    const rail = scrollElement?.closest(".chat-position-rail");
     if (
       event.key !== "Escape" ||
       event.defaultPrevented ||
-      this.interaction.dismissed ||
+      interactionState.dismissed ||
       !rail ||
       rail.ownerDocument.defaultView?.getComputedStyle(rail).display === "none"
     ) {
@@ -548,68 +523,60 @@ export class ChatPositionRailController {
     }
     event.preventDefault();
     event.stopImmediatePropagation();
-    this.interaction.hoveredId = null;
-    this.interaction.dismissed = true;
+    interactionState.hoveredId = null;
+    interactionState.dismissed = true;
     if (rail.contains(rail.ownerDocument.activeElement)) {
       // Every marker reveals a message in this transcript. Hover-only dismissal keeps focus.
       rail.closest<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
     }
-    this.refreshWindow();
+    refreshWindow();
   };
 
-  private readonly bindPreview = (element?: Element) => {
-    this.previewWindow?.removeEventListener("keydown", this.dismissPreview);
-    this.previewElement = element instanceof HTMLElement ? element : undefined;
+  const bindPreview = (element?: Element) => {
+    previewWindow?.removeEventListener("keydown", dismissPreview);
+    previewElement = element instanceof HTMLElement ? element : undefined;
     // Solid refs run before the preview leaves its inert template document.
     // The mounted rail supplies the actual event window.
-    this.previewWindow = element ? (this.scrollElement?.ownerDocument.defaultView ?? null) : null;
-    this.scheduleLayout();
+    previewWindow = element ? (scrollElement?.ownerDocument.defaultView ?? null) : null;
+    scheduleLayout();
     // Focused markers handle Escape before the window fallback dismisses hover-only previews.
-    this.previewWindow?.addEventListener("keydown", this.dismissPreview);
+    previewWindow?.addEventListener("keydown", dismissPreview);
   };
 
-  disconnect() {
-    this.connected = false;
-    this.pendingFocusId = undefined;
-    this.bindPreview();
-    this.bindScroller();
-    Object.assign(this.interaction, initialInteraction());
-  }
-
-  view(params: PositionRailParams): PositionRailViewParams | undefined {
+  function readView(params: PositionRailParams): PositionRailViewParams | undefined {
     const { positions, transcript, assistant } = params;
-    if (this.session !== transcript) {
-      this.session = transcript;
-      this.interaction = initialInteraction();
-      this.pendingFocusId = undefined;
-      this.viewportOffset = 0;
-      this.viewportHeight = undefined;
-      this.viewportVisible = false;
-      this.layoutVisible = false;
-      this.disconnectVisibility();
-      this.markersChanged = true;
+    if (session !== transcript) {
+      session = transcript;
+      interactionState = initialInteraction();
+      pendingFocusId = undefined;
+      viewportOffset = 0;
+      viewportHeight = undefined;
+      viewportVisible = false;
+      layoutVisible = false;
+      disconnectVisibility();
+      markersChanged = true;
     }
     const markers = positions.markers;
-    if (positions.markerIdsByMessageId !== this.markerIdsByMessageId) {
+    if (positions.markerIdsByMessageId !== markerIdsByMessageId) {
       if (
-        this.markerIdsByMessageId.size !== positions.markerIdsByMessageId.size ||
+        markerIdsByMessageId.size !== positions.markerIdsByMessageId.size ||
         [...positions.markerIdsByMessageId].some(
-          ([messageId, markerId]) => this.markerIdsByMessageId.get(messageId) !== markerId,
+          ([messageId, markerId]) => markerIdsByMessageId.get(messageId) !== markerId,
         )
       ) {
-        this.targetsChanged = true;
+        targetsChanged = true;
       }
-      this.markerIdsByMessageId = positions.markerIdsByMessageId;
-      this.positionMessageIds = [...positions.markerIdsByMessageId.keys()];
+      markerIdsByMessageId = positions.markerIdsByMessageId;
+      positionMessageIds = [...positions.markerIdsByMessageId.keys()];
     }
     const count = markers.length;
     if (count === 0) {
-      this.bindPreview();
-      this.bindScroller();
-      Object.assign(this.interaction, initialInteraction());
+      bindPreview();
+      bindScroller();
+      Object.assign(interactionState, initialInteraction());
       return undefined;
     }
-    const interaction = this.interaction;
+    const interaction = interactionState;
     for (const field of ["focusedId", "hoveredId"] as const) {
       if (!markers.some((candidate) => candidate.id === interaction[field])) {
         interaction[field] = null;
@@ -617,25 +584,24 @@ export class ChatPositionRailController {
     }
 
     const ids = markers.map((marker) => marker.id);
-    if (!transcriptArraysEqual(ids, this.markerIds)) {
-      this.projectionChanged ||= this.markerIds.some((id, index) => id !== ids[index]);
-      this.markerIds = ids;
-      this.markerIndexes = new Map(ids.map((id, index) => [id, index]));
-      if (this.activeId && !this.markerIndexes.has(this.activeId)) {
-        this.activeId = undefined;
+    if (!transcriptArraysEqual(ids, markerIds)) {
+      pendingProjectionChange ||= markerIds.some((id, index) => id !== ids[index]);
+      markerIds = ids;
+      markerIndexes = new Map(ids.map((id, index) => [id, index]));
+      if (currentActiveId && !markerIndexes.has(currentActiveId)) {
+        currentActiveId = undefined;
       }
-      this.markersChanged = true;
+      markersChanged = true;
     }
-    if (!this.refreshingWindow) {
-      this.requestObservation();
+    if (!refreshingWindow) {
+      requestObservation();
     }
-    const indexes = this.windowIndexes();
-    if (!transcriptArraysEqual(indexes, this.renderedIndexes) || this.markersChanged) {
-      this.renderedIndexes = indexes;
-      this.mountedMarkersChanged = true;
+    const indexes = windowIndexes();
+    if (!transcriptArraysEqual(indexes, renderedIndexes) || markersChanged) {
+      renderedIndexes = indexes;
     }
-    this.scheduleLayout();
-    const rovingId = interaction.focusedId ?? this.activeId ?? markers[0]!.id;
+    scheduleLayout();
+    const rovingId = interaction.focusedId ?? currentActiveId ?? markers[0]!.id;
     const moveFocus = (event: KeyboardEvent, index: number) => {
       const nextIndex =
         event.key === "Home"
@@ -655,34 +621,35 @@ export class ChatPositionRailController {
       if (!(event.currentTarget instanceof HTMLButtonElement)) {
         return;
       }
-      this.focusMarker(markers[nextIndex]!.id);
+      focusMarker(markers[nextIndex]!.id);
     };
     return {
       assistant,
       markers,
-      renderedIndexes: this.renderedIndexes,
-      activeId: this.activeId,
-      visibleIds: this.visibleIds,
+      renderedIndexes,
+      activeId: currentActiveId,
+      visibleIds,
       rovingId,
       hoveredId: interaction.hoveredId,
       previewId: interaction.dismissed
         ? undefined
         : (interaction.hoveredId ?? interaction.focusedId),
-      bindScroller: this.bindScroller,
-      bindPreview: this.bindPreview,
-      onScroll: this.observeLayout,
-      stopScrollInput: this.stopScrollInput,
+      createMarkerRef,
+      bindScroller,
+      bindPreview,
+      onScroll: observeLayout,
+      stopScrollInput,
       onPointerLeave: () => {
         interaction.hoveredId = null;
-        this.refreshWindow();
+        refreshWindow();
       },
       onMarkerHover: (id) => {
         interaction.hoveredId = id;
         interaction.dismissed = false;
-        this.refreshWindow();
+        refreshWindow();
       },
       onMarkerFocus: (id, event) => {
-        if (this.restoringFocus) {
+        if (restoringFocus) {
           return;
         }
         // Pointer focus must not move the target before pointer-up.
@@ -690,18 +657,17 @@ export class ChatPositionRailController {
           event.currentTarget instanceof HTMLElement &&
           event.currentTarget.matches(":focus-visible")
         ) {
-          this.revealMarker(id);
+          revealMarker(id);
         }
         interaction.focusedId = id;
         interaction.dismissed = false;
-        this.refreshWindow();
-        this.syncMountedMarkers();
-        this.syncTabStop();
+        refreshWindow();
+        syncTabStop();
       },
       onMarkerBlur: () => {
         interaction.focusedId = null;
-        this.syncTabStop();
-        this.refreshWindow();
+        syncTabStop();
+        refreshWindow();
       },
       onMarkerKeyDown: (index, event) => {
         if (
@@ -709,7 +675,7 @@ export class ChatPositionRailController {
         ) {
           moveFocus(event, index);
         } else if (event.key === "Escape") {
-          this.dismissPreview(event);
+          dismissPreview(event);
         } else if (event.key === "PageUp" || event.key === "PageDown") {
           event.stopPropagation();
         }
@@ -717,4 +683,14 @@ export class ChatPositionRailController {
       onMarkerSelect: (anchorId) => transcript.revealMessage(anchorId),
     };
   }
+
+  const view = createMemo(() => readView(props));
+  onCleanup(() => {
+    connected = false;
+    pendingFocusId = undefined;
+    bindPreview();
+    bindScroller();
+    Object.assign(interactionState, initialInteraction());
+  });
+  return view;
 }

@@ -1,9 +1,9 @@
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   PROVIDER_CONTEXT_HANDOFF,
   type ProviderContext,
   type ProviderStreamOptions,
-} from "../../../../packages/ai/src/provider-types.js";
+} from "@openclaw/ai/provider-types";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { AgentMessage } from "../../runtime/index.js";
 
 type MessageTransform = (
@@ -21,12 +21,10 @@ export function wrapStreamFnWithMessageTransform(
   materializeProviderContext?: ProviderContextMaterializer,
 ): StreamFn {
   return (model, context, options) => {
-    const messages = context?.messages;
-    const nextMessages = Array.isArray(messages)
-      ? transform(messages as AgentMessage[], model)
-      : messages;
+    const messages = context.messages;
+    const nextMessages = transform(messages, model);
     const nextContext =
-      Array.isArray(messages) && nextMessages !== messages
+      nextMessages !== messages
         ? {
             ...context,
             messages: nextMessages as typeof context.messages,
@@ -35,18 +33,13 @@ export function wrapStreamFnWithMessageTransform(
     if (!materializeProviderContext) {
       return streamFn(model, nextContext, options);
     }
-    let availableContext: Parameters<StreamFn>[1] | undefined = nextContext;
+    let providerContext: Promise<ProviderContext> | undefined;
     const handoff = async (): Promise<ProviderContext> => {
-      const captured = availableContext;
-      availableContext = undefined;
-      if (!captured) {
-        throw new Error("provider context handoff already consumed");
-      }
       options?.signal?.throwIfAborted();
-      return await materializeProviderContext({
-        context: captured,
+      return (providerContext ??= materializeProviderContext({
+        context: nextContext,
         signal: options?.signal,
-      });
+      }));
     };
     return streamFn(model, nextContext, {
       ...options,

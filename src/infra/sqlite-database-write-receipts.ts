@@ -3,6 +3,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { sqlPublicationAnchor, type EngineConnection } from "./sql-connection.js";
 import {
   isSqliteDatabaseAdmissionRetired as isRetired,
   readSqliteDatabaseGeneration,
@@ -30,17 +32,49 @@ export function sqliteSessionIdWriteScope(sessionId: string): { sessionId: strin
 export function createSqliteDatabaseWriteReceipts(owner: {
   admission(this: void, database: DatabaseSync): Admission | undefined;
   pathAdmission(this: void, location: string): Admission | undefined;
+  writeListeners: WeakMap<Admission, Set<() => void>>;
   readRevision(this: void, database: DatabaseSync): number | undefined;
   writer(this: void, database: DatabaseSync): Admission | undefined;
   suspended(this: void, database: DatabaseSync): boolean;
-  publish(this: void, record: Admission): void;
+  publish(this: void, record: Admission, keys: readonly string[]): void;
 }) {
+  /** Local sibling writers notify maintenance after publishing their shared write revision. */
+  function onSqliteDatabaseWriteSettled(
+    connection: EngineConnection,
+    listener: () => void,
+  ): (() => void) | undefined {
+    const database = sqlPublicationAnchor(connection);
+    const record = owner.admission(database);
+    if (!record) {
+      return undefined;
+    }
+    let listeners = owner.writeListeners.get(record);
+    if (!listeners) {
+      listeners = new Set();
+      owner.writeListeners.set(record, listeners);
+    }
+    return registerListener(listeners, listener);
+  }
+
+  /** An interrupted native write may have committed before its receipt was published. */
+  function settleWorker(record: Admission, worker: number): void {
+    const references = worker > 0 ? record.references.get(worker) : undefined;
+    if (references && Atomics.exchange(new Int32Array(references), 1, 0) > 0) {
+      advanceSqliteDatabaseGeneration(record, "writeRevision");
+      advanceSqliteDatabaseGeneration(record, "unscopedWriteRevision");
+      const listeners = owner.writeListeners.get(record);
+      if (listeners) {
+        notifyListeners(listeners, undefined);
+      }
+    }
+  }
   /** A typed owner certifies all session keys affected by this synchronous kernel. */
   function withSqliteDatabaseWriteScope<T>(
-    database: DatabaseSync,
+    connection: EngineConnection,
     scope: readonly SqliteDatabaseWriteScope[],
     run: () => T,
   ): T {
+    const database = sqlPublicationAnchor(connection);
     const record = owner.admission(database);
     const tracked = record
       ? readSqliteDatabaseGeneration(record, "writeScopeRevision") > 0
@@ -71,7 +105,8 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   }
 
   /** Authority and user callbacks cannot borrow their caller's certified mutation scope. */
-  function withoutSqliteDatabaseWriteScope<T>(database: DatabaseSync, run: () => T): T {
+  function withoutSqliteDatabaseWriteScope<T>(connection: EngineConnection, run: () => T): T {
+    const database = sqlPublicationAnchor(connection);
     const previous = state.writeScopes.get(database);
     state.writeScopes.delete(database);
     try {
@@ -98,7 +133,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     if (changed) {
       // Scope discovery is cold metadata, shared through the existing admission exchange.
       advanceSqliteDatabaseGeneration(record, "publicationRevision");
-      owner.publish(record);
+      owner.publish(record, keys);
     }
   }
 
@@ -111,9 +146,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
 
   /** Deletion owners retire only scopes whose stored identity has actually been removed. */
   function retireSqliteDatabaseWriteScopes(
-    database: DatabaseSync,
+    connection: EngineConnection,
     scope: readonly SqliteDatabaseWriteScope[],
   ): void {
+    const database = sqlPublicationAnchor(connection);
     const keys = normalizedWriteScopes(scope);
     const record = owner.admission(database);
     const retire = () => {
@@ -137,16 +173,14 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       if (changed) {
         advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
         advanceSqliteDatabaseGeneration(record, "publicationRevision");
-        owner.publish(record);
+        owner.publish(record, keys);
       }
     };
     if (
       !stageSqliteTransactionState(database, {
-        stage() {},
         commit: retire,
-        rollback() {},
       }) &&
-      !database.isTransaction
+      !connection.isTransaction
     ) {
       retire();
     }
@@ -216,7 +250,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   function readScopedWriteToken(
     database: DatabaseSync,
     scope: string | readonly SqliteDatabaseWriteScope[],
-    includePending = false,
+    pending?: Set<string> | null,
   ): string | undefined {
     const keys = normalizedWriteScopes(scope);
     const record = owner.admission(database);
@@ -228,7 +262,6 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     if (owner.readRevision(database) === undefined) {
       return undefined;
     }
-    const pending = includePending ? state.pendingWriteScopes.get(database) : undefined;
     return record
       ? scopedWriteToken(record, keys, pending)
       : localScopedWriteToken(database, keys, pending);
@@ -236,10 +269,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
 
   /** Per-key receipts survive unrelated committed writes. */
   function readSqliteDatabaseScopedWriteToken(
-    database: DatabaseSync,
+    connection: EngineConnection,
     scope: string | readonly SqliteDatabaseWriteScope[],
   ): string | undefined {
-    return readScopedWriteToken(database, scope);
+    return readScopedWriteToken(sqlPublicationAnchor(connection), scope);
   }
 
   function readSqliteDatabaseScopedWriteTokenForPath(
@@ -271,10 +304,11 @@ export function createSqliteDatabaseWriteReceipts(owner: {
 
   /** Capture the exact post-commit token before any fallible publication executes. */
   function readSqliteDatabasePendingScopedWriteToken(
-    database: DatabaseSync,
+    connection: EngineConnection,
     scope: string | readonly SqliteDatabaseWriteScope[],
   ): string | undefined {
-    return readScopedWriteToken(database, scope, true);
+    const database = sqlPublicationAnchor(connection);
+    return readScopedWriteToken(database, scope, state.pendingWriteScopes.get(database));
   }
 
   /** Host row caches retain a physical identity and receipt without opening SQLite. */
@@ -287,10 +321,11 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   }
 
   /** Predict the token published when the current native mutation settles. */
-  function readSqliteDatabasePendingWriteToken(database: DatabaseSync): string | undefined {
+  function readSqliteDatabasePendingWriteToken(connection: EngineConnection): string | undefined {
+    const database = sqlPublicationAnchor(connection);
     if (
-      !database.isOpen ||
-      !database.isTransaction ||
+      !connection.isOpen ||
+      !connection.isTransaction ||
       !hasSqlitePostCommitScope(database) ||
       owner.suspended(database)
     ) {
@@ -353,6 +388,8 @@ export function createSqliteDatabaseWriteReceipts(owner: {
         }
       }
     },
+    settleWorker,
+    onSqliteDatabaseWriteSettled,
     retireSqliteDatabaseWriteScopes,
     withSqliteDatabaseWriteScope,
     withoutSqliteDatabaseWriteScope,

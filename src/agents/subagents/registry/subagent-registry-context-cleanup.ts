@@ -200,7 +200,6 @@ export function createSubagentRegistryContextCleanup(config: {
     // Loading and entering plugin scope are part of the best-effort hook boundary.
     try {
       const stateContext = captureOpenClawStateWorkerContext();
-      const generation = params.entry.generation;
       const assertCurrent = () => {
         assertSubagentRegistryWriteSourceCurrent(stateContext);
         const current = getCurrentSubagentRunOwner(subagentRuns, params.entry);
@@ -208,11 +207,7 @@ export function createSubagentRegistryContextCleanup(config: {
           [current?.runId ?? entry.runId],
           stateContext.admission,
         );
-        if (
-          params.entry.generation !== generation ||
-          !config.isEndedHookOwnerCurrent(params.entry) ||
-          params.isCurrent?.() === false
-        ) {
+        if (!config.isEndedHookOwnerCurrent(params.entry) || params.isCurrent?.() === false) {
           throw new Error("Subagent ended hook lost its original owner");
         }
         if (!current && subagentRuns.has(entry.runId)) {

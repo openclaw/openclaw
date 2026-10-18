@@ -13,9 +13,12 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { installDatabaseEngineSelection } from "./database-engine/context.js";
+import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
@@ -39,6 +42,13 @@ const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-lifecycle-${p
 const { forceKillChildProcessTreeMock, spawnMock, tempDirs, runManagedServiceManagerBoundary } =
   useManagedServiceHandoffLifecycleFixture();
 const nodeTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+// Gateway startup admits its engine before update requests. Cold discovery is
+// covered separately by update-managed-service-handoff-engine.test.ts.
+beforeAll(() => {
+  installDatabaseEngineSelection({ effectiveEngines: resolveDatabaseFamilyEngines({}) });
+});
+afterAll(resetDatabaseEngineSelectionForTest);
 
 async function createUserSystemdFixture() {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-run-"));
@@ -99,7 +109,7 @@ describe("managed service update handoff", () => {
 
   registerManagedHandoffOwnerTests(runManagedServiceManagerBoundary, itUnix, expect);
 
-  itUnix.each(["addressed-unsafe", "rollback", "unsafe", "validation"] as const)(
+  itUnix.each(["addressed-unsafe", "rollback", "unsafe", "data-at-risk", "validation"] as const)(
     "coordinates CLI %s outcomes and preserves the notice destination",
     async (outcome) => {
       const rollback = outcome === "rollback";
@@ -138,7 +148,11 @@ describe("managed service update handoff", () => {
                   : {}),
                 recovery: rollback
                   ? { serviceRestartSafe: true, packageRollbackVerified: true, version: "1.0.0" }
-                  : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+                  : {
+                      serviceRestartSafe: false,
+                      reason: "runtime-verification-failed",
+                      ...(outcome === "data-at-risk" ? { dataAtRisk: "unreadable-state" } : {}),
+                    },
               },
             }),
       });
@@ -168,8 +182,14 @@ describe("managed service update handoff", () => {
           ).toBe(false);
         }
       }
+      if (outcome === "data-at-risk") {
+        expect(result.log).toContain("keep the gateway stopped: data at risk (unreadable-state)");
+      }
       if (outcome === "unsafe") {
-        expect(result.log).toContain("keep the gateway stopped");
+        expect(result.log).toContain("runtime-verification-failed");
+        expect(result.log).toContain("openclaw update repair");
+        expect(result.log).toContain("openclaw gateway status --deep");
+        expect(result.log).not.toContain("keep the gateway stopped");
       }
       if (outcome === "validation") {
         expect(result.commands).toEqual([]);

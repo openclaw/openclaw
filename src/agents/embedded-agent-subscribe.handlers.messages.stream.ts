@@ -5,11 +5,11 @@ import {
   asOptionalRecord as asRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import {
-  parseReplyDirectives,
-  type ReplyDirectiveParseResult,
-} from "../auto-reply/reply/reply-directives.js";
-import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
+  createStreamingDirectiveAccumulator,
+  splitTrailingDirective,
+} from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
 import {
   parseAssistantTextSignature,
@@ -26,6 +26,7 @@ import { hasReplyDirectiveMetadata } from "./embedded-agent-subscribe.handlers.m
 import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
+  StreamingReplyResolver,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import {
   extractAssistantCommentaryText,
@@ -185,7 +186,12 @@ export function emitAssistantCommentaryStreamData(
     }
   }
   for (const commentaryMessage of commentaryMessages) {
-    const text = extractAssistantCommentaryText(commentaryMessage);
+    const accumulator = createStreamingDirectiveAccumulator();
+    const text = extractAssistantCommentaryText(commentaryMessage, (part, final) => {
+      const preparedStart = accumulator.sourceText.length;
+      accumulator.consume(part, { final: finalMessage && final });
+      return accumulator.sourceText.slice(preparedStart);
+    });
     if (!text || (!finalMessage && isResponsesCommentary && ctx.state.deltaBuffer === text)) {
       continue;
     }
@@ -292,166 +298,157 @@ export function resolveAssistantTextChunk(params: {
   return accumulatedText.includes(content) ? "" : content;
 }
 
-export function resolveStreamingReply(params: {
-  evtType: "text_delta" | "text_start" | "text_end";
-  next: string;
-  previousText: string;
-  previousCleaned: string;
-  visibleDelta: string;
-  appendDelta: string | null;
-  parsedStreamDirectives: ReplyDirectiveParseResult | null;
-  previousAudioDirectiveCount: number;
-  rawDirectiveSource?: string;
-  directiveCodePrefix?: StreamDirectiveCodePrefix;
-}): {
-  text: string;
-  delta: string;
-  replace: boolean;
-  hasText: boolean;
-  replyDirectives: ReplyDirectiveParseResult | null;
-  audioDirectiveCount: number;
-  directiveCodePrefix?: StreamDirectiveCodePrefix;
-} {
-  let directiveCodePrefix = params.appendDelta !== null ? params.directiveCodePrefix : undefined;
-  if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
-    const text = params.previousCleaned;
-    return {
-      text,
-      delta: "",
-      replace: false,
-      hasText: Boolean(text.trim()),
-      replyDirectives: null,
-      audioDirectiveCount: params.previousAudioDirectiveCount,
-      directiveCodePrefix:
-        directiveCodePrefix &&
-        params.rawDirectiveSource?.length === directiveCodePrefix.checkedRawLength
-          ? directiveCodePrefix
-          : undefined,
-    };
-  }
-
-  let text: string | undefined;
-  let delta: string | undefined;
-  let isAppend = false;
-  let replyDirectives = params.parsedStreamDirectives;
-  let audioDirectiveCount = params.previousAudioDirectiveCount;
-  if (
-    directiveCodePrefix &&
-    params.rawDirectiveSource?.includes("[[", Math.max(0, directiveCodePrefix.checkedRawLength - 1))
-  ) {
-    directiveCodePrefix = undefined;
-  }
-  if (
-    params.evtType !== "text_end" &&
-    params.parsedStreamDirectives &&
-    !params.parsedStreamDirectives.isSilent &&
-    !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
-    !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
-    params.parsedStreamDirectives.text === params.visibleDelta &&
-    params.appendDelta !== null &&
-    params.previousText === params.previousCleaned &&
-    (directiveCodePrefix || !params.rawDirectiveSource?.includes("[["))
-  ) {
-    // Visibility and trim owners already prepared this exact append.
-    text = params.next;
-    delta = params.appendDelta;
-    isAppend = true;
-    if (directiveCodePrefix && params.rawDirectiveSource !== undefined) {
-      directiveCodePrefix = {
-        ...directiveCodePrefix,
-        checkedRawLength: params.rawDirectiveSource.length,
-      };
-    }
-  }
-  if (
-    text === undefined &&
-    params.evtType !== "text_end" &&
-    params.parsedStreamDirectives &&
-    !params.parsedStreamDirectives.isSilent &&
-    params.parsedStreamDirectives.text === params.visibleDelta &&
-    params.appendDelta !== null &&
-    params.previousCleaned &&
-    params.previousText.length > params.previousCleaned.length &&
-    !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta)
-  ) {
-    const marker = params.previousText.lastIndexOf("[[");
-    const tailStart = params.previousText.indexOf("]]", marker + 2) + 2;
-    const tail = params.previousText.slice(tailStart);
-    const source = params.rawDirectiveSource ?? params.next;
-    // Settled directives before any code opener cannot enter code on append.
-    // New markers and reference definitions still require the complete Markdown context.
-    if (
-      marker >= 0 &&
-      tailStart > marker + 2 &&
-      tail.trim() &&
-      params.previousCleaned.endsWith(tail.trimStart()) &&
-      !/[`~\t]| {4}/u.test(params.previousText.slice(0, marker)) &&
-      !source.includes("[[", params.previousText.length - 1) &&
-      !source.includes("]:")
-    ) {
-      text = params.previousCleaned + params.appendDelta;
-      delta = params.appendDelta;
-      isAppend = true;
-    }
-  }
-
-  if (text === undefined) {
-    directiveCodePrefix = undefined;
-    audioDirectiveCount = 0;
-    const source =
-      params.rawDirectiveSource === undefined
-        ? params.next
-        : toolCallXmlTextFilter(
-            { stripFunctionCallsXmlPayloads: true },
-            params.evtType !== "text_end",
-          ).transform(stripDowngradedToolCallText(params.rawDirectiveSource));
-    const parsed = parseReplyDirectives(
-      params.evtType === "text_end" ? source : splitTrailingDirective(source).text,
-      {
-        onAudioDirective: () => {
-          audioDirectiveCount += 1;
-        },
-      },
-    );
-    text =
-      params.rawDirectiveSource === undefined ? parsed.text : trimTextPreservingCode(parsed.text);
-    if (
-      params.evtType !== "text_end" &&
-      params.appendDelta !== null &&
-      source === params.rawDirectiveSource &&
-      text === params.next &&
-      !parsed.isSilent &&
-      !hasReplyDirectiveMetadata(parsed) &&
-      !parsed.mediaUrls?.length
-    ) {
-      const prefix = findDirectiveCodePrefix(source, params.visibleDelta);
-      if (prefix && params.next.startsWith(source.slice(0, prefix.end))) {
-        // Both raw and projected appends retain this canonical code prefix.
-        directiveCodePrefix = prefix;
+export function createStreamingReplyResolver(): StreamingReplyResolver {
+  let directiveCodePrefix: StreamDirectiveCodePrefix | undefined;
+  let hasDirectiveMarker = false;
+  let previousChar = "";
+  return (params) => {
+    if (params.rawDirectiveSource !== undefined) {
+      const appended = params.rawDirectiveDelta ?? params.rawDirectiveSource;
+      if (params.rawDirectiveDelta === undefined) {
+        directiveCodePrefix = undefined;
+        hasDirectiveMarker = false;
+        previousChar = "";
+      }
+      if ((previousChar + appended).includes("[[")) {
+        hasDirectiveMarker = true;
+        directiveCodePrefix = undefined;
+      }
+      if (appended) {
+        previousChar = appended.slice(-1);
       }
     }
-    if (replyDirectives) {
-      // Metadata comes from complete code context. Only newly accepted audio
-      // occurrences create a streaming edge; prior voice tags are not replayed.
-      replyDirectives = {
-        ...replyDirectives,
-        replyToId: parsed.replyToId,
-        replyToCurrent: parsed.replyToCurrent,
-        replyToTag: parsed.replyToTag,
-        audioAsVoice: audioDirectiveCount > params.previousAudioDirectiveCount,
+    if (params.appendDelta === null) {
+      directiveCodePrefix = undefined;
+    }
+    if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
+      if (params.rawDirectiveSource?.length !== directiveCodePrefix?.checkedRawLength) {
+        directiveCodePrefix = undefined;
+      }
+      const text = params.previousCleaned;
+      return {
+        text,
+        delta: "",
+        replace: false,
+        hasText: Boolean(text.trim()),
+        replyDirectives: null,
+        audioDirectiveCount: params.previousAudioDirectiveCount,
       };
     }
-  }
-  const replace = Boolean(
-    !isAppend && params.previousCleaned && !text.startsWith(params.previousCleaned),
-  );
-  return {
-    text,
-    delta: replace ? "" : (delta ?? text.slice(params.previousCleaned.length)),
-    replace,
-    hasText: Boolean(isAppend ? text : text.trim()),
-    replyDirectives,
-    audioDirectiveCount,
-    directiveCodePrefix,
+
+    let text: string | undefined;
+    let delta: string | undefined;
+    let isAppend = false;
+    let replyDirectives = params.parsedStreamDirectives;
+    let audioDirectiveCount = params.previousAudioDirectiveCount;
+    if (
+      params.evtType !== "text_end" &&
+      params.parsedStreamDirectives &&
+      !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
+      !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
+      params.parsedStreamDirectives.text === params.visibleDelta &&
+      params.appendDelta !== null &&
+      params.previousText === params.previousCleaned &&
+      (directiveCodePrefix || !hasDirectiveMarker)
+    ) {
+      // Visibility and trim owners already prepared this exact append.
+      text = params.next;
+      delta = params.appendDelta;
+      isAppend = true;
+      if (directiveCodePrefix && params.rawDirectiveSource !== undefined) {
+        directiveCodePrefix = {
+          ...directiveCodePrefix,
+          checkedRawLength: params.rawDirectiveSource.length,
+        };
+      }
+    }
+    if (
+      text === undefined &&
+      params.evtType !== "text_end" &&
+      params.parsedStreamDirectives &&
+      params.parsedStreamDirectives.text === params.visibleDelta &&
+      params.appendDelta !== null &&
+      params.previousCleaned &&
+      params.previousText.length > params.previousCleaned.length &&
+      !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta)
+    ) {
+      const marker = params.previousText.lastIndexOf("[[");
+      const tailStart = params.previousText.indexOf("]]", marker + 2) + 2;
+      const tail = params.previousText.slice(tailStart);
+      const source = params.rawDirectiveSource ?? params.next;
+      // Settled directives before any code opener cannot enter code on append.
+      // New markers and reference definitions still require the complete Markdown context.
+      if (
+        marker >= 0 &&
+        tailStart > marker + 2 &&
+        tail.trim() &&
+        params.previousCleaned.endsWith(tail.trimStart()) &&
+        !/[`~\t]| {4}/u.test(params.previousText.slice(0, marker)) &&
+        !source.includes("[[", params.previousText.length - 1) &&
+        !source.includes("]:")
+      ) {
+        text = params.previousCleaned + params.appendDelta;
+        delta = params.appendDelta;
+        isAppend = true;
+      }
+    }
+
+    if (text === undefined) {
+      directiveCodePrefix = undefined;
+      audioDirectiveCount = 0;
+      const source =
+        params.rawDirectiveSource === undefined
+          ? params.next
+          : toolCallXmlTextFilter(
+              { stripFunctionCallsXmlPayloads: true },
+              params.evtType !== "text_end",
+            ).transform(stripDowngradedToolCallText(params.rawDirectiveSource));
+      const parsed = parseReplyDirectives(
+        params.evtType === "text_end" ? source : splitTrailingDirective(source).text,
+        {
+          onAudioDirective: () => {
+            audioDirectiveCount += 1;
+          },
+        },
+      );
+      text =
+        params.rawDirectiveSource === undefined ? parsed.text : trimTextPreservingCode(parsed.text);
+      if (
+        params.evtType !== "text_end" &&
+        params.appendDelta !== null &&
+        source === params.rawDirectiveSource &&
+        text === params.next &&
+        !hasReplyDirectiveMetadata(parsed) &&
+        !parsed.mediaUrls?.length
+      ) {
+        const prefix = findDirectiveCodePrefix(source, params.visibleDelta);
+        if (prefix && params.next.startsWith(source.slice(0, prefix.end))) {
+          // Both raw and projected appends retain this canonical code prefix.
+          directiveCodePrefix = prefix;
+        }
+      }
+      if (replyDirectives) {
+        // Metadata comes from complete code context. Only newly accepted audio
+        // occurrences create a streaming edge; prior voice tags are not replayed.
+        replyDirectives = {
+          ...replyDirectives,
+          replyToId: parsed.replyToId,
+          replyToCurrent: parsed.replyToCurrent,
+          replyToTag: parsed.replyToTag,
+          audioAsVoice: audioDirectiveCount > params.previousAudioDirectiveCount,
+        };
+      }
+    }
+    const replace = Boolean(
+      !isAppend && params.previousCleaned && !text.startsWith(params.previousCleaned),
+    );
+    return {
+      text,
+      delta: replace ? "" : (delta ?? text.slice(params.previousCleaned.length)),
+      replace,
+      hasText: Boolean(isAppend ? text : text.trim()),
+      replyDirectives,
+      audioDirectiveCount,
+    };
   };
 }

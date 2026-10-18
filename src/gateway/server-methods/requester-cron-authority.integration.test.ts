@@ -18,8 +18,8 @@ import {
   markRequesterTurnYieldedWithAuthority,
 } from "../../agents/subagents/registry/subagent-registry-requester-yield.test-support.js";
 import {
+  captureRequesterContinuationCaller,
   revokeRequesterCronAuthority,
-  withRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
@@ -126,44 +126,42 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
     }),
   ).toBe(true);
   const runId = "successor-requester";
-  return await withRequesterCronAuthority(
-    {
-      requesterSessionKey: SESSION,
-      requesterSessionId: SESSION_ID,
-      requesterAgentId: "main",
-      batch: [expectDefined(runs.get(child.runId), "published requester child")],
-      rearmGeneration: runs.get(child.runId)?.requesterSettleWake?.rearmGeneration,
+  return await captureRequesterContinuationCaller({
+    requesterSessionKey: SESSION,
+    requesterSessionId: SESSION_ID,
+    requesterAgentId: "main",
+    batch: [expectDefined(runs.get(child.runId), "published requester child")],
+    rearmGeneration: runs.get(child.runId)?.requesterSettleWake?.rearmGeneration,
+    runId,
+    isCurrent: () => true,
+  }).run(() =>
+    inRun(
       runId,
-      isCurrent: () => true,
-    },
-    () =>
-      inRun(
-        runId,
-        admission(runId, createSyntheticPluginRuntimeClient(), child.childSessionKey),
-        async (identity, admittedRun, creator) => {
-          // Queue acceptance retires the committed outbox before tools finish.
-          // Its fresh admitted run must now own management and revocation.
-          expect(creator?.callerScopedCreation).toBeUndefined();
-          if (admin) {
-            const management = bindCronManagementGrant(runId);
-            expect(management?.managementOnly).toBe(true);
-            expect(() => management?.mint("cron.add")).toThrow("management-only");
-          }
-          await mutateSubagentRuns(
-            [child.runId],
-            () => ({
-              value: undefined,
-              postimages: new Map([[child.runId, null]]),
-            }),
-            {
-              runs,
-              context: captureOpenClawStateWorkerContext(),
-              assertCurrent: resolveAdmittedRunActiveAssertion(admittedRun),
-            },
-          );
-          return await run(identity, admittedRun, creator);
-        },
-      ),
+      admission(runId, createSyntheticPluginRuntimeClient(), child.childSessionKey),
+      async (identity, admittedRun, creator) => {
+        // Queue acceptance retires the committed outbox before tools finish.
+        // Its fresh admitted run must now own management and revocation.
+        expect(creator?.callerScopedCreation).toBeUndefined();
+        if (admin) {
+          const management = bindCronManagementGrant(runId);
+          expect(management?.managementOnly).toBe(true);
+          expect(() => management?.mint("cron.add")).toThrow("management-only");
+        }
+        await mutateSubagentRuns(
+          [child.runId],
+          () => ({
+            value: undefined,
+            postimages: new Map([[child.runId, null]]),
+          }),
+          {
+            runs,
+            context: captureOpenClawStateWorkerContext(),
+            assertCurrent: resolveAdmittedRunActiveAssertion(admittedRun),
+          },
+        );
+        return await run(identity, admittedRun, creator);
+      },
+    ),
   );
 }
 

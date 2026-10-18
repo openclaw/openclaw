@@ -121,6 +121,7 @@ import {
 } from "./mock-openai-contracts.js";
 import { planCronBlockedOutcomeTurn } from "./mock-openai-cron-blocked-outcome.js";
 import { planCronFailureRepairTurn } from "./mock-openai-cron-failure-repair.js";
+import { planCronSendContinueTurn } from "./mock-openai-cron-send-continue.js";
 import {
   extractExactReplyDirective,
   extractExactMarkerDirective,
@@ -542,6 +543,15 @@ async function buildResponsesPayload(
   if (cronFailureRepairTurn) {
     return cronFailureRepairTurn;
   }
+  const cronSendContinueTurn = planCronSendContinueTurn({
+    prompt,
+    input,
+    body: toolDeclarationBody,
+    buildToolCall: buildToolCallEventsWithArgs,
+  });
+  if (cronSendContinueTurn) {
+    return cronSendContinueTurn;
+  }
   const cronBlockedOutcomeTurn = planCronBlockedOutcomeTurn(prompt);
   if (cronBlockedOutcomeTurn) {
     return cronBlockedOutcomeTurn;
@@ -919,11 +929,7 @@ async function buildResponsesPayload(
   }
   if (terminalCompletionCase && terminalTurn?.kind === "completion") {
     const visibleRepresentation =
-      terminalCompletionCase === "silent"
-        ? QA_SUBAGENT_TERMINAL_MARKERS.silent
-        : terminalCompletionCase === "empty"
-          ? QA_SUBAGENT_TERMINAL_MARKERS.empty
-          : undefined;
+      terminalCompletionCase === "silent" ? QA_SUBAGENT_TERMINAL_MARKERS.silent : undefined;
     if (visibleRepresentation) {
       if (completedToolName === "message") {
         return buildAssistantEvents("");
@@ -945,10 +951,9 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents(visibleRepresentation);
     }
-    // The direct delivery fallback owns visible, restart, and sanitized fallback
-    // results. Use explicit silence so generic empty-response recovery cannot
-    // replay the historical spawn before that fallback runs.
-    return buildAssistantEvents("NO_REPLY");
+    // Empty output exercises direct fallback. Exact NO_REPLY is intentional
+    // silence and must not be used as a missing-answer fixture.
+    return buildAssistantEvents("");
   }
   const terminalWorkerCase = terminalTurn?.kind === "worker" ? terminalTurn.caseName : undefined;
   if (terminalWorkerCase) {
@@ -987,7 +992,11 @@ async function buildResponsesPayload(
       ].join("\n"),
     );
   }
-  if (terminalWorkerCase === "visible" || terminalWorkerCase === "restart") {
+  if (
+    terminalWorkerCase === "visible" ||
+    terminalWorkerCase === "restart" ||
+    terminalWorkerCase === "race"
+  ) {
     return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS[terminalWorkerCase]);
   }
   if (terminalCompletionCase && terminalTurn?.kind === "kickoff") {
@@ -2240,6 +2249,11 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
                 ? QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS
                 : QA_STALLED_TURN_RESPONSE_PAUSE_MS,
           }
+        : {}),
+      // Hold the silent requester completion so a queued follow-up turn is
+      // admitted behind it before direct fallback mirrors the child result.
+      ...(subagentTurn?.kind === "completion" && subagentTurn.caseName === "race"
+        ? { responsePauseMs: 5_000 }
         : {}),
     };
   };

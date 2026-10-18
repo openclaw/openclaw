@@ -56,6 +56,78 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     ]);
   });
 
+  it.each(["failed", "interrupted"])(
+    "preserves native %s ownership when the final text is exact silence",
+    async (status) => {
+      const projector = await createProjector(await createParams());
+      await streamFinalAnswer(projector, "answer", "NO_REPLY");
+      await projector.handleNotification(turnWithStatus(status));
+      if (status === "interrupted") {
+        projector.markAborted();
+      }
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(result.terminal.kind).not.toBe("ok");
+      expect(result.preparedTerminalReply).toEqual({
+        text: "",
+        terminalReply: { disposition: "silent" },
+      });
+      expect(result.assistantTexts).toEqual([]);
+    },
+  );
+
+  it.each([
+    { answer: "Completed answer.", coda: "NO_REPLY", expected: ["Completed answer."] },
+    {
+      answer: "Completed answer.",
+      coda: "NO_REPLY\nNO_REPLY",
+      expected: ["Completed answer.", "NO_REPLY"],
+    },
+  ])("preserves completed answers before final coda $coda", async ({ answer, coda, expected }) => {
+    const projector = await createProjector(await createParams());
+    await streamFinalAnswer(projector, "answer", answer);
+    await streamFinalAnswer(projector, "coda", coda);
+    await projector.handleNotification(turnCompleted([finalItem("coda", coda)]));
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(expected);
+    expect(result.preparedTerminalReply).toEqual({
+      text: expected.join("\n\n"),
+      terminalReply: { disposition: "visible", text: expected.join("\n\n") },
+    });
+  });
+
+  it("bounds combined terminal snapshots without truncating either delivered answer", async () => {
+    const projector = await createProjector(await createParams());
+    const answer = "a".repeat(4_000);
+    const coda = "b".repeat(200);
+    await streamFinalAnswer(projector, "answer", answer);
+    await streamFinalAnswer(projector, "coda", `NO_REPLY\n${coda}`);
+    await projector.handleNotification(turnCompleted([finalItem("coda", `NO_REPLY\n${coda}`)]));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual([answer, coda]);
+    expect(result.preparedTerminalReply).toEqual({
+      text: `${answer}\n\n${coda}`,
+      terminalReply: {
+        disposition: "visible",
+        text: `${answer}\n\n${"b".repeat(93)}…`,
+      },
+    });
+  });
+
+  it("withholds split control text from native partial replies", async () => {
+    const onPartialReply = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onPartialReply });
+    await projector.handleNotification(
+      forCurrentTurn("item/started", { item: finalItem("answer", "") }),
+    );
+    await projector.handleNotification(agentMessageDelta("NO_", "answer"));
+    await projector.handleNotification(agentMessageDelta("REPLY", "answer"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", { item: finalItem("answer", "NO_REPLY") }),
+    );
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
   it("streams the completed tail when final deltas stop short of the item text", async () => {
     const onPartialReply = vi.fn();
     const onAgentEvent = vi.fn();
@@ -87,6 +159,65 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       delta: "AB",
     });
   });
+
+  it.each(
+    ["item", "raw", "turn"].flatMap((completion) =>
+      ["Final", "NO_REPLY"].map((text) => ({ completion, text })),
+    ),
+  )(
+    "replaces a streamed draft with authoritative $completion text $text",
+    async ({ completion, text }) => {
+      const onAgentEvent = vi.fn();
+      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+      await projector.handleNotification(
+        forCurrentTurn("item/started", { item: finalItem("answer", "") }),
+      );
+      await projector.handleNotification(agentMessageDelta("Draft", "answer"));
+      if (completion === "item") {
+        await projector.handleNotification(
+          forCurrentTurn("item/completed", { item: finalItem("answer", text) }),
+        );
+      } else if (completion === "raw") {
+        await projector.handleNotification(
+          forCurrentTurn("rawResponseItem/completed", {
+            item: {
+              type: "message",
+              id: "answer",
+              role: "assistant",
+              phase: "final_answer",
+              content: [{ type: "output_text", text }],
+            },
+          }),
+        );
+      }
+      await projector.handleNotification(turnCompleted([finalItem("answer", text)]));
+
+      const candidates = onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate")
+        .map((event) => ({ status: event.data.status, text: event.data.progressText }));
+      expect(candidates).toEqual(
+        text === "NO_REPLY"
+          ? [
+              { status: "candidate", text: "Draft" },
+              { status: "superseded", text: "Draft" },
+            ]
+          : [
+              { status: "candidate", text: "Draft" },
+              ...(completion === "item" ? [{ status: "candidate", text: "Final" }] : []),
+              { status: "selected", text: "Final" },
+            ],
+      );
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(result.assistantTexts).toEqual(text === "NO_REPLY" ? [] : ["Final"]);
+      expect(result.preparedTerminalReply).toEqual(
+        text === "NO_REPLY"
+          ? { text: "", terminalReply: { disposition: "silent" } }
+          : { text: "Final", terminalReply: { disposition: "visible", text: "Final" } },
+      );
+      expect(result.lastAssistant?.content).toEqual([{ type: "text", text }]);
+    },
+  );
 
   it("keeps distinct completed same-text finals and raw-only completion", async () => {
     const projector = await createProjector(await createParams());
@@ -422,7 +553,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("Replacement draft");
   });
 
-  it("keeps the unphased replacement when a later silent final follows", async () => {
+  it("selects a later silent final instead of recovering an unphased replacement", async () => {
     const projector = await createProjector(await createParams());
 
     await streamFinalAnswer(projector, "answer-1", "First candidate");
@@ -431,9 +562,13 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     await projector.handleNotification(turnCompleted([finalItem("answer-3", "NO_REPLY")]));
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual(["Replacement draft"]);
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.preparedTerminalReply).toEqual({
+      text: "",
+      terminalReply: { disposition: "silent" },
+    });
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
-    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("NO_REPLY");
+    expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "NO_REPLY" }]);
   });
 
   it("omits a silent completed answer from the steering transcript boundary", async () => {
@@ -446,6 +581,15 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     );
 
     expect(projector.buildSteeringTranscriptPrefix()).toEqual([]);
+  });
+
+  it("retains literal control-looking text at a steering boundary", async () => {
+    const text = "NO_REPLY\nNO_REPLY";
+    const projector = await createProjector(await createParams());
+    await streamFinalAnswer(projector, "before-steer", text);
+    expect(projector.buildSteeringTranscriptPrefix()).toEqual([
+      expect.objectContaining({ content: [{ type: "text", text }] }),
+    ]);
   });
 
   it("drops a pre-sleep final after a later sleep handoff", async () => {
@@ -502,7 +646,8 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     await projector.handleNotification(turnCompleted([finalItem("answer-2", "NO_REPLY")]));
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual(["NO_REPLY"]);
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.preparedTerminalReply?.terminalReply).toEqual({ disposition: "silent" });
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
   });
 

@@ -143,7 +143,10 @@ export async function runTalkNativeActionParity({
       ).toBe("same permitted note");
       results.push(result.details);
       expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
-      return { payloads: [{ text: "Done." }], meta: { durationMs: 1 } };
+      return {
+        payloads: [{ text: "Done." }],
+        meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "Done." } },
+      };
     } finally {
       host.close();
     }

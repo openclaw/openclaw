@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { invalidateSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX } from "./openclaw-state-db-schema-migration-required.js";
 const LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX_SQL =
@@ -59,8 +60,12 @@ function inspectSkillWorkshopCollectionReviewIndex(database: DatabaseSync): bool
 
 /** Doctor can inspect the exact legacy defect before its repair transaction. */
 export function openDoctorStateSchemaReadAdmission(
-  database: DatabaseSync,
+  database: EngineConnection,
 ): (() => void) | undefined {
+  // PostgreSQL readers already hold catalog admission; damaged SQLite indexes do not apply.
+  if (isPostgresSqlConnection(database)) {
+    return undefined;
+  }
   invalidateSqliteSchemaFacts(database);
   if (!hasDanglingSkillWorkshopCollectionReviewIndex(database)) {
     return undefined;

@@ -15,11 +15,11 @@ import {
   type SessionTranscriptReadScope,
 } from "../../gateway/session-transcript-readers.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
+import { readTerminalSourceReplyDeliveryMirror } from "../../shared/chat-message-content.js";
 import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
 import {
   getTranscriptMessageRole as getMessageRole,
   isTerminalSilentAssistantMessage,
-  readTerminalSourceReplyDeliveryMirror,
 } from "../embedded-agent-runner/message-visibility.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
@@ -81,6 +81,62 @@ export async function reconcileInvalidHarnessCompletion(
     return { outcome: "reconciled" };
   }
   return { outcome: "changed", entry: current };
+}
+
+export async function completePendingFinalRecoveryWithNotice(
+  entry: SessionEntry,
+  target: MainSessionRecoveryStoreTarget,
+): Promise<boolean> {
+  const completedOutcome = isTerminalSessionStatus(entry.status) && entry.status !== "interrupted";
+  const endedAt = completedOutcome ? (entry.endedAt ?? Date.now()) : Date.now();
+  let completed = false;
+  await updateSessionEntry(
+    target,
+    (current) => {
+      if (
+        current.sessionId !== entry.sessionId ||
+        current.pendingFinalDelivery?.intentId !== entry.pendingFinalDelivery?.intentId
+      ) {
+        return null;
+      }
+      const pending = current.pendingFinalDelivery;
+      completed = true;
+      return {
+        ...buildMainSessionRecoverySettlementPatch({
+          entry: current,
+          recordTerminalSource: true,
+        }),
+        endedAt,
+        lifecycleRunId: undefined,
+        lastRunId: completedOutcome
+          ? current.lastRunId
+          : resolveRestartRecoveryTerminalClientRunId(current),
+        pendingFinalDelivery: undefined,
+        ...(pending?.context &&
+        pending.intentId &&
+        current.pendingDeliveryNotice?.intentId !== pending.intentId &&
+        (!current.pendingDeliveryNotice ||
+          current.pendingDeliveryNotice.createdAt <= pending.createdAt)
+          ? {
+              pendingDeliveryNotice: {
+                createdAt: pending.createdAt,
+                context: pending.context,
+                intentId: pending.intentId,
+                state: "owed" as const,
+              },
+            }
+          : {}),
+        runtimeMs:
+          typeof current.startedAt === "number"
+            ? Math.max(0, endedAt - current.startedAt)
+            : undefined,
+        status: completedOutcome ? current.status : ("done" as const),
+        updatedAt: endedAt,
+      };
+    },
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
+  return completed;
 }
 
 function findSourceTurnRange(params: {

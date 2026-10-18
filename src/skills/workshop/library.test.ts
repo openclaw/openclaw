@@ -47,6 +47,27 @@ async function readLive(name: string) {
 }
 
 describe("workshop library", () => {
+  it("reports unreadable skill files instead of returning an incomplete inventory", async () => {
+    const skillDir = path.join(resolveWorkshopSkillsDir({}, "main"), "oversized");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), Buffer.alloc(1024 * 1024 + 1, "x"));
+
+    await expect(listWorkshopSkills({}, "main")).rejects.toThrow(
+      /file exceeds limit of 1048576 bytes/,
+    );
+  });
+
+  it("skips directories without SKILL.md but still lists hand-edited broken frontmatter", async () => {
+    const skillsRoot = resolveWorkshopSkillsDir({}, "main");
+    await fs.mkdir(path.join(skillsRoot, "missing"), { recursive: true });
+    await fs.mkdir(path.join(skillsRoot, "broken"));
+    await fs.writeFile(path.join(skillsRoot, "broken", "SKILL.md"), "---\nname: [\n---\n");
+
+    expect(await listWorkshopSkills({}, "main")).toMatchObject([
+      { name: "broken", description: "", files: ["SKILL.md"] },
+    ]);
+  });
+
   it("reuses retained changes across runs and refreshes after a workshop write", async () => {
     const reads = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
     try {
@@ -303,6 +324,33 @@ describe("workshop library", () => {
       "Learning is off.",
     );
     expect(await readLive("deploy")).toContain("step 1");
+  });
+
+  it("retains the original live copy when restore publication and rollback both fail", async () => {
+    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "step 0") });
+    await patchWorkshopSkill(ctx, { name: "deploy", oldText: "step 0", newText: "step 1" });
+    const live = path.join(resolveWorkshopSkillsDir({}, "main"), "deploy");
+    let previous = "";
+    const rename = fs.rename;
+    const publishing = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (from === live) {
+        previous = String(to);
+      } else if (to === live) {
+        throw new Error(from === previous ? "rollback blocked" : "publication blocked");
+      }
+      await rename(from, to);
+    });
+    try {
+      await expect(restoreWorkshopSkill(ctx, { name: "deploy" })).rejects.toThrow(
+        "rollback blocked",
+      );
+    } finally {
+      publishing.mockRestore();
+    }
+    expect(previous).toContain(".restore-previous-");
+    expect(await fs.readFile(path.join(previous, "SKILL.md"), "utf8")).toBe(
+      skill("deploy", "step 1"),
+    );
   });
 
   it("keeps a longer legacy skill manageable while new names stay within 63 characters", async () => {

@@ -26,10 +26,7 @@ const DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS = 30_000;
 
 function normalizeMicrosoftProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const rawEdge = asOptionalRecord(rawConfig.edge);
-  const rawMicrosoft = asOptionalRecord(rawConfig.microsoft);
-  const rawProviderMicrosoft = asOptionalRecord(providers?.microsoft);
-  const raw = { ...rawEdge, ...rawMicrosoft, ...rawProviderMicrosoft };
+  const raw = asOptionalRecord(providers?.microsoft) ?? {};
   return readMicrosoftProviderConfig({
     ...raw,
     outputFormatConfigured: Boolean(trimToUndefined(raw.outputFormat)),

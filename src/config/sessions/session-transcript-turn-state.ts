@@ -62,6 +62,11 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
         selected.entry.activeWriterRunId === expected.expectedOwner.activeWriterRunId)) &&
     (expectedState === undefined ||
       (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
+        (expectedState.pendingFinalDelivery === undefined ||
+          isDeepStrictEqual(
+            selected.entry.pendingFinalDelivery,
+            expectedState.pendingFinalDelivery ?? undefined,
+          )) &&
         selected.entry.mainRestartRecovery?.cycleId === expectedState.mainRestartRecoveryCycleId &&
         selected.entry.mainRestartRecovery?.revision ===
           expectedState.mainRestartRecoveryRevision &&

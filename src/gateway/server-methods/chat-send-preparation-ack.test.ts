@@ -19,7 +19,8 @@ import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { getCompetingSessionWorkAdmissionRelease } from "../../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import * as transcriptPersistence from "../../sessions/user-turn-transcript.persistence.js";
 import * as skillSelection from "../../skills/library/selection.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -38,6 +39,34 @@ import type { RespondFn } from "./types.js";
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createFixture = useBrowserFollowupFixture();
+type Fixture = Awaited<ReturnType<typeof createFixture>>;
+
+function expectStarted(fixture: Fixture, respond: ReturnType<typeof vi.fn<RespondFn>>) {
+  expect(respond).toHaveBeenCalledExactlyOnceWith(
+    true,
+    expect.objectContaining({
+      runId: fixture.params.idempotencyKey,
+      status: "started",
+      messageSeq: 2,
+    }),
+    undefined,
+    expect.anything(),
+  );
+}
+
+function expectUserTurn(
+  fixture: Fixture,
+  transcript: ReturnType<typeof loadTranscriptEventsSync> | undefined,
+) {
+  expect(transcript).toHaveLength(fixture.activeTranscript.length + 1);
+  expect(transcript?.at(-1)).toMatchObject({
+    message: {
+      role: "user",
+      content: fixture.params.message,
+      idempotencyKey: `${fixture.params.idempotencyKey}:user`,
+    },
+  });
+}
 
 it("acknowledges staged chat input and joins its terminal disposition without host pending-input writes", async () => {
   const fixture = await createFixture();
@@ -106,8 +135,8 @@ it("retries a failed custody write with the same request identity without acknow
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
     expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-    expect(fixture.context.chatAbortControllers.has(fixture.params.idempotencyKey)).toBe(false);
-    await getSessionWorkAdmissionRelease({
+    expect(rpcSourceTesting.has(fixture.params.idempotencyKey)).toBe(false);
+    await getCompetingSessionWorkAdmissionRelease({
       scope: fixture.scope.storePath,
       identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
     });
@@ -136,12 +165,7 @@ it.for(["durable", "memory"] as const)(
   async (storage, { signal }) => {
     const fixture = await createFixture({ active: false, storage });
     const profile = ensureProfileForEmail("history-independent-ack@example.test");
-    fixture.client.authenticatedUserProfile = {
-      profileId: profile.id,
-      displayName: "History contention fixture",
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    };
+    setClientProfile(fixture.client, profile, "History contention fixture");
     const releaseHistory = createDeferred();
     const acknowledged = createDeferred();
     const runHistory = historyLane.pool.run.bind(historyLane.pool);
@@ -170,16 +194,7 @@ it.for(["durable", "memory"] as const)(
     const sending = fixture.send(respond, {});
     try {
       await withinTest(acknowledged.promise, signal);
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        true,
-        expect.objectContaining({
-          runId: fixture.params.idempotencyKey,
-          status: "started",
-          messageSeq: 2,
-        }),
-        undefined,
-        expect.anything(),
-      );
+      expectStarted(fixture, respond);
       expect(entryAtAck).toMatchObject({
         sessionId: fixture.scope.sessionId,
         lifecycleRunId: fixture.params.idempotencyKey,
@@ -187,14 +202,7 @@ it.for(["durable", "memory"] as const)(
         restartRecoveryDeliverySourceRunId: fixture.params.idempotencyKey,
         ...(storage === "memory" ? { incognito: true } : {}),
       });
-      expect(transcriptAtAck).toHaveLength(fixture.activeTranscript.length + 1);
-      expect(transcriptAtAck?.at(-1)).toMatchObject({
-        message: {
-          role: "user",
-          content: fixture.params.message,
-          idempotencyKey: `${fixture.params.idempotencyKey}:user`,
-        },
-      });
+      expectUserTurn(fixture, transcriptAtAck);
     } finally {
       releaseHistory.resolve();
       blockedHistory.mockRestore();
@@ -286,12 +294,7 @@ it.each(["unchanged", "selected profile", "session access"] as const)(
 it("recovers an older queued input into one idle transcript commit before ACK", async () => {
   const fixture = await createFixture({ preserveContent: true });
   const profile = ensureProfileForEmail("queued-input-upgrade@example.test");
-  fixture.client.authenticatedUserProfile = {
-    profileId: profile.id,
-    displayName: "Queued input upgrade fixture",
-    hasAvatar: false,
-    updatedAt: profile.updatedAt,
-  };
+  setClientProfile(fixture.client, profile, "Queued input upgrade fixture");
   try {
     await fixture.send();
     await fixture.dispatchedRecorder;
@@ -320,16 +323,7 @@ it("recovers an older queued input into one idle transcript commit before ACK", 
         }
       }),
     );
-    expect(response).toHaveBeenCalledExactlyOnceWith(
-      true,
-      expect.objectContaining({
-        runId: fixture.params.idempotencyKey,
-        status: "started",
-        messageSeq: 2,
-      }),
-      undefined,
-      expect.anything(),
-    );
+    expectStarted(fixture, response);
     expect(claimAtAck).toMatchObject({
       sessionId: fixture.scope.sessionId,
       restartRecoveryDeliveryRunId: fixture.params.idempotencyKey,
@@ -358,12 +352,7 @@ it.for(["dispatch", "failure", "cancel"] as const)(
   async (outcome, { signal }) => {
     const fixture = await createFixture({ active: false });
     const profile = ensureProfileForEmail("preparation-ack@example.test");
-    fixture.client.authenticatedUserProfile = {
-      profileId: profile.id,
-      displayName: "Preparation fixture",
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    };
+    setClientProfile(fixture.client, profile, "Preparation fixture");
     const entered = createDeferred();
     const release = createDeferred();
     const waitForPreparation = async () => {
@@ -415,16 +404,7 @@ it.for(["dispatch", "failure", "cancel"] as const)(
     const sending = fixture.send(respond);
     try {
       await withinTest(entered.promise, signal);
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        true,
-        expect.objectContaining({
-          runId: fixture.params.idempotencyKey,
-          status: "started",
-          messageSeq: 2,
-        }),
-        undefined,
-        expect.anything(),
-      );
+      expectStarted(fixture, respond);
       expect(acknowledged).toEqual({
         claim: {
           sessionId: fixture.scope.sessionId,
@@ -446,14 +426,7 @@ it.for(["dispatch", "failure", "cancel"] as const)(
         acceptedAfter,
       );
       const admittedTranscript = loadTranscriptEventsSync(fixture.scope);
-      expect(admittedTranscript).toHaveLength(fixture.activeTranscript.length + 1);
-      expect(admittedTranscript.at(-1)).toMatchObject({
-        message: {
-          role: "user",
-          content: fixture.params.message,
-          idempotencyKey: `${fixture.params.idempotencyKey}:user`,
-        },
-      });
+      expectUserTurn(fixture, admittedTranscript);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
       if (outcome === "cancel") {

@@ -2,32 +2,28 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   isEmbeddedAgentRunHandleActive,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunOwner,
+  resolveActiveEmbeddedRunOwnerForOperation,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  onAgentEventForRun,
+  rotateAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
-import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
-import {
-  logSessionStateChange,
-  startGatewayDiagnosticHeartbeat,
-  stopGatewayDiagnosticHeartbeat,
-} from "../../logging/diagnostic.js";
+import { logSessionStateChange } from "../../logging/diagnostic.js";
+import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { isReplyRunEvidenceStale } from "../../sessions/session-controller.state.js";
+import { steerSessionControllerOperation } from "../../sessions/session-controller.steer.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -45,6 +41,7 @@ import {
   readLaunchToolNames,
   placements,
   seedActivePlacement,
+  sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
@@ -58,13 +55,14 @@ describe("cloud worker run ownership", () => {
   afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each([
-    { cancellation: "user", firstToolDelayMs: 0 },
-    { cancellation: "deadline", firstToolDelayMs: 10 * 60_000 },
+    { cancellation: "user", firstToolDelayMs: 0, collisionAt: "cancellation" },
+    { cancellation: "deadline", firstToolDelayMs: 10 * 60_000, collisionAt: "progress" },
   ] as const)(
-    "keeps a bounded remote tool alive until $cancellation cancellation after a $firstToolDelayMs ms tool-start delay",
-    async ({ cancellation, firstToolDelayMs }) => {
-      const turnStartedAtMs = Date.UTC(2026, 7, 29);
-      vi.useFakeTimers({ toFake: ["Date"], now: turnStartedAtMs });
+    "keeps a bounded remote tool alive until $cancellation cancellation with a shared session ID at $collisionAt",
+    async ({ cancellation, firstToolDelayMs, collisionAt }) => {
+      let now = Date.UTC(2026, 7, 29);
+      const turnStartedAtMs = now;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
       await seedActivePlacement();
       const launched = createDeferred();
       const finishLaunch = createDeferred();
@@ -94,6 +92,10 @@ describe("cloud worker run ownership", () => {
                 request.signal?.addEventListener("abort", () => resolve(), { once: true });
               }),
             ]);
+            if (cancellation === "user") {
+              // Keep producer custody until its final worker receipt has been acknowledged.
+              await finishLaunch.promise;
+            }
             throw new Error("worker turn cancelled");
           },
         }),
@@ -104,8 +106,26 @@ describe("cloud worker run ownership", () => {
       const operation = createReplyOperation({
         sessionId: SESSION_ID,
         sessionKey: SESSION_KEY,
+        target: captureSessionTarget({
+          storeScope: sessionTarget.storePath,
+          sessionKey: SESSION_KEY,
+          incarnation: SESSION_ID,
+        }),
         resetTriggered: false,
       });
+      let otherOperation: ReturnType<typeof createReplyOperation> | undefined;
+      const collideSessionId = () => {
+        otherOperation = createReplyOperation({
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          target: captureSessionTarget({
+            storeScope: `${sessionTarget.storePath}.other`,
+            sessionKey: SESSION_KEY,
+            incarnation: SESSION_ID,
+          }),
+          resetTriggered: false,
+        });
+      };
       operation.setPhase("running");
       const runId = "run-bounded-worker-tool";
       registerAgentRunContext(runId, {
@@ -153,10 +173,7 @@ describe("cloud worker run ownership", () => {
         credentialExpiresAtMs: Date.now() + input.timeoutMs,
       };
       const receiver = createWorkerLiveEventReceiver();
-      vi.useFakeTimers({
-        toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
-        now: turnStartedAtMs + firstToolDelayMs,
-      });
+      now = turnStartedAtMs + firstToolDelayMs;
       const previousDiagnostics = areDiagnosticsEnabledForProcess();
       setDiagnosticsEnabledForProcess(true);
       logSessionStateChange({
@@ -164,20 +181,10 @@ describe("cloud worker run ownership", () => {
         sessionKey: SESSION_KEY,
         state: "processing",
       });
-      const heartbeatClock = createGatewaySchedulerClock(Date.now());
-      let recovery: ReturnType<typeof recoverStuckDiagnosticSession> | undefined;
-      startGatewayDiagnosticHeartbeat(
-        createTestGatewayScheduler(heartbeatClock.clock),
-        { diagnostics: { enabled: true } },
-        {
-          recoverStuckSession: (request) => {
-            recovery = recoverStuckDiagnosticSession(request);
-            return recovery;
-          },
-          sampleLiveness: () => null,
-        },
-      );
       try {
+        if (collisionAt === "progress") {
+          collideSessionId();
+        }
         expect(
           await receiver.apply({
             readAckedSeq: () => 0,
@@ -200,7 +207,7 @@ describe("cloud worker run ownership", () => {
             },
           }),
         ).toEqual({ ok: true, result: { ackedSeq: 1 } });
-        await vi.advanceTimersByTimeAsync(20 * 60_000 + 1 - firstToolDelayMs);
+        now = turnStartedAtMs + 20 * 60_000 + 1;
 
         expect(operation.abortSignal.aborted).toBe(false);
         expect(isReplyRunEvidenceStale(operation)).toBe(false);
@@ -212,12 +219,49 @@ describe("cloud worker run ownership", () => {
           hasActiveEmbeddedRun: true,
         });
         await expect(
-          queueEmbeddedAgentMessageWithOutcomeAsync(SESSION_ID, "follow up"),
-        ).resolves.toMatchObject({ queued: false, reason: "not_streaming" });
+          steerSessionControllerOperation({ operation, text: "follow up", options: {} }),
+        ).resolves.toMatchObject({
+          status: "rejected",
+          reason: "injection_unavailable",
+        });
         if (cancellation === "user") {
-          expect(resolveActiveEmbeddedRunOwner(SESSION_ID)?.abort()).toBe(true);
+          collideSessionId();
+          expect(resolveActiveEmbeddedRunOwnerForOperation(operation)?.abort()).toBe(true);
           expect(placements.validateTurnClaim(turnClaim)).toBe(true);
           await expect(turnCapability.run(async () => "late effect")).rejects.toThrow();
+          const finishing = {
+            runEpoch: OWNER_EPOCH,
+            lastAckedSeq: 1,
+            seq: 2,
+            runId,
+            event: {
+              kind: "lifecycle" as const,
+              payload: { phase: "finishing" as const, aborted: true, endedAt: now },
+            },
+          };
+          const lateEvent = vi.fn();
+          const unsubscribe = onAgentEventForRun(runId, lateEvent);
+          try {
+            expect(
+              await receiver.apply({
+                readAckedSeq: () => 0,
+                source: turnCapability,
+                identity: { ...identity, turnClaim: { ...turnClaim, claimId: "foreign-claim" } },
+                request: finishing,
+              }),
+            ).toEqual({ ok: false, details: { reason: "invalid-event" } });
+            expect(
+              await receiver.apply({
+                readAckedSeq: () => 0,
+                source: turnCapability,
+                identity,
+                request: finishing,
+              }),
+            ).toEqual({ ok: true, result: { ackedSeq: 2 } });
+            expect(lateEvent).not.toHaveBeenCalled();
+          } finally {
+            unsubscribe();
+          }
         } else {
           expect(
             await receiver.apply({
@@ -241,22 +285,19 @@ describe("cloud worker run ownership", () => {
               },
             }),
           ).toEqual({ ok: true, result: { ackedSeq: 2 } });
-          vi.setSystemTime(turnStartedAtMs + input.timeoutMs);
+          now = turnStartedAtMs + input.timeoutMs - 1;
           expect(isReplyRunEvidenceStale(operation)).toBe(false);
-          vi.setSystemTime(turnStartedAtMs + input.timeoutMs + 1);
+          now += 1;
           expect(isReplyRunEvidenceStale(operation)).toBe(true);
-          heartbeatClock.setTime(Date.now());
-          await heartbeatClock.wake();
-          // A delayed heartbeat defers recovery until the next healthy tick.
-          vi.setSystemTime(Date.now() + 30_000);
-          heartbeatClock.setTime(Date.now());
-          await heartbeatClock.wake();
-          expect(recovery).toBeDefined();
-          await recovery;
+          await operation.watchdog.tick();
           expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
         }
         expect(workerSignal?.aborted).toBe(true);
+        expect(otherOperation?.abortSignal.aborted).toBe(false);
+        finishLaunch.resolve();
         await attempt;
+        operation.complete();
+        await operation.ownerSettlement;
         expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(false);
         expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
         expect(
@@ -264,17 +305,84 @@ describe("cloud worker run ownership", () => {
         ).toBeUndefined();
         expect(environments.destroy).not.toHaveBeenCalled();
       } finally {
-        stopGatewayDiagnosticHeartbeat();
         setDiagnosticsEnabledForProcess(previousDiagnostics);
         finishLaunch.resolve();
         operation.abortByUser();
         await attempt;
         operation.complete();
+        otherOperation?.complete();
         receiver.clear();
-        vi.useRealTimers();
+        clock.mockRestore();
       }
     },
   );
+
+  it("uses accepted approval expiry and live custody without trusting worker events", async () => {
+    const { captureWorkerTurnLiveEventOwner, createWorkerTurnRunOwner } =
+      await import("./worker-turn-run-owner.js");
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    await seedActivePlacement();
+    const runId = "worker-approval-wait";
+    const claim = await placements.claimTurn({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      runId,
+      claimId: "approval-wait-claim",
+      owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+    });
+    const operation = createReplyOperation({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    const worker = await createWorkerTurnRunOwner({
+      placements,
+      claim,
+      sessionKey: SESSION_KEY,
+      turn: { ...turn(runId), timeoutMs: 30 * 60_000, replyOperation: operation },
+      isReplyDelivered: () => false,
+    });
+    const owner = captureWorkerTurnLiveEventOwner({ sessionId: SESSION_ID, turnClaim: claim });
+    expect(
+      captureWorkerTurnLiveEventOwner({ sessionId: "different-session", turnClaim: claim }),
+    ).toBeUndefined();
+    let pending = true;
+    const expiresAtMs = now + 12 * 60_000;
+    const wait = owner?.beginApprovalWait(expiresAtMs, () => pending);
+    try {
+      expect(wait).toBeDefined();
+      clock.mockReturnValue(now + 7 * 60_000);
+      expect(operation.watchdog.decide()).toMatchObject({
+        action: "observe",
+        reason: "approval",
+        deadlineAtMs: expiresAtMs,
+      });
+      pending = false;
+      expect(operation.watchdog.decide()).toMatchObject({
+        action: "stop",
+        reason: "semantic_stall",
+      });
+      pending = true;
+      clock.mockReturnValue(expiresAtMs);
+      expect(operation.watchdog.decide()).toMatchObject({
+        action: "stop",
+        reason: "semantic_stall",
+      });
+      wait?.close();
+      expect(operation.watchdog.snapshot().waits).toEqual([]);
+      await placements.releaseTurn(claim);
+      owner?.beginApprovalWait(expiresAtMs + 60_000, () => true);
+      expect(operation.watchdog.snapshot().waits).toEqual([]);
+    } finally {
+      wait?.close();
+      worker.dispose();
+      operation.complete();
+      clock.mockRestore();
+    }
+  });
 
   it.each([
     { closure: "replacement", cancelled: false },
@@ -300,6 +408,12 @@ describe("cloud worker run ownership", () => {
         owner: { kind: "worker" as const, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       };
       const firstClaim = await placements.claimTurn({ ...claimInput, claimId: "first-claim" });
+      const operation = createReplyOperation({
+        sessionKey: SESSION_KEY,
+        sessionId: SESSION_ID,
+        agentId: "main",
+        resetTriggered: false,
+      });
       let assertSettlementCurrent: (() => void) | undefined;
       const first = await withGatewayToolCallerIdentity(
         {
@@ -320,7 +434,7 @@ describe("cloud worker run ownership", () => {
           createWorkerTurnRunOwner({
             placements,
             claim: firstClaim,
-            turn: turn(runId),
+            turn: { ...turn(runId), replyOperation: operation },
             isReplyDelivered: () => false,
             sessionKey: SESSION_KEY,
           }),
@@ -355,34 +469,59 @@ describe("cloud worker run ownership", () => {
         },
       };
       let replacement: Awaited<ReturnType<typeof createWorkerTurnRunOwner>> | undefined;
+      let replacementOperation: ReturnType<typeof createReplyOperation> | undefined;
+
       try {
         if (closure === "shutdown") {
           rotateAgentEventLifecycleGeneration();
           expect(resolveActiveEmbeddedRunOwner(SESSION_ID)).toBeUndefined();
           expect(first.signal.aborted).toBe(true);
         } else if (closure === "same-claim replacement") {
+          first.dispose();
+          await placements.releaseTurn(firstClaim);
+          operation.complete();
+          await operation.ownerSettlement;
+          const readmittedClaim = await placements.claimTurn({
+            ...claimInput,
+            claimId: firstClaim.claimId,
+          });
+          replacementOperation = createReplyOperation({
+            sessionKey: SESSION_KEY,
+            sessionId: SESSION_ID,
+            agentId: "main",
+            resetTriggered: false,
+          });
           replacement = await createWorkerTurnRunOwner({
             placements,
-            claim: firstClaim,
-            turn: turn(runId),
+            claim: readmittedClaim,
+            turn: { ...turn(runId), replyOperation: replacementOperation },
             isReplyDelivered: () => false,
             sessionKey: SESSION_KEY,
           });
           expect(captureWorkerTurnLiveEventOwner(identity)).not.toBe(eventOwner);
         } else {
           await placements.releaseTurn(firstClaim);
-          expect(() => assertSettlementCurrent?.()).toThrow("settlement is closed");
           if (closure === "same-claim readmission") {
             await placements.claimTurn({ ...claimInput, claimId: firstClaim.claimId });
           } else if (closure === "replacement") {
+            first.dispose();
+            operation.complete();
+            await operation.ownerSettlement;
+
             const nextClaim = await placements.claimTurn({
               ...claimInput,
               claimId: "replacement-claim",
             });
+            replacementOperation = createReplyOperation({
+              sessionKey: SESSION_KEY,
+              sessionId: SESSION_ID,
+              agentId: "main",
+              resetTriggered: false,
+            });
             replacement = await createWorkerTurnRunOwner({
               placements,
               claim: nextClaim,
-              turn: turn(runId),
+              turn: { ...turn(runId), replyOperation: replacementOperation },
               isReplyDelivered: () => false,
               sessionKey: SESSION_KEY,
             });
@@ -410,13 +549,16 @@ describe("cloud worker run ownership", () => {
       } finally {
         first.dispose();
         replacement?.dispose();
+        replacementOperation?.complete();
+        operation.complete();
       }
     },
   );
   it.each(["caller", "abort", "lifecycle", "claim snapshot"] as const)(
     "retains exact construction ownership after delayed preparation: %s",
     async (outcome) => {
-      const { createWorkerTurnRunOwner } = await import("./worker-turn-run-owner.js");
+      const { captureWorkerTurnLiveEventOwner, createWorkerTurnRunOwner } =
+        await import("./worker-turn-run-owner.js");
       await seedActivePlacement();
       const runId = "run-preparing-worker-owner";
       const claim = await placements.claimTurn({
@@ -427,10 +569,16 @@ describe("cloud worker run ownership", () => {
         claimId: "preparing-claim",
         owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       });
+      const operation = createReplyOperation({
+        sessionKey: SESSION_KEY,
+        sessionId: SESSION_ID,
+        agentId: "main",
+        resetTriggered: false,
+      });
       const first = await createWorkerTurnRunOwner({
         placements,
         claim,
-        turn: turn(runId),
+        turn: { ...turn(runId), replyOperation: operation },
         isReplyDelivered: () => false,
         sessionKey: SESSION_KEY,
       });
@@ -455,7 +603,7 @@ describe("cloud worker run ownership", () => {
       const attempt = createWorkerTurnRunOwner({
         placements,
         claim: requested,
-        turn: { ...turn(runId), abortSignal: controller.signal },
+        turn: { ...turn(runId), abortSignal: controller.signal, replyOperation: operation },
         isReplyDelivered: () => false,
         sessionKey: SESSION_KEY,
         assertCurrent: () => {
@@ -490,9 +638,11 @@ describe("cloud worker run ownership", () => {
         }
         resume.resolve();
         if (outcome === "claim snapshot") {
-          const owner = await attempt;
-          expect(owner.claim).toEqual(claim);
-          expect(owner.claim).toBe(authority.claim);
+          await attempt;
+          expect(authority.claim).toEqual(claim);
+          expect(
+            captureWorkerTurnLiveEventOwner({ sessionId: SESSION_ID, turnClaim: claim }),
+          ).toBeDefined();
           expect(previous?.abort()).toBe(false);
           first.dispose();
           expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(true);
@@ -507,6 +657,7 @@ describe("cloud worker run ownership", () => {
         await settled;
         created?.dispose();
         first.dispose();
+        operation.complete();
       }
     },
   );

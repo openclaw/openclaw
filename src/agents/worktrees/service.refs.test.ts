@@ -7,7 +7,10 @@ import { getRefsFullClusterLcns } from "../../../test/helpers/refs.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
-import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import {
+  ageManagedWorktreeTemplates,
+  useManagedWorktreeTestRepository,
+} from "./service.test-support.js";
 import { listTemplatesAsync } from "./template-registry-async.js";
 
 const execFileAsync = promisify(execFile);
@@ -43,10 +46,8 @@ describe.skipIf(process.platform !== "win32" || !refsRoot)(
       await git(repo, "commit", "-m", "ReFS source fixture");
       const originalHead = await git(repo, "rev-parse", "HEAD");
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-      let now = Date.now();
       const service = new ManagedWorktreeService({
         env,
-        now: () => now,
         getConfig: () => ({ worktreeRoot }),
       });
       const first = await service.create({ repoRoot: repo, name: "first", baseRef: "HEAD" });
@@ -84,7 +85,7 @@ describe.skipIf(process.platform !== "win32" || !refsRoot)(
         await git(repo, "rev-parse", "HEAD"),
       );
       await expect(fs.access(template.path)).rejects.toMatchObject({ code: "ENOENT" });
-      now += IDLE_GC_MS + 1;
+      await ageManagedWorktreeTemplates(env, Date.now() - IDLE_GC_MS - 1);
       expect((await service.gc()).removed).toEqual([]);
       expect(await listTemplatesAsync(env)).toEqual([]);
       expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("saved edit\n");

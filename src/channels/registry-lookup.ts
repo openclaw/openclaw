@@ -1,15 +1,12 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type {
-  ActivePluginChannelRegistration,
-  ActivePluginChannelRegistry,
-} from "../plugins/channel-registry-state.types.js";
-import { getActivePluginChannelRegistrySnapshotFromState } from "../plugins/runtime-channel-state.js";
+import type { ActivePluginChannelRegistration } from "../plugins/channel-registry-state.types.js";
+import {
+  getActivePluginChannelRegistrySnapshotFromState,
+  type ActivePluginChannelRegistrySnapshot,
+} from "../plugins/runtime-channel-state.js";
 
 type RegisteredChannelPluginLookup = {
-  registry: ActivePluginChannelRegistry | null;
-  channels: ActivePluginChannelRegistration[] | undefined;
-  channelCount: number;
-  version: number;
+  snapshot: ActivePluginChannelRegistrySnapshot;
   entries: ActivePluginChannelRegistration[];
   byKey: Map<string, ActivePluginChannelRegistration>;
   byId: Map<string, ActivePluginChannelRegistration>;
@@ -28,20 +25,12 @@ function setLookupEntry(
 }
 
 function buildRegisteredChannelPluginLookup(): RegisteredChannelPluginLookup {
-  const { registry, version } = getActivePluginChannelRegistrySnapshotFromState();
-  const channels = Array.isArray(registry?.channels) ? registry.channels : undefined;
-  const channelCount = channels?.length ?? 0;
+  const snapshot = getActivePluginChannelRegistrySnapshotFromState();
   const cached = registeredChannelPluginLookup;
-  if (
-    cached &&
-    cached.registry === registry &&
-    cached.channels === channels &&
-    cached.channelCount === channelCount &&
-    cached.version === version
-  ) {
+  if (cached?.snapshot === snapshot) {
     return cached;
   }
-  const entries = channels?.length ? channels : [];
+  const entries = snapshot.registry?.channels ?? [];
   const byKey = new Map<string, ActivePluginChannelRegistration>();
   const byId = new Map<string, ActivePluginChannelRegistration>();
   for (const entry of entries) {
@@ -56,10 +45,7 @@ function buildRegisteredChannelPluginLookup(): RegisteredChannelPluginLookup {
     }
   }
   registeredChannelPluginLookup = {
-    registry,
-    channels,
-    channelCount,
-    version,
+    snapshot,
     entries,
     byKey,
     byId,

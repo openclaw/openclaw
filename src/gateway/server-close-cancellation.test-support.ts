@@ -1,10 +1,9 @@
 import { expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
-import {
-  createReplyOperation,
-  type ReplyOperation,
-} from "../auto-reply/reply/reply-run-registry.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
   createGatewayCloseTestHandlerFactory,
@@ -24,14 +23,17 @@ export function registerGatewayCancellationTests({
   ) => ReturnType<ReturnType<typeof createGatewayCloseTestHandlerFactory>>;
   setShutdownHook: (hook: () => Promise<void>) => void;
 }) {
-  it("cancels received work before ordinary shutdown hooks without a recovery marker", async () => {
+  it("records recovery before canceling received work and running ordinary shutdown hooks", async () => {
     const order: string[] = [];
-    const marker = vi.fn();
+    const marker = vi.fn(() => {
+      order.push("marker");
+    });
     setShutdownHook(async () => {
       order.push("hook");
     });
     const close = createClose({
-      cancelReceivedWork: () => {
+      cancelReceivedWork: (reason) => {
+        expect(isAgentRunRestartAbortReason(reason)).toBe(true);
         order.push("cancel");
       },
       markMainSessionsAbortedForRestart: marker,
@@ -40,8 +42,8 @@ export function registerGatewayCancellationTests({
       },
     });
     await close();
-    expect(order).toEqual(["cancel", "hook", "dispose"]);
-    expect(marker).not.toHaveBeenCalled();
+    expect(order).toEqual(["marker", "cancel", "hook", "dispose"]);
+    expect(marker).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(
@@ -55,9 +57,16 @@ export function registerGatewayCancellationTests({
           sessionKey: key,
           sessionId: key,
           resetTriggered: false,
+          target: captureSessionTarget({
+            storeScope: "/synthetic/gateway-close/cancellation.sqlite",
+            sessionKey: key,
+            incarnation: key,
+            agentId: "main",
+          }),
         });
         operation.setPhase("running");
         bindGatewayContextResolver(operation, resolver);
+        operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
         operations.push(operation);
         return operation;
       };
@@ -77,6 +86,7 @@ export function registerGatewayCancellationTests({
       const receivedWork = new AbortController();
       const cancelReceivedWork = vi.fn((reason?: Error) => receivedWork.abort(reason));
       const observed: boolean[] = [];
+      let finalizingWasPreserved = false;
       const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(
         async () => {
           markerEntered.resolve(undefined);
@@ -93,6 +103,10 @@ export function registerGatewayCancellationTests({
         channelIds: ["telegram"],
         stopChannel: async () => {
           observed.push(owned.abortSignal.aborted && receivedWork.signal.aborted);
+          finalizingWasPreserved = !finalizing.abortSignal.aborted && finalizing.result === null;
+          // Captured owners finish their real cleanup even when cancellation is refused.
+          finalizing.complete();
+          reboundDuringAbort.complete();
         },
         disposeAllCodeModeRuns: () => {
           observed.push(owned.abortSignal.aborted && receivedWork.signal.aborted);
@@ -120,7 +134,7 @@ export function registerGatewayCancellationTests({
         expect(reboundDuringAbort.abortSignal.aborted).toBe(false);
         expect(replacement.abortSignal.aborted).toBe(false);
         expect(finalizing.abortSignal.aborted).toBe(false);
-        expect(finalizing.result).toBeNull();
+        expect(finalizingWasPreserved).toBe(true);
         expect(result.warnings.includes("restart-main-session-marker")).toBe(markerFails);
       } finally {
         markerCommitted.resolve(undefined);

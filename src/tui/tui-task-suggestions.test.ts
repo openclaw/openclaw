@@ -1,17 +1,13 @@
-import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle } from "@earendil-works/pi-tui";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { createDeferred as deferred } from "../../test/helpers/promise.js";
+import {
+  captureChoicePromptSelector,
+  type TestChoiceSelector as TestSelector,
+} from "./components/choice-prompt.test-support.js";
 import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
-
-type TestSelector = Component & {
-  items: SelectItem[];
-  onSelect?: (item: SelectItem) => void;
-  onCancel?: () => void;
-  onSelectionChange?: (item: SelectItem) => void;
-  setSelectedIndex: ReturnType<typeof vi.fn<(index: number) => void>>;
-};
 
 function suggestionPayload(overrides: Record<string, unknown> = {}) {
   return {
@@ -27,12 +23,23 @@ function suggestionPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const controllers: Array<ReturnType<typeof createTuiTaskSuggestionController>> = [];
+
+afterEach(async () => {
+  for (const controller of controllers) {
+    controller.dispose();
+  }
+  controllers.length = 0;
+  await new Promise(setImmediate);
+});
+
 function createHarness() {
   const selectors: TestSelector[] = [];
   const addSystem = vi.fn();
   const closeOverlay = vi.fn();
   const overlayHandles: OverlayHandle[] = [];
-  const openOverlay = vi.fn((_component: Component) => {
+  const openOverlay = vi.fn((component: Component) => {
+    selectors.push(captureChoicePromptSelector(component));
     const handle = {
       hide: vi.fn(),
       setHidden: vi.fn(),
@@ -69,18 +76,8 @@ function createHarness() {
     closeOverlay,
     requestRender,
     onAccepted,
-    createSelector: (items) => {
-      const selector = {
-        items,
-        setSelectedIndex: vi.fn<(index: number) => void>(),
-        render: () => ["TASK ACTIONS"],
-        handleInput: () => undefined,
-        invalidate: () => undefined,
-      } satisfies TestSelector;
-      selectors.push(selector);
-      return selector;
-    },
   });
+  controllers.push(controller);
   return {
     controller,
     selectors,
@@ -172,7 +169,7 @@ describe("TUI task suggestions", () => {
     expect(firstPage).toContain("instruction-01");
     expect(firstPage).not.toContain("instruction-20");
     expect(firstPage).toContain("PgUp/PgDn to inspect");
-    expect(firstPage).toContain("TASK ACTIONS");
+    expect(firstPage).toContain("Dismiss");
 
     const pages = [firstPage];
     for (let page = 0; page < 3; page += 1) {
@@ -181,7 +178,7 @@ describe("TUI task suggestions", () => {
         expectDefined(prompt, "prompt test invariant").render(80).join("\n"),
       );
       pages.push(rendered);
-      expect(rendered).toContain("TASK ACTIONS");
+      expect(rendered).toContain("Dismiss");
     }
     expect(pages.join("\n")).toContain("instruction-20");
     expect(harness.requestRender).toHaveBeenCalled();
@@ -202,7 +199,7 @@ describe("TUI task suggestions", () => {
         expectDefined(prompt, "prompt test invariant").render(24).join("\n"),
       );
       pages.push(rendered);
-      expect(rendered).toContain("TASK ACTIONS");
+      expect(rendered).toContain("Dismiss");
       expectDefined(prompt, "prompt test invariant").handleInput?.("\u001b[6~");
     }
     expect(pages.join("\n").replace(/\s/g, "")).toContain("distinguishing-project");
@@ -318,23 +315,29 @@ describe("TUI task suggestions", () => {
   it("does not switch sessions after the operator navigates away during acceptance", async () => {
     const harness = createHarness();
     const pendingAccept = deferred<{ taskId: string; key: string }>();
-    harness.acceptTaskSuggestion.mockReturnValueOnce(pendingAccept.promise);
-    harness.controller.handleEvent("task.suggestion", {
-      action: "created",
-      suggestion: suggestionPayload(),
-    });
+    try {
+      harness.acceptTaskSuggestion.mockReturnValueOnce(pendingAccept.promise);
+      harness.controller.handleEvent("task.suggestion", {
+        action: "created",
+        suggestion: suggestionPayload(),
+      });
 
-    const accept = { value: "accept", label: "Start in a new session" };
-    harness.selectors[0]?.onSelect?.(accept);
-    harness.selectors[0]?.onSelect?.(accept);
-    harness.setSessionKey("agent:main:other");
-    harness.controller.sessionChanged();
-    pendingAccept.resolve({ taskId: "task_1", key: "agent:main:task" });
+      const accept = { value: "accept", label: "Start in a new session" };
+      harness.selectors[0]?.onSelect?.(accept);
+      harness.selectors[0]?.onSelect?.(accept);
+      harness.setSessionKey("agent:main:other");
+      harness.controller.sessionChanged();
+      pendingAccept.resolve({ taskId: "task_1", key: "agent:main:task" });
 
-    await vi.waitFor(() => {
-      expect(harness.addSystem).toHaveBeenCalledWith("follow-up task started in agent:main:task");
-    });
-    expect(harness.onAccepted).not.toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(harness.addSystem).toHaveBeenCalledWith("follow-up task started in agent:main:task");
+      });
+      expect(harness.onAccepted).not.toHaveBeenCalled();
+    } finally {
+      pendingAccept.resolve({ taskId: "task_1", key: "agent:main:task" });
+      await Promise.allSettled([pendingAccept.promise]);
+      await new Promise(setImmediate);
+    }
   });
 
   it.each(["accept", "dismiss"])(
@@ -342,41 +345,47 @@ describe("TUI task suggestions", () => {
     async (value) => {
       const harness = createHarness();
       const pending = deferred<{ taskId: string; key: string; dismissed: boolean }>();
-      const action =
-        value === "accept" ? harness.acceptTaskSuggestion : harness.dismissTaskSuggestion;
-      action.mockReturnValueOnce(pending.promise);
-      harness.listTaskSuggestions.mockResolvedValue([suggestionPayload()]);
-      await harness.controller.refresh();
-      const item = expectDefined(
-        harness.selectors[0]?.items.find((entry) => entry.value === value),
-        "pending task action",
-      );
-      harness.selectors[0]?.onSelect?.(item);
-      if (value === "accept") {
+      try {
+        const action =
+          value === "accept" ? harness.acceptTaskSuggestion : harness.dismissTaskSuggestion;
+        action.mockReturnValueOnce(pending.promise);
+        harness.listTaskSuggestions.mockResolvedValue([suggestionPayload()]);
+        await harness.controller.refresh();
+        const item = expectDefined(
+          harness.selectors[0]?.items.find((entry) => entry.value === value),
+          "pending task action",
+        );
         harness.selectors[0]?.onSelect?.(item);
+        if (value === "accept") {
+          harness.selectors[0]?.onSelect?.(item);
+        }
+        expect(action).toHaveBeenCalledTimes(1);
+
+        harness.setSessionKey("agent:main:other");
+        harness.controller.sessionChanged();
+        harness.setSessionKey("agent:main:main");
+        harness.controller.sessionChanged();
+        await harness.controller.refresh();
+        harness.controller.handleEvent("task.suggestion", {
+          action: "created",
+          suggestion: suggestionPayload(),
+        });
+        expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+
+        pending.resolve({ taskId: "task_1", key: "agent:main:task", dismissed: true });
+        await new Promise(setImmediate);
+        expect(action).toHaveBeenCalledTimes(1);
+        expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+        expect(harness.addSystem).toHaveBeenCalledWith(
+          value === "accept"
+            ? "follow-up task started in agent:main:task"
+            : "follow-up task dismissed",
+        );
+      } finally {
+        pending.resolve({ taskId: "task_1", key: "agent:main:task", dismissed: true });
+        await Promise.allSettled([pending.promise]);
+        await new Promise(setImmediate);
       }
-      expect(action).toHaveBeenCalledTimes(1);
-
-      harness.setSessionKey("agent:main:other");
-      harness.controller.sessionChanged();
-      harness.setSessionKey("agent:main:main");
-      harness.controller.sessionChanged();
-      await harness.controller.refresh();
-      harness.controller.handleEvent("task.suggestion", {
-        action: "created",
-        suggestion: suggestionPayload(),
-      });
-      expect(harness.openOverlay).toHaveBeenCalledTimes(1);
-
-      pending.resolve({ taskId: "task_1", key: "agent:main:task", dismissed: true });
-      await new Promise(setImmediate);
-      expect(action).toHaveBeenCalledTimes(1);
-      expect(harness.openOverlay).toHaveBeenCalledTimes(1);
-      expect(harness.addSystem).toHaveBeenCalledWith(
-        value === "accept"
-          ? "follow-up task started in agent:main:task"
-          : "follow-up task dismissed",
-      );
     },
   );
 
@@ -386,54 +395,66 @@ describe("TUI task suggestions", () => {
   ])("ignores $value completion after disposal (fails=$fails)", async ({ value, fails }) => {
     const harness = createHarness();
     const pending = deferred<{ taskId: string; key: string; dismissed: boolean }>();
-    const action =
-      value === "accept" ? harness.acceptTaskSuggestion : harness.dismissTaskSuggestion;
-    action.mockReturnValueOnce(pending.promise);
-    harness.controller.handleEvent("task.suggestion", {
-      action: "created",
-      suggestion: suggestionPayload(),
-    });
-    const item = expectDefined(
-      harness.selectors[0]?.items.find((entry) => entry.value === value),
-      "pending task action",
-    );
-    harness.selectors[0]?.onSelect?.(item);
-    if (value === "accept") {
+    try {
+      const action =
+        value === "accept" ? harness.acceptTaskSuggestion : harness.dismissTaskSuggestion;
+      action.mockReturnValueOnce(pending.promise);
+      harness.controller.handleEvent("task.suggestion", {
+        action: "created",
+        suggestion: suggestionPayload(),
+      });
+      const item = expectDefined(
+        harness.selectors[0]?.items.find((entry) => entry.value === value),
+        "pending task action",
+      );
       harness.selectors[0]?.onSelect?.(item);
-    }
-    expect(action).toHaveBeenCalledTimes(1);
-    harness.controller.dispose();
-    harness.requestRender.mockClear();
-    if (fails) {
-      pending.reject(new Error("gateway unavailable"));
-    } else {
-      pending.resolve({ taskId: "task_1", key: "agent:main:task", dismissed: true });
-    }
-    await new Promise(setImmediate);
+      if (value === "accept") {
+        harness.selectors[0]?.onSelect?.(item);
+      }
+      expect(action).toHaveBeenCalledTimes(1);
+      harness.controller.dispose();
+      harness.requestRender.mockClear();
+      if (fails) {
+        pending.reject(new Error("gateway unavailable"));
+      } else {
+        pending.resolve({ taskId: "task_1", key: "agent:main:task", dismissed: true });
+      }
+      await new Promise(setImmediate);
 
-    expect(harness.onAccepted).not.toHaveBeenCalled();
-    expect(harness.addSystem).not.toHaveBeenCalled();
-    expect(harness.listTaskSuggestions).not.toHaveBeenCalled();
-    expect(harness.requestRender).not.toHaveBeenCalled();
+      expect(harness.onAccepted).not.toHaveBeenCalled();
+      expect(harness.addSystem).not.toHaveBeenCalled();
+      expect(harness.listTaskSuggestions).not.toHaveBeenCalled();
+      expect(harness.requestRender).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve({ taskId: "task_1", key: "agent:main:task", dismissed: true });
+      await Promise.allSettled([pending.promise]);
+      await new Promise(setImmediate);
+    }
   });
 
   it("ignores a failed recovery refresh after disposal", async () => {
     const harness = createHarness();
     const pending = deferred<unknown[]>();
-    harness.dismissTaskSuggestion.mockRejectedValueOnce(new Error("gateway unavailable"));
-    harness.listTaskSuggestions.mockReturnValueOnce(pending.promise);
-    harness.controller.handleEvent("task.suggestion", {
-      action: "created",
-      suggestion: suggestionPayload(),
-    });
-    harness.selectors[0]?.onSelect?.({ value: "dismiss", label: "Dismiss" });
-    await vi.waitFor(() => expect(harness.listTaskSuggestions).toHaveBeenCalledTimes(1));
-    harness.controller.dispose();
-    harness.addSystem.mockClear();
-    pending.reject(new Error("refresh unavailable"));
-    await new Promise(setImmediate);
+    try {
+      harness.dismissTaskSuggestion.mockRejectedValueOnce(new Error("gateway unavailable"));
+      harness.listTaskSuggestions.mockReturnValueOnce(pending.promise);
+      harness.controller.handleEvent("task.suggestion", {
+        action: "created",
+        suggestion: suggestionPayload(),
+      });
+      harness.selectors[0]?.onSelect?.({ value: "dismiss", label: "Dismiss" });
+      await vi.waitFor(() => expect(harness.listTaskSuggestions).toHaveBeenCalledTimes(1));
+      harness.controller.dispose();
+      harness.addSystem.mockClear();
+      pending.reject(new Error("refresh unavailable"));
+      await new Promise(setImmediate);
 
-    expect(harness.addSystem).not.toHaveBeenCalled();
+      expect(harness.addSystem).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve([]);
+      await Promise.allSettled([pending.promise]);
+      await new Promise(setImmediate);
+    }
   });
 
   it("shows only suggestions for the active session", () => {
@@ -503,17 +524,23 @@ describe("TUI task suggestions", () => {
   it("does not resurrect a resolved suggestion from a stale refresh", async () => {
     const harness = createHarness();
     const pendingList = deferred<unknown[]>();
-    harness.listTaskSuggestions.mockReturnValueOnce(pendingList.promise);
+    try {
+      harness.listTaskSuggestions.mockReturnValueOnce(pendingList.promise);
 
-    const refresh = harness.controller.refresh();
-    harness.controller.handleEvent("task.suggestion", {
-      action: "resolved",
-      taskId: "task_1",
-      resolution: "dismissed",
-    });
-    pendingList.resolve([suggestionPayload()]);
-    await refresh;
+      const refresh = harness.controller.refresh();
+      harness.controller.handleEvent("task.suggestion", {
+        action: "resolved",
+        taskId: "task_1",
+        resolution: "dismissed",
+      });
+      pendingList.resolve([suggestionPayload()]);
+      await refresh;
 
-    expect(harness.openOverlay).not.toHaveBeenCalled();
+      expect(harness.openOverlay).not.toHaveBeenCalled();
+    } finally {
+      pendingList.resolve([]);
+      await Promise.allSettled([pendingList.promise]);
+      await new Promise(setImmediate);
+    }
   });
 });

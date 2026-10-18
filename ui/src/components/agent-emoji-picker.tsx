@@ -39,7 +39,6 @@ type AgentEmojiPickerProps = {
 };
 export function AgentEmojiPicker(props: AgentEmojiPickerProps) {
   const [query, setQuery] = createSignal("");
-  const [opened, setOpened] = createSignal(false);
   const [trigger, setTrigger] = createSignal<HTMLButtonElement>();
   const id = `agent-emoji-trigger-${generateUUID()}`;
   let popover: PopoverHandle | undefined;
@@ -62,7 +61,7 @@ export function AgentEmojiPicker(props: AgentEmojiPickerProps) {
         aria-label={t("agents.identity.chooseEmoji")}
         disabled={props.disabled}
         aria-haspopup="dialog"
-        aria-expanded={opened() ? "true" : "false"}
+        aria-expanded="false"
         aria-controls={`${id}-popover`}
         onClick={() => popover?.overlay.request(!popover.overlay.open)}
       >
@@ -98,7 +97,6 @@ export function AgentEmojiPicker(props: AgentEmojiPickerProps) {
               }
             }}
             onOpenChange={(open) => {
-              setOpened(open);
               if (open) {
                 searchInput.focus({ preventScroll: true });
               } else {

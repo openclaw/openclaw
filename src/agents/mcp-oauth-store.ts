@@ -35,9 +35,9 @@ export type McpOAuthStoreWriteOptions = {
   context: OpenClawStateWorkerContext;
 };
 
-function readExisting(
+function readExisting<Command extends SqliteWorkerCommand<McpOAuthReadOnlyOperations>>(
   context: OpenClawStateWorkerContext,
-  command: SqliteWorkerCommand<McpOAuthReadOnlyOperations>,
+  command: Command,
 ) {
   return executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
@@ -60,13 +60,7 @@ export async function readMcpOAuthStoreReadOnly(
   context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
 ): Promise<McpOAuthStore> {
   const result = await readExisting(context, { type: "mcpOAuth.readOnly", input: storeKey });
-  if (result === undefined) {
-    return {};
-  }
-  if (result.ok && result.type === "mcpOAuth.readOnly") {
-    return result.value;
-  }
-  throw new Error("Unexpected MCP OAuth store read result");
+  return result?.value ?? {};
 }
 
 export async function readMcpOAuthStoreStatuses(
@@ -77,13 +71,7 @@ export async function readMcpOAuthStoreStatuses(
     return [];
   }
   const result = await readExisting(context, { type: "mcpOAuth.statuses", input: storeKeys });
-  if (result === undefined) {
-    return storeKeys.map(() => projectMcpOAuthCredentialsStatus({}));
-  }
-  if (result.ok && result.type === "mcpOAuth.statuses") {
-    return result.value;
-  }
-  throw new Error("Unexpected MCP OAuth status batch result");
+  return result?.value ?? storeKeys.map(() => projectMcpOAuthCredentialsStatus({}));
 }
 
 /** List canonical store keys matching one server/principal prefix without creating state. */
@@ -92,25 +80,13 @@ export async function listMcpOAuthStoreKeysByPrefix(
   context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
 ): Promise<string[]> {
   const result = await readExisting(context, { type: "mcpOAuth.keys", input: prefix });
-  if (result === undefined) {
-    return [];
-  }
-  if (result.ok && result.type === "mcpOAuth.keys") {
-    return result.value;
-  }
-  throw new Error("Unexpected MCP OAuth keys read result");
+  return result?.value ?? [];
 }
 
 export async function countMcpOAuthStorePrincipals(prefix: string): Promise<number> {
   const context = captureOpenClawStateWorkerContext();
   const result = await readExisting(context, { type: "mcpOAuth.countPrincipals", input: prefix });
-  if (result === undefined) {
-    return 0;
-  }
-  if (result.ok && result.type === "mcpOAuth.countPrincipals") {
-    return result.value;
-  }
-  throw new Error("Unexpected MCP OAuth principal count result");
+  return result?.value ?? 0;
 }
 
 /** Resolve one unexpired callback state without creating state or scanning credential JSON. */
@@ -119,13 +95,7 @@ export async function readMcpOAuthPendingAuthorization(
   context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
 ): Promise<string | undefined> {
   const result = await readExisting(context, { type: "mcpOAuth.pending", input: state });
-  if (result === undefined) {
-    return undefined;
-  }
-  if (result.ok && result.type === "mcpOAuth.pending") {
-    return result.value;
-  }
-  throw new Error("Unexpected MCP OAuth pending state read result");
+  return result?.value;
 }
 
 /** Apply a bounded mutation under its original live store lease. */

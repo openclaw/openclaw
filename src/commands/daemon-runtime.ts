@@ -21,7 +21,6 @@ export const GATEWAY_DAEMON_RUNTIME_OPTIONS: Array<{
   },
 ];
 
-/** Narrow arbitrary input to a supported Gateway daemon runtime id. */
 export function isGatewayDaemonRuntime(value: string | undefined): value is GatewayDaemonRuntime {
   return value === "bun" || value === "node";
 }

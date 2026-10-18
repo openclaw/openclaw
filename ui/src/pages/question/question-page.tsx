@@ -18,7 +18,8 @@ import {
 } from "../../app/question-prompt.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ChatQuestionCard } from "../chat/components/chat-question-card-view.tsx";
 import { createGatewayQuestionPanelProps } from "../chat/components/chat-question-card.ts";
 
@@ -26,210 +27,176 @@ type QuestionPageRequestError = "connection" | "load" | "unavailable" | null;
 
 type QuestionPageProps = { questionId: string };
 
-class QuestionPageController {
-  loading = true;
-  requestError: QuestionPageRequestError = null;
-  readonly questionState = createQuestionPromptState(() => this.notify());
-
-  constructor(
-    readonly context: ApplicationContext,
-    private readonly props: QuestionPageProps,
-    private readonly host: HTMLElement,
-    private readonly publish: () => void,
-  ) {}
-  get questionId() {
-    return untrack(() => this.props.questionId);
-  }
-  get prompt() {
-    return listQuestionPrompts(this.questionState).find(
-      (candidate) => candidate.id === this.questionId,
-    );
-  }
-  private notify() {
-    const panel = this.host.querySelector("openclaw-chat-question-card");
-    this.questionPanelHadFocus =
-      panel !== null &&
-      (panel.contains(document.activeElement) ||
-        (this.questionPanelHadFocus && document.activeElement === document.body));
-    this.publish();
-  }
-  private client: GatewayBrowserClient | null = null;
-  private boundQuestionId: string | undefined;
-  private operationGeneration = 0;
-  private stopGateway: (() => void) | undefined;
-  private stopGatewayEvents: (() => void) | undefined;
-  private previousDocumentTitle: string | undefined;
-  private activeDocumentTitle: string | undefined;
-  private questionPanelHadFocus = false;
-
-  connect(): void {
-    this.previousDocumentTitle = document.title;
-    this.boundQuestionId = this.questionId;
-    this.stopGateway = this.context.gateway.subscribe((snapshot) =>
-      this.applyGatewaySnapshot(snapshot),
-    );
-    this.stopGatewayEvents = this.context.gateway.subscribeEvents((event) => {
-      if (isRecord(event.payload) && event.payload.id === this.questionId) {
-        handleQuestionPromptEvent(this.questionState, event);
-      }
-    });
-    this.applyGatewaySnapshot(this.context.gateway.snapshot);
-  }
-
-  dispose(): void {
-    this.stopGateway?.();
-    this.stopGateway = undefined;
-    this.stopGatewayEvents?.();
-    this.stopGatewayEvents = undefined;
-    this.operationGeneration += 1;
-    this.client = null;
-    disposeQuestionPromptState(this.questionState);
-    if (
-      this.previousDocumentTitle !== undefined &&
-      (!this.activeDocumentTitle || document.title === this.activeDocumentTitle)
-    ) {
-      document.title = this.previousDocumentTitle;
+function createQuestionPage(context: ApplicationContext, props: QuestionPageProps) {
+  // External callbacks and completion checks read the live ID; effect admission receives its ID.
+  const questionId = () => untrack(() => props.questionId);
+  const [loading, setLoading] = createSignal(true, { ownedWrite: true });
+  const [requestError, setRequestError] = createSignal<QuestionPageRequestError>(null, {
+    ownedWrite: true,
+  });
+  let clientOwner: GatewayBrowserClient | null = null;
+  let operationGeneration = 0;
+  let questionPanel: HTMLElement | undefined;
+  let heading: HTMLHeadingElement | undefined;
+  let questionPanelHadFocus = false;
+  const rememberPanelFocus = () => {
+    questionPanelHadFocus =
+      questionPanel?.contains(document.activeElement) ||
+      (questionPanelHadFocus && document.activeElement === document.body);
+  };
+  let publishQuestions = () => {};
+  const questionState = createQuestionPromptState(() => {
+    rememberPanelFocus();
+    publishQuestions();
+  });
+  const questions = projectSource(questionState, {
+    read: listQuestionPrompts,
+    subscribe: (_state, notify) => {
+      publishQuestions = notify;
+      return () => {
+        publishQuestions = () => {};
+      };
+    },
+    equality: "revision",
+  });
+  const prompt = () => questions.read().find((candidate) => candidate.id === props.questionId);
+  const previousDocumentTitle = document.title;
+  let activeDocumentTitle: string | undefined;
+  // Gateway receipts retire question operations and rebind the prompt client synchronously before reconnect.
+  const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
+  const stopGatewayEvents = context.gateway.subscribeEvents((event) => {
+    if (isRecord(event.payload) && event.payload.id === questionId()) {
+      handleQuestionPromptEvent(questionState, event);
     }
-    this.previousDocumentTitle = undefined;
-    this.activeDocumentTitle = undefined;
-  }
-
-  bindQuestionId(): void {
-    if (this.boundQuestionId !== this.questionId) {
-      this.boundQuestionId = this.questionId;
-      this.operationGeneration += 1;
-      this.requestError = this.questionId ? null : "unavailable";
-      this.loading = Boolean(this.questionId);
-      if (this.questionId && this.client) {
-        void this.loadQuestion(this.client);
-      }
-      this.notify();
+  });
+  applyGatewaySnapshot(context.gateway.snapshot);
+  onCleanup(() => {
+    stopGateway();
+    stopGatewayEvents();
+    operationGeneration += 1;
+    clientOwner = null;
+    disposeQuestionPromptState(questionState);
+    if (!activeDocumentTitle || document.title === activeDocumentTitle) {
+      document.title = previousDocumentTitle;
     }
-  }
-
-  documentTitle(): string {
-    const prompt = listQuestionPrompts(this.questionState).find(
-      (candidate) => candidate.id === this.questionId,
-    );
-    const title = `${this.pageTitle(prompt)} — ${t("approvalPage.brandName")}`;
-    return title;
-  }
-
-  afterRender(title: string): void {
-    document.title = title;
-    this.activeDocumentTitle = title;
-    if (this.questionPanelHadFocus && !this.host.querySelector("openclaw-chat-question-card")) {
-      this.host.querySelector<HTMLElement>("#question-page-title")?.focus({ preventScroll: true });
-    }
-  }
-
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot): void {
-    try {
-      const nextClient = snapshot.phase === "connected" ? snapshot.client : null;
-      if (this.client === nextClient) {
-        if (
-          !nextClient &&
-          (snapshot.lastError ||
-            snapshot.phase === "offline" ||
-            snapshot.phase === "reload-required" ||
-            snapshot.phase === "stopped")
-        ) {
-          this.loading = false;
-          this.requestError = "connection";
-        }
+  });
+  // Gateway requests, browser title, and return focus follow the current question ID.
+  createEffect(
+    () => props.questionId,
+    (id, previous) => {
+      if (previous === undefined || id === previous) {
         return;
       }
-      this.operationGeneration += 1;
-      this.client = nextClient;
-      setQuestionPromptClient(
-        this.questionState,
-        canUseQuestionPrompts(snapshot) ? nextClient : null,
-      );
-      if (!nextClient) {
-        if (
-          listQuestionPrompts(this.questionState).some((prompt) => prompt.id === this.questionId)
-        ) {
-          this.loading = false;
-          this.requestError = "connection";
-        }
-        return;
+      operationGeneration += 1;
+      rememberPanelFocus();
+      setRequestError(id ? null : "unavailable");
+      setLoading(Boolean(id));
+      if (id && clientOwner) {
+        void loadQuestion(clientOwner, id);
       }
-      if (!this.questionId) {
-        this.loading = false;
-        this.requestError = "unavailable";
-        return;
+    },
+  );
+  createEffect(
+    () => `${pageTitle(prompt())} — ${t("approvalPage.brandName")}`,
+    (title) => {
+      document.title = title;
+      activeDocumentTitle = title;
+      if (questionPanelHadFocus && !questionPanel?.isConnected) {
+        heading?.focus({ preventScroll: true });
       }
-      void this.loadQuestion(nextClient);
-    } finally {
-      this.notify();
-    }
-  }
+    },
+  );
 
-  async loadQuestion(client: GatewayBrowserClient): Promise<void> {
-    if (!canUseQuestionPrompts(this.context.gateway.snapshot)) {
-      this.loading = false;
-      this.requestError = "unavailable";
+  function applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot): void {
+    rememberPanelFocus();
+    const nextClient = snapshot.phase === "connected" ? snapshot.client : null;
+    if (clientOwner === nextClient) {
+      if (
+        !nextClient &&
+        (snapshot.lastError ||
+          snapshot.phase === "offline" ||
+          snapshot.phase === "reload-required" ||
+          snapshot.phase === "stopped")
+      ) {
+        setLoading(false);
+        setRequestError("connection");
+      }
       return;
     }
-    const id = this.questionId;
-    const generation = ++this.operationGeneration;
-    this.loading = true;
-    this.requestError = null;
-    this.notify();
+    operationGeneration += 1;
+    clientOwner = nextClient;
+    setQuestionPromptClient(questionState, canUseQuestionPrompts(snapshot) ? nextClient : null);
+    if (!nextClient) {
+      if (listQuestionPrompts(questionState).some((candidate) => candidate.id === questionId())) {
+        setLoading(false);
+        setRequestError("connection");
+      }
+      return;
+    }
+    if (!questionId()) {
+      setLoading(false);
+      setRequestError("unavailable");
+      return;
+    }
+    void loadQuestion(nextClient);
+  }
+
+  async function loadQuestion(client: GatewayBrowserClient, id = questionId()): Promise<void> {
+    if (!canUseQuestionPrompts(context.gateway.snapshot)) {
+      setLoading(false);
+      setRequestError("unavailable");
+      return;
+    }
+    const generation = ++operationGeneration;
+    setLoading(true);
+    setRequestError(null);
+    rememberPanelFocus();
     try {
       const result = await requestQuestionGateway(client, "question.get", { id });
-      if (
-        this.client !== client ||
-        this.operationGeneration !== generation ||
-        this.questionId !== id
-      ) {
+      if (clientOwner !== client || operationGeneration !== generation || questionId() !== id) {
         return;
       }
-      if (!isRecord(result) || !isRecord(result.question) || result.question.id !== id) {
-        this.requestError = "unavailable";
+      if (result.question.id !== id) {
+        setRequestError("unavailable");
         return;
       }
       const record = result.question;
       if (
-        (record.status !== "pending" &&
-          record.status !== "answered" &&
-          record.status !== "cancelled" &&
-          record.status !== "expired") ||
-        !handleQuestionPromptEvent(this.questionState, {
+        !handleQuestionPromptEvent(questionState, {
           event: "question.requested",
           payload: { ...record, status: "pending" },
         })
       ) {
-        this.requestError = "unavailable";
+        setRequestError("unavailable");
         return;
       }
       if (record.status === "answered") {
-        const accepted = handleQuestionPromptEvent(this.questionState, {
+        const accepted = handleQuestionPromptEvent(questionState, {
           event: "question.resolved",
           payload: { id, status: "answered", answers: record.answers },
         });
         if (!accepted) {
-          this.requestError = "unavailable";
+          setRequestError("unavailable");
         }
       } else if (record.status === "cancelled" || record.status === "expired") {
-        handleQuestionPromptEvent(this.questionState, {
+        handleQuestionPromptEvent(questionState, {
           event: "question.resolved",
           payload: { id, status: record.status },
         });
       }
     } catch (error) {
-      if (this.client === client && this.operationGeneration === generation) {
-        this.requestError = isQuestionNotFoundError(error) ? "unavailable" : "load";
+      if (clientOwner === client && operationGeneration === generation) {
+        setRequestError(isQuestionNotFoundError(error) ? "unavailable" : "load");
       }
     } finally {
-      if (this.client === client && this.operationGeneration === generation) {
-        this.loading = false;
-        this.notify();
+      if (clientOwner === client && operationGeneration === generation) {
+        setLoading(false);
+        rememberPanelFocus();
       }
     }
   }
 
-  questionStatusLabel(prompt: QuestionPrompt): string {
+  function questionStatusLabel(value: QuestionPrompt): string {
     return t(
       {
         answered: "chat.questions.answered",
@@ -237,33 +204,49 @@ class QuestionPageController {
         expired: "chat.questions.expired",
         pending: "chat.questions.unavailable",
         unavailable: "chat.questions.unavailable",
-      }[prompt.status],
+      }[value.status],
     );
   }
 
-  pageTitle(prompt: QuestionPrompt | undefined): string {
-    if (this.loading) {
+  function pageTitle(value: QuestionPrompt | undefined): string {
+    if (loading()) {
       return t("common.loading");
     }
-    if (this.requestError) {
+    const error = requestError();
+    if (error) {
       return t(
-        this.requestError === "connection"
+        error === "connection"
           ? "chat.questions.disconnected"
-          : this.requestError === "load"
+          : error === "load"
             ? "chat.questions.loadFailed"
             : "chat.questions.unavailable",
       );
     }
-    return prompt && prompt.status !== "pending"
-      ? this.questionStatusLabel(prompt)
+    return value && value.status !== "pending"
+      ? questionStatusLabel(value)
       : t("chat.questions.eyebrow");
   }
 
-  retry() {
-    if (this.client) {
-      void this.loadQuestion(this.client);
-    }
-  }
+  return {
+    loading,
+    requestError,
+    prompt,
+    pageTitle,
+    questionStatusLabel,
+    questionState,
+    refreshQuestions: () => questionState.onChange(),
+    setPanel: (element: HTMLElement) => {
+      questionPanel = element;
+    },
+    setHeading: (element: HTMLHeadingElement) => {
+      heading = element;
+    },
+    retry: () => {
+      if (clientOwner) {
+        void loadQuestion(clientOwner);
+      }
+    },
+  };
 }
 
 function QuestionSummary(props: { prompt: QuestionPrompt }) {
@@ -303,39 +286,16 @@ function QuestionSummary(props: { prompt: QuestionPrompt }) {
   );
 }
 
-function QuestionPageContent(props: QuestionPageProps & { host: HTMLElement }) {
+function QuestionPageContent(props: QuestionPageProps) {
   const context = useApplication();
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const controller = new QuestionPageController(
-    context,
-    props,
-    untrack(() => props.host),
-    () => setRevision((value) => value + 1),
-  );
-  const read = () => {
-    revision();
-    return controller;
-  };
-  untrack(() => controller.connect());
-  onCleanup(() => controller.dispose());
-  createEffect(
-    () => props.questionId,
-    () => controller.bindQuestionId(),
-  );
-  createEffect(
-    () => {
-      revision();
-      return controller.documentTitle();
-    },
-    (title) => controller.afterRender(title),
-  );
+  const page = createQuestionPage(context, props);
   const panelProps = () => {
-    const prompt = read().prompt;
+    const prompt = page.prompt();
     return prompt
       ? createGatewayQuestionPanelProps(prompt, {
-          onChange: () => setRevision((value) => value + 1),
-          onSubmit: (answers) => submitQuestionPrompt(controller.questionState, prompt.id, answers),
-          onSkip: () => cancelQuestionPrompt(controller.questionState, prompt.id),
+          onChange: page.refreshQuestions,
+          onSubmit: (answers) => submitQuestionPrompt(page.questionState, prompt.id, answers),
+          onSkip: () => cancelQuestionPrompt(page.questionState, prompt.id),
         })
       : undefined;
   };
@@ -343,54 +303,54 @@ function QuestionPageContent(props: QuestionPageProps & { host: HTMLElement }) {
     <main
       class="approval-page question-page"
       aria-labelledby="question-page-title"
-      aria-busy={read().loading ? "true" : "false"}
-      data-state={read().prompt?.status ?? read().requestError ?? "loading"}
+      aria-busy={page.loading() ? "true" : "false"}
+      data-state={page.prompt()?.status ?? page.requestError() ?? "loading"}
     >
       <div class="approval-page__card approval-page__card--severity-info">
         <div class="approval-page__content">
           <Show
             when={
-              read().loading ||
-              read().requestError ||
-              !read().prompt ||
-              read().prompt?.status === "pending"
+              page.loading() ||
+              page.requestError() ||
+              !page.prompt() ||
+              page.prompt()?.status === "pending"
             }
           >
-            <h1 id="question-page-title" class="sr-only" tabindex="-1">
-              {read().pageTitle(read().prompt)}
+            <h1 ref={page.setHeading} id="question-page-title" class="sr-only" tabindex="-1">
+              {page.pageTitle(page.prompt())}
             </h1>
           </Show>
           <Show
-            when={!read().loading && !read().requestError}
+            when={!page.loading() && !page.requestError()}
             fallback={
               <div class="approval-page__state" role="status">
-                {read().pageTitle(read().prompt)}
-                <Show when={!read().loading && read().requestError === "load"}>
-                  <button type="button" class="btn" onClick={() => controller.retry()}>
+                {page.pageTitle(page.prompt())}
+                <Show when={!page.loading() && page.requestError() === "load"}>
+                  <button type="button" class="btn" onClick={() => page.retry()}>
                     {t("common.retry")}
                   </button>
                 </Show>
               </div>
             }
           >
-            <Show when={read().prompt}>
+            <Show when={page.prompt()}>
               {(prompt) => (
                 <Show
-                  when={read().prompt?.status === "pending"}
+                  when={page.prompt()?.status === "pending"}
                   fallback={
                     <div
                       class="approval-page__state"
                       data-question-status={prompt().status}
                       role="status"
                     >
-                      <h1 id="question-page-title" tabindex="-1">
-                        {read().questionStatusLabel(prompt())}
+                      <h1 ref={page.setHeading} id="question-page-title" tabindex="-1">
+                        {page.questionStatusLabel(prompt())}
                       </h1>
                       <QuestionSummary prompt={prompt()} />
                     </div>
                   }
                 >
-                  <ChatQuestionCard props={panelProps()} />
+                  <ChatQuestionCard ref={page.setPanel} props={panelProps()} />
                 </Show>
               )}
             </Show>
@@ -403,7 +363,7 @@ function QuestionPageContent(props: QuestionPageProps & { host: HTMLElement }) {
 
 defineSolidBridge<QuestionPageProps>(
   "openclaw-question-page",
-  (props, host) => <QuestionPageContent questionId={props.questionId} host={host} />,
+  (props) => <QuestionPageContent questionId={props.questionId} />,
   { properties: { questionId: { default: "", attribute: "question-id" } } },
 );
 

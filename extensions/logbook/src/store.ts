@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   openEngineWorkerStore,
-  resolveDatabaseEngineInput,
+  getDatabaseEngineInput,
   runEngineStoreOperation,
   type DatabaseEngineInput,
 } from "openclaw/plugin-sdk/database-engine-runtime";
@@ -27,16 +27,12 @@ export class LogbookStore {
   readonly framesDir: string;
   private closing: Promise<void> | undefined;
 
-  static async open(
-    dataDir: string,
-    workerModuleUrl: URL,
-    config: Parameters<typeof resolveDatabaseEngineInput>[0] = {},
-  ): Promise<LogbookStore> {
+  static async open(dataDir: string, workerModuleUrl: URL): Promise<LogbookStore> {
     if (!dataDir) {
       throw new Error("Logbook data directory is required");
     }
     const root = await canonicalPathFromExistingAncestor(path.resolve(dataDir));
-    const postgresInput = await resolveDatabaseEngineInput(config);
+    const postgresInput = getDatabaseEngineInput("logbook");
     const worker = await openEngineWorkerStore<LogbookOperations>(
       {
         moduleUrl: workerModuleUrl,
@@ -189,10 +185,8 @@ export class LogbookStore {
     return this.execute("saveStandup", { day, text });
   }
 
-  captureFrame(params: CapturedFrame): Promise<number> {
-    // Snapshot before admission so a queued caller cannot mutate the capture bytes.
-    const buffer = Buffer.from(params.buffer);
-    const input = { ...params, buffer };
+  captureFrame(input: CapturedFrame): Promise<number> {
+    const { buffer } = input;
     return this.frameIo.run(async () => {
       const contentHash = createHash("sha256").update(buffer).digest("hex");
       const previous = await this.executeWorker("lastFrame", undefined);

@@ -18,7 +18,9 @@ type CuaDriverSdk = Pick<
   | "createTrustedSession"
 >;
 
-export type CuaToolResult = import("@trycua/cua-driver").ToolResult;
+export type CuaToolResult = import("@trycua/cua-driver").ToolResult & {
+  structuredContent?: Record<string, unknown>;
+};
 
 // These numeric values are part of the pinned SDK contract. Keeping
 // them local avoids loading the native library while OpenClaw is only

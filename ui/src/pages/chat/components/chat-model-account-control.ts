@@ -10,6 +10,7 @@ import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-acc
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
+import { projectChatFields } from "../chat-field-projection.ts";
 import type { ChatModelAccountSectionViewProps } from "./chat-model-types.ts";
 
 registerModelAccountsEnglish();
@@ -43,7 +44,6 @@ export function renderChatModelAccountControl(params: {
   onSelect: (account: UserModelAccount) => Promise<boolean>;
   onAutomatic?: () => void;
   onManage?: () => void;
-  onRequestUpdate: () => void;
 }): ChatModelAccountSection | undefined {
   const { owner, selection, client } = params;
   if (!selection) {
@@ -55,15 +55,19 @@ export function renderChatModelAccountControl(params: {
     inventory.model !== params.model ||
     inventory.selection !== selection
   ) {
-    inventory = {
-      model: params.model,
-      selection,
-      accounts: [],
-      loading: false,
-      open: false,
-      error: null,
-      isCurrent: params.ownsSelection,
-    };
+    inventory = projectChatFields<AccountInventory>(
+      {
+        model: params.model,
+        selection,
+        accounts: [],
+        nextCursor: undefined,
+        loading: false,
+        open: false,
+        error: null,
+        isCurrent: params.ownsSelection,
+      },
+      ["accounts", "nextCursor", "loading", "open", "error"],
+    );
     inventories.set(owner, inventory);
   }
   const currentInventory = inventory;
@@ -75,7 +79,6 @@ export function renderChatModelAccountControl(params: {
     }
     currentInventory.loading = true;
     currentInventory.error = null;
-    params.onRequestUpdate();
     try {
       const result = await client.request<UsersListModelAccountsResult>(
         "users.listModelAccounts",
@@ -97,7 +100,6 @@ export function renderChatModelAccountControl(params: {
     } finally {
       if (ownsInventory()) {
         currentInventory.loading = false;
-        params.onRequestUpdate();
       }
     }
   };
@@ -191,7 +193,6 @@ export function renderChatModelAccountControl(params: {
   };
   const toggleAccounts = () => {
     currentInventory.open = !currentInventory.open;
-    params.onRequestUpdate();
     // Reopening retries an empty inventory after a failed load; loaded pages are reused.
     if (
       currentInventory.open &&
@@ -201,14 +202,17 @@ export function renderChatModelAccountControl(params: {
       void loadAccounts();
     }
   };
+  // The picker observes this section snapshot to resynchronize its search DOM.
+  const open = currentInventory.open;
+  const error = currentInventory.error;
   const viewProps = (startIndex: number): ChatModelAccountSectionViewProps => ({
     selectionKind: selection.kind,
     disabled: params.disabled,
     selectedIdentity,
     options,
     currentValue,
-    open: currentInventory.open,
-    error: currentInventory.error,
+    open,
+    error,
     startIndex,
     onToggle: toggleAccounts,
     onSelect: selectAccount,
@@ -216,7 +220,6 @@ export function renderChatModelAccountControl(params: {
   return {
     onClose: () => {
       currentInventory.open = false;
-      params.onRequestUpdate();
     },
     viewProps,
   };

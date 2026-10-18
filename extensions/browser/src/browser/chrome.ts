@@ -189,16 +189,10 @@ function resolveOwnedManagedChromeIdentity(params: {
   if (shell) {
     return shell;
   }
-  // One-shot launches can differ from persisted mode. Discovery is not authority:
-  // either candidate must pass the same live PID, port, command, and profile proof.
-  for (const headless of [false, true]) {
-    const exe = resolveBrowserExecutable(params.resolved, params.profile, headless);
-    const identity = exe && readOwnedManagedChromeIdentity({ ...params, exe });
-    if (exe && identity) {
-      return { exe, identity };
-    }
-  }
-  return null;
+  // Discovery is mode-independent; live PID, port, command, and profile checks own identity.
+  const exe = resolveBrowserExecutable(params.resolved, params.profile);
+  const identity = exe && readOwnedManagedChromeIdentity({ ...params, exe });
+  return exe && identity ? { exe, identity } : null;
 }
 
 function resolveOwnedManagedChromeListener(params: {
@@ -549,10 +543,9 @@ export class ManagedChromeCleanupError extends Error {
 function resolveBrowserExecutable(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
-  headless = resolveManagedBrowserHeadlessMode(resolved, profile).headless,
 ): BrowserExecutable | null {
   return resolveBrowserExecutableForPlatform(
-    { ...resolved, headless, executablePath: profile.executablePath ?? resolved.executablePath },
+    { ...resolved, executablePath: profile.executablePath ?? resolved.executablePath },
     process.platform,
   );
 }
@@ -824,7 +817,7 @@ async function launchOpenClawChromeLocked(
     );
   }
 
-  const exe = resolveBrowserExecutable(resolved, profile, headlessMode.headless);
+  const exe = resolveBrowserExecutable(resolved, profile);
   if (!exe) {
     throw new Error(
       "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).",
@@ -1351,14 +1344,11 @@ async function stopOwnedOpenClawChromeLocked(
   }
   let owner: ReturnType<typeof resolveOwnedManagedChromeIdentity>;
   try {
-    if (
-      process.platform !== "linux" &&
-      process.platform !== "darwin" &&
-      [false, true].some((headless) => {
-        const exe = resolveBrowserExecutable(resolved, profile, headless);
-        return exe && isHeadlessShellExecutable(exe.path);
-      })
-    ) {
+    const unsupportedPlatformExe =
+      process.platform !== "linux" && process.platform !== "darwin"
+        ? resolveBrowserExecutable(resolved, profile)
+        : null;
+    if (unsupportedPlatformExe && isHeadlessShellExecutable(unsupportedPlatformExe.path)) {
       return {
         status: "unverified",
         reason:

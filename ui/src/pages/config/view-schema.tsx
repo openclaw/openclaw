@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { For, createMemo } from "solid-js";
+import {
+  analyzeConfigSchema,
+  type ConfigSchemaAnalysis,
+} from "../../components/config-form.analyze.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
-import { analyzeConfigSchema, type ConfigSchemaAnalysis } from "../../components/config-form.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ConfigViewState } from "./view-types.ts";
 

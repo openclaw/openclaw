@@ -56,6 +56,7 @@ export type ModelProvidersViewProps = Omit<
   Omit<ProviderProfilesViewProps, "onAddAccount" | "addAccountDisabled"> & {
     connected: boolean;
     loading: boolean;
+    providerDetailsReady?: boolean;
     refreshing: boolean;
     error: string | null;
     providerUsageFailed: boolean;
@@ -176,7 +177,10 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
     result.status === "ok" && result.results.some((target) => target.status !== "ok");
   const presentation = hasWarnings ? "warning" : result.status === "ok" ? "success" : "error";
   return (
-    <div class={"model-providers__probe model-providers__probe--" + presentation} role="status">
+    <div
+      class={["model-providers__probe", `model-providers__probe--${presentation}`]}
+      role="status"
+    >
       <div class="model-providers__probe-summary">
         <strong>
           {hasWarnings
@@ -502,27 +506,12 @@ function renderProviderNoticeRow(text: string) {
 
 export function ModelProviders(props: ModelProvidersViewProps) {
   return (
-    <Show
-      when={props.connected}
-      fallback={
-        <SettingsPage>
-          <SettingsGroup>
-            <SettingsEmpty message={t("modelProviders.disconnected")} />
-          </SettingsGroup>
-        </SettingsPage>
-      }
-    >
-      <ConnectedModelProviders {...props} />
-    </Show>
-  );
-}
-
-function ConnectedModelProviders(props: ModelProvidersViewProps) {
-  return (
     <>
       <SettingsPage>
         <>
-          <ModelReadiness {...props} />
+          <Show when={props.connected || !props.loading}>
+            <ModelReadiness {...props} />
+          </Show>
           <div id={MODEL_SETTINGS_TARGET_IDS.behavior}>
             <DefaultModels
               {...props}
@@ -533,13 +522,22 @@ function ConnectedModelProviders(props: ModelProvidersViewProps) {
               message={props.messages.defaults}
             />
           </div>
-          {props.installedAgents}
-          <ProviderAccess {...props} />
-          {props.providerUsageStalled ? (
-            <div class="callout warning" role="status">
-              {t("usage.providerUsage.stalled")}
-            </div>
-          ) : undefined}
+          <Show
+            when={props.providerDetailsReady !== false}
+            fallback={
+              <div class="model-providers__loading">
+                <SettingsLoadingSkeleton rows={1} />
+              </div>
+            }
+          >
+            {props.installedAgents}
+            <ProviderAccess {...props} />
+            {props.providerUsageStalled ? (
+              <div class="callout warning" role="status">
+                {t("usage.providerUsage.stalled")}
+              </div>
+            ) : undefined}
+          </Show>
         </>
       </SettingsPage>
       <AddProvider {...props} />

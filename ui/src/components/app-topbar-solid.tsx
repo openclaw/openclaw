@@ -1,17 +1,20 @@
+import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
-import { LitContent } from "../lit/solid-content.tsx";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
+import type { GatewayStatusProps } from "./gateway-status.ts";
+import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 import "./tooltip.ts";
 
 type Props = {
   navDrawerOpen: boolean;
-  newSessionAction: unknown;
+  gatewayStatus?: GatewayStatusProps | null;
+  newSessionAction: (() => JSX.Element) | undefined;
   resourceBasePath: string;
   environment: ControlUiEnvironment | null;
   onToggleDrawer: ((trigger: HTMLElement) => void) | undefined;
@@ -34,13 +37,22 @@ defineSolidBridge<Props>(
               onClick={(event) => props.onToggleDrawer?.(event.currentTarget)}
               aria-label={drawerLabel()}
               aria-expanded={props.navDrawerOpen ? "true" : "false"}
+              data-connection-status={props.gatewayStatus?.kind ?? undefined}
             >
               <span class="nav-collapse-toggle__icon" aria-hidden="true">
                 <Icon name="menu" />
               </span>
+              <Show when={props.gatewayStatus?.kind}>
+                <span class="gateway-status-dot" aria-hidden="true" />
+              </Show>
             </button>
           </openclaw-tooltip>
           <div class="topnav-shell__content" onMouseDown={beginNativeWindowDrag}>
+            <Show when={props.gatewayStatus?.kind && props.gatewayStatus.kind !== "connected"}>
+              <div class="mobile-connection-status">
+                <GatewayStatus {...props.gatewayStatus!} />
+              </div>
+            </Show>
             <div class="topbar-brand" aria-label="OpenClaw">
               <img
                 class="topbar-brand__logo"
@@ -58,7 +70,7 @@ defineSolidBridge<Props>(
             </div>
           </div>
           <div class="topnav-shell__actions">
-            <LitContent value={props.newSessionAction} />
+            {props.newSessionAction?.()}
             <openclaw-tooltip prop:content={t("chat.commandPaletteTitle")}>
               <span slot="content">
                 <ShortcutText
@@ -82,6 +94,7 @@ defineSolidBridge<Props>(
   {
     properties: {
       navDrawerOpen: { default: false, attribute: false },
+      gatewayStatus: { default: null, attribute: false },
       newSessionAction: { default: undefined, attribute: false },
       resourceBasePath: { default: "", attribute: false },
       environment: { default: null, attribute: false },

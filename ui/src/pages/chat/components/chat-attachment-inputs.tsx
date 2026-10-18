@@ -28,10 +28,12 @@ export function ChatAttachmentInputs(props: ChatAttachmentControlsProps) {
         {(kind) => (
           <input
             type="file"
+            tabindex="-1"
+            aria-hidden="true"
             accept={kind === "file" ? undefined : "image/*"}
             multiple={kind !== "camera"}
             capture={kind === "camera" ? "environment" : undefined}
-            class={`agent-chat__${kind}-input`}
+            class={[`agent-chat__${kind}-input`]}
             disabled={props.disabled}
             onChange={(event) => {
               if (!props.disabled) {

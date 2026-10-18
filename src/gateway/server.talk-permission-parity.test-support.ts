@@ -10,10 +10,12 @@ import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capab
 import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mode.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { captureRpcSourceScopeMatcher } from "./session-runtime-scope.js";
 import { talkClientHandlers } from "./talk/handlers/client.js";
 import {
   createGatewaySuiteHarness,
@@ -56,6 +58,10 @@ export async function runTalkNodePermissionParity({
   expectRevokedWriter: (runId: string, isCurrent: () => boolean) => void;
 }) {
   const scope = () => ({ agentId, sessionKey: canonicalKey, sessionId, storePath });
+  const matchesSourceScope = captureRpcSourceScopeMatcher({
+    storePath,
+    resolveGatewayContext: context.resolveGatewayContext,
+  });
 
   const { createTalkParityNodeFixture, installTalkParityProviderFixture } =
     await import("./server.talk-node-parity.test-support.js");
@@ -292,10 +298,22 @@ export async function runTalkNodePermissionParity({
               params.abortSignal,
             );
             finished.resolve(result.details);
-            return { payloads: [{ text: "Native action finished." }], meta: { durationMs: 0 } };
+            return {
+              payloads: [{ text: "Native action finished." }],
+              meta: {
+                durationMs: 0,
+                terminalReply: { disposition: "visible", text: "Native action finished." },
+              },
+            };
           } catch (error) {
             finished.resolve({ error: String(error) });
-            return { payloads: [{ text: "Native action did not run." }], meta: { durationMs: 0 } };
+            return {
+              payloads: [{ text: "Native action did not run." }],
+              meta: {
+                durationMs: 0,
+                terminalReply: { disposition: "visible", text: "Native action did not run." },
+              },
+            };
           } finally {
             host.close();
           }
@@ -394,7 +412,12 @@ export async function runTalkNodePermissionParity({
           }
           await waitForDispatchEnd();
           if (publicOnly) {
-            expect(context.chatAbortControllers.has(runId)).toBe(false);
+            expect(
+              listRpcSourceEntries().some(
+                ([candidateRunId, rpcSource]) =>
+                  candidateRunId === runId && matchesSourceScope(rpcSource),
+              ),
+            ).toBe(false);
             await expect(provider.run("Start new work after revocation")).rejects.toThrow(
               /authority|active|closed|stopped/i,
             );
@@ -513,7 +536,10 @@ export async function runTalkOperatorSourceParity({
   let admittedSource: object | undefined;
   runEmbeddedAgent.mockImplementationOnce(async (params) => {
     admittedSource = params.preparedRunAdmission?.readOperatorAuthority?.()?.source;
-    return { payloads: [{ text: "Done." }], meta: { durationMs: 1 } };
+    return {
+      payloads: [{ text: "Done." }],
+      meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "Done." } },
+    };
   });
   const handler = expectDefined(talkClientHandlers["talk.client.toolCall"], "Talk RPC handler");
   const respond = vi.fn<RespondFn>();

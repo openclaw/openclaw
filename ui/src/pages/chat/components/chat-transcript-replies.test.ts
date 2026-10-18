@@ -1,18 +1,17 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
-import * as chatMessage from "./chat-message-group.test-support.ts";
 import {
-  getTranscriptState,
+  render,
+  renderChatThread,
   renderTranscriptSearch,
-  toggleTranscriptSearch,
-} from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.test-support.ts";
+} from "../test-helpers/chat-transcript-native.tsx";
+import * as chatMessage from "./chat-message-group-frame.ts";
+import { getTranscriptState, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -102,8 +101,8 @@ describe("chat transcript replies", () => {
       ]);
       props.replyMessageAccess = { revision: 0, navigationId: null, read: () => undefined, open };
       render(renderChatThread(props, transcript), container);
-      transcript.hostConnected();
-      transcript.hostUpdated();
+      transcript.start();
+      transcript.update();
       await flushDeferredRowPrune();
 
       const preview = container.querySelector<HTMLButtonElement>(
@@ -142,10 +141,10 @@ describe("chat transcript replies", () => {
         preview?.click();
         await Promise.resolve();
         await commitReplyLayout();
-        transcript.hostDisconnected();
+        transcript.dispose();
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
         vi.useRealTimers();
       }
     },
@@ -177,11 +176,11 @@ describe("chat transcript replies", () => {
       };
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         await flushDeferredRowPrune();
 
         expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
@@ -200,7 +199,7 @@ describe("chat transcript replies", () => {
         preview?.click();
         expect(open).toHaveBeenCalledWith("source-message");
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -208,12 +207,12 @@ describe("chat transcript replies", () => {
   it.each([false, true])(
     "opens folded work when a reply navigation loads its source (run frame: %s)",
     async (framed) => {
-      const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       const [sourceMessage, followUp] = replyMessages();
       const props = threadProps("pane-folded-history-reply", "agent:main:dashboard:reply", [
         followUp,
       ]);
+      const transcript = createTestTranscript(props.paneId);
       const open = vi.fn();
       props.replyMessageAccess = {
         revision: 0,
@@ -223,12 +222,17 @@ describe("chat transcript replies", () => {
       };
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         await flushDeferredRowPrune();
+        const viewport = requireElement(container, ".chat-thread");
+        viewport.scrollTo = (options?: ScrollToOptions | number, y?: number) => {
+          viewport.scrollTop = typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
+          viewport.dispatchEvent(new Event("scroll"));
+        };
         requireElement(container, ".chat-reply-attribution--inline button").click();
         expect(open).toHaveBeenCalledWith("source-message");
         props.replyMessageAccess.navigationId = "source-message";
@@ -250,6 +254,8 @@ describe("chat transcript replies", () => {
           followUp,
         ];
         rerender();
+        expect(transcript.revealMessage("source-message")).toBe(true);
+        rerender();
         await flushDeferredRowPrune();
         expect(
           requireElement(container, ".chat-work-group button").getAttribute("aria-expanded"),
@@ -258,7 +264,7 @@ describe("chat transcript replies", () => {
           "The original answer",
         );
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -283,11 +289,12 @@ describe("chat transcript replies", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     if (searchQuery) {
-      Object.assign(getTranscriptState(props.paneId), { searchOpen: true, searchQuery });
+      getTranscriptState(props.paneId).search.toggle();
+      getTranscriptState(props.paneId).search.setQuery(searchQuery);
     }
     render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     await flushDeferredRowPrune();
     try {
       const strips = [...container.querySelectorAll(".chat-reply-attribution--reply")].map(
@@ -297,7 +304,7 @@ describe("chat transcript replies", () => {
       expect(container.textContent?.split("Replying to").length).toBe(strips.length + 1);
       return strips;
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   }
 
@@ -490,19 +497,15 @@ describe("chat transcript replies", () => {
         open,
       };
     }
-    const requestUpdate = () => queueMicrotask(rerender);
     const rerender = () => {
-      render(renderTranscriptSearch(paneId, requestUpdate), searchContainer);
-      render(
-        renderChatThread({ ...props, onRequestUpdate: requestUpdate }, transcript),
-        threadContainer,
-      );
-      transcript.hostUpdated();
+      render(renderTranscriptSearch(paneId), searchContainer);
+      render(renderChatThread(props, transcript), threadContainer);
+      transcript.update();
     };
     try {
-      toggleTranscriptSearch(paneId, requestUpdate);
+      toggleTranscriptSearch(paneId);
       rerender();
-      transcript.hostConnected();
+      transcript.start();
       const input = requireElement(searchContainer, "input") as HTMLInputElement;
       input.value = "Follow up";
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -525,7 +528,7 @@ describe("chat transcript replies", () => {
         expect(open).toHaveBeenCalledWith(sourceId);
       }
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
       vi.useRealTimers();
     }
   });
@@ -581,7 +584,7 @@ describe("chat transcript replies", () => {
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       const attribution = () =>
         expectDefined(
@@ -591,9 +594,10 @@ describe("chat transcript replies", () => {
             ?.querySelector(".chat-reply-attribution--reply"),
           "reply attribution",
         );
+      const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         await flushDeferredRowPrune();
         // The snapshot names an original outside the loaded history; it still navigates.
         expect(
@@ -606,7 +610,8 @@ describe("chat transcript replies", () => {
             ?.getAttribute("data-chat-row-key"),
           "unrelated group key",
         );
-        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+        expect(prepareFrame.mock.calls.some(([group]) => group.key === unrelatedKey)).toBe(true);
+        prepareFrame.mockClear();
 
         for (const [name, text] of [
           ["Carol", "Original question loaded"],
@@ -626,12 +631,12 @@ describe("chat transcript replies", () => {
           expect(
             attribution().querySelector("button .chat-reply-attribution__name")?.textContent,
           ).toBe(name);
-          expect(renderGroup.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual(
+          expect(prepareFrame.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual(
             [],
           );
         }
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );

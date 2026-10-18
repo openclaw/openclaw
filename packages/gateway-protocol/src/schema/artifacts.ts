@@ -71,6 +71,8 @@ export const ArtifactsDownloadParamsSchema = closedObject({
   artifactId: NonEmptyString,
   /** Opt in only when the client can reach the Gateway's HTTP(S) media routes. */
   transport: Type.Optional(Type.Literal("http")),
+  /** Request a bounded image rendition when inline transfer is needed; omit for original bytes. */
+  previewWidth: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 
 /** Download response, either inline base64 bytes, URL, or metadata for unsupported modes. */

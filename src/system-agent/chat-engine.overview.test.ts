@@ -53,7 +53,6 @@ it("uses the verified inference owner for a delegated fleet overview", async () 
             requesterAgentId: "work",
             verifiedInference: inference.binding,
             deps: {
-              ...inference.deps,
               // Keep verified inference fixed while the real overview reads the explicit fleet.
               readConfigFileSnapshot: async () => verifiedSnapshot,
             },

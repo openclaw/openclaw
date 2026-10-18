@@ -9,9 +9,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "../../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../../auto-reply/reply/queue.test-helpers.js";
-import { clearFollowupDrainCallback } from "../../../auto-reply/reply/queue/drain.js";
-import { clearFollowupQueue } from "../../../auto-reply/reply/queue/state.js";
-import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import { clearSessionQueues } from "../../../auto-reply/reply/queue/cleanup.js";
 import { initSessionState } from "../../../auto-reply/reply/session.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import {
@@ -23,7 +21,7 @@ import {
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import { sessionMutationHandlers } from "../../../gateway/server-methods/sessions-mutations.js";
 import { registerInternalHook, unregisterInternalHook } from "../../../hooks/internal-hooks.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { killAllControlledSubagentRuns, killSessionSubagentRuns } from "./subagent-control-kill.js";
@@ -90,7 +88,7 @@ it.each([false, true])(
     }));
     const replacement = loadSessionEntry({ storePath, sessionKey: key });
     const interruptReplacement = vi.fn();
-    const replacementAdmission = await beginSessionWorkAdmission({
+    const replacementAdmission = await beginSessionEffect({
       scope: storePath,
       identities: [key, "replacement-child"],
       assertAllowed: () => {},
@@ -324,7 +322,9 @@ it.each(
   },
 );
 
-it.each(["chat", "rpc", "chat-rebind"] as const)(
+// src/auto-reply/reply/session.test.ts owns parent identity rebind in
+// "reacquires a changed identity before an explicit reset".
+it.each(["chat", "rpc"] as const)(
   "%s reset drains parent then child admissions before committing the boundary",
   async (boundary) => {
     const storePath = await writeSubagentSessionEntry({
@@ -355,17 +355,14 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
     });
     const parentInterrupted = createDeferredCore();
     const childInterrupted = createDeferredCore();
-    const interruptChild = vi.fn(() => {
-      childInterrupted.resolve();
-      return { runId: "draining" };
-    });
-    const parentAdmission = await beginSessionWorkAdmission({
+    const interruptChild = vi.fn(() => childInterrupted.resolve());
+    const parentAdmission = await beginSessionEffect({
       scope: storePath,
       identities: [parentKey, "parent"],
       assertAllowed: () => {},
       onInterrupt: () => parentInterrupted.resolve(),
     });
-    const childAdmission = await beginSessionWorkAdmission({
+    const childAdmission = await beginSessionEffect({
       scope: storePath,
       identities: [childKey("draining"), "draining"],
       run: {
@@ -378,8 +375,6 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
       onInterrupt: interruptChild,
     });
     const respond = vi.fn();
-    const replacementInterrupted = createDeferredCore();
-    let replacementAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
     const reset =
       boundary !== "rpc"
         ? initSessionState({
@@ -412,28 +407,7 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
       await parentInterrupted.promise;
       expect(interruptChild).not.toHaveBeenCalled();
       expect(subagentRuns.get("draining")?.killIntent).toBeUndefined();
-      if (boundary === "chat-rebind") {
-        await patchSessionEntryCore({ storePath, sessionKey: parentKey }, (entry) => ({
-          ...entry,
-          sessionId: "replacement-parent",
-        }));
-        replacementAdmission = await beginSessionWorkAdmission({
-          scope: storePath,
-          identities: ["replacement-parent"],
-          assertAllowed: () => {},
-          onInterrupt: () => replacementInterrupted.resolve(),
-        });
-      }
       parentAdmission.release();
-      if (replacementAdmission) {
-        expect(
-          await Promise.race([
-            replacementInterrupted.promise.then(() => "parent"),
-            childInterrupted.promise.then(() => "child"),
-          ]),
-        ).toBe("parent");
-        replacementAdmission.release();
-      }
       await childInterrupted.promise;
       expect(loadSessionEntry({ storePath, sessionKey: parentKey })?.lifecycleRevision).toBe(
         "before-reset",
@@ -462,7 +436,6 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
         displayName: "finalized before reset",
       });
     } finally {
-      replacementAdmission?.release();
       parentAdmission.release();
       childAdmission.release();
       await reset;
@@ -535,20 +508,11 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
       defaultSessionId: "parent",
       lifecycleRevision: "original",
     });
-    const cancel = vi.fn();
-    let replacementReply: ReturnType<typeof createReplyOperation> | undefined;
     const replaceParent = async () => {
       await patchSessionEntryCore({ storePath, sessionKey: parentKey }, (entry) => ({
         ...entry,
         [field]: "replacement",
       }));
-      replacementReply = createReplyOperation({
-        sessionKey: parentKey,
-        sessionId: field === "sessionId" ? "replacement" : "parent",
-        resetTriggered: false,
-      });
-      replacementReply.attachBackend({ kind: "embedded", cancel, isStreaming: () => false });
-      replacementReply.setPhase("running");
       enqueueFollowupRun(
         parentKey,
         createQueueTestRun({ prompt: "replacement follow-up" }),
@@ -600,12 +564,9 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
       expectUnfinishedYieldedRun("replacement-child");
       expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
       expect(loadSessionEntry({ storePath, sessionKey: parentKey })?.[field]).toBe("replacement");
-      expect.soft(cancel).not.toHaveBeenCalled();
       expect(getFollowupQueueDepth(parentKey)).toBe(1);
     } finally {
-      replacementReply?.complete();
-      clearFollowupQueue(parentKey);
-      clearFollowupDrainCallback(parentKey);
+      clearSessionQueues([parentKey]);
       unregisterInternalHook("command:reset", replaceParent);
     }
   },

@@ -16,6 +16,10 @@ import type {
   SessionEntryCurrentFacts,
 } from "../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
 import { holdForeignWriter } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
@@ -47,6 +51,70 @@ afterEach(async () => {
 });
 
 describe("worker plugin state", () => {
+  it("keeps pure reads off the writer queue and observes earlier namespace writes", async () => {
+    await withOpenClawTestState({ label: "plugin-state-reader-queue" }, async (state) => {
+      const pluginId = "reader-fixture";
+      const namespace = "reconnect";
+      const store = createPluginStateKeyedStoreV2<string>(
+        pluginId,
+        {
+          namespace,
+          maxEntries: 10,
+          env: state.env,
+        },
+        { assertCurrent() {} },
+      );
+      await store.register("a", "first");
+      await waitForDiagnosticEventsDrained();
+      const queued: string[] = [];
+      const unsubscribe = onInternalDiagnosticEvent(
+        (event) => {
+          if (
+            event.type === "worker.request" &&
+            event.requestClass === "plugin_state" &&
+            event.phase === "queued"
+          ) {
+            queued.push(event.kind);
+          }
+        },
+        { include: ["worker.request"] },
+      );
+      try {
+        expect(await store.lookup("missing")).toBeUndefined();
+        expect(await store.lookupMany(["a", "missing"])).toEqual([
+          { ok: true, value: "first" },
+          { ok: true, value: undefined },
+        ]);
+        expect((await store.entries()).map(({ key, value }) => [key, value])).toEqual([
+          ["a", "first"],
+        ]);
+        expect(await store.count()).toBe(1);
+        expect(
+          (
+            await pluginStateEntriesInKeyRange({
+              pluginId,
+              namespace,
+              env: state.env,
+              keyStartInclusive: "a",
+              keyEndExclusive: "b",
+              limit: 10,
+            })
+          ).map(({ key, value }) => [key, value]),
+        ).toEqual([["a", "first"]]);
+        await waitForDiagnosticEventsDrained();
+        expect(queued).toHaveLength(5);
+        expect(queued).not.toContain("sqlite_writer");
+
+        const pendingWrite = store.register("b", "second");
+        const followingRead = store.lookup("b");
+        await expect(followingRead).resolves.toBe("second");
+        await pendingWrite;
+      } finally {
+        unsubscribe();
+      }
+    });
+  });
+
   it("compares cross-namespace lease conditions in the same worker transaction as the write", async () => {
     await withOpenClawTestState({ label: "plugin-state-conditional-lease" }, async (state) => {
       const options = { namespace: "journal", maxEntries: 10, env: state.env };

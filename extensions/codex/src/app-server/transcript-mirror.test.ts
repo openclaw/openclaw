@@ -1059,7 +1059,7 @@ describe("mirrorCodexAppServerTranscript", () => {
         { role: "assistant", text: "Before failed mirror." },
         { role: "assistant", text: " After failed mirror." },
         { role: "user", text: "Steer" },
-        { role: "assistant", text: "After steer." },
+        { role: "assistant", text: " After steer." },
       ]);
     });
 
@@ -1090,10 +1090,9 @@ describe("mirrorCodexAppServerTranscript", () => {
           "thread-1",
           attempt.turnId,
         );
-        await projector.handleNotification({
-          method: "turn/completed",
-          params: {
-            threadId: "thread-1",
+        await projector.handleNotification(
+          forCurrentTurn("turn/completed", {
+            turnId: attempt.turnId,
             turn: {
               id: attempt.turnId,
               status: attempt.failed ? "failed" : "completed",
@@ -1102,8 +1101,8 @@ describe("mirrorCodexAppServerTranscript", () => {
                 ? { message: "Rate limit reached", codexErrorInfo: "rateLimitExceeded" }
                 : null,
             },
-          },
-        });
+          }),
+        );
         await mirrorTranscriptBestEffort({
           params: attemptParams,
           result: projector.buildResult(buildEmptyToolTelemetry()),

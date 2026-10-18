@@ -1,4 +1,3 @@
-// Doctor diagnostics for Tailscale config and shipped external Serve routes.
 import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";

@@ -13,7 +13,7 @@ import {
 } from "../../components/solid/icon.tsx";
 import { SettingsPage, SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/tooltip.ts";
-import "../../components/theme-brand-icon.ts";
+import "../../components/theme-brand-icon.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import {

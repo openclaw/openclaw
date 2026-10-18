@@ -7,6 +7,10 @@ const call = '{"name":"write","arguments":{"path":"proof.txt","content":"OK"}}';
 const fenced = `\`\`\`json\n${call}\n\`\`\``;
 const definition =
   '{"name":"write","description":"Write a file","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}}';
+const wrappedXml =
+  "<tool_call><function=read><parameter=path>proof.txt</parameter></function></tool_call>";
+const react = 'Action: read\nAction Input: {"path":"proof.txt"}';
+const legacy = '[TOOL_CALL]{tool => "read", args => {"path":"proof.txt"}}[/TOOL_CALL]';
 
 describe("non-executing text tool-call detection", () => {
   it.each([
@@ -27,6 +31,17 @@ describe("non-executing text tool-call detection", () => {
     'read\n<invoke name="read"><parameter name="path">proof.txt</parameter></invoke>',
     `<tool_call>${call}</tool_call>`,
     "```xml\n<function=read><parameter=path>proof.txt</parameter></function>\n```",
+    wrappedXml,
+    '<tool_calls><invoke name="read"><parameter name="path">proof.txt</parameter></invoke></tool_calls>',
+    "<function_call><function=read><parameter=path>proof.txt</parameter></function></function_call>",
+    react,
+    'Action: read\nAction Input: {\n  "path": "proof.txt"\n}',
+    "Action: read\r\nAction Input: proof.txt",
+    `I'll call read now.\n${react}`,
+    `\`\`\`\n${react}\n\`\`\``,
+    legacy,
+    `Let me use read.\n${legacy}`,
+    `\`\`\`\n${legacy}\n\`\`\``,
   ])("recognizes a structured attempt: %s", (text) => {
     expect(isPlainTextToolCallAttempt(text, hasToolName)).toBe(true);
   });
@@ -54,6 +69,22 @@ describe("non-executing text tool-call detection", () => {
     `${fenced}\nThis is an example; it has not run.`,
     `\`\`\`text\ncall write proof.txt\n\`\`\``,
     '```json\n{"name":"write","arguments":{}}',
+    ...[wrappedXml, react, legacy].flatMap((text) => [
+      text.replaceAll("read", "unregistered"),
+      `Here is an example:\n${text}`,
+      `Here is an example:\n\`\`\`\n${text}\n\`\`\``,
+      `${text}\nThis is an example; it has not run.`,
+    ]),
+    "<tool_call><function=read><parameter=path>proof.txt</parameter></function>",
+    "<tool_call><function=read><parameter=path>proof.txt</parameter></function></function_call>",
+    "Action: read",
+    "Action: read\nAction Input:",
+    'Action: read\nAction Input: {"path":"proof.txt"',
+    'Action: read\nAction Input: ["proof.txt"',
+    'Action: read\nAction Input: "proof.txt',
+    'Action: read\nAction Input: {"path":"proof.txt"}\nObservation: example result',
+    '[TOOL_CALL]{tool => "read", args => {}}',
+    '[TOOL_CALL]{tool => "read"}[/TOOL_CALL]',
   ])("preserves prose, examples, and unknown tools: %s", (text) => {
     expect(isPlainTextToolCallAttempt(text, hasToolName)).toBe(false);
   });

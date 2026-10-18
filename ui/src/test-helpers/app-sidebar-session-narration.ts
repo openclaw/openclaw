@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import {
-  SidebarSessionNarrationController,
+  createSidebarNarration,
   type SidebarNarrationSyncInput,
 } from "../components/app-sidebar-session-narration.ts";
 import type { SidebarRecentSession } from "../components/app-sidebar-session-types.ts";
@@ -32,9 +32,8 @@ export function runningRow(key: string): SidebarRecentSession {
   };
 }
 
-export function createRunningNarrationController(source: SidebarNarrationSyncInput["source"]) {
-  const updates: Array<ReadonlyMap<string, string>> = [];
-  const controller = new SidebarSessionNarrationController((lines) => updates.push(lines));
+export function createRunningNarration(source: SidebarNarrationSyncInput["source"]) {
+  const narration = createSidebarNarration();
   const input: SidebarNarrationSyncInput = {
     enabled: true,
     connected: true,
@@ -44,8 +43,8 @@ export function createRunningNarrationController(source: SidebarNarrationSyncInp
     rows: [runningRow("agent:main:run")],
     agentId: "main",
   };
-  controller.sync(input);
-  return { controller, updates, input };
+  narration.sync(input);
+  return { narration, input };
 }
 
 export function browserVisibility(initial: DocumentVisibilityState = "visible") {

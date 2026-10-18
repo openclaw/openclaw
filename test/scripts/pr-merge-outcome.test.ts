@@ -76,6 +76,51 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     },
   );
 
+  it.each([
+    { name: "timely known", known: true, readSeconds: 0, proofSeconds: 65, admitted: true },
+    { name: "late known", known: true, readSeconds: 65, proofSeconds: 0, admitted: false },
+    { name: "still UNKNOWN", known: false, readSeconds: 0, proofSeconds: 65, admitted: false },
+  ])(
+    "uses projection time for $name admission after local Git proof",
+    ({ known, readSeconds, proofSeconds, admitted }) => {
+      const f = fixture();
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      f.save({
+        ...f.state(),
+        mainProofDelaySeconds: proofSeconds,
+        observations: [
+          { pr: unknownProjection },
+          {
+            main,
+            pr: known ? { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } : unknownProjection,
+            advanceSeconds: readSeconds,
+          },
+        ],
+      });
+
+      const result = f.run();
+      const state = f.state();
+
+      expect(state.mainProofDelayedAt, result.output).toBe(proofSeconds ? 2 : null);
+      expect(state.settlementSleeps[0]).toBe(2);
+      expect(state.settlementSleeps.reduce((total, delay) => total + delay, 0)).toBe(
+        known ? 2 : 60,
+      );
+      expect(result.status, result.output).toBe(admitted ? 0 : 1);
+      expect(state.mutations).toBe(admitted ? 1 : 0);
+      if (admitted) {
+        expect(state.graphqlMergePayloads[0]?.expectedHeadOid).toBe(f.head);
+        expect(f.record()).toMatchObject({ phase: "complete", head: f.head, main });
+      } else {
+        expect(result.output).toContain(
+          known ? "mergeability exceeded the 60s settle limit" : "mergeability remained UNKNOWN",
+        );
+        expect(f.captures()).toEqual([]);
+        expect(() => f.record()).toThrow();
+      }
+    },
+  );
+
   it("explicitly completes a reconciled merge after cleanup without another merge dispatch", () => {
     const f = reconciledMergeAfterCleanup();
     const landed = f.git(["--git-dir=" + f.remote, "rev-parse", "main"]);

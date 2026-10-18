@@ -10,6 +10,7 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { CronJob } from "../cron/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { bindInProcessRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   loadTranscriptRows,
@@ -105,8 +106,6 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const directContext = {
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },
@@ -133,25 +132,31 @@ test("lists and patches session store via sessions.* RPC", async () => {
     await expectDefined(
       sessionsHandlers[method],
       "sessionsHandlers[method] test invariant",
-    )({
-      req: {} as never,
-      params,
-      respond: (ok, payload, error) => {
-        result = {
-          ok,
-          payload:
-            payload === undefined
-              ? undefined
-              : coercePayload
-                ? coercePayload(payload)
-                : (payload as TPayload),
-          error,
-        };
-      },
-      context: directContext as never,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    )(
+      bindInProcessRequestMutationAuthority(
+        {
+          req: { type: "req", id: method, method, params },
+          params,
+          respond: (ok, payload, error) => {
+            result = {
+              ok,
+              payload:
+                payload === undefined
+                  ? undefined
+                  : coercePayload
+                    ? coercePayload(payload)
+                    : (payload as TPayload),
+              error,
+            };
+          },
+          context: directContext as never,
+          client: null,
+          isWebchatConnect: () => false,
+        },
+        undefined,
+        undefined,
+      ),
+    );
     if (!result) {
       throw new Error(`${method} did not respond`);
     }
@@ -679,8 +684,31 @@ test("write-scoped operators manage chat organization but not admin session sett
     },
   });
 
-  agentDiscoveryMock.enabled = true;
-  agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+  const { getRuntimeConfig, writeConfigFile } = await getGatewayConfigModule();
+  // Catalog workers need the fixture model in configuration, not a host-only discovery mock.
+  await writeConfigFile({
+    ...getRuntimeConfig(),
+    models: {
+      providers: {
+        openai: {
+          api: "openai-responses",
+          baseUrl: "https://openai.invalid/v1",
+          agentRuntime: { id: "openclaw" },
+          models: [
+            {
+              id: "gpt-test-a",
+              name: "A",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 32768,
+              maxTokens: 2048,
+            },
+          ],
+        },
+      },
+    },
+  });
 
   const { ws } = await openClient({ scopes: ["operator.write"] });
   try {

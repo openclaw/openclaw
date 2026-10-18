@@ -246,6 +246,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         return { payloads: [{ text: "same authorized account" }], meta: { agentMeta: {} } };
       });
 
+      let previousSessionEntry: ReturnType<typeof makeCronSessionEntry> | undefined;
       for (const [index, model] of ["gpt-4.1", "gpt-4o"].entries()) {
         // Close the real SQLite owners before each load: neither job nor credential comes from a warm handle.
         clearRuntimeAuthProfileStoreSnapshots();
@@ -258,12 +259,13 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         const changed = config(`openai/${model}@${other}`);
         changed.auth!.order = { openai: [other, profileId] };
         resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model });
-        resolveCronSessionMock.mockReturnValue(
-          makeCronSession({
-            sessionEntry: makeCronSessionEntry({ sessionId: `fresh-run-${index}` }),
-          }),
-        );
+        const cronSession = makeCronSession({
+          sessionEntry: makeCronSessionEntry({ sessionId: `fresh-run-${index}` }),
+          initialSessionEntry: previousSessionEntry,
+        });
+        resolveCronSessionMock.mockReturnValue(cronSession);
         const result = await runWithConfig(changed, reloaded);
+        previousSessionEntry = cronSession.sessionEntry;
         expect(result.status).toBe("ok");
         expect(result.sessionId).toBe(`fresh-run-${index}`);
         expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(index + 1);

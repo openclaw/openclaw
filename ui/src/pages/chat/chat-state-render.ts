@@ -1,36 +1,17 @@
-import type { ChatPageHost } from "./chat-state-host.ts";
+import { chatRunPresentation, type ChatRunPublication } from "./chat-run-presentation.ts";
 
-export function cancelChatStreamRenderFrame(state: ChatPageHost): void {
-  const frame = state.chatStreamRenderFrame;
-  if (frame == null) {
-    return;
-  }
-  state.chatStreamRenderFrame = null;
-  if (typeof globalThis.cancelAnimationFrame === "function") {
-    globalThis.cancelAnimationFrame(frame);
-  }
+export function cancelChatStreamRenderFrame(state: object): void {
+  chatRunPresentation(state).cancelFrame();
 }
 
-export function requestChatPageUpdate(
-  state: ChatPageHost,
-  mode: "immediate" | "animation-frame" = "immediate",
-): void {
-  const hidden = globalThis.document?.visibilityState === "hidden";
-  if (hidden || mode === "immediate" || typeof globalThis.requestAnimationFrame !== "function") {
-    cancelChatStreamRenderFrame(state);
-    state.requestUpdate?.();
-    return;
-  }
-  if (state.chatStreamRenderFrame != null) {
-    return;
-  }
-  let frame = 0;
-  frame = globalThis.requestAnimationFrame(() => {
-    if (state.chatStreamRenderFrame !== frame) {
-      return;
-    }
-    state.chatStreamRenderFrame = null;
-    state.requestUpdate?.();
-  });
-  state.chatStreamRenderFrame = frame;
+export function publishChatRunState(state: object, mode: ChatRunPublication = "immediate"): void {
+  chatRunPresentation(state).publish(mode);
+}
+
+export function mutateChatRunState<T>(
+  state: object,
+  operation: () => T,
+  mode?: ChatRunPublication | false,
+): T {
+  return chatRunPresentation(state).batch(operation, mode);
 }

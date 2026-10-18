@@ -7,6 +7,10 @@ import { DatabaseSync } from "node:sqlite";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import {
+  resolveDaemonRuntimePinStorePath,
+  withDaemonRuntimePinStore,
+} from "../daemon/runtime-pin-store.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -19,6 +23,7 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import * as durability from "./directory-durability.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteCopy from "./sqlite-file-copy.js";
@@ -115,6 +120,99 @@ function withFixture(run: (fixture: RestoreFixture) => Promise<void>, linked = f
     async (state) => run(await createRestoreFixture(state, linked)),
   );
 }
+
+it("captures and restores exact local daemon intent with its independent schema", async () => {
+  await withOpenClawTestState(
+    { layout: "split", prefix: "update-daemon-restore-", scenario: "minimal" },
+    async (state) => {
+      const raw = '{ "version": 999, "broken": ';
+      const key = "daemon-runtime-pin:malformed-intent";
+      withDaemonRuntimePinStore(state.env, true, (db) => {
+        db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(key, raw, 123);
+      });
+      const fixture = await createRestoreFixture(state);
+      try {
+        const pathname = resolveDaemonRuntimePinStorePath(state.env);
+        expect(fixture.backup.databaseOwners).not.toContainEqual(
+          expect.objectContaining({ path: pathname }),
+        );
+        expect(fixture.backup.databases).toContainEqual(
+          expect.objectContaining({ path: pathname, userVersion: 1 }),
+        );
+        withDaemonRuntimePinStore(state.env, true, (db) => {
+          db.prepare("UPDATE daemon_runtime_pins SET value_json = ?, updated_at_ms = ?").run(
+            '{"version":1}',
+            456,
+          );
+        });
+        await fixture.restore();
+        withDaemonRuntimePinStore(state.env, false, (db) => {
+          expect(db.prepare("SELECT * FROM daemon_runtime_pins").all()).toEqual([
+            { state_key: key, value_json: raw, updated_at_ms: 123 },
+          ]);
+        });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+});
+
+it.each(["present", "absent"] as const)(
+  "restores the %s local credential store after a failed candidate",
+  async (initial) => {
+    await withOpenClawTestState(
+      { layout: "split", prefix: "update-client-restore-", scenario: "minimal" },
+      async (state) => {
+        const pathname = state.statePath("client", "credentials.sqlite");
+        const writeToken = async (token: string) => {
+          await fs.mkdir(path.dirname(pathname), { recursive: true, mode: 0o700 });
+          using db = new DatabaseSync(pathname);
+          if (db.prepare("PRAGMA user_version").get()?.user_version === 0) {
+            db.exec(CLIENT_CREDENTIAL_SCHEMA_SQL);
+            db.exec("PRAGMA user_version = 1");
+          }
+          db.prepare(
+            "INSERT OR REPLACE INTO native_exec_socket_credentials VALUES ('current', ?, ?, ?)",
+          ).run("/synthetic/native.sock", token, 123);
+        };
+        if (initial === "present") {
+          await writeToken("synthetic-before-update");
+        }
+        const fixture = await createRestoreFixture(state);
+        try {
+          expect(fixture.backup.databaseOwners).not.toContainEqual(
+            expect.objectContaining({ path: pathname }),
+          );
+          if (initial === "present") {
+            expect(fixture.backup.databases).toContainEqual(
+              expect.objectContaining({ path: pathname, userVersion: 1 }),
+            );
+          } else {
+            expect(fixture.backup.missingPaths).toContain(pathname);
+          }
+          await writeToken("synthetic-candidate-write");
+          await fixture.restore();
+          if (initial === "present") {
+            using restored = new DatabaseSync(pathname, { readOnly: true });
+            expect(restored.prepare("SELECT * FROM native_exec_socket_credentials").all()).toEqual([
+              {
+                socket_key: "current",
+                socket_path: "/synthetic/native.sock",
+                socket_token: "synthetic-before-update",
+                updated_at_ms: 123,
+              },
+            ]);
+          } else {
+            await expect(fs.stat(pathname)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+        } finally {
+          await fixture.close();
+        }
+      },
+    );
+  },
+);
 
 async function unchangedFiles(fixture: RestoreFixture) {
   expect(process.env.OPENCLAW_STATE_DIR).toBe(fixture.state.stateDir);

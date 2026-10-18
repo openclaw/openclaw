@@ -5855,14 +5855,19 @@ class ChatController internal constructor(
     }
 
     suspend fun fail(err: Throwable): OutboxSendOutcome =
-      when (err) {
-        is CancellationException -> {
+      when {
+        err is CancellationException -> {
           // Process teardown leaves the claim for startup recovery. The direct caller's
           // UI lifetime does not cancel the controller-owned dispatch.
           throw err
         }
 
-        is GatewayRequestNotEnqueued -> {
+        err is GatewayRequestNotEnqueued ||
+          (
+            err is GatewayRequestRejected && err.gatewayError.code == "UNAVAILABLE" &&
+              err.gatewayError.details?.reason == "gateway-restarting" && err.gatewayError.details.retryable
+          ) -> {
+          // The restart admission fence rejected before execution; preserve the same ID for reconnect.
           persist(ChatOutboxStatus.Queued, if (direct != null) err.message else err.message ?: "send failed")
           direct?.let { settleDirectSendRun(it, item.id) }
           if (direct == null || direct.gatewayScope == currentCacheScope()) _healthOk.value = false
@@ -5870,7 +5875,7 @@ class ChatController internal constructor(
           OutboxSendOutcome.Stop
         }
 
-        is GatewayRequestDefinitiveFailure -> {
+        err is GatewayRequestDefinitiveFailure -> {
           // A rejection can be a cached result from an admitted run; it never permits replay.
           val persisted = persist(ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
           if (direct != null) {
@@ -5882,7 +5887,7 @@ class ChatController internal constructor(
           if (direct == null && persisted == null) OutboxSendOutcome.Stop else OutboxSendOutcome.Continue
         }
 
-        is GatewayRequestOutcomeUnknown -> {
+        err is GatewayRequestOutcomeUnknown -> {
           // Interactive ambiguity retains its live owner for history recovery; reconnect
           // has no pre-ACK projection and parks the input for explicit retry instead.
           persist(

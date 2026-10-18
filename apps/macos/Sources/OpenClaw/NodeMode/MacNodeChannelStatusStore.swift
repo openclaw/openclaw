@@ -24,24 +24,24 @@ enum MacNodeChannelState: Equatable, Sendable {
         isDegraded: Bool,
         recoveryAction: RecoveryAction?)?
     {
+        let reason: String
+        let diagnostic: String?
+        let isDegraded: Bool
         switch self {
         case .idle, .connected(workerUnavailableReason: nil, diagnostic: _):
             return nil
-        case let .connected(workerUnavailableReason: .some(reason), diagnostic: diagnostic):
-            let compatibility = Self.workerSchemaMismatch(in: reason + "\n" + (diagnostic ?? ""))
-            let label = compatibility.map {
-                "Mac node degraded — update the OpenClaw app: its worker supports schema \($0.supported), " +
-                    "but shared state requires schema \($0.required)"
-            } ?? "Mac node degraded — \(Self.condense(reason))"
-            return (label, Self.excerpt(diagnostic), true, compatibility == nil ? nil : .checkForUpdates)
-        case let .unavailable(reason, diagnostic):
-            let compatibility = Self.workerSchemaMismatch(in: reason + "\n" + (diagnostic ?? ""))
-            let label = compatibility.map {
-                "Mac node unavailable — update the OpenClaw app: its worker supports schema \($0.supported), " +
-                    "but shared state requires schema \($0.required)"
-            } ?? "Mac node unavailable — \(Self.condense(reason))"
-            return (label, Self.excerpt(diagnostic), false, compatibility == nil ? nil : .checkForUpdates)
+        case let .connected(workerUnavailableReason: .some(value), diagnostic: detail):
+            (reason, diagnostic, isDegraded) = (value, detail, true)
+        case let .unavailable(value, detail):
+            (reason, diagnostic, isDegraded) = (value, detail, false)
         }
+        let status = isDegraded ? "degraded" : "unavailable"
+        let compatibility = Self.workerSchemaMismatch(in: reason + "\n" + (diagnostic ?? ""))
+        let label = compatibility.map {
+            "Mac node \(status) — update the OpenClaw app: its worker supports schema \($0.supported), " +
+                "but shared state requires schema \($0.required)"
+        } ?? "Mac node \(status) — \(Self.condense(reason))"
+        return (label, Self.excerpt(diagnostic), isDegraded, compatibility == nil ? nil : .checkForUpdates)
     }
 
     private static func workerSchemaMismatch(in message: String) -> (required: Int, supported: Int)? {

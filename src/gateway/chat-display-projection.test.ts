@@ -61,6 +61,33 @@ it("strips attachment capabilities even after another field changed", () => {
   ).toEqual([{ role: "assistant", content: [{ type: "attachment", attachment }] }]);
 });
 
+it("normalizes context markers independently from assistant billing", () => {
+  // Whole-turn counters; the marker keeps the latest call that clients size context from.
+  const usage = { input: 6, output: 77, cacheRead: 54_631, totalTokens: 54_714 };
+  const marker = { state: "available", promptTokens: 27_378, totalTokens: 27_379 };
+  const message = (contextUsage: unknown) => ({
+    role: "assistant",
+    content: [{ type: "text", text: "done" }],
+    usage: { ...usage, contextUsage },
+  });
+  const projected = sanitizeChatHistoryMessages([
+    message({ ...marker, source: "private" }),
+    message({ state: "unavailable", source: "private", promptTokens: 100 }),
+    message({ state: "available", promptTokens: 27_378 }),
+    message({ state: "available", promptTokens: 27_378, totalTokens: 27_000 }),
+    message({ state: "available", promptTokens: Number.POSITIVE_INFINITY, totalTokens: 30_000 }),
+    message({ state: "available", promptTokens: 0, totalTokens: 0 }),
+  ]) as Array<{ usage?: unknown }>;
+  expect(projected.map((entry) => entry.usage)).toEqual([
+    { ...usage, contextUsage: marker },
+    { ...usage, contextUsage: { state: "unavailable" } },
+    usage,
+    usage,
+    usage,
+    { ...usage, contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 } },
+  ]);
+});
+
 describe("transcript display metadata", () => {
   it("keeps display identity while omitting upstream prompt metadata", () => {
     const metadata = { id: "message-1", mirrorIdentity: "turn-1:prompt", replyToId: "message-0" };

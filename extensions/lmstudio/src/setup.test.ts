@@ -1028,6 +1028,7 @@ describe("lmstudio setup", () => {
     );
 
     expect(discoverLmstudioModelsMock.mock.calls[0]?.[0]).toMatchObject({
+      onListedModels: expect.any(Function),
       baseUrl: "http://localhost:1234/v1",
       apiKey: "secretref-lmstudio-key",
       headers: {
@@ -1098,6 +1099,7 @@ describe("lmstudio setup", () => {
     );
 
     expect(discoverLmstudioModelsMock.mock.calls[0]?.[0]).toMatchObject({
+      onListedModels: expect.any(Function),
       baseUrl: "http://localhost:1234/v1",
       apiKey: expectedApiKey,
       headers,

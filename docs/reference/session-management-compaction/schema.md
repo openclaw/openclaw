@@ -27,7 +27,7 @@ Each `sessionKey` points at a current `sessionId` (the SQLite transcript identit
 - **Daily reset** (`session.reset.mode: "daily"`) creates a new `sessionId` on the next message after the configured local-hour boundary (`session.reset.atHour`, default `4`).
 - **Idle expiry** (`session.reset.mode: "idle"` with `session.reset.idleMinutes`, or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. If daily and idle are both configured, whichever expires first wins.
 - **Control UI reconnect resume** preserves the currently visible session for one reconnect send when the Gateway receives the matching `sessionId` from an operator UI client. This is a one-shot signal; ordinary stale sends still create a new `sessionId`.
-- **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but never extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
+- **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but never extend daily/idle reset freshness. A visible automation result newly committed to its destination conversation refreshes that conversation's idle timestamp; silent runs and replayed results do not. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
 - **Automatic parent fork policy** uses OpenClaw's active branch when creating a thread or subagent fork. If that branch is too large (over a fixed internal cap, currently 100K tokens), OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. Sizing is automatic and not configurable; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
 - **Operator forks**: `sessions.create { parentSessionKey, fork: true }` branches from the parent's current state. Admission uses the selected child model's effective usable input capacity, falling back to the 100K safety cap when model capacity is unavailable. A normal fork is refused while the parent has an active run; adding `forkFrom: "last-completed"` copies only through the last completed assistant message, excluding the in-progress tail. Unlike automatic parent forks, an operator fork over its capacity limit is rejected rather than accepted with isolated context. The child inherits the parent's model selection unless one is passed explicitly. The response marks it `forkedFromParent`, and token counters start fresh.
 - **Message forks**: `sessions.fork { sessionKey, entryId }` creates a child from the active-path prefix before the selected user message and returns that message to the composer for editing. The parent remains unchanged. Incognito forks retain the parent's in-memory storage class; restarting the Gateway removes both sessions. Codex fork verification compares complete attested submitted prompts, including whitespace; the bounded display-import projection is not a substitute for that evidence. See [Control UI](/web/control-ui) for fork and rewind actions.
@@ -38,7 +38,7 @@ The runtime store keeps `SessionEntry` values in per-agent SQLite. The value typ
 
 - `sessionId`: current transcript id used to address SQLite transcript rows
 - `sessionStartedAt`: start timestamp for the current `sessionId`; daily reset freshness uses this. Legacy rows may derive it from the JSONL session header.
-- `lastInteractionAt`: last real user/channel interaction timestamp; idle reset freshness uses this so heartbeat, cron, and exec events do not keep sessions alive. Legacy rows without this field fall back to the recovered session start time.
+- `lastInteractionAt`: last user/channel interaction or newly committed visible automation result; idle reset freshness uses this so heartbeat, cron wakeups, and exec events do not keep sessions alive. Legacy rows without this field fall back to the recovered session start time.
 - `updatedAt`: last store-row mutation timestamp, used for listing/pruning/bookkeeping - not the daily/idle freshness authority.
 - `archivedAt`: optional archive timestamp. Archived sessions stay in the store with their transcript intact and are excluded from normal active listings.
 - `pinnedAt`: optional pin timestamp. Active pinned sessions sort ahead of unpinned sessions; archiving a session clears its pin.
@@ -80,12 +80,14 @@ Transcripts are managed by the OpenClaw session accessor and exposed to runtime 
 
 Notable entry types:
 
-- `message`: user/assistant/toolResult messages
+- `message`: user/assistant/toolResult messages. A message that a transcript rewrite re-appended carries an optional `supersedesEntryId` with the id of the entry it replaced (see below).
 - `custom_message`: extension-injected message that _does_ enter model context (rendered in the TUI when `display: true`, hidden entirely when `display: false`)
 - `custom`: extension state that does _not_ enter model context (for persisting extension state across reloads)
 - `compaction`: persisted compaction summary with `firstKeptEntryId` and `tokensBefore`
 - `reset`: a fresh history window, optionally retaining messages from `firstKeptEntryId`
 - `branch_summary`: persisted summary when navigating a tree branch
+
+Transcript rewrites, such as tool-result truncation, chat edits, and context-engine `rewriteTranscriptEntries()`, branch from the first replaced entry's parent and re-append the rest of the active suffix under new entry ids. Each re-appended `message` entry records `supersedesEntryId`: the id of the entry it immediately replaced. A message rewritten again points to the previous copy, so repeated rewrites form a chain back to the original. Other re-appended entry types, ordinary appends, and messages re-appended by rewrites made before this field existed have no marker.
 
 History readers keep the latest reset window across later compactions: explicitly retained reset messages and messages after that reset remain visible, but older messages and compaction summaries do not reappear. Model context follows the latest reset or compaction instead, so compaction can summarize the current conversation without reopening its earlier history.
 

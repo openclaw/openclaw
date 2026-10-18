@@ -22,14 +22,15 @@ import {
   type SourceLocation,
 } from "./code-mode-source-location.js";
 import { CODE_MODE_MODULE_ACCESS_ERROR, prepareSource } from "./code-mode-source.js";
-import type {
-  CodeModeConfig,
-  CodeModeFailurePhase,
-  CodeModeNodeInput,
-  CodeModeWorkerContinuation,
-  CodeModeWorkerThreadResult,
-  PendingBridgeRequest,
-  SettledBridgeRequest,
+import {
+  CODE_MODE_BRIDGE_METHODS,
+  type CodeModeConfig,
+  type CodeModeFailurePhase,
+  type CodeModeNodeInput,
+  type CodeModeWorkerContinuation,
+  type CodeModeWorkerThreadResult,
+  type PendingBridgeRequest,
+  type SettledBridgeRequest,
 } from "./code-mode-worker-types.js";
 import { ToolInputError } from "./tool-input-error.js";
 
@@ -64,6 +65,7 @@ let gcStartedAt = performance.now();
 let majorCollections = 0;
 let stormStartedAt = gcStartedAt;
 let stormCollections = 0;
+let consecutiveStormWindows = 0;
 let lastStormWarningAt = -Infinity;
 let cellCount = 0;
 let workerId: string | undefined;
@@ -77,7 +79,12 @@ observeGcSamples((samples) => {
   const now = performance.now();
   const stormIntervalMs = now - stormStartedAt;
   if (stormIntervalMs >= 10_000) {
-    if (stormCollections > stormIntervalMs / 100 && now - lastStormWarningAt >= 60_000) {
+    const storming = stormCollections > stormIntervalMs / 100;
+    consecutiveStormWindows = storming ? Math.min(2, consecutiveStormWindows + 1) : 0;
+    if (consecutiveStormWindows === 2 && workerId) {
+      publishWorkerGcStorm({ retireWorkerId: workerId });
+    }
+    if (storming && now - lastStormWarningAt >= 60_000) {
       const { heapUsed, heapTotal, external, arrayBuffers } = process.memoryUsage();
       publishWorkerGcStorm({
         workerId,
@@ -123,24 +130,7 @@ observeGcSamples((samples) => {
   majorCollections = 0;
 });
 
-const bridgeMethods = new Set<string>([
-  "search",
-  "describe",
-  "callValue",
-  "resultSave",
-  "resultLoad",
-  "resultDelete",
-  "nodes",
-  "yield",
-  "namespace",
-  "agentSpawn",
-  "agentWait",
-  "skillsList",
-  "skillsSearch",
-  "skillsRead",
-  "sleep",
-  "swarmNote",
-]);
+const bridgeMethods = new Set<string>(CODE_MODE_BRIDGE_METHODS);
 
 function isBridgeMethod(method: string): method is PendingBridgeRequest["method"] {
   return bridgeMethods.has(method);

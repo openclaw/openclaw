@@ -223,12 +223,9 @@ export function runWorktreeRunEndCommand(
   command: SqliteWorkerCommand<RunEndCommands>,
   authority: WorktreeWorkerAuthority = {},
 ): Promise<void> {
-  const captured = structuredClone(command);
-  const predicates = structuredClone(authority.predicates);
-  const assertCaller = authority.assertCurrent;
-  const leaseSet = authority.leaseSet;
+  const { predicates, assertCurrent: assertCaller, leaseSet } = authority;
   return withWorktreeRunEnd(context.environment, async () => {
-    const mutation = captureWorktreeRegistryMutation(context, commandChanges(captured, predicates));
+    const mutation = captureWorktreeRegistryMutation(context, commandChanges(command, predicates));
     const assertCurrent = () => mutation.assertAuthority(() => assertCaller?.());
     context.admission.assertCurrent();
     if (
@@ -242,8 +239,8 @@ export function runWorktreeRunEndCommand(
         leaseSet?.context ?? context,
         (scope) =>
           scope.execute({
-            type: captured.type,
-            input: { ...captured.input, predicates, leases: leases?.identities },
+            type: command.type,
+            input: { ...command.input, predicates, leases: leases?.identities },
           }),
         {
           signal: authority.signal,
@@ -252,7 +249,7 @@ export function runWorktreeRunEndCommand(
           mutation,
           unknownMessage: "Worktree settlement outcome is unknown; recovery custody retained",
           recover: (receipt) =>
-            receipt.receipt === captured.input.receipt ? { value: undefined } : undefined,
+            receipt.receipt === command.input.receipt ? { value: undefined } : undefined,
         },
       );
     try {

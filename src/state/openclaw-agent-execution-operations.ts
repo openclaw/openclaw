@@ -1,3 +1,4 @@
+import { loadAgentAuthProfileOperations } from "../agents/auth-profiles/store-agent.worker.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import type {
   SessionEntryReplacementCandidate,
@@ -30,6 +31,8 @@ import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-con
 import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
 
 type Handlers = WorkerOperationHandlers<AgentWorkerOperationContext>;
+
+export { loadAgentAuthProfileOperations };
 
 export async function loadAgentTranscriptReadOperations() {
   const [
@@ -353,6 +356,14 @@ export async function loadAgentCompoundOperations() {
   } satisfies Handlers;
 }
 
+export async function loadAgentEntryDeletionOperations() {
+  const deletion = await import("../config/sessions/session-entry-deletion.worker.js");
+  return {
+    "session.lifecycle.deletePlan": deletion.planSessionDeletionInAgentWorker,
+    "session.lifecycle.delete": deletion.deleteSessionEntryInAgentWorker,
+  } satisfies Handlers;
+}
+
 export async function loadAgentPurgeOperations() {
   const purge = await import("../config/sessions/session-agent-purge.worker.js");
   return {
@@ -399,9 +410,9 @@ export async function loadAgentTrajectoryOperations() {
   return {
     "trajectory.events.append": (
       input: Parameters<typeof kernel.appendSqliteTrajectoryRuntimeEventsWithWriter>[0],
-      { writeTransaction, admit },
+      { open, writeTransaction, admit },
     ) => {
-      return kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
+      return kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, open(), (label, write) =>
         writeTransaction(label, "Trajectory append", (current) => {
           const result = write(current);
           deferSqliteWorkerCommitReceipt(current.db, result.receipt);
@@ -667,7 +678,8 @@ export async function loadSessionRowBackfillOperations() {
 }
 
 export type RegisteredAgentWorkerOperations = WorkerOperations<
-  Awaited<ReturnType<typeof loadSessionRowBackfillOperations>> &
+  Awaited<ReturnType<typeof loadAgentAuthProfileOperations>> &
+    Awaited<ReturnType<typeof loadSessionRowBackfillOperations>> &
     Awaited<ReturnType<typeof loadUsageCacheOperations>> &
     Awaited<ReturnType<typeof loadAgentVoiceSessionOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
@@ -676,6 +688,7 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
     Awaited<ReturnType<typeof loadAgentCompoundOperations>> &
+    Awaited<ReturnType<typeof loadAgentEntryDeletionOperations>> &
     Awaited<ReturnType<typeof loadAgentPurgeOperations>> &
     Awaited<ReturnType<typeof loadAgentMaintenanceFinalizationOperations>> &
     Awaited<ReturnType<typeof loadAgentNativeBindingOperations>> &

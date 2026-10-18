@@ -1,6 +1,6 @@
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import type { MenuItemBindings } from "./solid/menu.tsx";
 import "./tooltip.ts";

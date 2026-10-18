@@ -162,21 +162,16 @@ describe("Google image-generation provider", () => {
 
   it("passes request SSRF policy to the provider HTTP helper", async () => {
     mockGoogleApiKeyAuth();
-    const postJsonRequest = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
-      response: Response.json(
-        googleImagePayload([
-          {
-            inlineData: {
-              mimeType: "image/png",
-              data: Buffer.from("png-data").toString("base64"),
-            },
+    const postJsonRequest = vi.spyOn(providerHttp, "postJsonResponse").mockResolvedValue(
+      googleImagePayload([
+        {
+          inlineData: {
+            mimeType: "image/png",
+            data: Buffer.from("png-data").toString("base64"),
           },
-        ]),
-      ),
-      finalUrl:
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent",
-      release: async () => {},
-    });
+        },
+      ]),
+    );
 
     await generateImage({ ssrfPolicy: { allowRfc2544BenchmarkRange: true } });
 
@@ -295,20 +290,25 @@ describe("Google image-generation provider", () => {
     ]);
   });
 
-  it("still rejects oversized Google image JSON responses", async () => {
+  it("keeps generated image JSON above the configured media cap", async () => {
     mockGoogleApiKeyAuth();
+    const image = Buffer.alloc(4 * 1024 * 1024, 1);
     vi.stubGlobal(
       "fetch",
       vi
         .fn()
         .mockResolvedValue(
-          jsonResponse(googleImagePayload([{ text: "x".repeat(35 * 1024 * 1024) }])),
+          jsonResponse(
+            googleImagePayload([
+              { inlineData: { mimeType: "image/png", data: image.toString("base64") } },
+            ]),
+          ),
         ),
     );
 
-    await expect(generateImage({})).rejects.toThrow(
-      "google.image-generation: JSON response exceeds",
-    );
+    // The old store-cap bound for 0.5 MB was about 3.7 MB of JSON for four images.
+    const result = await generateImage({ cfg: { agents: { defaults: { mediaMaxMb: 0.5 } } } });
+    expect(result.images[0]?.buffer.byteLength).toBe(image.byteLength);
   });
 
   it("sends reference images and explicit resolution for edit flows", async () => {
@@ -391,7 +391,7 @@ describe("Google image-generation provider", () => {
   it("honors configured private-network opt-in for Google image generation", async () => {
     mockGoogleApiKeyAuth();
     installGoogleFetchMock();
-    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonResponse");
 
     await generateImage({
       prompt: "draw a fox",

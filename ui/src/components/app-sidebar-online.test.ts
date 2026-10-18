@@ -14,7 +14,10 @@ import {
 import { admitSidebarBootScope } from "../pages/chat/session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { selectSidebarView } from "../test-helpers/app-sidebar-setup.ts";
+import {
+  focusSidebarPersonWithKeyboard,
+  selectSidebarView,
+} from "../test-helpers/app-sidebar-setup.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -213,7 +216,7 @@ describe("sidebar people workload", () => {
 
   it("ignores heartbeat and offscreen watching packets while retaining visible activity and viewers", async () => {
     const { sidebar, gateway } = await mountWorkload();
-    const update = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "requestUpdate");
+    const update = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "invalidate");
     const heartbeat = presence().map((entry) =>
       Object.assign({}, entry, {
         ts: NOW + 1,
@@ -346,9 +349,9 @@ describe("sidebar people workload", () => {
     async (mode) => {
       const { sidebar } = await mountWorkload();
       sidebar.sidebarAgentsMode = mode;
-      const view = sidebar.sidebarMenus.host.people;
-      view.setStatusFilter("running");
-      view.setSortMode("running");
+      const view = sidebar.people;
+      view.set("statusFilter", "running");
+      view.set("sortMode", "running");
       await settle(sidebar);
       expect(names(sidebar)).toEqual(["bea", "ada"]);
       expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
@@ -393,7 +396,7 @@ describe("sidebar people workload", () => {
     sidebar.setSessionOwnerFilter("cy");
     context.agentSelection.state.selectedId = "research";
     context.agentSelection.state.scopeId = "research";
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await settle(sidebar);
     pending.resolve(summary());
     await settle(sidebar);
@@ -413,17 +416,17 @@ describe("sidebar people workload", () => {
       presence: [...presence(), { instanceId: "raw", ts: NOW, user: { id: "raw", name: "Aaron" } }],
     });
     const reads = request.mock.calls.length;
-    const view = sidebar.sidebarMenus.host.people;
-    view.setSortMode("running");
+    const view = sidebar.people;
+    view.set("sortMode", "running");
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["bea", "ada", "cy", "Aaron"]);
-    view.setSortMode("name");
+    view.set("sortMode", "name");
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["Aaron", "ada", "bea", "cy"]);
-    view.setSortMode("open");
+    view.set("sortMode", "open");
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["ada", "bea", "cy", "Aaron"]);
-    view.setStatusFilter("running");
+    view.set("statusFilter", "running");
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["ada", "bea"]);
     expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
@@ -434,7 +437,7 @@ describe("sidebar people workload", () => {
   it("keeps the filter recoverable for unavailable counts and empty matches", async () => {
     const pending = createDeferred<SessionsListResult>();
     const { sidebar } = await mountWorkload(() => pending.promise);
-    sidebar.sidebarMenus.host.people.setStatusFilter("running");
+    sidebar.people.set("statusFilter", "running");
     await settle(sidebar);
     expect(names(sidebar)).toEqual([]);
     expect(sidebar.querySelector(".sidebar-session-empty-hint")?.textContent).toBe(
@@ -447,13 +450,13 @@ describe("sidebar people workload", () => {
       "No people match this filter",
     );
     expect(sidebar.querySelector(".sidebar-online [aria-haspopup=dialog]")).not.toBeNull();
-    sidebar.sidebarMenus.host.people.resetView();
+    sidebar.people.resetView();
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);
   });
 
-  it("dismisses compact people menus on selection and only offers reset for changed settings", async () => {
-    const { sidebar } = await mountWorkload();
+  it("dismisses compact people menus and retains choices across a view-context replacement", async () => {
+    const { sidebar, provider, context } = await mountWorkload();
     const open = async () => {
       await click(sidebar, ".sidebar-online__filter-toggle");
       await vi.dynamicImportSettled();
@@ -474,12 +477,38 @@ describe("sidebar people workload", () => {
     await click(sidebar, 'openclaw-select-picker:has(#sidebar-people-sort) [data-value="running"]');
     expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
     expect(names(sidebar)).toEqual(["bea", "ada"]);
+    provider.setContext({ ...context, basePath: "/control" });
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["bea", "ada"]);
     await open();
+    expect(sidebar.querySelector("#sidebar-people-status")?.textContent).toContain("Running");
     await click(sidebar, "#sidebar-people-reset");
     expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
     expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);
     await open();
     expect(sidebar.querySelector("#sidebar-people-reset")).toBeNull();
+  });
+
+  it("dismisses a person card at native detach and keeps interaction alive across a same-task move", async () => {
+    const { sidebar, provider } = await mountWorkload();
+    focusSidebarPersonWithKeyboard(person(sidebar, "ada"));
+    await vi.dynamicImportSettled();
+    await settle(sidebar);
+    expect(document.querySelector(".person-activity-hovercard")).not.toBeNull();
+
+    sidebar.hostElement.remove();
+    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
+    provider.append(sidebar.hostElement);
+    await settle(sidebar);
+    focusSidebarPersonWithKeyboard(person(sidebar, "bea"));
+    await settle(sidebar);
+    expect(
+      document.querySelector(".person-activity-hovercard")?.getAttribute("aria-label"),
+    ).toContain("bea");
+
+    provider.remove();
+    await settle(sidebar);
+    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
   });
 
   it("keeps all mixed Active, Idle, and Online-only people, including zero counts, in presence order", async () => {

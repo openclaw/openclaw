@@ -32,7 +32,6 @@ import type { DiscordVoiceAudioReceipt } from "./recording-types.js";
 import { respondToDiscordVoiceTranscript } from "./segment.js";
 import {
   CAPTURE_FINALIZE_GRACE_MS,
-  resolveVoiceTimeoutMs,
   logVoiceVerbose,
   MIN_SEGMENT_SECONDS,
   type VoiceOperationResult,
@@ -88,10 +87,7 @@ export class DiscordVoiceReceive {
     scheduleVoiceCaptureFinalize({
       state: entry.capture,
       userId,
-      delayMs: resolveVoiceTimeoutMs(
-        this.params.discordConfig.voice?.captureSilenceGraceMs,
-        CAPTURE_FINALIZE_GRACE_MS,
-      ),
+      delayMs: this.params.discordConfig.voice?.captureSilenceGraceMs ?? CAPTURE_FINALIZE_GRACE_MS,
     });
   }
 

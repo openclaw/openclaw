@@ -11,7 +11,7 @@ import {
   findActiveCronRunReceiptInDatabase,
 } from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
-import type { CronRunReceiptHandle, CronRunReceiptOwnerObservation } from "./run-receipt.types.js";
+import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 export function inspectActiveCronRunReceipt(params: { storePath: string; jobId: string }) {
   return runOpenClawStateWriteTransaction(({ db }) =>
@@ -109,7 +109,9 @@ export function prepareCronRunReceiptClaim(params: {
   agentId: string;
   startedAtMs: number;
   requestRunId?: string;
-  observed: CronRunReceiptOwnerObservation | undefined;
+  observed:
+    | Pick<CronRunReceiptHandle, "receiptId" | "ownerPid" | "ownerStartTime" | "startedAtMs">
+    | undefined;
 }) {
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
   const storeKey = cronStoreKey(params.storePath);

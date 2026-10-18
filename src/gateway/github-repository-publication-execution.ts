@@ -158,6 +158,7 @@ export function createRepositoryGitHubPublicationExecution(params: {
             snapshot: prepared.snapshot,
             snapshotRoot: prepared.snapshotRoot,
             storePath: loaded.storePath,
+            readCurrentEntry: () => assertReceiptOwner(row, preparedOwner).loaded.entry,
             assertWorkflowChangesAllowed: bound
               ? assertExecution
               : () => assertGitHubPublicationWorkflowChangesAllowed(getRequester()),

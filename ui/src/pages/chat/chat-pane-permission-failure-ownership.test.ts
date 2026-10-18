@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { render } from "lit";
+import { createComponent, createSignal, merge } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
@@ -125,8 +126,15 @@ describe("chat permission failure ownership", () => {
           ),
         );
         const container = document.createElement("div");
-        const draw = () => render(solidContent(ChatPermissionPicker, picker()), container);
-        draw();
+        const [currentPicker, setCurrentPicker] = createSignal(picker());
+        const view = mountSolid(() => createComponent(ChatPermissionPicker, merge(currentPicker)), {
+          container,
+        });
+        onTestFinished(view.unmount);
+        const draw = () => {
+          setCurrentPicker(picker());
+          flush();
+        };
         const trigger = container.querySelector<HTMLButtonElement>(
           "[data-chat-permission-select]",
         )!;

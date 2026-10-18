@@ -103,6 +103,7 @@ FAILURE_MESSAGE=""
 FAILURE_SIGNAL=""
 gateway_pid=""
 plugin_registry_pid=""
+formerly_bundled_doctor_pid=""
 candidate_selector_registry=0
 missing_plugin_registry_pid=""
 clawhub_fixture_pid=""
@@ -502,6 +503,12 @@ watchos_reconnect_restarted_candidate() {
 }
 
 cleanup() {
+  if [ -n "$formerly_bundled_doctor_pid" ]; then
+    # Signal the responsive managed owner, then join before removing its dependencies.
+    kill -TERM "$formerly_bundled_doctor_pid" 2>/dev/null || true
+    wait "$formerly_bundled_doctor_pid" || true
+    formerly_bundled_doctor_pid=""
+  fi
   stop_gateway
   openclaw_e2e_stop_process "${plugin_registry_pid:-}"
   openclaw_e2e_stop_process "${missing_plugin_registry_pid:-}"
@@ -1082,6 +1089,25 @@ assert_schema_outcome() {
   node scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs assert \
     "$ARTIFACT_ROOT/schema-before.json" "$update_exit_code" "$installed_version" "$update_outcome" \
     "$ARTIFACT_ROOT/schema-after.json"
+}
+
+start_formerly_bundled_doctor() {
+  echo "==> upgrade-survivor:formerly-bundled-doctor" >&3
+  json_event formerly-bundled-doctor started
+  node scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs \
+    --managed "$candidate_version" >"$ARTIFACT_ROOT/formerly-bundled-doctor.log" 2>&1 &
+  formerly_bundled_doctor_pid="$!"
+}
+
+join_formerly_bundled_doctor() {
+  local previous_phase="$CURRENT_PHASE" doctor_status=0
+  CURRENT_PHASE="formerly-bundled-doctor"
+  wait "$formerly_bundled_doctor_pid" || doctor_status=$?
+  formerly_bundled_doctor_pid=""
+  cat "$ARTIFACT_ROOT/formerly-bundled-doctor.log" >&3
+  [ "$doctor_status" -eq 0 ] || return "$doctor_status"
+  json_event formerly-bundled-doctor passed
+  CURRENT_PHASE="$previous_phase"
 }
 
 assert_legacy_operator_update_noop() {
@@ -2343,6 +2369,8 @@ if [ "$SCENARIO" = "cron-owner-doctor" ]; then
   phase assert-cron-owner-idempotence node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs assert-idempotent
   phase prepare-cron-owner-runtime node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs prepare-runtime
   OPENCLAW_SKIP_CRON=0 phase cron-owner-candidate-gateway-start start_gateway
+  # /readyz can precede optional-agent admission; continuity reads require settled startup.
+  phase cron-owner-candidate-startup probe_gateway_endpoint /startupz started "$ARTIFACT_ROOT/cron-owner-startup.json"
   phase cron-owner-candidate-gateway-probes check_gateway_probes
   phase run-cron-owner-runtime openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
     node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs run-runtime
@@ -2774,6 +2802,9 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   if [ "$native_assignment_enabled" = "1" ]; then
     phase verify-native-assignment-recovery node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs live "$candidate_version"
   fi
+  # This proof owns separate state and a private registry; the candidate no-op
+  # and service checks only share its immutable installed package and archives.
+  start_formerly_bundled_doctor
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     # The restart shim has no native service cgroup. After proving the published
     # managed restart, exercise candidate no-op convergence with a foreground Gateway.
@@ -2789,8 +2820,7 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
     phase legacy-operator-noop-service-status check_gateway_status
   fi
   phase legacy-operator-doctor-clean assert_legacy_operator_doctor_clean
-  phase formerly-bundled-doctor node scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs \
-    "$candidate_version"
+  join_formerly_bundled_doctor
 fi
 if [ "$SCENARIO" = "watchos-direct-node" ]; then
   phase watchos-candidate-reconnect watchos_reconnect_candidate

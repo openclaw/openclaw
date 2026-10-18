@@ -43,7 +43,7 @@ function expectMinimaxFetchCall(index: number, url: string) {
   }
   const [actualUrl, init, timeoutMs, fetchFn] = call;
   expect(actualUrl).toBe(url);
-  expect(init?.method).toBe("GET");
+  expect(init).toMatchObject({ method: "GET" });
   expect(Number.isInteger(timeoutMs)).toBe(true);
   expect(timeoutMs).toBeGreaterThan(0);
   expect(fetchFn).toBe(fetch);
@@ -83,6 +83,27 @@ function oversizedJsonResponse(): Response {
 }
 
 describe("minimax video generation provider", () => {
+  it.each(["minimax", "minimax-portal"])(
+    "rejects an invalid %s media origin before resolving credentials or submitting video",
+    async (providerId) => {
+      await expect(
+        buildMinimaxVideoGenerationProvider(providerId).generateVideo(
+          videoRequest({
+            provider: providerId,
+            cfg: {
+              models: {
+                providers: { [providerId]: { baseUrl: "https://[", models: [] } },
+              },
+            },
+          }),
+        ),
+      ).rejects.toBeInstanceOf(TypeError);
+      expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
+      expect(postJsonRequestMock).not.toHaveBeenCalled();
+      expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects a duration that rounds to zero before submission", async () => {
     await expect(
       buildMinimaxVideoGenerationProvider().generateVideo(videoRequest({ durationSeconds: 0.4 })),
@@ -196,7 +217,7 @@ describe("minimax video generation provider", () => {
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockRejectedValueOnce(new Error("temporary poll failure"))
+      .mockRejectedValueOnce(new Error("request timeout"))
       .mockResolvedValueOnce(
         jsonResponse({
           task_id: "task-retry",

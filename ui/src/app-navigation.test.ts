@@ -32,6 +32,7 @@ const ALL_ROUTES: RouteId[] = Array.from(
   new Set<RouteId>([
     "chat",
     "custodian",
+    "claws",
     ...SIDEBAR_NAV_ROUTES,
     "workboard",
     "skills",

@@ -98,7 +98,7 @@ function normalizeDeepgramRealtimeBaseUrl(value?: string): string {
 }
 
 function toDeepgramRealtimeWsUrl(config: DeepgramRealtimeTranscriptionSessionConfig): string {
-  const url = new URL(normalizeDeepgramRealtimeBaseUrl(config.baseUrl));
+  const url = new URL(config.baseUrl);
   // Self-hosted Deepgram may explicitly use ws:// without TLS. Translate only
   // matching HTTP schemes so direct WebSocket endpoints keep their contract.
   if (url.protocol === "http:") {
@@ -158,10 +158,8 @@ function createDeepgramRealtimeTranscriptionSession(
   let finalizeFallbackTimer: ReturnType<typeof setTimeout> | undefined;
   let openedOnce = false;
 
-  const collapseWhitespace = (value: string) => value.replace(/\s+/g, " ").trim();
-
   const joinTranscript = (left: string, right: string) =>
-    collapseWhitespace(left && right ? `${left} ${right}` : left || right);
+    (left && right ? `${left} ${right}` : left || right).replace(/\s+/g, " ").trim();
 
   const clearFinalizeFallback = () => {
     if (finalizeFallbackTimer) {

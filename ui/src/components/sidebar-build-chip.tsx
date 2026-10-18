@@ -1,4 +1,4 @@
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { pathForRoute } from "../app-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
@@ -6,7 +6,7 @@ import { formatDateTimeMs } from "../lib/format.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "./tooltip.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
   formatSettingsBuildLabel,
   formatSidebarBuildSubtitle,
@@ -78,6 +78,24 @@ export const SidebarBuildChip = defineSolidBridge<SidebarBuildChipProps>(
   },
 );
 
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-sidebar-build-chip": SolidBridgeElement<SidebarBuildChipProps>;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-sidebar-build-chip": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-sidebar-build-chip"]
+      > & {
+        [K in keyof SidebarBuildChipProps as `prop:${K}`]?: SidebarBuildChipProps[K];
+      };
+    }
+  }
+}
+
 const COPY_FEEDBACK_MS = 1_500;
 
 async function copyBuildCommit(button: HTMLButtonElement, commit: string, idleLabel: string) {
@@ -96,7 +114,7 @@ async function copyBuildCommit(button: HTMLButtonElement, commit: string, idleLa
 function renderSidebarServerDetails(
   info: ControlUiBuildInfo,
   gatewayVersion: string | null,
-): JSX.Element {
+): SolidJSX.Element {
   const commit = info.commit?.slice(0, 12) ?? null;
   const builtAtMs = info.builtAt ? Date.parse(info.builtAt) : Number.NaN;
   const builtAt = Number.isFinite(builtAtMs)

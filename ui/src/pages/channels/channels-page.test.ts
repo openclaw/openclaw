@@ -1,18 +1,26 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  ControlUiChannelSettingsContext,
+  ControlUiChannelSettingsSnapshot,
+} from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import type { ControlUiPluginDistribution } from "../../plugins/control-ui-distribution.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ChannelsPage } from "./channels-page.tsx";
 
-const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
+const packaged = vi.hoisted(() => [] as ControlUiPluginDistribution[]);
+vi.mock("../../plugins/control-ui-distribution.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/control-ui-distribution.ts")>()),
+  controlUiPluginDistributions: packaged,
+}));
 
-type ChannelsPageTestElement = HTMLElement;
 const mountedPages = new Map<
   HTMLElement,
   { dispose: () => void; replace: (context: ApplicationContext) => void }
@@ -56,31 +64,6 @@ async function settle() {
 type TestGateway = ApplicationContext["gateway"] & {
   emit: (patch: Partial<ApplicationGatewaySnapshot>) => void;
 };
-
-function stubHangingFetch() {
-  const fetchMock = vi.fn<typeof fetch>(
-    async (_input, init) =>
-      await new Promise<Response>((_resolve, reject) => {
-        const signal = init?.signal;
-        if (!signal) {
-          throw new Error("Expected Nostr profile request to carry an AbortSignal");
-        }
-        signal.addEventListener(
-          "abort",
-          () => {
-            const reason: unknown = signal.reason;
-            if (!(reason instanceof DOMException)) {
-              throw new Error("Expected profile timeout to abort with a DOMException");
-            }
-            reject(reason);
-          },
-          { once: true },
-        );
-      }),
-  );
-  vi.stubGlobal("fetch", fetchMock);
-  return fetchMock;
-}
 
 function createGateway(): TestGateway {
   const client = {
@@ -190,49 +173,8 @@ async function choosePairingFilter(page: HTMLElement, index: number, value: stri
   await settle();
 }
 
-async function editProfileName(page: ChannelsPageTestElement, value: string) {
-  const name = page.querySelector<HTMLInputElement>("#nostr-profile-name");
-  if (!name) {
-    throw new Error("Missing profile name");
-  }
-  name.value = value;
-  name.dispatchEvent(new Event("input", { bubbles: true }));
-  await settle();
-}
-
-async function mountNostrProfile() {
-  const gateway = createGateway();
-  gateway.connection.token = "saved-token";
-  gateway.snapshot.hello = {
-    type: "hello-ok",
-    protocol: 3,
-    auth: { role: "operator", scopes: ["operator.admin"], deviceToken: "device-token" },
-  };
-  const source = createContext(gateway);
-  const refresh = vi.spyOn(source.channels, "refresh").mockResolvedValue();
-  source.channels.state.channelsSnapshot = {
-    ts: 0,
-    channelOrder: ["nostr"],
-    channelLabels: { nostr: "Nostr" },
-    channels: { nostr: { configured: true, profile: { name: "Alice" } } },
-    channelAccounts: {},
-    channelDefaultAccountId: {},
-  };
-  const page = mountPage(source.context);
-  await settle();
-  const channel = page.querySelector<HTMLButtonElement>(".channels-item");
-  if (!channel) {
-    throw new Error("Missing Nostr channel");
-  }
-  channel.click();
-  await settle();
-  profileButton(page, "Edit Profile").click();
-  await settle();
-  await editProfileName(page, "Alice Updated");
-  return { gateway, source, refresh, page };
-}
-
 afterEach(() => {
+  packaged.length = 0;
   for (const page of mountedPages.keys()) {
     disposePage(page);
   }
@@ -243,103 +185,74 @@ afterEach(() => {
 });
 
 describe("ChannelsPage lifecycle", () => {
-  it("openclaw-channels-page Import from Relays preserves a null profile name with extra fields", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>().mockResolvedValue(
-        Response.json({
-          ok: true,
-          saved: true,
-          merged: { name: null, displayName: "Imported display", extra: { value: true } },
-        }),
-      ),
-    );
-    const { source, page } = await mountNostrProfile();
-    profileButton(page, "Import from Relays").click();
-    await waitForSolid(() => expect(page.textContent).toContain("Profile imported"));
-    expect(page.querySelector<HTMLInputElement>("#nostr-profile-name")?.value).toBe("");
-    expect(page.querySelector<HTMLInputElement>("#nostr-profile-displayName")?.value).toBe(
-      "Imported display",
-    );
-    source.runtimeConfig.dispose();
-    source.channels.dispose();
-  });
-
-  it("openclaw-channels-page Save & Publish preserves HTTP validation details", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json(
-          { ok: false, error: "Validation failed", details: ["name: Name is too long"] },
-          { status: 400 },
-        ),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-    const { source, page } = await mountNostrProfile();
-    profileButton(page, "Save & Publish").click();
-    await waitForSolid(() => expect(page.textContent).toContain("HTTP 400: Validation failed"));
-    expect(page.textContent).toContain("Name is too long");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    source.runtimeConfig.dispose();
-    source.channels.dispose();
-  });
-
-  it.each([
-    ["Save & Publish", 401, 200],
-    ["Import from Relays", 401, 401],
-    ["Save & Publish", 403, 200],
-    ["Save & Publish", 401, 503],
-  ] as const)(
-    "openclaw-channels-page %s handles credentials and HTTP errors after %s then %s",
-    async (action, firstStatus, nextStatus) => {
-      const fetchMock = vi
-        .fn<typeof fetch>()
-        .mockResolvedValueOnce(
-          Response.json(
-            { error: { message: firstStatus === 403 ? "Forbidden" : "Unauthorized" } },
-            { status: firstStatus },
-          ),
-        )
-        .mockResolvedValueOnce(
-          nextStatus === 200
-            ? Response.json({ ok: true, persisted: true, saved: true, merged: { name: "Alice" } })
-            : nextStatus === 503
-              ? new Response("gateway unavailable", { status: 503 })
-              : Response.json({ error: { message: "Unauthorized" } }, { status: nextStatus }),
-        );
-      vi.stubGlobal("fetch", fetchMock);
-      const { source, page } = await mountNostrProfile();
-      profileButton(page, action).click();
-      const recovered = firstStatus === 401 && nextStatus === 200;
-      await waitForSolid(() =>
-        expect(page.textContent).toContain(
-          recovered
-            ? action === "Save & Publish"
-              ? "Profile published"
-              : "Profile imported"
-            : "Last error",
-        ),
-      );
-      expect(
-        fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
-      ).toEqual(
-        firstStatus === 403
-          ? ["Bearer device-token"]
-          : ["Bearer device-token", "Bearer saved-token"],
-      );
-      if (!recovered) {
-        expect(page.textContent).toContain(
-          firstStatus === 403
-            ? "HTTP 403: Forbidden"
-            : nextStatus === 503
-              ? "HTTP 503"
-              : "HTTP 401: Unauthorized",
-        );
+  it("keeps channel details available but waits for reconnect before starting setup", async () => {
+    const gateway = createGateway();
+    setGatewayScopes(gateway, ["operator.admin", "operator.read"]);
+    const hello = gateway.snapshot.hello;
+    const source = createContext(gateway);
+    const request = vi.spyOn(gateway.snapshot.client!, "request");
+    const baseRequest = request.getMockImplementation();
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "wizard.start") {
+        return {
+          done: false,
+          status: "running",
+          sessionId: "channel-setup",
+          step: { id: "token", type: "text", title: "Channel token" },
+        };
       }
-      source.runtimeConfig.dispose();
-      source.channels.dispose();
-    },
-  );
+      return await baseRequest?.(method, params);
+    });
+    const page = mountPage(source.context);
+    await settle();
+    expect(profileButton(page, "Set up").disabled).toBe(false);
+
+    for (const phase of ["reconnecting", "offline"] as const) {
+      gateway.emit({ phase });
+      await settle();
+      expect(gateway.snapshot.hello).toBe(hello);
+      const setupButtons = Array.from(page.querySelectorAll("button")).filter(
+        (button) => button.textContent?.trim() === "Set up",
+      );
+      expect(setupButtons.length).toBeGreaterThan(0);
+      for (const button of setupButtons) {
+        expect(button.disabled).toBe(true);
+        button.click();
+      }
+      const browse = page.querySelector<HTMLButtonElement>("button.channels-item")!;
+      expect(browse.textContent).toContain("More channels");
+      expect(browse.disabled).toBe(true);
+      browse.click();
+
+      const details = page.querySelector<HTMLButtonElement>(".channels-item__detail")!;
+      expect(details.disabled).toBe(false);
+      details.click();
+      await settle();
+      expect(page.querySelector(".channels-detail")).not.toBeNull();
+      const runSetup = profileButton(page, "Run setup");
+      expect(runSetup.disabled).toBe(true);
+      runSetup.click();
+      await settle();
+      expect(page.querySelector(".channels-wizard")).toBeNull();
+      expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(0);
+      page.querySelector<HTMLButtonElement>(".channels-detail__close")!.click();
+      await settle();
+      expect(page.querySelector(".channels-detail")).toBeNull();
+    }
+
+    gateway.emit({ phase: "connected" });
+    await settle();
+    const setup = profileButton(page, "Set up");
+    expect(setup.disabled).toBe(false);
+    setup.click();
+    await waitForSolid(() => {
+      expect(page.querySelector("#channel-wizard-text-input")).not.toBeNull();
+    });
+    expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(1);
+    disposePage(page);
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
 
   it("prefers the exact plugin icon over an earlier owning plugin", async () => {
     const gateway = createGateway();
@@ -879,128 +792,425 @@ describe("ChannelsPage lifecycle", () => {
     source.runtimeConfig.dispose();
     source.channels.dispose();
   });
-
-  it.each([
-    ["Save & Publish", "source replacement", 200],
-    ["Import from Relays", "disconnect", 200],
-    ["Import from Relays", "replacement form", 200],
-    ["Save & Publish", "credential/client replacement", 401],
-    ["Import from Relays", "credential/client replacement", 401],
-    ["Import from Relays", "unmount", 401],
-  ] as const)(
-    "retires rendered %s after %s before pending %s",
-    async (action, retirement, status) => {
-      vi.useFakeTimers();
-      const response = createDeferred<Response>();
-      const fetchMock = vi.fn<typeof fetch>(() => response.promise);
-      vi.stubGlobal("fetch", fetchMock);
-      const { gateway, source, refresh, page } = await mountNostrProfile();
-      const second = createContext(gateway);
-      const secondRefresh = vi.spyOn(second.channels, "refresh").mockResolvedValue();
-      profileButton(page, action).click();
-      await settle();
-      expect(fetchMock).toHaveBeenCalledOnce();
-
-      switch (retirement) {
-        case "source replacement":
-          expect(source.ensureSchemaLoaded).toHaveBeenCalledOnce();
-          replacePageContext(page, second.context);
-          await waitForSolid(() => expect(second.ensureSchemaLoaded).toHaveBeenCalledOnce());
-          break;
-        case "disconnect":
-          gateway.emit({ phase: "stopped" });
-          break;
-        case "replacement form":
-          expect(profileButton(page, "Cancel").disabled).toBe(false);
-          profileButton(page, "Cancel").click();
-          break;
-        case "credential/client replacement":
-          gateway.connection.token = "rotated-token";
-          gateway.emit({ client: createGateway().snapshot.client });
-          break;
-        case "unmount":
-          disposePage(page);
-          break;
-      }
-      await settle();
-      expect(page.querySelector("#nostr-profile-name")).toBeNull();
-      if (retirement === "replacement form") {
-        profileButton(page, "Edit Profile").click();
-        await settle();
-        await editProfileName(page, "Fresh draft");
-      }
-      if (retirement === "credential/client replacement") {
-        await vi.advanceTimersByTimeAsync(0);
-        // Reconnection refreshes the new client before the retired request settles.
-        refresh.mockClear();
-        secondRefresh.mockClear();
-      }
-      response.resolve(
-        Response.json(
-          { ok: true, persisted: true, saved: true, merged: { name: "Stale import" } },
-          { status },
-        ),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      await settle();
-
-      expect(fetchMock).toHaveBeenCalledOnce();
-      expect(refresh).not.toHaveBeenCalled();
-      expect(secondRefresh).not.toHaveBeenCalled();
-      expect(page.textContent).not.toContain("Profile published");
-      expect(page.textContent).not.toContain("Profile imported");
-      expect(page.textContent).not.toContain("Last error");
-      if (retirement === "replacement form") {
-        expect(page.querySelector<HTMLInputElement>("#nostr-profile-name")?.value).toBe(
-          "Fresh draft",
-        );
-        expect(profileButton(page, "Import from Relays").disabled).toBe(false);
-      } else {
-        expect(page.querySelector("#nostr-profile-name")).toBeNull();
-      }
-      source.runtimeConfig.dispose();
-      source.channels.dispose();
-      second.runtimeConfig.dispose();
-      second.channels.dispose();
-    },
-  );
-
-  it.each(["Save & Publish", "Import from Relays"])(
-    "times out rendered %s across credential retry",
-    async (action) => {
-      vi.useFakeTimers();
-      const fetchMock = stubHangingFetch();
-      fetchMock.mockImplementationOnce(
-        async () =>
-          await new Promise<Response>((resolve) => {
-            setTimeout(() => resolve(new Response(null, { status: 401 })), 15_000);
-          }),
-      );
-      const { source, refresh, page } = await mountNostrProfile();
-      profileButton(page, action).click();
-      await settle();
-      expect(fetchMock).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(14_999);
-      expect(fetchMock).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(
-        fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
-      ).toEqual(["Bearer device-token", "Bearer saved-token"]);
-      await vi.advanceTimersByTimeAsync(NOSTR_PROFILE_REQUEST_TIMEOUT_MS - 15_001);
-      expect(page.textContent).not.toContain("Request timed out");
-      expect(fetchMock.mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      await settle();
-
-      expect(fetchMock.mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(true);
-      expect(profileButton(page, action).disabled).toBe(false);
-      expect(page.textContent).toContain(
-        "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.",
-      );
-      expect(refresh).not.toHaveBeenCalled();
-      source.runtimeConfig.dispose();
-      source.channels.dispose();
-    },
-  );
 });
+
+async function mountPackagedChannel(channelId = "custom-profile", scopes = ["operator.admin"]) {
+  const placement = { section: "channels", panel: "detail", channelId } as const;
+  packaged.push({
+    pluginId: "profile-fixture",
+    revision: "fixture-revision",
+    bundledDistribution: { packageName: "profile-fixture", packageVersion: "1.0.0" },
+    entry: "/fixture/index.js",
+    styles: [],
+    imports: [],
+    activation: "settings-only",
+    settingsViews: [placement],
+  });
+  const gateway = createGateway();
+  gateway.connection.token = "saved-token";
+  gateway.snapshot.hello = {
+    type: "hello-ok",
+    protocol: 3,
+    auth: { role: "operator", scopes, deviceToken: "device-token" },
+  };
+  const source = createContext(gateway);
+  const refresh = vi.spyOn(source.channels, "refresh").mockResolvedValue();
+  source.channels.state.channelsSnapshot = {
+    ts: 0,
+    channelOrder: [channelId, "other"],
+    channelLabels: { [channelId]: "Custom profile", other: "Other" },
+    channels: { [channelId]: { configured: true, linked: true }, other: { configured: true } },
+    channelAccounts: {},
+    channelDefaultAccountId: {},
+  };
+  const mounts: Array<{
+    context: ControlUiChannelSettingsContext;
+    input: HTMLInputElement;
+    update: ReturnType<typeof vi.fn<(props: ControlUiChannelSettingsSnapshot) => void>>;
+    dispose: ReturnType<typeof vi.fn>;
+  }> = [];
+  // This synthetic view only records host lifetime/snapshot wiring; real plugin rendering is covered by its own tests and packaged E2E.
+  Object.assign(source.context, {
+    plugins: {
+      loadSettingsView: vi.fn(async (_placement, signal: AbortSignal) => ({
+        signal,
+        dispose: vi.fn(),
+        view: {
+          placement,
+          mount(container: HTMLElement, context: ControlUiChannelSettingsContext) {
+            const input = document.createElement("input");
+            input.dataset.pluginDraft = "true";
+            container.append(input);
+            const mounted = {
+              context,
+              input,
+              update: vi.fn<(props: ControlUiChannelSettingsSnapshot) => void>(),
+              dispose: vi.fn(() => input.remove()),
+            };
+            mounts.push(mounted);
+            return mounted;
+          },
+        },
+      })),
+    },
+  });
+  const page = mountPage(source.context);
+  async function open(label = "Custom profile") {
+    const channel = [
+      ...page.querySelectorAll<HTMLButtonElement>(
+        "button.channels-item, button.channels-item__detail",
+      ),
+    ].find((node) => node.textContent?.includes(label));
+    expect(channel).toBeDefined();
+    channel!.click();
+    await settle();
+  }
+  await open();
+  await waitForSolid(() => expect(mounts).toHaveLength(1));
+  return { gateway, source, refresh, page, mounts, open, context: mounts[0]!.context };
+}
+const profileRequest = (signal = new AbortController().signal) => ({
+  accountId: "main/account",
+  path: ["profile"],
+  method: "PUT" as const,
+  body: { name: "Example" },
+  signal,
+});
+
+it("retains a packaged editor and its pending request across detail close, another channel, and reopen", async () => {
+  const pending = createDeferred<Response>();
+  const fetchMock = vi.fn<typeof fetch>().mockReturnValue(pending.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  const f = await mountPackagedChannel();
+  const original = f.mounts[0]!;
+  original.input.value = "Retained draft";
+  const request = f.context.request(profileRequest());
+  f.page.querySelector<HTMLButtonElement>(".channels-detail__close")!.click();
+  await settle();
+  expect(original.context.signal.aborted).toBe(false);
+  expect(original.update).toHaveBeenLastCalledWith(expect.objectContaining({ presented: false }));
+  await f.open("Other");
+  f.page.querySelector<HTMLButtonElement>(".channels-detail__close")!.click();
+  await settle();
+  pending.resolve(Response.json({ ok: true }));
+  await expect(request).resolves.toMatchObject({ ok: true });
+  await f.open();
+  expect(f.mounts).toHaveLength(1);
+  expect(f.page.querySelector("[data-plugin-draft]")).toBe(original.input);
+  expect(original.input.value).toBe("Retained draft");
+  expect(original.update).toHaveBeenLastCalledWith(expect.objectContaining({ presented: true }));
+  f.source.runtimeConfig.dispose();
+  f.source.channels.dispose();
+});
+
+it("retires a real host configuration slot and rejects mounting through its old context", async () => {
+  const f = await mountPackagedChannel();
+  const container = document.createElement("div");
+  f.mounts[0]!.input.parentElement!.append(container);
+  const dispose = f.context.mountConfig(container);
+  await waitForSolid(() => expect(container.textContent).toContain("Reload"));
+  f.gateway.emit({ client: createGateway().snapshot.client });
+  expect(f.context.signal.aborted).toBe(true);
+  expect(container.childNodes).toHaveLength(0);
+  expect(() => f.context.mountConfig(container)).toThrow();
+  expect(() => {
+    dispose();
+    dispose();
+  }).not.toThrow();
+  f.source.runtimeConfig.dispose();
+  f.source.channels.dispose();
+});
+
+it("retains the editor across same-client reconnects and synchronously publishes the new transport epoch", async () => {
+  const f = await mountPackagedChannel();
+  const original = f.mounts[0]!;
+  original.input.value = "Draft";
+  const hello = f.gateway.snapshot.hello;
+  f.gateway.emit({ phase: "reconnecting", hello: null });
+  expect(original.context.signal.aborted).toBe(false);
+  expect(original.update).toHaveBeenLastCalledWith(expect.objectContaining({ connected: false }));
+  f.gateway.emit({ phase: "connected", hello });
+  await settle();
+  expect(f.mounts).toHaveLength(1);
+  expect(original.input.value).toBe("Draft");
+  expect(original.update).toHaveBeenLastCalledWith(expect.objectContaining({ connected: true }));
+  f.source.runtimeConfig.dispose();
+  f.source.channels.dispose();
+});
+
+it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as const)(
+  "rejects retained HTTP callbacks and pending responses after %s retirement before another credential dispatch",
+  async (retirement) => {
+    const pending = createDeferred<Response>();
+    const fetchMock = vi.fn<typeof fetch>().mockReturnValue(pending.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const f = await mountPackagedChannel();
+    const caller = new AbortController();
+    const request = f.context.request(profileRequest(caller.signal));
+    const rejection = expect(request).rejects.toThrow();
+    const signal = fetchMock.mock.calls[0]![1]!.signal!;
+    let second: ReturnType<typeof createContext> | undefined;
+    if (retirement === "disconnect") {
+      f.gateway.emit({ phase: "stopped" });
+    } else if (retirement === "client") {
+      f.gateway.connection.token = "rotated-token";
+      f.gateway.emit({ client: createGateway().snapshot.client });
+    } else if (retirement === "admin") {
+      setGatewayScopes(f.gateway, ["operator.read"]);
+    } else if (retirement === "source") {
+      second = createContext(f.gateway);
+      Object.assign(second.context, { plugins: f.source.context.plugins });
+      replacePageContext(f.page, second.context);
+    } else if (retirement === "unmount") {
+      disposePage(f.page);
+    } else {
+      caller.abort();
+    }
+    expect(signal.aborted).toBe(true);
+    await expect(
+      f.context.request(profileRequest(retirement === "caller" ? caller.signal : undefined)),
+    ).rejects.toThrow();
+    pending.resolve(Response.json({ error: "Unauthorized" }, { status: 401 }));
+    await rejection;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    if (retirement !== "disconnect" && retirement !== "caller") {
+      expect(f.mounts[0]!.dispose).toHaveBeenCalledOnce();
+    }
+    f.source.runtimeConfig.dispose();
+    f.source.channels.dispose();
+    second?.runtimeConfig.dispose();
+    second?.channels.dispose();
+  },
+);
+
+it("checks operation authority after consuming a successful response body", async () => {
+  const body = createDeferred<unknown>();
+  const reading = createDeferred();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json() {
+        reading.resolve();
+        return body.promise;
+      },
+    } as Response),
+  );
+  const f = await mountPackagedChannel();
+  const request = f.context.request(profileRequest());
+  const rejection = expect(request).rejects.toThrow();
+  await reading.promise;
+  f.gateway.emit({ phase: "stopped" });
+  body.resolve({ ok: true });
+  await rejection;
+  f.source.runtimeConfig.dispose();
+  f.source.channels.dispose();
+});
+
+it.each([
+  [401, 200],
+  [401, 401],
+  [403, 200],
+  [401, 503],
+] as const)(
+  "keeps captured credential fallback and sanitized HTTP details for %s then %s",
+  async (first, second) => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: { message: first === 403 ? "Forbidden" : "Unauthorized" } },
+          { status: first },
+        ),
+      )
+      .mockResolvedValueOnce(
+        second === 200
+          ? Response.json({ ok: true, persisted: true })
+          : second === 503
+            ? new Response("gateway unavailable", { status: second })
+            : Response.json({ error: { message: "Unauthorized" } }, { status: second }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const f = await mountPackagedChannel();
+    const result = await f.context.request(profileRequest());
+    expect(
+      fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+    ).toEqual(
+      first === 403 ? ["Bearer device-token"] : ["Bearer device-token", "Bearer saved-token"],
+    );
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/channels/custom-profile/main%2Faccount/profile");
+    expect(result.status).toBe(first === 403 ? 403 : second);
+    if (first === 403 || second !== 200) {
+      expect(result.errorMessage).toBe(
+        first === 403
+          ? "HTTP 403: Forbidden"
+          : second === 503
+            ? "HTTP 503"
+            : "HTTP 401: Unauthorized",
+      );
+    }
+    f.source.runtimeConfig.dispose();
+    f.source.channels.dispose();
+  },
+);
+
+it("keeps a caller deadline across credential retry and response-body consumption", async () => {
+  vi.useFakeTimers();
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementationOnce(
+      async () =>
+        await new Promise<Response>((resolve) => {
+          setTimeout(() => resolve(new Response(null, { status: 401 })), 15_000);
+        }),
+    )
+    .mockImplementation(
+      async (_url, init) =>
+        ({
+          ok: true,
+          status: 200,
+          json: () =>
+            new Promise((_resolve, reject) => {
+              init!.signal!.addEventListener(
+                "abort",
+                () => {
+                  try {
+                    init!.signal!.throwIfAborted();
+                  } catch (error) {
+                    reject(
+                      error instanceof Error || error instanceof DOMException
+                        ? error
+                        : new Error("Unexpected abort reason", { cause: error }),
+                    );
+                  }
+                },
+                { once: true },
+              );
+            }),
+        }) as Response,
+    );
+  vi.stubGlobal("fetch", fetchMock);
+  const f = await mountPackagedChannel();
+  const caller = new AbortController();
+  const timer = setTimeout(
+    () => caller.abort(new DOMException("Deadline", "TimeoutError")),
+    30_000,
+  );
+  const request = f.context.request(profileRequest(caller.signal));
+  const rejection = expect(request).rejects.toMatchObject({ name: "TimeoutError" });
+  await vi.advanceTimersByTimeAsync(14_999);
+  expect(fetchMock).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(14_999);
+  expect(fetchMock.mock.calls[1]![1]!.signal!.aborted).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  await rejection;
+  expect(fetchMock.mock.calls[0]![1]!.signal).toBe(fetchMock.mock.calls[1]![1]!.signal);
+  clearTimeout(timer);
+  f.source.runtimeConfig.dispose();
+  f.source.channels.dispose();
+});
+
+it("binds plugin login actions to the existing owner and omits the default start/wait account", async () => {
+  const f = await mountPackagedChannel("whatsapp");
+  const client = f.gateway.snapshot.client!;
+  const request = vi.spyOn(client, "request");
+  request.mockClear();
+  await f.context.login!.start(false);
+  await f.context.login!.wait();
+  expect(request.mock.calls.filter(([method]) => method.startsWith("web.login."))).toEqual([
+    ["web.login.start", { channel: "whatsapp", force: false, timeoutMs: 30000 }],
+    ["web.login.wait", { channel: "whatsapp", timeoutMs: 120000, currentQrDataUrl: undefined }],
+  ]);
+  const account = f.context.login!.captureLogout()!;
+  expect(account.accountId).toBe("default");
+  await account.logout();
+  expect(request).toHaveBeenCalledWith("channels.logout", {
+    channel: "whatsapp",
+    accountId: "default",
+  });
+  f.source.runtimeConfig.dispose();
+  f.source.channels.dispose();
+});
+
+it("denies login and confirmation capabilities to an initially read-only operator", async () => {
+  const f = await mountPackagedChannel("whatsapp", ["operator.read"]);
+  const request = vi.spyOn(f.gateway.snapshot.client!, "request");
+  request.mockClear();
+  await expect(f.context.login!.start(false)).rejects.toThrow();
+  await expect(f.context.login!.wait()).rejects.toThrow();
+  expect(() => f.context.login!.captureLogout()).toThrow();
+  await expect(
+    f.context.confirm!({
+      title: "Log out",
+      message: "Confirm account logout",
+      confirmLabel: "Logout",
+    }),
+  ).rejects.toThrow();
+  expect(request).not.toHaveBeenCalled();
+  expect(document.body.textContent).not.toContain("Confirm account logout");
+  f.source.runtimeConfig.dispose();
+  f.source.channels.dispose();
+});
+
+it.each(["account", "linked"] as const)(
+  "rejects a captured plugin logout after its %s changes",
+  async (change) => {
+    const f = await mountPackagedChannel("whatsapp");
+    const status = f.source.channels.state.channelsSnapshot!;
+    status.channelDefaultAccountId.whatsapp = "work/account";
+    status.channelAccounts.whatsapp = [{ accountId: "work/account", linked: true }];
+    const account = f.context.login!.captureLogout()!;
+    expect(account.accountId).toBe("work/account");
+    if (change === "account") {
+      status.channelDefaultAccountId.whatsapp = "replacement";
+    } else {
+      status.channelAccounts.whatsapp[0]!.linked = false;
+    }
+    const request = vi.spyOn(f.gateway.snapshot.client!, "request");
+    request.mockClear();
+    await account.logout();
+    expect(request).not.toHaveBeenCalled();
+    f.source.runtimeConfig.dispose();
+    f.source.channels.dispose();
+  },
+);
+
+it.each(["disconnect", "client", "admin", "unmount"] as const)(
+  "cancels confirmation and denies retained login actions synchronously after %s",
+  async (retirement) => {
+    const f = await mountPackagedChannel("whatsapp");
+    const request = vi.spyOn(f.gateway.snapshot.client!, "request");
+    const account = f.context.login!.captureLogout()!;
+    const confirmation = f.context.confirm!({
+      title: "Log out",
+      message: "Confirm account logout",
+      confirmLabel: "Logout",
+      danger: true,
+    });
+    const rejection = expect(confirmation).rejects.toThrow();
+    await waitForSolid(() => expect(document.body.textContent).toContain("Confirm account logout"));
+    if (retirement === "disconnect") {
+      f.gateway.emit({ phase: "stopped" });
+    } else if (retirement === "client") {
+      f.gateway.emit({ client: createGateway().snapshot.client });
+    } else if (retirement === "admin") {
+      setGatewayScopes(f.gateway, ["operator.read"]);
+    } else {
+      disposePage(f.page);
+    }
+    request.mockClear();
+    await expect(f.context.login!.start(true)).rejects.toThrow();
+    await expect(f.context.login!.wait()).rejects.toThrow();
+    await expect(account.logout()).rejects.toThrow();
+    await rejection;
+    expect(request).not.toHaveBeenCalled();
+    await waitForSolid(() =>
+      expect(document.body.textContent).not.toContain("Confirm account logout"),
+    );
+    f.source.runtimeConfig.dispose();
+    f.source.channels.dispose();
+  },
+);

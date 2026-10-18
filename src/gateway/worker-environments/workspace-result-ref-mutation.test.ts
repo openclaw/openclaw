@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "../../agents/worktrees/service.js";
 import * as processExec from "../../process/exec.js";
 import {
@@ -91,11 +92,9 @@ it("shares ref serialization and deferred retention between snapshots and result
   vi.stubEnv("GIT_COMMON_DIR", undefined);
   const root = await repository();
   const other = await repository();
-  let now = 1_700_000_000_000;
   const service = new ManagedWorktreeService({
     env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
     getConfig: () => ({}),
-    now: () => now,
   });
   phase = "create";
   const worktree = await service.create({ repoRoot: root, name: "snapshot", baseRef: "HEAD" });
@@ -116,7 +115,11 @@ it("shares ref serialization and deferred retention between snapshots and result
   await requireGit(root, ["update-ref", retainedRef, "HEAD"]);
   const retainedRefs = new Set<string>();
   const readRetainedRefs = vi.fn(() => retainedRefs);
-  now += SNAPSHOT_RETENTION_MS + 1;
+  await updateRegistryWorktree(
+    { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+    worktree.id,
+    { removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1 },
+  );
 
   const started = createDeferred();
   const release = createDeferred();

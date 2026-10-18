@@ -109,7 +109,7 @@ export async function runCopilotExecution(context: {
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
   let transcriptJournal: AttemptTranscriptJournal | undefined;
   let initialSdkUserValidated = false;
-  let activeRunHandleRef: ReturnType<typeof registerCopilotActiveRun> | undefined;
+  let activeRunRegistrationRef: ReturnType<typeof registerCopilotActiveRun> | undefined;
   let userInputBridgeRef: CopilotUserInputBridge | undefined;
   let cleanupToolBridge: (() => void) | undefined;
   let releaseError: Error | undefined;
@@ -133,6 +133,10 @@ export async function runCopilotExecution(context: {
     aborted = true;
   };
   const abortActiveSession = () => {
+    // Signal and backend cancellation can reach the same native turn.
+    if (abortRequested) {
+      return;
+    }
     markExternalAbort();
     if (settled || !sentTurnStarted || !session) {
       return;
@@ -236,6 +240,10 @@ export async function runCopilotExecution(context: {
     | Awaited<ReturnType<typeof createToolBridge>>["promptToolPolicy"]
     | undefined;
   try {
+    if (!settledToolFinalization && effectiveCwd && !sandbox?.enabled) {
+      // The native owner resolved this local cwd; prepare before any tools or inference.
+      input.hostCapabilities?.prepareContinuationRetryCount?.({ cwd: effectiveCwd });
+    }
     params.abortSignal?.addEventListener("abort", abortActiveSession, { once: true });
     if (params.abortSignal?.aborted) {
       abortActiveSession();
@@ -394,7 +402,9 @@ export async function runCopilotExecution(context: {
           pooledClient: handle,
           sessionConfig,
         });
-      } catch {}
+      } catch {
+        // Binding observers are best effort; the journal still owns transcript writes.
+      }
     }
     transcriptJournal = createAttemptTranscriptJournal({
       abortSession: () => session?.abort() ?? Promise.resolve(),
@@ -456,7 +466,7 @@ export async function runCopilotExecution(context: {
       if (!userInputBridge) {
         throw new Error("[copilot-attempt] ordinary attempts require a user-input bridge");
       }
-      activeRunHandleRef = registerCopilotActiveRun({
+      activeRunRegistrationRef = registerCopilotActiveRun({
         abortActiveSession,
         agentId: sessionAgentId,
         bridge,
@@ -512,7 +522,9 @@ export async function runCopilotExecution(context: {
         timedOutDuringCompaction = bridge?.isCompacting() === true;
         try {
           await bridge?.awaitDeltaChain();
-        } catch {}
+        } catch {
+          // Preserve the timeout and still drain canonical transcript writes below.
+        }
         await bridge?.awaitAgentEventChain();
         bridge?.flushTranscriptProjection();
         try {
@@ -539,13 +551,15 @@ export async function runCopilotExecution(context: {
       promptError = toCopilotError(transcriptError);
     }
     userInputBridgeRef?.cancelPending();
-    if (activeRunHandleRef) {
-      input.replyOperation?.detachBackend(activeRunHandleRef);
+    if (activeRunRegistrationRef) {
+      const { attachment, handle: activeRunHandle } = activeRunRegistrationRef;
       clearActiveEmbeddedRun(
         input.sessionId,
-        activeRunHandleRef,
+        activeRunHandle,
         input.sessionKey,
         input.sessionFile,
+        undefined,
+        attachment,
       );
     }
     const journalSnapshot = transcriptJournal?.snapshot();
@@ -589,7 +603,9 @@ export async function runCopilotExecution(context: {
             cleanup,
             sdkSessionId,
           });
-        } catch {}
+        } catch {
+          // A cleanup observer cannot replace the turn's already-selected outcome.
+        }
       }
       params.abortSignal?.removeEventListener("abort", abortActiveSession);
     } else {

@@ -38,6 +38,7 @@ vi.mock("../../config/validation.js", async (importOriginal) => ({
 }));
 vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
+  loadGatewayConfigRedactionHints: () => undefined,
   loadGatewayRuntimeConfigSchema: () => ({
     schema: { type: "object" },
     uiHints: {},
@@ -93,6 +94,7 @@ beforeEach(() => {
       writeOptions: ConfigWriteOptions;
     }) => {
       writeOptions.assertCurrent?.();
+      writeOptions.assertBeforePublish?.();
       if (snapshot.hash !== storedHash) {
         throw new ConfigMutationConflictError("config changed since last load");
       }
@@ -334,6 +336,7 @@ describe("suggested cloud profile adoption", () => {
       async ({ writeOptions }: { writeOptions: ConfigWriteOptions }) => {
         current = false;
         writeOptions.assertCurrent?.();
+        writeOptions.assertBeforePublish?.();
         throw new Error("revoked request reached config publication");
       },
     );

@@ -186,7 +186,33 @@ describe("runCronCommandJob", () => {
   );
 
   it.each([
-    { output: "NO_REPLY\n", summary: "NO_REPLY", outputMaxBytes: undefined, truncated: false },
+    { output: "NO_REPLY\n", summary: undefined, outputMaxBytes: undefined, truncated: false },
+    {
+      output: "NO_REPLY\nNO_REPLY",
+      summary: "NO_REPLY",
+      outputMaxBytes: undefined,
+      truncated: false,
+    },
+    { output: "NO_REPLY.", summary: "NO_REPLY.", outputMaxBytes: undefined, truncated: false },
+    {
+      output: '{"action":"NO_REPLY"}',
+      summary: '{"action":"NO_REPLY"}',
+      outputMaxBytes: undefined,
+      truncated: false,
+    },
+    { output: '"NO_REPLY"', summary: '"NO_REPLY"', outputMaxBytes: undefined, truncated: false },
+    {
+      output: "No channel reply.",
+      summary: "No channel reply.",
+      outputMaxBytes: undefined,
+      truncated: false,
+    },
+    {
+      output: " NO_REPLY\nReport",
+      summary: "NO_REPLY\nReport",
+      outputMaxBytes: undefined,
+      truncated: false,
+    },
     {
       output: `Visit https://example.com/device and enter code ABCD-EFGH\n${"x".repeat(200)}`,
       summary: `action-required output preserved:\nVisit https://example.com/device and enter code ABCD-EFGH\n\n${"x".repeat(24)}`,
