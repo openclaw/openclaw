@@ -11,16 +11,11 @@ let container: HTMLDivElement;
 async function renderDivider() {
   const root = document.createElement("div");
   const divider = document.createElement("resizable-divider");
-  Object.assign(divider, {
-    splitRatio: 0.6,
-    minRatio: 0.4,
-    maxRatio: 0.7,
-    label: "Resize sidebar",
-  });
+  Object.assign(divider, { splitRatio: 0.6, minRatio: 0.4, maxRatio: 0.7 });
+  divider.label = "Resize sidebar";
   root.append(divider);
   mountSolid(() => root, { container });
   root.getBoundingClientRect = vi.fn(() => new DOMRect(0, 0, 400, 0));
-
   await divider.updateComplete;
   vi.advanceTimersToNextFrame();
   return divider;
@@ -37,7 +32,7 @@ function key(target: EventTarget, name: string, shiftKey = false) {
   return event;
 }
 
-async function dragFixture() {
+async function dragFixture(start = true) {
   const divider = await renderDivider();
   const resized = vi.fn();
   const resizeStarted = vi.fn();
@@ -48,6 +43,9 @@ async function dragFixture() {
   container.addEventListener("resize-start", resizeStarted);
   divider.addEventListener("resize", resized);
   divider.addEventListener("resize-end", resizeEnded);
+  if (start) {
+    dispatchPointer(divider, "pointerdown", 100);
+  }
   return { divider, resized, resizeStarted, resizeEnded };
 }
 
@@ -89,31 +87,22 @@ it("exposes the supplied split without measuring until a resize gesture", async 
   const measureRatio = vi.fn(() => 0.55);
   divider.measureRatio = measureRatio;
   await divider.updateComplete;
-
+  expect(divider.getAttribute("role")).toBe("separator");
+  expect(divider.getAttribute("tabindex")).toBe("0");
+  expect(divider.getAttribute("aria-label")).toBe("Resize sidebar");
+  expect(divider.getAttribute("aria-orientation")).toBe("vertical");
   expect(
-    Object.fromEntries([...divider.attributes].map(({ name, value }) => [name, value])),
-  ).toMatchObject({
-    role: "separator",
-    tabindex: "0",
-    "aria-label": "Resize sidebar",
-    "aria-orientation": "vertical",
-    "aria-valuemin": "40",
-    "aria-valuemax": "70",
-    "aria-valuenow": "60",
-  });
+    ["min", "max", "now"].map((suffix) => divider.getAttribute(`aria-value${suffix}`)),
+  ).toEqual(["40", "70", "60"]);
 
   divider.splitRatio = 0.65;
   await divider.updateComplete;
-
   expect(divider.getAttribute("aria-valuenow")).toBe("65");
-
   divider.label = "Resize panel";
   await divider.updateComplete;
-
   expect(divider.getAttribute("aria-label")).toBe("Resize panel");
   expect(divider.getAttribute("aria-valuenow")).toBe("65");
   expect(measureRatio).not.toHaveBeenCalled();
-
   key(divider, "Tab");
   expect(measureRatio).not.toHaveBeenCalled();
   key(divider, "ArrowLeft");
@@ -131,7 +120,6 @@ it("updates the fallback separator label when the locale changes", async () => {
     mountSolid(() => divider, { container });
     await divider.updateComplete;
     expect(divider.getAttribute("aria-label")).toBe("Resize split view");
-
     await i18n.setLocale("pt-BR");
     flush();
     expect(divider.getAttribute("aria-label")).toBe("Redimensionar visualização dividida");
@@ -152,25 +140,20 @@ it.each([
   divider.addEventListener("resize-start", resizeStarted);
   await divider.updateComplete;
   expect(divider.getAttribute("aria-orientation")).toBe(orientation);
-
-  expect(key(divider, decrease).defaultPrevented).toBe(true);
-  expectLastResizeRatio(resized, 0.58);
-
-  expect(key(divider, increase, true).defaultPrevented).toBe(true);
-  expectLastResizeRatio(resized, 0.65);
-
-  key(divider, "Home");
-  expectLastResizeRatio(resized, 0.4);
-
-  key(divider, "End");
-  expectLastResizeRatio(resized, 0.7);
+  for (const [name, shift, ratio] of [
+    [decrease, false, 0.58],
+    [increase, true, 0.65],
+    ["Home", false, 0.4],
+    ["End", false, 0.7],
+  ] as const) {
+    expect(key(divider, name, shift).defaultPrevented).toBe(true);
+    expectLastResizeRatio(resized, ratio);
+  }
   expect(resizeStarted).not.toHaveBeenCalled();
 });
 
 it("keeps dragging owned by the initiating pointer", async () => {
   const { divider, resized, resizeStarted, resizeEnded } = await dragFixture();
-
-  dispatchPointer(divider, "pointerdown", 100);
   expect(document.activeElement).not.toBe(divider);
   expect([...divider.classList]).toEqual(["dragging"]);
   expect(divider.setPointerCapture).toHaveBeenCalledWith(7);
@@ -181,12 +164,10 @@ it("keeps dragging owned by the initiating pointer", async () => {
     composed: true,
   });
   expect(resized).not.toHaveBeenCalled();
-
   dispatchPointer(divider, "pointerdown", 180, 8);
   dispatchPointer(document, "pointermove", 220, 8);
   dispatchPointer(document, "pointercancel", 220, 8);
   dispatchPointer(document, "pointerup", 220, 8);
-
   expect(divider.setPointerCapture).toHaveBeenCalledTimes(1);
   expect(calls(resizeStarted, resized, resizeEnded)).toEqual([1, 0, 0]);
   expect([...divider.classList]).toEqual(["dragging"]);
@@ -208,10 +189,7 @@ it("keeps dragging owned by the initiating pointer", async () => {
 
 it("stops dragging when the window loses focus", async () => {
   const { divider, resized, resizeEnded } = await dragFixture();
-
-  dispatchPointer(divider, "pointerdown", 100);
   window.dispatchEvent(new Event("blur"));
-
   expect([...divider.classList]).toEqual([]);
   expect(divider.releasePointerCapture).toHaveBeenCalledWith(7);
   expectLastResizeRatio(resizeEnded, 0.6);
@@ -222,7 +200,7 @@ it("stops dragging when the window loses focus", async () => {
 });
 
 it("ends only the owner gesture when pointer capture is lost", async () => {
-  const { divider, resized, resizeEnded } = await dragFixture();
+  const { divider, resized, resizeEnded } = await dragFixture(false);
   const capturedPointers = new Set<number>();
   divider.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
   divider.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
@@ -231,13 +209,11 @@ it("ends only the owner gesture when pointer capture is lost", async () => {
   dispatchPointer(divider, "pointerdown", 100, 7);
   dispatchPointer(document, "pointermove", 120, 7);
   dispatchPointer(divider, "lostpointercapture", 120, 8);
-
   expect([...divider.classList]).toEqual(["dragging"]);
   expect(calls(resized, resizeEnded)).toEqual([0, 0]);
 
   capturedPointers.delete(7);
   dispatchPointer(divider, "lostpointercapture", 120, 7);
-
   expectLastResizeRatio(resized, 0.65);
   expectLastResizeRatio(resizeEnded, 0.65);
   expect(resizeEnded).toHaveBeenCalledOnce();
@@ -251,8 +227,6 @@ it("ends only the owner gesture when pointer capture is lost", async () => {
 
 it("commits the final pointer position when disconnected", async () => {
   const { divider, resized, resizeEnded } = await dragFixture();
-
-  dispatchPointer(divider, "pointerdown", 100);
   dispatchPointer(document, "pointermove", 120);
   divider.remove();
   // The bridge preserves roots during same-turn reparenting.

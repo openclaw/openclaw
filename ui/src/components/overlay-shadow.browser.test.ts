@@ -15,18 +15,14 @@ afterEach(() => {
 });
 
 function shadow(mode: ShadowRootMode = "closed", parent: ParentNode = document.body) {
-  const host = document.createElement("div");
-  parent.append(host);
-  hosts.push(host);
+  const host = element("div", parent);
   return host.attachShadow({ mode });
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, root: ParentNode) {
   const node = document.createElement(tag);
   root.append(node);
-  if (root === document.body) {
-    hosts.push(node);
-  }
+  hosts.push(node);
   return node;
 }
 
@@ -77,8 +73,7 @@ it("keeps closed-shadow clicks and inside-to-outside gestures inside their start
   press(current.action);
   current.action.click();
   await Promise.resolve();
-  expect(selectedWhileOpen).toBe(true);
-  expect(current.owner.open).toBe(true);
+  expect([selectedWhileOpen, current.owner.open]).toEqual([true, true]);
 
   press(current.action, outside);
   await Promise.resolve();
@@ -88,8 +83,7 @@ it("keeps closed-shadow clicks and inside-to-outside gestures inside their start
   document.addEventListener("overlay-hide", veto, { once: true });
   press(outside);
   await Promise.resolve();
-  expect(current.owner.open).toBe(true);
-  expect(current.surface.inert).toBe(false);
+  expect([current.owner.open, current.surface.inert]).toEqual([true, false]);
 
   press(outside);
   await Promise.resolve();
@@ -139,17 +133,17 @@ it.each(["inside", "outside"] as const)(
 it.each(["pointerdown", "pointermove", "focusin"] as const)(
   "delivers %s policy facts once with the closed-root target before its handler",
   async (type) => {
-    const received: { source: string; target: EventTarget | null }[] = [];
+    const received: [string, EventTarget | null][] = [];
     const current = fixture(shadow("closed", shadow()), {
       onInteraction(event, target) {
         if (event.type === type) {
-          received.push({ source: "policy", target });
+          received.push(["policy", target]);
         }
       },
     });
     await open(current.owner);
     current.action.addEventListener(type, (event) => {
-      received.push({ source: "control", target: event.target });
+      received.push(["control", event.target]);
     });
     if (type === "focusin") {
       current.action.focus();
@@ -157,8 +151,8 @@ it.each(["pointerdown", "pointermove", "focusin"] as const)(
       current.action.dispatchEvent(new PointerEvent(type, { bubbles: true, composed: true }));
     }
     expect(received).toEqual([
-      { source: "policy", target: current.action },
-      { source: "control", target: current.action },
+      ["policy", current.action],
+      ["control", current.action],
     ]);
     expect(current.owner.open).toBe(true);
   },
@@ -194,8 +188,7 @@ it.each(["surface", "trigger"] as const)(
     await Promise.resolve();
     expect([current.owner.open, child.owner.open]).toEqual([false, false]);
     await frame();
-    expect(release).toHaveBeenCalledTimes(1);
-    expect(childRelease).toHaveBeenCalledTimes(1);
+    expect([release, childRelease].map((mock) => mock.mock.calls.length)).toEqual([1, 1]);
     expect(child.surface.matches(":popover-open")).toBe(false);
   },
 );
@@ -212,18 +205,11 @@ it("reference-counts root listeners and disconnects observation after its last o
   expect(registration).toBeGreaterThanOrEqual(0);
   const observer = observed.mock.contexts[registration];
   const listeners = [...added.mock.calls];
-  expect(listeners.map(([type]) => type).toSorted()).toEqual([
-    "focusin",
-    "focusin",
-    "keydown",
-    "pointercancel",
-    "pointerdown",
-    "pointerdown",
-    "pointermove",
-    "pointermove",
-    "pointerup",
-    "pointerup",
-  ]);
+  expect(listeners.map(([type]) => type).toSorted()).toEqual(
+    "focusin focusin keydown pointercancel pointerdown pointerdown pointermove pointermove pointerup pointerup".split(
+      " ",
+    ),
+  );
   first.owner.dispose();
   expect(removed).not.toHaveBeenCalled();
   expect(disconnected.mock.contexts).not.toContain(observer);
@@ -241,12 +227,7 @@ it("moves the surface-root effect once and ignores trigger-only root changes", a
     onRootChange(root) {
       const name = root === first ? "first" : "second";
       seen.push(`attach:${name}`);
-      const style = document.createElement("style");
-      (root instanceof ShadowRoot ? root : root.head).append(style);
-      return () => {
-        seen.push(`release:${name}`);
-        style.remove();
-      };
+      return () => seen.push(`release:${name}`);
     },
   });
   await Promise.resolve();

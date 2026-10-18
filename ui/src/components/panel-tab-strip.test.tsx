@@ -20,21 +20,14 @@ const makeTab = (index = 1, overrides: Partial<PanelTabStripTab> = {}): PanelTab
 });
 const TAB = makeTab();
 const host = () => document.body.appendChild(document.createElement("div"));
-
-type StripOptions = Partial<PanelTabStripProps<PanelTabStripTab>> & {
-  container?: HTMLDivElement;
-};
-const strips = new Map<
-  HTMLDivElement,
-  {
-    update: (props: PanelTabStripProps<PanelTabStripTab>) => void;
-    unmount: () => void;
-  }
->();
+type StripProps = PanelTabStripProps<PanelTabStripTab>;
+type StripOptions = Partial<StripProps> & { container?: HTMLDivElement };
+type MountedStrip = { update: (props: StripProps) => void; unmount: () => void };
+const strips = new Map<HTMLDivElement, MountedStrip>();
 
 async function renderStrip(options: StripOptions) {
   const container = options.container ?? host();
-  const props: PanelTabStripProps<PanelTabStripTab> = {
+  const props: StripProps = {
     tabs: options.tabs ?? [],
     activeId: options.activeId ?? options.tabs?.[0]?.id ?? null,
     ariaControls: "test-tab-panel",
@@ -69,12 +62,13 @@ function measureEdges(element: Element, edges: () => [number, number]) {
   });
 }
 
-function tabStrip(container: ParentNode) {
-  return container.querySelector<HTMLElement>(".tabstrip");
-}
-
-function renderedTabs(container: ParentNode) {
-  return [...container.querySelectorAll<HTMLElement>(".tabstrip-tab")];
+const tabStrip = (root: ParentNode, suffix = "") =>
+  root.querySelector<HTMLElement>(`.tabstrip${suffix}`)!;
+const renderedTabs = (root: ParentNode) => [...root.querySelectorAll<HTMLElement>(".tabstrip-tab")];
+function dispatchDrag(element: HTMLElement, type: string, dataTransfer: object, clientX = 0) {
+  const event = new MouseEvent(type, { bubbles: true, clientX, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  element.dispatchEvent(event);
 }
 
 function overflowState(label: HTMLElement) {
@@ -105,12 +99,8 @@ function tabMeasurementClock() {
     constructor(readonly callback: ResizeObserverCallback) {
       observers.add(this);
     }
-    observe = (target: Element) => {
-      this.targets.add(target);
-    };
-    unobserve = (target: Element) => {
-      this.targets.delete(target);
-    };
+    observe = (target: Element) => this.targets.add(target);
+    unobserve = (target: Element) => this.targets.delete(target);
     disconnect = () => this.targets.clear();
   }
   vi.stubGlobal("ResizeObserver", ControlledResizeObserver);
@@ -161,13 +151,13 @@ it("keeps interactive native controls mounted across tab updates", async () => {
   control.textContent = "First action";
   control.addEventListener("click", () => onAction(control.textContent));
   const container = await renderStrip({ tabs: [TAB], newControl: control });
-  expect(container.querySelector(".tabstrip-new-control")?.getAttribute("slot")).toBe("nav");
-  const button = container.querySelector<HTMLButtonElement>(".tabstrip-new-control button")!;
+  expect(tabStrip(container, "-new-control").getAttribute("slot")).toBe("nav");
+  const button = tabStrip(container, "-new-control button");
   button.click();
   expect(onAction).toHaveBeenLastCalledWith("First action");
   control.textContent = "Updated action";
   await renderStrip({ tabs: [{ ...TAB, label: "Updated tab" }], container, newControl: control });
-  expect(container.querySelector(".tabstrip-new-control button")).toBe(button);
+  expect(tabStrip(container, "-new-control button")).toBe(button);
   expect(button.textContent).toBe("Updated action");
   button.click();
   expect(onAction).toHaveBeenLastCalledWith("Updated action");
@@ -180,22 +170,18 @@ it("retains icon content when tab projections and callbacks change", async () =>
   icon.textContent = "First icon";
   const tabs = [makeTab(1, { icon }), makeTab(2)];
   const container = await renderStrip({ tabs });
-  const iconElement = container.querySelector(".tabstrip-tab__icon span");
+  const iconElement = tabStrip(container, "-tab__icon span");
   const onSelect = vi.fn();
-  await renderStrip({
-    tabs: tabs.map((tab) => Object.assign({}, tab)),
-    activeId: "tab-2",
-    onSelect,
-    container,
-  });
-  expect(container.querySelector(".tabstrip-tab__icon span")).toBe(iconElement);
+  const projections = tabs.map((tab) => Object.assign({}, tab));
+  await renderStrip({ tabs: projections, activeId: "tab-2", onSelect, container });
+  expect(tabStrip(container, "-tab__icon span")).toBe(iconElement);
   renderedTabs(container)
     .find((tab) => tab.dataset.tabValue === TAB.id)
     ?.click();
   expect(onSelect).toHaveBeenCalledExactlyOnceWith(TAB.id);
   icon.textContent = "Updated icon";
   flush();
-  expect(container.querySelector(".tabstrip-tab__icon span")).toBe(iconElement);
+  expect(tabStrip(container, "-tab__icon span")).toBe(iconElement);
   expect(iconElement?.textContent).toBe("Updated icon");
 });
 
@@ -219,7 +205,7 @@ it.each([
 it("closes the requested tab from its labeled close button", async () => {
   const onClose = vi.fn();
   const container = await renderStrip({ tabs: [TAB], onClose });
-  const closeButton = container.querySelector<HTMLButtonElement>(".tabstrip-tab__close");
+  const closeButton = tabStrip(container, "-tab__close");
 
   expect(closeButton?.hasAttribute("title")).toBe(false);
   expect(closeButton?.getAttribute("aria-label")).toBe(TAB.closeLabel);
@@ -252,10 +238,8 @@ it("batches overflow reads after content commits and skips unchanged renders", a
   await clock.settle(container);
   expect(operations).toEqual([]);
 
-  await renderStrip({
-    tabs: tabs.map((tab) => Object.assign({}, tab, { label: "Long label" })),
-    container,
-  });
+  const longLabels = tabs.map((tab) => Object.assign({}, tab, { label: "Long label" }));
+  await renderStrip({ tabs: longLabels, container });
   expect(operations).toEqual([]);
   await clock.settle(container);
   expect(operations).toEqual(["read 0", "read 1", "write 0", "write 1"]);
@@ -264,12 +248,8 @@ it("batches overflow reads after content commits and skips unchanged renders", a
     [true, true],
   ]);
 
-  await renderStrip({
-    tabs: tabs.map((tab) =>
-      Object.assign({}, tab, { label: "Long label", className: "is-exited" }),
-    ),
-    container,
-  });
+  const exited = longLabels.map((tab) => Object.assign({}, tab, { className: "is-exited" }));
+  await renderStrip({ tabs: exited, container });
   clock.flush();
   expect(
     labels.map((label) => label.parentElement?.classList.contains("has-label-overflow")),
@@ -285,79 +265,66 @@ it("batches overflow reads after content commits and skips unchanged renders", a
     "read 1",
   ]);
   expect(labels[0]!.hasAttribute("data-tooltip-overflow")).toBe(false);
-  unmountStrip(container);
 });
 
 it("measures the visible label when its tooltip wrapper changes", async () => {
   const clock = tabMeasurementClock();
   const container = host();
   for (const labelTooltip of [undefined, "Full label", undefined]) {
-    await renderStrip({
-      container,
-      tabs: [{ ...TAB, label: "A long label", labelTooltip }],
-    });
-    const label = container.querySelector<HTMLElement>(".tabstrip-tab__label")!;
+    await renderStrip({ container, tabs: [{ ...TAB, label: "A long label", labelTooltip }] });
+    const label = tabStrip(container, "-tab__label");
     widths(label, 100, 200);
     await clock.settle(container);
     expect(label.closest("openclaw-tooltip") !== null).toBe(Boolean(labelTooltip));
     expect(overflowState(label)).toEqual([true, true]);
   }
-  unmountStrip(container);
 });
 
-it.each(["ltr", "rtl"])(
-  "refreshes physical scroll edges and releases measurements across connection changes (%s)",
-  async (dir) => {
-    document.documentElement.dir = dir;
-    const clock = tabMeasurementClock();
-    const container = await renderStrip({ tabs: [TAB] });
-    await clock.settle(container, false);
-    let contentLeft = 0;
-    let contentRight = 200;
-    const measure = () => {
-      const group = tabStrip(container)!;
-      measureEdges(group, () => [0, 100]);
-      const reads = [...group.children].map((child) =>
-        measureEdges(child, () => [contentLeft, contentRight]),
-      );
-      return { group, reads };
-    };
-    let { group, reads } = measure();
-    const scroll = () => group.dispatchEvent(new Event("scroll"));
-    const readCounts = () => reads.map((read) => read.mock.calls.length);
-    const expectReadCount = (count: number) => expect(readCounts()).toEqual(reads.map(() => count));
-    clock.flush();
-    expect(scrollEdges(group)).toEqual([false, true]);
-    reads.forEach((read) => read.mockClear());
+it.each(["ltr", "rtl"])("refreshes scroll edges across disconnect/reconnect (%s)", async (dir) => {
+  document.documentElement.dir = dir;
+  const clock = tabMeasurementClock();
+  const container = await renderStrip({ tabs: [TAB] });
+  await clock.settle(container, false);
+  let contentEdges: [number, number] = [0, 200];
+  const measure = () => {
+    const group = tabStrip(container)!;
+    measureEdges(group, () => [0, 100]);
+    const reads = [...group.children].map((child) => measureEdges(child, () => contentEdges));
+    return { group, reads };
+  };
+  let { group, reads } = measure();
+  const scroll = () => group.dispatchEvent(new Event("scroll"));
+  const readCounts = () => reads.map((read) => read.mock.calls.length);
+  const expectReadCount = (count: number) => expect(readCounts()).toEqual(reads.map(() => count));
+  clock.flush();
+  expect(scrollEdges(group)).toEqual([false, true]);
+  reads.forEach((read) => read.mockClear());
 
-    contentLeft = -100;
-    contentRight = 100;
-    scroll();
-    scroll();
-    expectReadCount(0);
-    clock.flush();
-    expectReadCount(1);
-    expect(scrollEdges(group)).toEqual([true, false]);
+  contentEdges = [-100, 100];
+  scroll();
+  scroll();
+  expectReadCount(0);
+  clock.flush();
+  expectReadCount(1);
+  expect(scrollEdges(group)).toEqual([true, false]);
 
-    scroll();
-    unmountStrip(container);
-    expect(clock.observed(group)).toBe(false);
-    reads.forEach((read) => read.mockClear());
-    clock.flush();
-    scroll();
-    clock.flush();
-    expectReadCount(0);
+  scroll();
+  unmountStrip(container);
+  expect(clock.observed(group)).toBe(false);
+  reads.forEach((read) => read.mockClear());
+  clock.flush();
+  scroll();
+  clock.flush();
+  expectReadCount(0);
 
-    contentLeft = 0;
-    await renderStrip({ tabs: [TAB], container });
-    await clock.settle(container, false);
-    ({ group, reads } = measure());
-    clock.flush();
-    expect(clock.observed(group)).toBe(true);
-    expect(group.classList.contains("has-scroll-left")).toBe(false);
-    unmountStrip(container);
-  },
-);
+  contentEdges = [0, 100];
+  await renderStrip({ tabs: [TAB], container });
+  await clock.settle(container, false);
+  ({ group, reads } = measure());
+  clock.flush();
+  expect(clock.observed(group)).toBe(true);
+  expect(group.classList.contains("has-scroll-left")).toBe(false);
+});
 
 it("keeps one live scroll-edge listener no matter how many renders race", async () => {
   const clock = tabMeasurementClock();
@@ -393,22 +360,17 @@ it("reorders draggable tabs at the requested edge", async () => {
   });
   const [source, target] = renderedTabs(container);
   const dataTransfer = createDataTransferStub();
-  const dispatchDrag = (element: HTMLElement, type: string, clientX: number) => {
-    const event = new MouseEvent(type, { bubbles: true, clientX, cancelable: true });
-    Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
-    element.dispatchEvent(event);
-  };
   measureEdges(target!, () => [100, 180]);
 
-  dispatchDrag(source!, "dragstart", 0);
+  dispatchDrag(source!, "dragstart", dataTransfer);
   const sourceId = "files";
   expect(tabStrip(container)?.dataset.draggedPanelTab).toBe(sourceId);
   expect(dataTransfer.getData("application/x-openclaw-panel-tab")).toBe(sourceId);
-  dispatchDrag(target!, "dragover", 110);
+  dispatchDrag(target!, "dragover", dataTransfer, 110);
   flush();
   // Drop clears the preview; capture it first.
   const previewed = target?.classList.contains("is-drop-before");
-  dispatchDrag(target!, "drop", 110);
+  dispatchDrag(target!, "drop", dataTransfer, 110);
 
   expect(source?.draggable).toBe(true);
   expect(previewed).toBe(true);
@@ -417,17 +379,12 @@ it("reorders draggable tabs at the requested edge", async () => {
 
 it("omits dragging and ignores dragstart for a tab with draggable false", async () => {
   const onReorder = vi.fn();
-  const container = await renderStrip({
-    tabs: [{ ...TAB, draggable: false }],
-    onReorder,
-  });
+  const container = await renderStrip({ tabs: [{ ...TAB, draggable: false }], onReorder });
   const tab = renderedTabs(container)[0]!;
   const dataTransfer = { setData: vi.fn(), effectAllowed: "none" };
-  const event = new MouseEvent("dragstart", { bubbles: true });
-  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
 
   expect(tab.hasAttribute("draggable")).toBe(false);
-  tab.dispatchEvent(event);
+  dispatchDrag(tab, "dragstart", dataTransfer);
   expect(dataTransfer.setData).not.toHaveBeenCalled();
   expect(dataTransfer.effectAllowed).toBe("none");
   expect(tabStrip(container)?.hasAttribute("data-dragged-panel-tab")).toBe(false);
