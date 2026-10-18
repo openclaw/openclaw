@@ -1,8 +1,9 @@
 import "../lib/toast-host.ts";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
-import { renderGatewayStatus } from "../components/solid/gateway-status.tsx";
+import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
+import type { ChatPage } from "../pages/chat/chat-page.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
@@ -27,6 +29,7 @@ import {
 import { readShellView, type ShellViewHost } from "./app-shell-view-state.ts";
 import {
   isOptionalElementDefined,
+  APP_SIDEBAR_ELEMENT,
   MACOS_TITLEBAR_ELEMENT,
   SIDEBAR_ATTENTION_ELEMENT,
 } from "./lazy-custom-element.ts";
@@ -62,26 +65,84 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
     return readShellView(props.host);
   });
   const shellConnectionStatus = createMemo(() => view().shellConnectionStatus);
+  const connectionKind = createMemo(
+    () =>
+      shellConnectionStatus() ??
+      (!view().nativeEmbed && view().gatewayConnected ? "connected" : null),
+  );
+  const [connectionRecovery, setConnectionRecovery] = createSignal(false);
+  const [connectionFlagVisible, setConnectionFlagVisible] = createSignal(false);
+  // Only status transitions restart the brief recovery row and avatar flag.
+  createEffect(connectionKind, (kind, previous) => {
+    const recovery = kind === "connected" && previous != null && previous !== "connected";
+    setConnectionRecovery(recovery);
+    setConnectionFlagVisible(Boolean(kind && (kind !== "connected" || recovery)));
+    const rowTimer = recovery ? setTimeout(() => setConnectionRecovery(false), 2_000) : undefined;
+    const flagTimer = setTimeout(() => setConnectionFlagVisible(false), 4_000);
+    return () => {
+      clearTimeout(rowTimer);
+      clearTimeout(flagTimer);
+    };
+  });
+  const gatewayStatus = createMemo<GatewayStatusProps>(() => ({
+    kind: connectionKind(),
+    lastError: shellConnectionStatus() ? view().gatewaySnapshot.lastError : null,
+    queuedCount: shellConnectionStatus() ? view().sidebarProperties.storedOutboxes?.total : 0,
+    onRetry: props.host.viewCallbacks.retryGateway,
+  }));
+  const mobileGatewayStatus = createMemo(() =>
+    view().mobileNavLayout && !view().navDrawerOpen && !view().nativeEmbed ? gatewayStatus() : null,
+  );
+  const footerStatus = createMemo(() =>
+    shellConnectionStatus() || connectionRecovery() ? gatewayStatus() : null,
+  );
+  const connectionAnnouncement = createMemo(() => {
+    const kind = shellConnectionStatus();
+    return kind
+      ? gatewayStatusLabel(kind, view().sidebarProperties.storedOutboxes?.total)
+      : view().gatewayConnected
+        ? t("nav.gateway.connected")
+        : "";
+  });
   // Legacy Mac hosts stamp this immutable host class before mounting the shell.
   // The web-chrome flag remains a reactive view read for the current host path.
   const legacyMacChrome = () =>
     !view().nativeWebChrome && document.documentElement.classList.contains("openclaw-native-macos");
   // Lazy registrations and the native sidebar consume committed shell presentation.
-  createEffect(view, (state) => {
-    props.host.lazyCustomElements.requestWhileActive(
-      props.host.onboardingMemoryImportElement,
-      state.memoryImportActive,
-    );
-    if (state.nativeWebChrome && !state.onboarding) {
-      props.host.lazyCustomElements.preload(MACOS_TITLEBAR_ELEMENT, { reportError: true });
-    }
-    if (!state.nativeEmbed && (state.onboarding || state.floatingAttentionVisible)) {
-      props.host.lazyCustomElements.preload(SIDEBAR_ATTENTION_ELEMENT, { reportError: true });
-    }
-    if (!state.settingsTakeover && !state.nativeEmbed) {
-      Object.assign(props.host.navigationSidebar, state.sidebarProperties);
-    }
-  });
+  createEffect(
+    () => ({
+      state: view(),
+      status: gatewayStatus(),
+      mobile: mobileGatewayStatus(),
+      recovery: connectionRecovery(),
+      flag: connectionFlagVisible(),
+    }),
+    ({ state, status, mobile, recovery, flag }) => {
+      props.host.mobileGatewayStatus = mobile;
+      const chatPage = props.host.routeOutlet?.querySelector<ChatPage>("openclaw-chat-page");
+      if (chatPage) {
+        chatPage.gatewayStatus = mobile;
+      }
+      props.host.lazyCustomElements.requestWhileActive(
+        props.host.onboardingMemoryImportElement,
+        state.memoryImportActive,
+      );
+      if (state.nativeWebChrome && !state.onboarding) {
+        props.host.lazyCustomElements.preload(MACOS_TITLEBAR_ELEMENT, { reportError: true });
+      }
+      if (!state.nativeEmbed && (state.onboarding || state.floatingAttentionVisible)) {
+        props.host.lazyCustomElements.preload(SIDEBAR_ATTENTION_ELEMENT, { reportError: true });
+      }
+      if (!state.settingsTakeover && !state.nativeEmbed) {
+        Object.assign(props.host.navigationSidebar, state.sidebarProperties, {
+          gatewayStatus: status,
+          connectionRecovery: recovery,
+          connectionFlagVisible: flag,
+          connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
+        });
+      }
+    },
+  );
   const workspace = (
     <div style={{ display: "contents" }}>
       <ShellLazyOverlays
@@ -108,7 +169,6 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             "shell--settings": view().settingsTakeover,
             "shell--home-control":
               view().collapsedControls && view().homePanelAvailable && !view().railAvailable,
-            "shell--connection-status": Boolean(view().shellConnectionStatus),
             "shell--floating-attention": floatingSidebarAttentionVisible(view().floatingUpdateCard),
             "shell--nav-resizing": navResizing(),
           },
@@ -141,6 +201,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             prop:resourceBasePath={view().context.resourceBasePath}
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
+            prop:gatewayStatus={mobileGatewayStatus()}
             prop:newSessionAction={() => (
               <Show
                 when={
@@ -240,8 +301,25 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             <Show when={view().settingsTakeover} fallback={props.host.navigationSidebar}>
               <LazySettingsSidebar
                 loader={props.host.settingsSidebar}
-                sidebarProps={view().settingsSidebarProps}
+                host={props.host}
+                sidebarProps={{ ...view().settingsSidebarProps, footerStatus: footerStatus() }}
               />
+            </Show>
+            <Show
+              when={
+                (view().settingsTakeover
+                  ? props.host.settingsSidebar.renderer() === null
+                  : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT)) && footerStatus()
+              }
+            >
+              <aside class="sidebar">
+                <div class="sidebar-shell">
+                  <div class="sidebar-shell__content" />
+                  <div class="sidebar-shell__footer">
+                    <GatewayStatus {...footerStatus()!} row />
+                  </div>
+                </div>
+              </aside>
             </Show>
           </div>
         </Show>
@@ -300,6 +378,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           <Show when={view().embedNavigation}>
             <LazySettingsSidebar
               loader={props.host.settingsSidebar}
+              host={props.host}
               sidebarProps={view().settingsSidebarProps}
             />
           </Show>
@@ -326,17 +405,9 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             />
           </ShellLayoutProvider>
         </main>
-        <Show when={shellConnectionStatus()}>
-          <div class="shell-connection-status">
-            {renderGatewayStatus({
-              kind: shellConnectionStatus()!,
-              get lastError() {
-                return view().gatewaySnapshot.lastError;
-              },
-              onRetry: props.host.viewCallbacks.retryGateway,
-            })}
-          </div>
-        </Show>
+        <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {connectionAnnouncement()}
+        </span>
         <openclaw-terminal-panel
           ref={(element) => (props.host.terminalPanel = element)}
           inert={view().navDrawerOpen}

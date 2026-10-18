@@ -1,4 +1,3 @@
-// Gateway Talk handoff registry.
 // Manages short-lived browser Talk rooms, tokens, events, and turn ownership.
 import { randomBytes, randomUUID } from "node:crypto";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";

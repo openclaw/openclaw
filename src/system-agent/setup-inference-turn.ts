@@ -153,7 +153,7 @@ export async function runSetupInferenceTurn(params: {
     if (cliError) {
       return failed("unavailable", cliError);
     }
-    const profileError = await resolveSetupInferenceProfileError(route, workspaceDir, deps);
+    const profileError = await resolveSetupInferenceProfileError(route, workspaceDir);
     if (profileError) {
       return failed("auth", profileError);
     }
@@ -575,7 +575,6 @@ export async function verifySetupInferenceConfig(
     params.config,
     params.agentId,
     {
-      loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
       modelTarget: params.modelTarget,
     },
     params.configSnapshot,
@@ -600,7 +599,7 @@ export async function verifySetupInferenceConfig(
     try {
       stagedOwnerPluginArtifacts = (
         deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts
-      )({ config: route.sourceConfig, executionRoute: route, deps });
+      )({ config: route.sourceConfig, executionRoute: route });
     } catch (error) {
       return {
         ok: false,
@@ -633,7 +632,6 @@ export async function verifySetupInferenceConfig(
         currentConfig,
         route.agentId,
         {
-          loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
           modelTarget: params.modelTarget,
         },
         currentSnapshot,
@@ -706,7 +704,7 @@ export async function completeSetupInferenceConfig(
   const route = await resolveSystemAgentConfiguredRouteFromConfig(
     params.config,
     params.agentId,
-    { loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync },
+    {},
     params.configSnapshot,
   );
   if (!route) {

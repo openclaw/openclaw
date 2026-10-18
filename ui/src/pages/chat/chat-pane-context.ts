@@ -188,7 +188,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const params = {
       client: scope.client,
       gatewaySnapshot: scope.context.gateway.snapshot,
+      currentGatewaySnapshot: () => scope.context.gateway.snapshot,
       row,
+      currentRow: () => (this.state ? selectedChatSessionRow(this.state) : undefined),
       fallbackAgentId: resolveChatAgentId(scope.state),
       isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       publishError: (error: unknown) => this.publishHeaderError(error, scope.headerOutcomeOwner),
@@ -209,10 +211,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         ...params,
         mode,
         pendingKey,
-        currentGatewaySnapshot: () => scope.context.gateway.snapshot,
         requiredProfile: () =>
           scope.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
-        currentRow: () => (this.state ? selectedChatSessionRow(this.state) : undefined),
         onPendingChange,
       });
     }

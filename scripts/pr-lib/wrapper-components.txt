@@ -745,6 +745,7 @@ src/config/sessions/targets.ts
 src/config/sessions/transcript-payload-read.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-predicate-fields.ts
+src/config/sessions/transcript-store-identity.ts
 src/config/sessions/transcript-target-binding.ts
 src/config/sessions/version.ts
 src/config/shell-env-expected-keys.ts

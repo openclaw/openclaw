@@ -1,3 +1,5 @@
+import { symlinkSync } from "node:fs";
+import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
@@ -16,6 +18,10 @@ import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js"
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -201,10 +207,19 @@ it("publishes legacy transcript previews without acquiring stored row facts agai
   });
 });
 
-it("retains transcript previews across metadata edits and consumes committed appends without reads", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("retains transcript previews across metadata edits and consumes committed alias appends without reads", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot(cfg);
     const { scope, query } = await seedPreview("metadata-preview", "Original preview", cfg);
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env: state.env });
+    const aliasDirectory = state.path("transcript-alias");
+    symlinkSync(
+      path.dirname(storePath),
+      aliasDirectory,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const aliasPath = path.join(aliasDirectory, path.basename(storePath));
+    openOpenClawAgentDatabase({ agentId: scope.agentId, path: aliasPath });
     const initial = observeSessionRowBackfill([scope.sessionKey]);
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
     using projection = await createTestProjection({ cfg, modelCatalog: [] });
@@ -233,14 +248,37 @@ it("retains transcript previews across metadata edits and consumes committed app
       });
     }
     expect(backfill.mock.calls.length).toBe(0);
+    const reads = vi.fn();
+    observeRowFacts((owner) => async (input) => {
+      reads();
+      return owner.readRowFacts(input);
+    });
     const appended = observeSessionRowBackfill([scope.sessionKey]);
-    await sessions.persistSessionTranscriptTurn(scope, {
-      config: cfg,
-      messages: [{ message: { role: "assistant", content: "Appended preview" } }],
-      touchSessionEntry: false,
+    const append = sessions.appendTranscriptMessageSync(
+      { ...scope, storePath: aliasPath },
+      { config: cfg, message: { role: "assistant", content: "Appended preview" } },
+    );
+    expect(append).toMatchObject({ ok: true, value: { appended: true } });
+    expect(projection.capture(query)?.retainedDatabaseFacts).toMatchObject({
+      activitySummaryWatermark: { maxSeq: 2 },
+      transcriptPreview: "Appended preview",
+    });
+    const aliasQuery = { ...query, storePath: aliasPath };
+    expect(projection.capture(aliasQuery)?.retainedDatabaseFacts).toMatchObject({
+      activitySummaryWatermark: { maxSeq: 2 },
+      transcriptPreview: "Appended preview",
     });
     await appended;
     expect(preview(projection, query)).toBe("Appended preview");
+    const refreshed = vi.fn();
+    projection.onFactsChange(refreshed);
+    emitSessionTranscriptUpdate({ target: { ...scope, storePath: aliasPath } });
+    await projection.ensureMaterialized();
+    await nextTurn();
+    expect(refreshed).toHaveBeenCalledWith({ kind: "row", key: scope.sessionKey });
+    expect(preview(projection, aliasQuery)).toBe("Appended preview");
+    expect(backfill).not.toHaveBeenCalled();
+    expect(reads).not.toHaveBeenCalled();
     await sessions.patchSessionEntryCore(scope, () => ({ displayName: "After append" }));
     await projection.ensureMaterialized();
     await nextTurn();
@@ -249,6 +287,7 @@ it("retains transcript previews across metadata edits and consumes committed app
       lastMessagePreview: "Appended preview",
     });
     expect(backfill).not.toHaveBeenCalled();
+    expect(reads).not.toHaveBeenCalled();
   });
 });
 

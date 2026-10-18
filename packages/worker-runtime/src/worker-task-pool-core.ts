@@ -418,7 +418,11 @@ export class WorkerTaskPoolCore<Input, Output> {
               bootstrapError: this.bootstrap.error,
               createWorker: () => this.createWorker(slot),
               fail: (error, nativeFailure) =>
-                this.fail(slot, new WorkerTaskError(String(error), "unavailable"), nativeFailure),
+                this.fail(
+                  slot,
+                  new WorkerTaskError(String(error), "unavailable", { cause: error }),
+                  nativeFailure,
+                ),
               refuse: (error) => this.finish(task, error, undefined, true),
             }),
           (error) => this.finish(task, toErrorObject(error, "worker task preparation failed")),

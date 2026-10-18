@@ -59,7 +59,7 @@ export type SessionEntryWorkerPreparation = (
 ) => {
   prepare: () => Promise<void>;
   beforeWrite: () => void;
-  release: () => Promise<void>;
+  runOptions?: { retireNativeOnFailure: true };
 };
 
 export async function withSessionEntryWorker<T>(
@@ -258,7 +258,6 @@ export async function withSessionEntryWorker<T>(
         : await runOpenClawAgentWorkerWrite(
             options,
             () => {
-              preparation?.beforeWrite();
               const writingExecution: OpenClawAgentDatabaseExecution = {
                 ...execution,
                 get fileIdentity() {
@@ -268,8 +267,11 @@ export async function withSessionEntryWorker<T>(
                   // Lend the existing scope so a failed read unwinds before native cleanup.
                   return execution.runExisting(
                     readSource,
-                    (worker) => withWriterReads(worker, () => operation(worker)),
-                    readOptions,
+                    (worker) => {
+                      preparation?.beforeWrite();
+                      return withWriterReads(worker, () => operation(worker));
+                    },
+                    readOptions ?? preparation?.runOptions,
                   );
                 },
               };
@@ -289,13 +291,10 @@ export async function withSessionEntryWorker<T>(
     outcome = { ok: false, error };
   }
   const cleanupErrors: unknown[] = [];
-  for (const cleanup of [
-    () => releaseSource?.(),
-    () => preparation?.release(),
-    () => (retainedExecution ? undefined : execution.release()),
-  ]) {
+  const releaseExecution = retainedExecution ? undefined : () => execution.release();
+  for (const cleanup of [releaseSource, releaseExecution]) {
     try {
-      await cleanup();
+      await cleanup?.();
     } catch (error) {
       cleanupErrors.push(error);
     }
@@ -551,8 +550,7 @@ export async function runSessionEntryWorkerMutation<T>(
           if (outcome.ok) {
             completed = outcome.value;
           }
-          // Keep the executing scope and FIFO writer through native publication settlement.
-          // Close joins this callback; a delayed result cannot borrow a successor owner.
+          // Close joins publication and FIFO scope; late results cannot borrow a successor.
           if (await settle(publication, identity)) {
             throwSessionWorkerOutcomeUnknown(
               unknownMessage,

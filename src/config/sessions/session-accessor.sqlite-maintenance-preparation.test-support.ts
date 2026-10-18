@@ -177,8 +177,7 @@ export function registerSessionMaintenancePreparationTests() {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { active, stale, database, plan, archivedEntries } = makeFixture(state);
       const preparation = pausedStep();
-      const preparations: string[] = [];
-      const released: string[] = [];
+      let preparations = 0;
       const published: string[] = [];
       const unsubscribe = sessionChanges.subscribe((change) => {
         if (
@@ -190,14 +189,10 @@ export function registerSessionMaintenancePreparationTests() {
         }
       });
       observePlanning({
-        async afterPrepare(id) {
-          preparations.push(id);
-          if (preparations.length === 1) {
+        async afterPrepare() {
+          if (++preparations === 1) {
             await preparation.enter();
           }
-        },
-        afterRelease(id) {
-          released.push(id);
         },
       });
       const sql = observeHostDataSql();
@@ -224,20 +219,15 @@ export function registerSessionMaintenancePreparationTests() {
           }),
         });
         await abortable(foreground, signal);
-        expect(released).toEqual([]);
         expect(published).toEqual([stale.sessionKey]);
         preparation.resume();
         await expect(pending).resolves.toEqual({ kind: "maintenance-plan-stale" });
-        expect(released).toEqual([preparations[0]]);
         expect(published).toEqual([stale.sessionKey]);
         retry = reclaim({ plan });
         await expect(retry).resolves.toMatchObject({
           kind: "maintenance-plan",
           value: { archived: 1, archivedEntries, entryRemovals: [] },
         });
-        expect(preparations).toHaveLength(2);
-        expect(preparations[0]).not.toBe(preparations[1]);
-        expect(released).toEqual(preparations);
         expect(published).toEqual([stale.sessionKey, stale.sessionKey]);
         expect(sql.queries).toEqual([]);
       } finally {
@@ -253,41 +243,26 @@ export function registerSessionMaintenancePreparationTests() {
   });
 
   it.for(["caller revocation", "lost preparation reply"] as const)(
-    "joins preparation cleanup after %s without discarding another caller's preparation",
+    "preserves rows after %s and lets the next maintenance pass proceed",
     async (failure, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const { stale, plan, archivedEntries } = makeFixture(state);
-        const firstGate = pausedStep();
-        const secondGate = pausedStep();
-        const releaseGate = pausedStep();
-        const preparations: string[] = [];
-        const released: string[] = [];
+        const preparation = pausedStep();
+        let preparations = 0;
         const cancelled = new Error(`Maintenance ${failure} after native preparation`);
         observePlanning({
-          async afterPrepare(id) {
-            preparations.push(id);
-            if (preparations.length === 1) {
-              await firstGate.enter();
+          async afterPrepare() {
+            if (++preparations === 1) {
+              await preparation.enter();
               if (failure === "lost preparation reply") {
                 throw cancelled;
               }
-            } else {
-              await secondGate.enter();
             }
-          },
-          async beforeRelease(id) {
-            if (id === preparations[0]) {
-              await releaseGate.enter();
-            }
-          },
-          afterRelease(id) {
-            released.push(id);
           },
         });
         let current = true;
-        const settled = vi.fn();
         const published = vi.fn();
-        const sql = observeHostDataSql();
+        let sql = observeHostDataSql();
         const first = reclaim({
           plan,
           onWorkerResult: published,
@@ -297,49 +272,31 @@ export function registerSessionMaintenancePreparationTests() {
             }
           },
         });
-        void first.then(settled, settled);
         const firstOutcome = first.then(
           (value) => ({ value }),
           (error: unknown) => ({ error }),
         );
         let second: ReturnType<typeof reclaim> | undefined;
-        let excess: ReturnType<typeof reclaim> | undefined;
         try {
-          await waitForGate(firstGate.entered, firstOutcome, signal);
+          await waitForGate(preparation.entered, firstOutcome, signal);
           current = failure !== "caller revocation";
-          firstGate.resume();
-          await waitForGate(releaseGate.entered, firstOutcome, signal);
-          expect(settled).not.toHaveBeenCalled();
-          second = reclaim({ plan });
-          await waitForGate(secondGate.entered, second, signal);
-          expect(preparations).toHaveLength(2);
-          expect(preparations[0]).not.toBe(preparations[1]);
-          expect(released).toEqual([]);
-          expect(published).not.toHaveBeenCalled();
-          excess = reclaim({ plan });
-          await expect(abortable(excess, signal)).rejects.toThrow(
-            "Session maintenance preparation capacity is occupied",
-          );
-          expect(preparations).toHaveLength(2);
-          expect(released).toHaveLength(1);
-          const refusedId = expectDefined(released[0], "refused preparation discard");
-          expect(preparations).not.toContain(refusedId);
-          releaseGate.resume();
+          preparation.resume();
           expect(await firstOutcome).toEqual({ error: cancelled });
-          expect(released).toEqual([refusedId, preparations[0]]);
-          secondGate.resume();
+          expect(published).not.toHaveBeenCalled();
+          expect(sql.queries).toEqual([]);
+          sql.restore();
+          expect(loadSessionEntry(stale)?.archivedAt).toBeUndefined();
+          sql = observeHostDataSql();
+          second = reclaim({ plan });
           await expect(second).resolves.toMatchObject({
             kind: "maintenance-plan",
             value: { archived: 1, archivedEntries },
           });
-          expect(released).toEqual([refusedId, ...preparations]);
           expect(published).not.toHaveBeenCalled();
           expect(sql.queries).toEqual([]);
         } finally {
-          firstGate.resume();
-          secondGate.resume();
-          releaseGate.resume();
-          await Promise.allSettled([firstOutcome, second, excess]);
+          preparation.resume();
+          await Promise.allSettled([firstOutcome, second]);
           sql.restore();
         }
         expect(loadSessionEntry(stale)?.archivedAt).toEqual(expect.any(Number));
@@ -365,7 +322,7 @@ export function registerSessionMaintenancePreparationTests() {
         let nativeClosed = false;
         let closeNative: (() => Promise<void>) | undefined;
         observePlanning({
-          async afterPrepare(_id, native) {
+          async afterPrepare(native) {
             if (closeNative) {
               return;
             }
@@ -440,62 +397,4 @@ export function registerSessionMaintenancePreparationTests() {
       });
     },
   );
-
-  it("preserves committed maintenance after joined preparation-discard failure", async ({
-    signal,
-  }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { stale, plan, archivedEntries } = makeFixture(state);
-      const nativeClose = pausedStep();
-      const published = vi.fn();
-      let committed = false;
-      const settled = vi.fn();
-      let closeNative: (() => Promise<void>) | undefined;
-      const cleanupFailure = new Error("Preparation discard failed after committed maintenance");
-      observePlanning({
-        afterPrepare(_id, native) {
-          const close = native.store.close.bind(native.store);
-          closeNative = close;
-          vi.spyOn(native.store, "close").mockImplementation(async () => {
-            await close();
-            await nativeClose.enter();
-          });
-        },
-        afterExecute(result) {
-          expect(result.kind).toBe("committed");
-          committed = true;
-        },
-        beforeRelease() {
-          expect(committed).toBe(true);
-          throw cleanupFailure;
-        },
-      });
-      const sql = observeHostDataSql();
-      const pending = reclaim({
-        plan,
-        onWorkerResult: published,
-      });
-      void pending.then(settled, settled);
-      try {
-        await waitForGate(nativeClose.entered, pending, signal);
-        expect(published).toHaveBeenCalledOnce();
-        expect(settled).not.toHaveBeenCalled();
-        nativeClose.resume();
-        await expect(pending).resolves.toMatchObject({
-          kind: "maintenance-plan",
-          value: { archived: 1, archivedEntries },
-        });
-        expect(sql.queries).toEqual([]);
-      } finally {
-        nativeClose.resume();
-        await Promise.allSettled([pending]);
-        try {
-          await closeNative?.();
-        } finally {
-          sql.restore();
-        }
-      }
-      expect(loadSessionEntry(stale)?.archivedAt).toEqual(expect.any(Number));
-    });
-  });
 }

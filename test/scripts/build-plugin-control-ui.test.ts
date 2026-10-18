@@ -142,6 +142,12 @@ await withDistArtifactOwnership(process.cwd(), async () => fs.writeFileSync("ui-
 import { runBuildAllSteps } from ${JSON.stringify(buildAllUrl)};
 const result = await withDistArtifactOwnership(process.cwd(), () => runBuildAllSteps("full", {
   cacheEnabled: false,
+  // This fixture runs one tiny UI writer; host pressure must not gate the lock handoff proof.
+  memoryLimit: {
+    availableMemoryBytes: 16 * 1024 ** 3,
+    procMemTotalBytes: 16 * 1024 ** 3,
+    cgroupMemoryLimitBytes: 16 * 1024 ** 3,
+  },
   env: { ...process.env, GIT_COMMIT: "${"a".repeat(40)}", OPENCLAW_BUILD_TIMESTAMP: "2026-10-17T00:00:00.000Z" },
   steps: [{ label: "ui:build", args: ["scripts/ui.js", "build"] }],
 }));

@@ -11,6 +11,7 @@ import {
   withSessionEntryReadOnlyInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { sameSessionTranscriptStorePath } from "../../config/sessions/transcript-store-identity.js";
 import {
   withOwnedSessionTranscriptWrites,
   type OwnedSessionTranscriptWriteContext,
@@ -451,7 +452,8 @@ export async function executeQueuedContextEngineCompaction(input: {
           (!proposed.sessionFile || proposed.sessionFile === params.sessionFile) &&
           (!target?.agentId || target.agentId === runtimeTarget.agentId) &&
           (!target?.sessionKey || target.sessionKey === runtimeTarget.sessionKey) &&
-          (!target?.storePath || target.storePath === runtimeTarget.storePath);
+          (!target?.storePath ||
+            sameSessionTranscriptStorePath(target.storePath, runtimeTarget.storePath));
         // Completion survives cancellation; a proposed successor's token snapshot
         // belongs to that identity only after the host accepts it.
         tokensAfter = sameTarget ? result.result?.tokensAfter : undefined;

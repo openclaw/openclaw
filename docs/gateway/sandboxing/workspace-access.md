@@ -70,6 +70,12 @@ guest-created files under `.cache/` and `.artifacts/` still reconcile; an ignore
 rule alone does not make a file disposable. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
 
+If you are a guest, you can ask the agent:
+
+> Bring this workspace up to date with the latest project changes, keeping my
+> edits. Resolve any conflicts, rerun the relevant checks and Auto Review, and
+> update the same draft PR. Do not merge it.
+
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
 current selected repository base into this session's existing local managed
 workspace. The Gateway fetches with its host identity and prepares any missing

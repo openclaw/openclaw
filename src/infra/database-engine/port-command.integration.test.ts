@@ -438,6 +438,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
     120_000,
   );
 
+  // Green CI runs 39068774273/39071119824 measured p95 at 82s; retain more than 2× headroom.
   it.each([false, true])(
     "rolls back a reverse port with retained PostgreSQL writes (missing namespace: %s)",
     async (missingNamespace) => {
@@ -493,7 +494,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         expect(await canonicalPostgres(client, restored.namespace)).toEqual(canonical(expected));
       }, true);
     },
-    120_000,
+    180_000,
   );
 
   it.each(["environment", "absent", "changed environment"])(

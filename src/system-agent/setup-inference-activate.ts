@@ -120,10 +120,7 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
       const route = await resolveSystemAgentConfiguredRouteFromConfig(
         cfg,
         params.agentId,
-        {
-          loadAuthProfileStoreForRuntimeAsync: ctx.deps.loadAuthProfileStoreForRuntimeAsync,
-          ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
-        },
+        params.modelTarget ? { modelTarget: params.modelTarget } : {},
         ctx.snapshot,
       );
       if (!route) {
@@ -398,7 +395,6 @@ async function verifyAndActivateCandidate(
   const routeDeps = {
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     pluginMetadataPlugins: metadata.plugins,
-    loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
   };
   const requestedAgentId = params.agentId ? routeAgentId : undefined;
   // Saved model rows stay sparse; compare the same runtime defaults before and after writing.
@@ -440,7 +436,6 @@ async function verifyAndActivateCandidate(
     (deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts)({
       config: route.runConfig,
       executionRoute: route,
-      deps,
     }),
   );
   params.onPreparationComplete?.();

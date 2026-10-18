@@ -157,10 +157,15 @@ export async function hydrateChatHistory(
       }
       admission = requests.subscriptionReady;
     }
+    // A pane mounted after hello can still be hydrating its retained cursor and
+    // receipts. Join that data read before constructing the first request.
+    const hydration = waitForInitialChatSnapshot(state);
+    if ((hydration && !(await hydration)) || !isCurrent()) {
+      return undefined;
+    }
     // The snapshot covers activity emitted before the foreground observer was
     // admitted; subsequent activity arrives through its acknowledged full stream.
     setChatError(state, null);
-    // The cached transcript can finish hydrating while stream admission is pending.
     let response = await request(readChatHistoryCursor(state));
     if (!isCurrent()) {
       return undefined;
@@ -171,12 +176,6 @@ export async function hydrateChatHistory(
       if (!isCurrent()) {
         return undefined;
       }
-    }
-    // Fetch in parallel with IndexedDB, then reconcile against the cached paint.
-    // Joining at publication keeps a fast response from retiring the local read.
-    const hydration = waitForInitialChatSnapshot(state);
-    if ((hydration && !(await hydration)) || !isCurrent()) {
-      return undefined;
     }
     const previousMessages = state.chatMessages;
     const previousPagination = state.chatHistoryPagination;
