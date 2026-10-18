@@ -28,6 +28,7 @@ type PaneProperty =
   | "narrow"
   | "mergedChrome"
   | "navDrawerOpen"
+  | "gatewayStatus"
   | "onboarding"
   | "onOpenSplitView"
   | "onSplitDown"
@@ -65,6 +66,7 @@ export const chatPaneProperties = {
   narrow: { default: false },
   mergedChrome: { default: false },
   navDrawerOpen: { default: false },
+  gatewayStatus: { default: null },
   onboarding: { default: false },
   onOpenSplitView: { default: undefined },
   onSplitDown: { default: undefined },

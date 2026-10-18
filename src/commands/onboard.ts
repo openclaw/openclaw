@@ -455,7 +455,6 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   );
 }
 
-/** Runs the onboard command after normalizing legacy flags and setup mode. */
 export async function setupWizardCommand(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,

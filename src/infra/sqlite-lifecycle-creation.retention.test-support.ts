@@ -25,18 +25,11 @@ const [root, scenario] = process.argv.slice(2);
 assert.ok(root, "SQLite lifecycle retention requires its temporary directory");
 const callerContext = new AsyncLocalStorage<object>();
 
-class SqliteStagingCaller {
-  prompt = Buffer.alloc(1024 * 1024, 1);
+class RetainedCaller {
+  prompt = Buffer.alloc(1024 * 1024);
 }
-class SqliteStateOpeningCaller {
-  prompt = Buffer.alloc(1024 * 1024, 2);
-}
-class SqliteStateOpeningAuthority {
-  prompt = Buffer.alloc(1024 * 1024, 3);
-}
-class SqliteAgentOpeningCaller {
-  prompt = Buffer.alloc(1024 * 1024, 4);
-}
+
+const referencesTo = (...objects: object[]) => objects.map((object) => new WeakRef(object));
 
 async function assertCollected(references: WeakRef<object>[]) {
   await collectForRetentionCheck(`sqlite-${scenario}`);
@@ -48,10 +41,10 @@ async function assertCollected(references: WeakRef<object>[]) {
 }
 
 function captureStagingCaller() {
-  const caller = new SqliteStagingCaller();
+  const caller = new RetainedCaller();
   return {
     owner: callerContext.run(caller, captureSqliteSnapshotStagingOwner),
-    references: [new WeakRef(caller), new WeakRef(caller.prompt)],
+    references: referencesTo(caller, caller.prompt),
   };
 }
 
@@ -80,15 +73,10 @@ const readCommand = {
 } as const;
 
 async function completeStateOpening() {
-  const caller = new SqliteStateOpeningCaller();
-  const authority = new SqliteStateOpeningAuthority();
+  const caller = new RetainedCaller();
+  const authority = new RetainedCaller();
   const context = captureOpenClawStateWorkerContext();
-  const references = [
-    new WeakRef(caller),
-    new WeakRef(caller.prompt),
-    new WeakRef(authority),
-    new WeakRef(authority.prompt),
-  ];
+  const references = referencesTo(caller, caller.prompt, authority, authority.prompt);
   await callerContext.run(caller, async () => {
     const result = await runOpenClawStateWorkerOperation(
       context,
@@ -130,7 +118,7 @@ async function completeAgentCaller(
   context: ReturnType<typeof captureOpenClawStateWorkerContext>,
   prepare = false,
 ) {
-  const caller = new SqliteAgentOpeningCaller();
+  const caller = new RetainedCaller();
   // Keep this lexical: an opening Promise's async context is a separate contract.
   const source: Parameters<OpenClawAgentDatabaseExecution["prepare"]>[0] = {
     assertCurrent() {
@@ -149,7 +137,7 @@ async function completeAgentCaller(
       });
     },
   };
-  const references = [new WeakRef(caller), new WeakRef(caller.prompt), new WeakRef(source)];
+  const references = referencesTo(caller, caller.prompt, source);
   if (prepare) {
     await execution.prepare(source);
   } else {
@@ -246,15 +234,15 @@ async function checkHistoryClose() {
   }
 }
 
-if (scenario === "snapshot-staging") {
-  await checkStaging();
-} else if (scenario === "state-opening") {
-  await checkStateOpening();
-} else if (scenario === "agent-opening") {
-  await checkAgentOpening();
-} else if (scenario === "history-close") {
-  await checkHistoryClose();
-} else {
+const scenarios = new Map<string, () => Promise<void>>([
+  ["snapshot-staging", checkStaging],
+  ["state-opening", checkStateOpening],
+  ["agent-opening", checkAgentOpening],
+  ["history-close", checkHistoryClose],
+]);
+const run = scenarios.get(scenario ?? "");
+if (!run) {
   throw new Error(`Unknown SQLite lifecycle retention scenario: ${scenario}`);
 }
+await run();
 process.stdout.write(JSON.stringify({ scenario, collected: true, reused: true }));

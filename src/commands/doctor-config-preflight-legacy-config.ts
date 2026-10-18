@@ -14,47 +14,13 @@ import type { ConfigFileSnapshot } from "../config/types.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
 import { listRetiredCronStateFiles } from "../infra/state-migrations.retired-cron-files.js";
 import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
-import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
-import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
-import {
-  canPlanAutomaticConfigRepair,
-  planAutomaticConfigRepair,
-} from "./doctor/shared/automatic-config-repair.js";
-import type { DoctorConfigPreflightOptions } from "./doctor/shared/config-migration-result.js";
+import type { planAutomaticConfigRepair } from "./doctor/shared/automatic-config-repair.js";
 import {
   prepareDoctorConfigRecoverySnapshot,
   recoverDoctorConfigFromLastKnownGood,
 } from "./doctor/shared/config-recovery.js";
 import { findRetiredConfigUpgradeRequirement } from "./doctor/shared/retired-config-formats.js";
-
-export function createDoctorConfigRepairPlanner(params: {
-  options: DoctorConfigPreflightOptions;
-  stateMigrationsRequested: boolean;
-  skipLegacyParentConfigWrite: boolean;
-  runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
-}) {
-  const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) =>
-    params.runWithPluginMetadataSnapshot(
-      { config: snapshot.sourceConfig ?? snapshot.config ?? {} },
-      () => planAutomaticConfigRepair(snapshot),
-    );
-  const planAdmittedConfigRepair = (
-    snapshot: ConfigFileSnapshot,
-    prepared: Awaited<ReturnType<typeof planAutomaticConfigRepair>> = null,
-  ) =>
-    (params.options.repairPrefixedConfig === true ||
-      (params.stateMigrationsRequested && params.options.migrateLegacyConfig !== false)) &&
-    canPlanAutomaticConfigRepair(snapshot) &&
-    !params.skipLegacyParentConfigWrite &&
-    (params.options.repairPrefixedConfig === true ||
-      !shouldSkipPluginValidationForDoctorConfigPreflight()) &&
-    !resolveIsConfigReadOnly(process.env) &&
-    !resolveFutureConfigActionBlock({ action: "normalize legacy config", snapshot })
-      ? (prepared ?? planScopedConfigRepair(snapshot))
-      : null;
-  return { planScopedConfigRepair, planAdmittedConfigRepair };
-}
 
 export async function migrateLegacyDoctorConfig(params: {
   enabled: boolean;

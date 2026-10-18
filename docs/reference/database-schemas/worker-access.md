@@ -66,6 +66,13 @@ row; a changed final token estimate updates accounting without counting compacti
 twice. Shared-state events follow the agent-store commit, and memory indexing keeps
 its existing post-compaction policy.
 
+Compaction and transcript writers compare already admitted database identities
+when a state directory has multiple path spellings, such as a symlink and its
+canonical path. SQLite uses physical file identity and birthtime; PostgreSQL uses
+namespace and store ID. These comparisons do not probe the filesystem or admit a
+new store. Agent, session, key, storage environment, lifecycle, and writer-claim
+checks still bind each write to its original target.
+
 Public GitHub coauthor attribution reads merge aliases, verified accounts, and
 credit preferences in one worker-owned snapshot statement. Enterprise attribution
 keeps a read transaction for its additional verified-email binding lookup. Both

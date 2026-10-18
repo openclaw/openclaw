@@ -1,3 +1,4 @@
+import { symlinkSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -20,6 +21,7 @@ import { openOpenClawAgentSqliteWorkerStoreV2 } from "../../state/openclaw-agent
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { assertCompactionPathAlias } from "./compaction-pathalias.test-support.js";
 import { sessionNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
   loadSessionEntry,
@@ -114,6 +116,21 @@ function expectRolledBack(
   expect(loadSessionEntry(scope)).toMatchObject({ compactionCount: 0 });
   expect(loadSessionEntry(scope)?.transcriptByteCompactionLatch).toBeUndefined();
 }
+
+it.each([undefined, "different store", "changed writer"] as const)(
+  "compacts through a symlinked state root (refusal=%s)",
+  async (refusal) => {
+    const canonical = sessionScope("symlink-compaction");
+    const alias = path.join(sessionDirs.make(), "state");
+    symlinkSync(canonical.env!.OPENCLAW_STATE_DIR, alias, "junction");
+    const scope = {
+      ...canonical,
+      env: { OPENCLAW_STATE_DIR: alias },
+      storePath: path.join(alias, "sessions.json"),
+    };
+    await assertCompactionPathAlias(scope, { ...canonical, env: canonical.env! }, refusal);
+  },
+);
 
 it.each([false, true])(
   "fuses summary accounting and intervening metadata (incognito=%s)",

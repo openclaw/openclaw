@@ -1,7 +1,4 @@
-// The run loop primes lifecycle.runtime.ts before the HTTP listener binds, so the
-// hub's re-exports decide how much module graph loads during gateway cold start.
 import { readFileSync } from "node:fs";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -49,29 +46,13 @@ afterEach(async () => {
 
 type LifecycleRuntime = typeof import("./lifecycle.runtime.js");
 
-const repoRoot = path.resolve(import.meta.dirname, "../../..");
-
-function readSource(relativePath: string): string {
-  return readFileSync(path.join(repoRoot, relativePath), "utf8");
-}
-
 describe("gateway lifecycle hub import boundaries", () => {
   it("re-exports primed symbols from their defining modules instead of facades", () => {
-    const hub = readSource("src/cli/gateway-cli/lifecycle.runtime.ts");
-
-    // The generation owner must not pull hot-reload or managed-reloader graphs
-    // into the lifecycle hub before the gateway can accept a connection.
+    const hub = readFileSync(new URL("./lifecycle.runtime.ts", import.meta.url), "utf8");
     expect(hub).toContain('from "../../gateway/server-reload-generation.js"');
     expect(hub).not.toContain('from "../../gateway/server-reload-hot.js"');
     expect(hub).not.toContain('from "../../gateway/server-reload-managed.js"');
-
-    // Restart marking belongs to server close, after the drain identifies the
-    // exact runs that still need abort. The primed run-loop hub must not regain
-    // the earlier duplicate owner.
     expect(hub).not.toContain("main-session-restart-recovery");
-    expect(hub).not.toContain(
-      'from "../../agents/main-session-recovery/main-session-restart-recovery.js"',
-    );
   });
 
   it.for(["SIGTERM", "SIGUSR2"] as const)(

@@ -141,7 +141,6 @@ async function rewritePreparedTranscriptMessage<T>(
               });
             },
             beforeWrite() {},
-            async release() {},
           })
         : undefined,
     async run(worker, commit) {

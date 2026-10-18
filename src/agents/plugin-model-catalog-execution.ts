@@ -1,4 +1,5 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
@@ -149,7 +150,11 @@ export async function loadPersistedPluginModelCatalogs(
       },
     });
     reading = readPluginModelCatalogsInWorker(
-      { ...options, pluginIds: pluginIds && [...pluginIds] },
+      {
+        ...options,
+        env: { ...env, OPENCLAW_STATE_DIR: resolveStateDir(env) },
+        pluginIds: pluginIds && [...pluginIds],
+      },
       controller.signal,
     );
     const catalogs = await reading;

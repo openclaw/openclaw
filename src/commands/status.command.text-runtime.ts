@@ -1,4 +1,3 @@
-// Text-mode status runtime barrel.
 // Command orchestration loads this owner only for text diagnostics and reports.
 
 export { getTerminalTableWidth } from "../../packages/terminal-core/src/table.js";

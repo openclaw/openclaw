@@ -540,3 +540,77 @@ describe("local session placement actions", () => {
     expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
   });
 });
+
+describe("cloud placement stop confirmation authority", () => {
+  it.each([
+    "unchanged",
+    "read-only",
+    "method-removed",
+    "replacement",
+    "busy",
+    "offline-device",
+    "new-placement",
+    "removed",
+  ] as const)("uses the current owner state after confirmation (%s)", async (change) => {
+    const { pane, state, request, reconcileMutation } = createPlacementPane(
+      dialogs,
+      undefined,
+      ["operator.write"],
+      ["sessions.reclaim"],
+    );
+    const client = pane.context.gateway.snapshot.client;
+    const session = activePlacementSession();
+    state.sessionKey = session.key;
+    state.currentSessionId = session.sessionId;
+    state.sessionsResult = { ...createSessionsListResult(), sessions: [session] };
+    const stopping = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
+    const actions = await waitForConfirmDialogActions();
+    const current = { ...session };
+    if (change === "read-only" || change === "method-removed") {
+      pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+        change === "method-removed" ? [] : ["sessions.reclaim"],
+        change === "read-only" ? ["operator.read"] : ["operator.write"],
+      );
+    }
+    if (change === "replacement") {
+      current.sessionId = "replacement-session";
+    }
+    if (change === "busy") {
+      current.hasActiveRun = true;
+    }
+    if (change === "offline-device") {
+      current.placement = {
+        ...current.placement,
+        runner: { kind: "device", status: "offline" },
+      };
+    }
+    if (change === "new-placement") {
+      current.placement = { ...current.placement, generation: 2 };
+    }
+    state.sessionsResult = {
+      ...createSessionsListResult(),
+      sessions: change === "removed" ? [] : [current],
+    };
+    expect(pane.context.gateway.snapshot.client).toBe(client);
+    answerConfirmDialog(actions, "confirm");
+    await stopping;
+    if (change === "unchanged") {
+      expect(pane.context.placementStartup.pause).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledWith(
+        "sessions.reclaim",
+        { key: session.key, agentId: "main" },
+        { timeoutMs: null },
+      );
+      expect(reconcileMutation).toHaveBeenCalledWith("main");
+    } else {
+      expect(pane.context.placementStartup.pause).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalledWith(
+        "sessions.reclaim",
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(reconcileMutation).not.toHaveBeenCalled();
+      expect(state.chatError).toBeTruthy();
+    }
+  });
+});
