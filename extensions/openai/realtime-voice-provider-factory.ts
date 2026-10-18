@@ -29,6 +29,7 @@ import {
   isOpenAIGptLiveSubscriptionModel,
   resolveOpenAIQuicksilverVoiceCapabilities,
   resolveOpenAIQuicksilverVoice,
+  type OpenAIGptLiveVoiceSelection,
 } from "./realtime-quicksilver.js";
 import { OpenAIRealtimeBridge } from "./realtime-voice-bridge.js";
 import {
@@ -207,11 +208,15 @@ async function createOpenAIRealtimeBrowserSession(
     if (!quicksilverBroker) {
       throw new Error("OpenAI GPT-Live browser session broker is unavailable");
     }
+    const voice: OpenAIGptLiveVoiceSelection = resolveOpenAIQuicksilverVoice(
+      model,
+      req.voice ?? config.voice,
+    );
     const quicksilverRequest = {
       ...req,
       model,
       instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
-      voice: req.voice ?? config.voice,
+      voice,
     };
     const auth = await resolveOpenAIQuicksilverBridgeAuth({ ...authParams, model }, context);
     return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
@@ -430,10 +435,14 @@ export function buildOpenAIRealtimeVoiceProvider(
             "GPT-Live backend WebSocket sessions do not support Azure endpoints or deployments",
           );
         }
+        const voice: OpenAIGptLiveVoiceSelection = resolveOpenAIQuicksilverVoice(
+          model,
+          config.voice,
+        );
         const bridgeConfig = {
           ...req,
           model,
-          voice: config.voice,
+          voice,
           instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
         };
         const authParams = {
