@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { formatCliOperatorError } from "../cli/failure-output.js";
@@ -33,6 +32,7 @@ import {
   createFormatFixture,
   writeBackupManifest,
 } from "./git-backup.test-support.js";
+import { withDatabase } from "./local-repository.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   logDiagnostic: undefined as { stdout: string; stderr: string } | undefined,
@@ -47,20 +47,16 @@ vi.mock("../infra/git-exec.js", async (importOriginal) => {
     executeGitCommand: async (
       ...args: Parameters<typeof actual.executeGitCommand>
     ): ReturnType<typeof actual.executeGitCommand> => {
-      if (args[1][0] === "push" && mocks.pushDiagnostic) {
+      const diagnostic =
+        args[1][0] === "push"
+          ? mocks.pushDiagnostic
+          : args[1][0] === "log"
+            ? mocks.logDiagnostic
+            : undefined;
+      if (diagnostic) {
         return {
           code: 1,
-          ...mocks.pushDiagnostic,
-          signal: null,
-          killed: false,
-          termination: "exit",
-          timeoutMs: args[2]?.timeoutMs ?? actual.GIT_TIMEOUT_MS,
-        };
-      }
-      if (args[1][0] === "log" && mocks.logDiagnostic) {
-        return {
-          code: 1,
-          ...mocks.logDiagnostic,
+          ...diagnostic,
           signal: null,
           killed: false,
           termination: "exit",
@@ -140,6 +136,37 @@ function createStateDatabaseFixture(root: string): {
       identity: { role: "global" },
     },
   };
+}
+
+async function backupFixture(name = "repository") {
+  const root = await tempRoot();
+  return {
+    root,
+    ...createStateDatabaseFixture(root),
+    repositoryPath: path.join(root, name),
+  };
+}
+
+async function configureGitIdentity(repositoryPath: string) {
+  await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
+  await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
+}
+
+function expectText(text: string | undefined, present: string[], absent: string[] = []) {
+  for (const value of present) {
+    expect(text).toContain(value);
+  }
+  for (const value of absent) {
+    expect(text).not.toContain(value);
+  }
+}
+
+function gitDiagnostic(remote: string, stderr: string, stdout: string) {
+  const stream = (label: string, tail: string) =>
+    [...Array.from({ length: 20 }, (_, index) => `${label}-old-${index} '${remote}'`), tail].join(
+      "\n",
+    );
+  return { stderr: stream("stderr", stderr), stdout: stream("stdout", stdout) };
 }
 
 describe("Git-backed SQLite snapshots", () => {
@@ -263,22 +290,16 @@ describe("Git-backed SQLite snapshots", () => {
           const first = resultSchema.parse(JSON.parse((await create()).stdout));
           const opsTree = await requireGit(repositoryPath, ["rev-parse", "HEAD:agents/ops"]);
           const mainTree = await requireGit(repositoryPath, ["rev-parse", "HEAD:agents/main"]);
-          const main = new DatabaseSync(path.join(entries.main.agentDir, "openclaw-agent.sqlite"));
-          try {
+          withDatabase(path.join(entries.main.agentDir, "openclaw-agent.sqlite"), (main) => {
             main.exec("UPDATE schema_meta SET updated_at = updated_at + 1");
-          } finally {
-            main.close();
-          }
+          });
           const opsPath = path.join(entries.ops.agentDir, "openclaw-agent.sqlite");
           if (condition === "missing") {
             await fs.rm(opsPath);
           } else if (condition === "old-schema") {
-            const ops = new DatabaseSync(opsPath);
-            try {
+            withDatabase(opsPath, (ops) => {
               ops.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
-            } finally {
-              ops.close();
-            }
+            });
           } else {
             await fs.writeFile(
               configPath,
@@ -347,9 +368,7 @@ describe("Git-backed SQLite snapshots", () => {
   );
 
   it("prunes owned artifacts without deleting an unowned agent scope", async () => {
-    const root = await tempRoot();
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "repository");
+    const { stateDir, database, repositoryPath } = await backupFixture();
     const ownedAgentPath = path.join(repositoryPath, "agents", "owned-agent");
     const unownedFile = path.join(repositoryPath, "agents", "operator", "operator.txt");
     await initializeGitBackupRepository({ repositoryPath, stateDir });
@@ -412,8 +431,7 @@ describe("Git-backed SQLite snapshots", () => {
       await fs.mkdir(stateDir);
 
       await initializeGitBackupRepository({ repositoryPath, stateDir });
-      await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
-      await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
+      await configureGitIdentity(repositoryPath);
       await fs.writeFile(path.join(repositoryPath, "README.md"), "backup\n");
       await requireGit(repositoryPath, ["add", "README.md"]);
       await requireGit(repositoryPath, ["commit", "-m", "backup history"]);
@@ -425,9 +443,9 @@ describe("Git-backed SQLite snapshots", () => {
   );
 
   it("uses a commit-scoped fallback identity when Git has no configured email", async () => {
-    const root = await tempRoot();
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "identity-free-repository");
+    const { root, stateDir, database, repositoryPath } = await backupFixture(
+      "identity-free-repository",
+    );
     const isolatedHome = path.join(root, "git-home");
     await fs.mkdir(isolatedHome, { recursive: true });
     const gitEnv = createPathResolutionEnv(isolatedHome, {
@@ -455,26 +473,18 @@ describe("Git-backed SQLite snapshots", () => {
   });
 
   it("redacts and durably preserves credential-bearing push diagnostics", async () => {
-    const root = await tempRoot();
-    const { stateDir } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "push-repository");
+    const { stateDir, repositoryPath } = await backupFixture("push-repository");
     const username = ["synthetic", "user"].join("-");
     const password = ["synthetic", "password"].join("-");
     const querySecret = ["synthetic", "query", "secret"].join("-");
     const remote = `https://${username}:${password}@example.invalid/repository?access_token=${querySecret}`;
-    mocks.pushDiagnostic = {
-      stderr: [
-        ...Array.from({ length: 20 }, (_, index) => `stderr-old-${index} '${remote}'`),
-        `stderr-tail-🦞 fatal: unable to access '${remote}'`,
-      ].join("\n"),
-      stdout: [
-        ...Array.from({ length: 20 }, (_, index) => `stdout-old-${index} '${remote}'`),
-        `stdout-tail-🐚 remote: rejected '${remote}'`,
-      ].join("\n"),
-    };
+    mocks.pushDiagnostic = gitDiagnostic(
+      remote,
+      `stderr-tail-🦞 fatal: unable to access '${remote}'`,
+      `stdout-tail-🐚 remote: rejected '${remote}'`,
+    );
     await initializeGitBackupRepository({ repositoryPath, stateDir, remote });
-    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
-    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
+    await configureGitIdentity(repositoryPath);
 
     await withBackupStateEnv({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const runtime = createTestRuntime();
@@ -485,16 +495,17 @@ describe("Git-backed SQLite snapshots", () => {
         excludeSecrets: true,
       });
 
-      expect(result.pushWarning).toContain("stderr:");
-      expect(result.pushWarning).toContain("stdout:");
-      expect(result.pushWarning).toContain(
-        "https://***:***@example.invalid/repository?access_token=***",
+      expectText(
+        result.pushWarning,
+        [
+          "stderr:",
+          "stdout:",
+          "https://***:***@example.invalid/repository?access_token=***",
+          "stderr-tail-🦞",
+          "stdout-tail-🐚",
+        ],
+        [username, password, querySecret],
       );
-      expect(result.pushWarning).not.toContain(username);
-      expect(result.pushWarning).not.toContain(password);
-      expect(result.pushWarning).not.toContain(querySecret);
-      expect(result.pushWarning).toContain("stderr-tail-🦞");
-      expect(result.pushWarning).toContain("stdout-tail-🐚");
       expect(result.pushWarning?.length).toBeLessThanOrEqual(1_200);
       expect(runtime.error).toHaveBeenCalledWith(
         `Warning: Git backup committed, but push failed: ${result.pushWarning}`,
@@ -542,16 +553,11 @@ describe("Git-backed SQLite snapshots", () => {
       "openclaw backup fixture",
     ]);
     await requireGit(repositoryPath, ["checkout", "--detach", "HEAD"]);
-    mocks.logDiagnostic = {
-      stderr: [
-        ...Array.from({ length: 20 }, (_, index) => `stderr-old-${index} '${remote}'`),
-        `${"🦞".repeat(400)}x stderr-tail-🦞 fatal: unable to read '${remote}'`,
-      ].join("\n"),
-      stdout: [
-        ...Array.from({ length: 20 }, (_, index) => `stdout-old-${index} '${remote}'`),
-        `stdout-tail-🐚 retry with '${remote}'`,
-      ].join("\n"),
-    };
+    mocks.logDiagnostic = gitDiagnostic(
+      remote,
+      `${"🦞".repeat(400)}x stderr-tail-🦞 fatal: unable to read '${remote}'`,
+      `stdout-tail-🐚 retry with '${remote}'`,
+    );
 
     const error = await backupGitLogCommand(createTestRuntime(), {
       repository: repositoryPath,
@@ -564,15 +570,18 @@ describe("Git-backed SQLite snapshots", () => {
     const output = formatCliOperatorError(error, { argv: ["backup", "git", "log"], env: {} });
 
     expect(error.message.length).toBeLessThanOrEqual(1_200);
-    expect(output).toContain("git log failed (code=1, termination=exit)");
-    expect(output).toContain("stderr:");
-    expect(output).toContain("stdout:");
-    expect(output).toContain("stderr-tail-🦞");
-    expect(output).toContain("stdout-tail-🐚");
-    expect(output).toContain("https://***:***@example.invalid/history?token=***");
-    expect(output).not.toContain(username);
-    expect(output).not.toContain(password);
-    expect(output).not.toContain(querySecret);
+    expectText(
+      output,
+      [
+        "git log failed (code=1, termination=exit)",
+        "stderr:",
+        "stdout:",
+        "stderr-tail-🦞",
+        "stdout-tail-🐚",
+        "https://***:***@example.invalid/history?token=***",
+      ],
+      [username, password, querySecret],
+    );
     expect(output).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
     expect(output).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
   });
@@ -599,26 +608,19 @@ describe("Git-backed SQLite snapshots", () => {
     );
     await fs.writeFile(path.join(repositoryPath, ".git", "HEAD"), `${commit}\n`);
 
-    const outcome = await readGitBackupLog({ repositoryPath, limit: 1 }).then(
-      (entries) => ({
-        kind: "returned",
-        entries: entries.map((entry) => ({
-          commitBytes: Buffer.byteLength(entry.commit),
-          date: entry.date,
-          messageBytes: Buffer.byteLength(entry.message),
-        })),
-      }),
-      (error: unknown) => ({
-        kind: "error",
-        message: error instanceof Error ? error.message : String(error),
-      }),
+    const error = await readGitBackupLog({ repositoryPath, limit: 1 }).catch(
+      (cause: unknown) => cause,
     );
-    expect(outcome).toEqual({ kind: "error", message: expect.stringContaining("output-limit") });
-    if ("message" in outcome) {
-      expect(outcome.message.length).toBeLessThanOrEqual(1_200);
-      expect(outcome.message).toContain("https://***:***@example.invalid/history");
-      expect(outcome.message).not.toContain(secret);
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) {
+      throw new Error("expected truncated Git history error");
     }
+    expect(error.message.length).toBeLessThanOrEqual(1_200);
+    expectText(
+      error.message,
+      ["output-limit", "https://***:***@example.invalid/history"],
+      [secret],
+    );
   });
 
   it("does not treat a symbolic HEAD with a missing object as an empty log", async () => {
@@ -643,14 +645,11 @@ describe("Git-backed SQLite snapshots", () => {
   });
 
   it("refuses adopted non-backup ancestry and records local push degradation", async () => {
-    const root = await tempRoot();
-    const { stateDir } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "adopted-repository");
+    const { root, stateDir, repositoryPath } = await backupFixture("adopted-repository");
     const remotePath = path.join(root, "remote.git");
     await requireGit(root, ["init", "--bare", remotePath]);
     await initializeGitBackupRepository({ repositoryPath, stateDir, remote: remotePath });
-    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
-    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
+    await configureGitIdentity(repositoryPath);
     await fs.writeFile(path.join(repositoryPath, "unrelated.txt"), "operator-owned\n");
     await requireGit(repositoryPath, ["add", "unrelated.txt"]);
     await requireGit(repositoryPath, ["commit", "-m", "operator history"]);
@@ -676,14 +675,11 @@ describe("Git-backed SQLite snapshots", () => {
   });
 
   it("pushes backup-only ancestry to a new remote", async () => {
-    const root = await tempRoot();
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "backup-repository");
+    const { root, stateDir, database, repositoryPath } = await backupFixture("backup-repository");
     const remotePath = path.join(root, "remote.git");
     await requireGit(root, ["init", "--bare", remotePath]);
     await initializeGitBackupRepository({ repositoryPath, stateDir, remote: remotePath });
-    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
-    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
+    await configureGitIdentity(repositoryPath);
 
     const result = await createGitBackup({
       repositoryPath,
@@ -808,24 +804,25 @@ describe("Git-backed SQLite snapshots", () => {
       identity: { role: "global" },
       excludeSecrets: true,
     });
-    expect(manifest.excludedTables).toContain("device_auth_tokens");
-    expect(manifest.excludedTables).toContain("channel_pairing_requests");
-    expect(manifest.excludedTables).toContain("device_pairing_join_codes");
-    expect(manifest.tables).not.toHaveProperty("device_auth_tokens");
-    expect(manifest.tables).not.toHaveProperty("channel_pairing_requests");
-    expect(manifest.tables).not.toHaveProperty("device_pairing_join_codes");
-    expect(manifest.tables).not.toHaveProperty("session_transcript_index_state");
-    expect(manifest.tables).not.toHaveProperty("session_transcript_fts_rows");
-    await expect(
-      fs.lstat(path.join(dump, "tables", "channel_pairing_requests.jsonl")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.lstat(path.join(dump, "tables", "device_pairing_join_codes.jsonl")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    const secretTables = [
+      "device_auth_tokens",
+      "channel_pairing_requests",
+      "device_pairing_join_codes",
+    ];
     const schema = await fs.readFile(path.join(dump, "schema.sql"), "utf8");
-    expect(schema).not.toContain("device_auth_tokens");
-    expect(schema).not.toContain("channel_pairing_requests");
-    expect(schema).not.toContain("device_pairing_join_codes");
+    for (const table of secretTables) {
+      expect(manifest.excludedTables).toContain(table);
+      expect(manifest.tables).not.toHaveProperty(table);
+      expect(schema).not.toContain(table);
+    }
+    for (const table of secretTables.slice(1)) {
+      await expect(fs.lstat(path.join(dump, "tables", `${table}.jsonl`))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+    for (const table of ["session_transcript_index_state", "session_transcript_fts_rows"]) {
+      expect(manifest.tables).not.toHaveProperty(table);
+    }
     const restored = await restoreGitBackupDirectory({
       sourcePath: dump,
       targetPath: path.join(root, "redacted.sqlite"),
@@ -836,29 +833,30 @@ describe("Git-backed SQLite snapshots", () => {
     if (process.platform !== "win32") {
       expect((await fs.stat(restored.targetPath)).mode & 0o777).toBe(0o600);
     }
-    const restoredDatabase = new DatabaseSync(restored.targetPath, { readOnly: true });
-    try {
-      expect(
-        restoredDatabase
-          .prepare("SELECT rowid FROM content_fts WHERE content_fts MATCH 'lobster'")
-          .all(),
-      ).toEqual([{ rowid: 1 }]);
-      expect(
-        restoredDatabase
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('memory_vec', 'session_transcript_index_state')",
-          )
-          .all(),
-      ).toEqual([]);
-      expect(
-        restoredDatabase.prepare("SELECT COUNT(*) AS count FROM device_auth_tokens").get(),
-      ).toEqual({ count: 0 });
-      expect(
-        restoredDatabase.prepare("SELECT COUNT(*) AS count FROM channel_pairing_requests").get(),
-      ).toEqual({ count: 0 });
-    } finally {
-      restoredDatabase.close();
-    }
+    withDatabase(
+      restored.targetPath,
+      (restoredDatabase) => {
+        expect(
+          restoredDatabase
+            .prepare("SELECT rowid FROM content_fts WHERE content_fts MATCH 'lobster'")
+            .all(),
+        ).toEqual([{ rowid: 1 }]);
+        expect(
+          restoredDatabase
+            .prepare(
+              "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('memory_vec', 'session_transcript_index_state')",
+            )
+            .all(),
+        ).toEqual([]);
+        expect(
+          restoredDatabase.prepare("SELECT COUNT(*) AS count FROM device_auth_tokens").get(),
+        ).toEqual({ count: 0 });
+        expect(
+          restoredDatabase.prepare("SELECT COUNT(*) AS count FROM channel_pairing_requests").get(),
+        ).toEqual({ count: 0 });
+      },
+      { readOnly: true },
+    );
   });
 
   it("redacts secret machine-state keys while retaining ordinary machine state", async () => {
@@ -893,17 +891,13 @@ describe("Git-backed SQLite snapshots", () => {
       excludedConfigStateKeyPrefixes: ["authProfiles.", "nodeHost.", "webPush.vapidKeys"],
       tables: { config_machine_state: { rows: 1 } },
     });
-    expect(rows).toContain("sidebar.sectionOrder");
-    expect(rows).toContain("first");
-    expect(rows).not.toContain("nodeHost.");
-    expect(rows).not.toContain("webPush.vapidKeys");
-    expect(rows).not.toContain(nodeSecret);
-    expect(rows).not.toContain("authProfiles.");
-    expect(rows).not.toContain(authSecret);
-    expect(rows).not.toContain(pushSecret);
-    expect(manifestJson).not.toContain(nodeSecret);
-    expect(manifestJson).not.toContain(pushSecret);
-    expect(manifestJson).not.toContain(authSecret);
+    const secrets = [nodeSecret, pushSecret, authSecret];
+    expectText(
+      rows,
+      ["sidebar.sectionOrder", "first"],
+      ["nodeHost.", "webPush.vapidKeys", "authProfiles.", ...secrets],
+    );
+    expectText(manifestJson, [], secrets);
 
     const restoredPath = path.join(root, "restored.sqlite");
     const restored = await restoreGitBackupDirectory({
@@ -926,12 +920,9 @@ describe("Git-backed SQLite snapshots", () => {
     const dump = path.join(root, "dump");
     const restoredPath = path.join(root, "restored.sqlite");
     await createFormatFixture(source);
-    const database = new DatabaseSync(source);
-    try {
+    withDatabase(source, (database) => {
       database.exec("DROP TABLE schema_meta;");
-    } finally {
-      database.close();
-    }
+    });
     await dumpGitBackupDatabase({
       snapshotPath: source,
       outputPath: dump,

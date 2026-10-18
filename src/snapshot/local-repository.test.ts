@@ -76,6 +76,8 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
 
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
 
+// Restore filesystem spies before the fixture tracker removes their directories.
+afterEach(() => vi.restoreAllMocks());
 const { createTempDir, createGenericRepositoryFixture, createGenericSnapshotFixture } =
   useLocalRepositoryFixtures(afterEach);
 
@@ -106,6 +108,45 @@ async function refreshArtifactManifest(result: SnapshotResult): Promise<void> {
   }));
 }
 
+async function stagingFixture(id: string, mode = 0o700, sharedMode?: number) {
+  const { tempDir, sourcePath, repositoryPath } = await createGenericRepositoryFixture();
+  const sharedPath = path.join(tempDir, "shared");
+  const validationRootPath = path.join(sharedPath, "validation");
+  const restoreParentPath = path.join(sharedPath, "restore");
+  for (const directory of [validationRootPath, restoreParentPath]) {
+    await fs.mkdir(directory, { recursive: true, mode });
+    await fs.chmod(directory, mode);
+  }
+  if (sharedMode !== undefined) {
+    await fs.chmod(sharedPath, sharedMode);
+  }
+  const provider = createLocalSqliteSnapshotProvider({ repositoryPath, validationRootPath });
+  const snapshot = await createGenericSnapshot(provider, sourcePath, id);
+  return {
+    provider,
+    snapshot,
+    sharedPath,
+    validationRootPath,
+    restorePath: path.join(restoreParentPath, "source.sqlite"),
+  };
+}
+
+function readGlobalRows(file: string) {
+  return withDatabase(
+    file,
+    (database) => ({
+      queue: database.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
+      leases: database.prepare("SELECT COUNT(*) AS count FROM state_leases").get(),
+      blobs: database
+        .prepare(
+          "SELECT plugin_id, entry_key FROM plugin_blob_entries ORDER BY plugin_id, entry_key",
+        )
+        .all(),
+    }),
+    { readOnly: true },
+  );
+}
+
 describe("local SQLite snapshot repository", () => {
   it.runIf(process.platform !== "win32").each([
     { label: "000", mode: 0o000 },
@@ -132,7 +173,7 @@ describe("local SQLite snapshot repository", () => {
     const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
     const originalOpen = fs.open.bind(fs);
     let syncFailed = false;
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+    vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
       const handle = await originalOpen(filePath, flags, mode);
       if (!syncFailed && flags === "wx+" && path.basename(String(filePath)) === ".pending") {
         vi.spyOn(handle, "sync").mockImplementation(async () => {
@@ -143,11 +184,9 @@ describe("local SQLite snapshot repository", () => {
       return handle;
     });
 
-    await withRestoredSpies([openSpy], async () => {
-      await expect(
-        createGenericSnapshot(provider, sourcePath, "pending-sync-failure"),
-      ).rejects.toThrow(/pending sync failed/u);
-    });
+    await expect(
+      createGenericSnapshot(provider, sourcePath, "pending-sync-failure"),
+    ).rejects.toThrow(/pending sync failed/u);
     expect(syncFailed).toBe(true);
     await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });
@@ -169,7 +208,7 @@ describe("local SQLite snapshot repository", () => {
         }
       };
       const originalOpen = fs.open.bind(fs);
-      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
         const resolvedPath = path.resolve(String(filePath));
         const handle = await originalOpen(filePath, flags, mode);
         if (flags === "wx+" && path.basename(resolvedPath) === ".pending") {
@@ -183,29 +222,25 @@ describe("local SQLite snapshot repository", () => {
         return handle;
       });
       const publish = directoryDurability.publishFileExclusive;
-      const publicationSpy = vi
-        .spyOn(directoryDurability, "publishFileExclusive")
-        .mockImplementation(async (options) => {
-          if (snapshotDir && path.dirname(options.targetPath) === snapshotDir) {
-            events.push(`publish:${path.basename(options.targetPath)}`);
-          }
-          return await publish(options);
-        });
+      vi.spyOn(directoryDurability, "publishFileExclusive").mockImplementation(async (options) => {
+        if (snapshotDir && path.dirname(options.targetPath) === snapshotDir) {
+          events.push(`publish:${path.basename(options.targetPath)}`);
+        }
+        return await publish(options);
+      });
       const originalUnlink = fsSync.unlinkSync.bind(fsSync);
-      const unlinkSpy = vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
+      vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
         if (path.basename(String(filePath)) === ".pending") {
           events.push("pending-unlink");
         }
         originalUnlink(filePath);
       });
 
-      await withRestoredSpies([openSpy, publicationSpy, unlinkSpy], async () => {
-        try {
-          await createGenericSnapshot(provider, sourcePath, "publication-order");
-        } finally {
-          durabilityTestState.beforeSync = undefined;
-        }
-      });
+      try {
+        await createGenericSnapshot(provider, sourcePath, "publication-order");
+      } finally {
+        durabilityTestState.beforeSync = undefined;
+      }
 
       const pendingSync = events.indexOf("pending-sync");
       const repositorySync = events.indexOf("repository-sync");
@@ -488,26 +523,11 @@ describe("local SQLite snapshot repository", () => {
   ])(
     "rejects verification and restore staging with an untrusted $scope",
     async ({ scope, mode, error }) => {
-      const tempDir = await createTempDir();
-      const sourcePath = path.join(tempDir, "source.sqlite");
-      const repositoryPath = path.join(tempDir, "snapshots");
-      const sharedPath = path.join(tempDir, "shared");
-      const validationRootPath = path.join(sharedPath, "validation");
-      const restoreParentPath = path.join(sharedPath, "restore");
-      const restorePath = path.join(restoreParentPath, "source.sqlite");
-      createGenericDatabase(sourcePath);
-      await fs.mkdir(validationRootPath, { recursive: true, mode });
-      await fs.chmod(validationRootPath, mode);
-      await fs.mkdir(restoreParentPath, { mode });
-      await fs.chmod(restoreParentPath, mode);
-      if (scope === "ancestor") {
-        await fs.chmod(sharedPath, 0o777);
-      }
-      const provider = createLocalSqliteSnapshotProvider({
-        repositoryPath,
-        validationRootPath,
-      });
-      const snapshot = await createGenericSnapshot(provider, sourcePath, "replaceable-ancestor");
+      const { provider, snapshot, restorePath } = await stagingFixture(
+        "replaceable-ancestor",
+        mode,
+        scope === "ancestor" ? 0o777 : undefined,
+      );
 
       await expect(provider.verify(snapshot.ref)).rejects.toThrow(error);
       await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(error);
@@ -518,20 +538,11 @@ describe("local SQLite snapshot repository", () => {
   it.runIf(process.platform !== "win32")(
     "rejects sticky staging ancestors owned by another user",
     async () => {
-      const tempDir = await createTempDir();
-      const sourcePath = path.join(tempDir, "source.sqlite");
-      const repositoryPath = path.join(tempDir, "snapshots");
-      const sharedPath = path.join(tempDir, "shared");
-      const validationRootPath = path.join(sharedPath, "validation");
-      createGenericDatabase(sourcePath);
-      await fs.mkdir(validationRootPath, { recursive: true, mode: 0o700 });
-      await fs.chmod(validationRootPath, 0o700);
-      await fs.chmod(sharedPath, 0o1777);
-      const provider = createLocalSqliteSnapshotProvider({
-        repositoryPath,
-        validationRootPath,
-      });
-      const snapshot = await createGenericSnapshot(provider, sourcePath, "untrusted-sticky-owner");
+      const { provider, snapshot, sharedPath } = await stagingFixture(
+        "untrusted-sticky-owner",
+        0o700,
+        0o1777,
+      );
       const canonicalSharedPath = await fs.realpath(sharedPath);
       const originalLstat = fs.lstat.bind(fs);
       const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
@@ -572,19 +583,8 @@ describe("local SQLite snapshot repository", () => {
   it.runIf(process.platform === "darwin")(
     "rejects granting macOS ACLs on private roots, ancestors, and staging directories",
     async () => {
-      const tempDir = await createTempDir();
-      const sourcePath = path.join(tempDir, "source.sqlite");
-      const repositoryPath = path.join(tempDir, "snapshots");
-      const sharedPath = path.join(tempDir, "shared");
-      const validationRootPath = path.join(sharedPath, "validation");
-      createGenericDatabase(sourcePath);
-      await fs.mkdir(validationRootPath, { recursive: true, mode: 0o700 });
-      await fs.chmod(validationRootPath, 0o700);
-      const provider = createLocalSqliteSnapshotProvider({
-        repositoryPath,
-        validationRootPath,
-      });
-      const snapshot = await createGenericSnapshot(provider, sourcePath, "macos-acl");
+      const { provider, snapshot, sharedPath, validationRootPath } =
+        await stagingFixture("macos-acl");
 
       try {
         await runExec("/bin/chmod", [
@@ -719,7 +719,7 @@ describe("local SQLite snapshot repository", () => {
       });
       const originalMkdir = fs.mkdir.bind(fs);
       let racedPath: string | undefined;
-      const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (directoryPath, options) => {
+      vi.spyOn(fs, "mkdir").mockImplementation(async (directoryPath, options) => {
         const resolvedPath = path.resolve(String(directoryPath));
         if (
           path.basename(path.dirname(resolvedPath)) === path.basename(repositoryPath) &&
@@ -732,11 +732,9 @@ describe("local SQLite snapshot repository", () => {
         return await originalMkdir(directoryPath, options);
       });
 
-      await withRestoredSpies([mkdirSpy], async () => {
-        await expect(createGenericSnapshot(provider, sourcePath, "directory-race")).rejects.toThrow(
-          /directory already exists/u,
-        );
-      });
+      await expect(createGenericSnapshot(provider, sourcePath, "directory-race")).rejects.toThrow(
+        /directory already exists/u,
+      );
       expect(racedPath).toBeDefined();
       await expect(fs.readFile(path.join(racedPath!, "keep"), "utf8")).resolves.toBe("racer");
     },
@@ -745,35 +743,31 @@ describe("local SQLite snapshot repository", () => {
   it("rejects an artifact changed after entering the final directory", async () => {
     const { provider, sourcePath } = await createGenericRepositoryFixture();
     const publish = directoryDurability.publishFileExclusive;
-    const publicationSpy = vi
-      .spyOn(directoryDurability, "publishFileExclusive")
-      .mockImplementation(async (options) => {
-        const published = await publish(options);
-        if (
-          path.basename(options.targetPath) === SNAPSHOT_MANIFEST_FILENAME &&
-          !path.basename(path.dirname(options.targetPath)).startsWith(".tmp-")
-        ) {
-          await fs.appendFile(
-            path.join(path.dirname(options.targetPath), SNAPSHOT_SQLITE_FILENAME),
-            "changed-after-final-move",
-          );
-        }
-        return published;
-      });
-
-    await withRestoredSpies([publicationSpy], async () => {
-      await expect(
-        createGenericSnapshot(provider, sourcePath, "final-directory-race"),
-      ).rejects.toThrow(/size mismatch/u);
-      await expect(provider.list()).resolves.toEqual([]);
+    vi.spyOn(directoryDurability, "publishFileExclusive").mockImplementation(async (options) => {
+      const published = await publish(options);
+      if (
+        path.basename(options.targetPath) === SNAPSHOT_MANIFEST_FILENAME &&
+        !path.basename(path.dirname(options.targetPath)).startsWith(".tmp-")
+      ) {
+        await fs.appendFile(
+          path.join(path.dirname(options.targetPath), SNAPSHOT_SQLITE_FILENAME),
+          "changed-after-final-move",
+        );
+      }
+      return published;
     });
+
+    await expect(
+      createGenericSnapshot(provider, sourcePath, "final-directory-race"),
+    ).rejects.toThrow(/size mismatch/u);
+    await expect(provider.list()).resolves.toEqual([]);
   });
 
   it("rejects an artifact changed after removing the commit marker", async () => {
     const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
     const originalUnlink = fsSync.unlinkSync.bind(fsSync);
     let mutated = false;
-    const unlinkSpy = vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
+    vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
       originalUnlink(filePath);
       if (!mutated && path.basename(String(filePath)) === ".pending") {
         fsSync.appendFileSync(
@@ -784,11 +778,9 @@ describe("local SQLite snapshot repository", () => {
       }
     });
 
-    await withRestoredSpies([unlinkSpy], async () => {
-      await expect(
-        createGenericSnapshot(provider, sourcePath, "post-commit-artifact-race"),
-      ).rejects.toThrow(/size mismatch/u);
-    });
+    await expect(
+      createGenericSnapshot(provider, sourcePath, "post-commit-artifact-race"),
+    ).rejects.toThrow(/size mismatch/u);
     expect(mutated).toBe(true);
     await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });
@@ -799,7 +791,7 @@ describe("local SQLite snapshot repository", () => {
       const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
       const originalUnlink = fsSync.unlinkSync.bind(fsSync);
       let raced = false;
-      const unlinkSpy = vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
+      vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
         if (raced || path.basename(String(filePath)) !== ".pending") {
           originalUnlink(filePath);
           return;
@@ -815,11 +807,9 @@ describe("local SQLite snapshot repository", () => {
         raced = true;
       });
 
-      await withRestoredSpies([unlinkSpy], async () => {
-        await expect(
-          createGenericSnapshot(provider, sourcePath, "post-commit-directory-race"),
-        ).rejects.toThrow(/unexpected entry/u);
-      });
+      await expect(
+        createGenericSnapshot(provider, sourcePath, "post-commit-directory-race"),
+      ).rejects.toThrow(/unexpected entry/u);
       expect(raced).toBe(true);
       await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
     },
@@ -831,45 +821,41 @@ describe("local SQLite snapshot repository", () => {
       const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
       const publish = directoryDurability.publishFileExclusive;
       let raced = false;
-      const publicationSpy = vi
-        .spyOn(directoryDurability, "publishFileExclusive")
-        .mockImplementation(async (options) => {
-          const replaceStaging = async () => {
-            if (
-              !raced &&
-              path.basename(options.targetPath) === SNAPSHOT_SQLITE_FILENAME &&
-              path.dirname(path.dirname(options.targetPath)) ===
-                (await fs.realpath(repositoryPath)) &&
-              !path.basename(path.dirname(options.targetPath)).startsWith(".tmp-")
-            ) {
-              await fs.unlink(options.sourcePath);
-              await fs.writeFile(options.sourcePath, "raced staging bytes");
-              raced = true;
-            }
-          };
-          if (phase === "before") {
-            // Keep the removed inode live so the replacement cannot reuse its identity.
-            const stagingHandle = await fs.open(options.sourcePath, "r");
-            try {
-              await replaceStaging();
-              return await publish(options);
-            } finally {
-              await stagingHandle.close();
-            }
+      vi.spyOn(directoryDurability, "publishFileExclusive").mockImplementation(async (options) => {
+        const replaceStaging = async () => {
+          if (
+            !raced &&
+            path.basename(options.targetPath) === SNAPSHOT_SQLITE_FILENAME &&
+            path.dirname(path.dirname(options.targetPath)) ===
+              (await fs.realpath(repositoryPath)) &&
+            !path.basename(path.dirname(options.targetPath)).startsWith(".tmp-")
+          ) {
+            await fs.unlink(options.sourcePath);
+            await fs.writeFile(options.sourcePath, "raced staging bytes");
+            raced = true;
           }
-          const published = await publish(options);
-          await replaceStaging();
-          return published;
-        });
-
-      await withRestoredSpies([publicationSpy], async () => {
-        await expect(
-          createGenericSnapshot(provider, sourcePath, "replaced-entry-staging"),
-        ).rejects.toThrow(/publication|staging|target/u);
-        expect(raced).toBe(true);
-        await expect(provider.list()).resolves.toEqual([]);
-        await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+        };
+        if (phase === "before") {
+          // Keep the removed inode live so the replacement cannot reuse its identity.
+          const stagingHandle = await fs.open(options.sourcePath, "r");
+          try {
+            await replaceStaging();
+            return await publish(options);
+          } finally {
+            await stagingHandle.close();
+          }
+        }
+        const published = await publish(options);
+        await replaceStaging();
+        return published;
       });
+
+      await expect(
+        createGenericSnapshot(provider, sourcePath, "replaced-entry-staging"),
+      ).rejects.toThrow(/publication|staging|target/u);
+      expect(raced).toBe(true);
+      await expect(provider.list()).resolves.toEqual([]);
+      await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
     },
   );
 
@@ -877,25 +863,21 @@ describe("local SQLite snapshot repository", () => {
     const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
     const publish = directoryDurability.publishFileExclusive;
     let racedPath: string | undefined;
-    const publicationSpy = vi
-      .spyOn(directoryDurability, "publishFileExclusive")
-      .mockImplementation(async (options) => {
-        const targetPath = path.resolve(options.targetPath);
-        if (
-          path.basename(targetPath) === SNAPSHOT_SQLITE_FILENAME &&
-          path.dirname(path.dirname(targetPath)) === (await fs.realpath(repositoryPath)) &&
-          !path.basename(path.dirname(targetPath)).startsWith(".tmp-")
-        ) {
-          racedPath = targetPath;
-          await fs.writeFile(targetPath, "racer", { flag: "wx" });
-        }
-        return await publish(options);
-      });
+    vi.spyOn(directoryDurability, "publishFileExclusive").mockImplementation(async (options) => {
+      const targetPath = path.resolve(options.targetPath);
+      if (
+        path.basename(targetPath) === SNAPSHOT_SQLITE_FILENAME &&
+        path.dirname(path.dirname(targetPath)) === (await fs.realpath(repositoryPath)) &&
+        !path.basename(path.dirname(targetPath)).startsWith(".tmp-")
+      ) {
+        racedPath = targetPath;
+        await fs.writeFile(targetPath, "racer", { flag: "wx" });
+      }
+      return await publish(options);
+    });
 
-    await withRestoredSpies([publicationSpy], async () => {
-      await expect(createGenericSnapshot(provider, sourcePath, "entry-race")).rejects.toMatchObject(
-        { code: "EEXIST" },
-      );
+    await expect(createGenericSnapshot(provider, sourcePath, "entry-race")).rejects.toMatchObject({
+      code: "EEXIST",
     });
     expect(racedPath).toBeDefined();
     await expect(fs.readFile(racedPath!, "utf8")).resolves.toBe("racer");
@@ -919,50 +901,19 @@ describe("local SQLite snapshot repository", () => {
     expect(artifactBytes.includes(TRANSIENT_PLUGIN_BLOB_MARKER)).toBe(false);
     expect(artifactBytes.includes(DURABLE_PLUGIN_BLOB_MARKER)).toBe(true);
     expect(artifactBytes.includes(STATE_LEASE_MARKER)).toBe(false);
-    withDatabase(
-      artifactPath,
-      (artifact) => {
-        expect(
-          artifact.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
-        ).toEqual({ count: 0 });
-        expect(
-          artifact
-            .prepare(
-              "SELECT plugin_id, entry_key FROM plugin_blob_entries ORDER BY plugin_id, entry_key",
-            )
-            .all(),
-        ).toEqual([{ plugin_id: "durable-plugin", entry_key: "durable" }]);
-        expect(artifact.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
-          count: 0,
-        });
-      },
-      { readOnly: true },
-    );
-
-    withDatabase(
-      sourcePath,
-      (source) => {
-        expect(
-          source.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
-        ).toEqual({
-          count: 1,
-        });
-        expect(
-          source
-            .prepare(
-              "SELECT plugin_id, entry_key FROM plugin_blob_entries ORDER BY plugin_id, entry_key",
-            )
-            .all(),
-        ).toEqual([
-          { plugin_id: "diffs", entry_key: "transient" },
-          { plugin_id: "durable-plugin", entry_key: "durable" },
-        ]);
-        expect(source.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
-          count: 1,
-        });
-      },
-      { readOnly: true },
-    );
+    expect(readGlobalRows(artifactPath)).toEqual({
+      queue: { count: 0 },
+      leases: { count: 0 },
+      blobs: [{ plugin_id: "durable-plugin", entry_key: "durable" }],
+    });
+    expect(readGlobalRows(sourcePath)).toEqual({
+      queue: { count: 1 },
+      leases: { count: 1 },
+      blobs: [
+        { plugin_id: "diffs", entry_key: "transient" },
+        { plugin_id: "durable-plugin", entry_key: "durable" },
+      ],
+    });
 
     const wrongRolePath = path.join(tempDir, "wrong-role.sqlite");
     createAgentDatabase(wrongRolePath, "main");
@@ -1077,7 +1028,7 @@ describe("local SQLite snapshot repository", () => {
       );
       const originalRealpath = fs.realpath.bind(fs);
       let redirected = false;
-      const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
+      vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
         const pathname = path.resolve(String(args[0]));
         if (!redirected && pathname === canonicalRestoreParentPath) {
           redirected = true;
@@ -1087,11 +1038,9 @@ describe("local SQLite snapshot repository", () => {
         return await originalRealpath(...args);
       });
 
-      await withRestoredSpies([realpathSpy], async () => {
-        await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-          /restore target changed|outside snapshot repository|must be a real directory|not a directory/u,
-        );
-      });
+      await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
+        /restore target changed|outside snapshot repository|must be a real directory|not a directory/u,
+      );
       expect(redirected).toBe(true);
       await expectMissing(path.join(snapshot.ref.path, path.basename(restorePath)));
     },
@@ -1104,7 +1053,7 @@ describe("local SQLite snapshot repository", () => {
         await createGenericSnapshotFixture("verified-bytes");
       const artifactPath = path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME);
       const originalOpen = fs.open.bind(fs);
-      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
         const handle = await originalOpen(filePath, flags, mode);
         if (
           flags === "wx+" &&
@@ -1118,12 +1067,10 @@ describe("local SQLite snapshot repository", () => {
         return handle;
       });
 
-      await withRestoredSpies([openSpy], async () => {
-        await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-          /hash mismatch|size mismatch/u,
-        );
-        await expectMissing(restorePath);
-      });
+      await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
+        /hash mismatch|size mismatch/u,
+      );
+      await expectMissing(restorePath);
     },
   );
 
@@ -1135,7 +1082,7 @@ describe("local SQLite snapshot repository", () => {
         { database: { values: ["original"] } },
       );
       const originalOpen = fs.open.bind(fs);
-      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
         if (
           flags === "wx+" &&
           path.basename(path.dirname(String(filePath))).startsWith(".sqlite-publish-")
@@ -1158,14 +1105,12 @@ describe("local SQLite snapshot repository", () => {
       });
 
       let restored = false;
-      await withRestoredSpies([openSpy], async () => {
-        try {
-          await provider.restoreFresh(snapshot.ref, restorePath);
-          restored = true;
-        } catch (error) {
-          expect(String(error)).toMatch(/file changed while reading/u);
-        }
-      });
+      try {
+        await provider.restoreFresh(snapshot.ref, restorePath);
+        restored = true;
+      } catch (error) {
+        expect(String(error)).toMatch(/file changed while reading/u);
+      }
       if (!restored) {
         await expectMissing(restorePath);
         return;
@@ -1185,23 +1130,19 @@ describe("local SQLite snapshot repository", () => {
         "source.sqlite",
       );
       const publish = directoryDurability.publishFileExclusive;
-      const publicationSpy = vi
-        .spyOn(directoryDurability, "publishFileExclusive")
-        .mockImplementation(async (options) => {
-          const published = await publish(options);
-          if (path.resolve(options.targetPath) === canonicalRestorePath) {
-            await fs.writeFile(`${canonicalRestorePath}-wal`, "racer");
-          }
-          return published;
-        });
-
-      await withRestoredSpies([publicationSpy], async () => {
-        await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-          /unexpected sidecar/u,
-        );
-        await expectMissing(restorePath);
-        await expect(fs.readFile(`${restorePath}-wal`, "utf8")).resolves.toBe("racer");
+      vi.spyOn(directoryDurability, "publishFileExclusive").mockImplementation(async (options) => {
+        const published = await publish(options);
+        if (path.resolve(options.targetPath) === canonicalRestorePath) {
+          await fs.writeFile(`${canonicalRestorePath}-wal`, "racer");
+        }
+        return published;
       });
+
+      await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
+        /unexpected sidecar/u,
+      );
+      await expectMissing(restorePath);
+      await expect(fs.readFile(`${restorePath}-wal`, "utf8")).resolves.toBe("racer");
     },
   );
 
