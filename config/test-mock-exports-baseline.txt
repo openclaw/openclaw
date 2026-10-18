@@ -5758,7 +5758,6 @@
 ["src/daemon/systemd-definition-mutation.test.ts","./exec-file.js","0f8dffbd598dd442ef78d5b622d1de67888a08719bd495c9ba12e07adac73188",1]
 ["src/daemon/systemd-install-rollback.test.ts","./systemd-scope.js","e16865e56d4b3ec1d4be534d248c85b80e2279cec40a3b85a72f029c6e8fa746",1]
 ["src/daemon/systemd-loaded-runtime.test.ts","./systemd-scope.js","609230c70ed6f961bbf06ea94937d912a15da4892a535af49972ee1f746f5aa6",1]
-["src/daemon/systemd-loaded-unit-inventory.test.ts","./systemd-exec.js","f2f684e3d9eeef67ef9787b1069bbc708d729bb44dc4bd656ec3410609de055e",1]
 ["src/daemon/systemd-peer-native.test.ts","../shared/pid-alive.js","73d8de8ee82833aa9e6844d1ca47aaa07e1fe1a2cf5076cff22d808db7ac2b1d",1]
 ["src/daemon/systemd-peer.test.ts","../shared/pid-alive.js","c51ac74e8cd18e8ec68cbc3fae504733e9256717f62eb490cdd1228ba70e00d3",1]
 ["src/daemon/systemd-peer.test.ts","./exec-file.js","0f8dffbd598dd442ef78d5b622d1de67888a08719bd495c9ba12e07adac73188",1]
