@@ -55,6 +55,16 @@ export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
+  if (
+    moduleIdIncludesPackage(id, "@solidjs/signals") ||
+    moduleIdIncludesPackage(id, "solid-js") ||
+    moduleIdIncludesPackage(id, "@solidjs/web")
+  ) {
+    // Keep runtime initialization together; recursive route groups would pull
+    // deferred neighbors into startup when a new Solid feature becomes live.
+    return "control-ui-foundation";
+  }
+
   switch (controlUiBootManifestKey(id)) {
     case "ui/src/app/app-root-focus.ts":
     case "ui/src/app/app-root-focus-view.tsx":
