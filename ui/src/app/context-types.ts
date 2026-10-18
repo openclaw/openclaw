@@ -83,6 +83,11 @@ export type ApplicationNavigationOptions = Partial<
   Pick<RouteLocation, "pathname" | "search" | "hash">
 >;
 
+export type MountedApplicationShell = {
+  readonly element: HTMLElement;
+  readonly routeOutlet?: ControlUiReadinessOutlet;
+};
+
 type ChatAttachmentHandoffKey = {
   owner: ApplicationGateway["snapshot"]["client"];
   paneId: string;
