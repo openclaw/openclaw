@@ -13,9 +13,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { statusModelRefs } from "../status/status-message.test-support.js";
 import {
   buildStatusMessage,
+  configureCliBackend,
+  fallbackRoute,
   modelArgs,
   providerModels,
   statusContext,
@@ -33,18 +34,7 @@ const openrouterArgs = {
 function usage(input: number, output: number, cacheRead: number, totalTokens: number) {
   return { input, output, cacheRead, cacheWrite: 0, totalTokens };
 }
-beforeEach(() =>
-  cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: [],
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
-    resolveRuntimeCliBackends: () => [],
-  }),
-);
+beforeEach(() => configureCliBackend());
 afterEach(() => cliBackendsTesting.resetDepsForTest());
 
 async function buildTranscriptUsageStatusMessage(args: StatusTestArgs): Promise<string> {
@@ -82,13 +72,7 @@ describe("status transcript usage and model context", () => {
     agentId: string;
     sessionId: string;
     model?: string;
-    usage?: {
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      totalTokens: number;
-    };
+    usage?: ReturnType<typeof usage>;
   }) {
     const scope = {
       agentId: params.agentId,
@@ -151,58 +135,43 @@ describe("status transcript usage and model context", () => {
     });
   });
 
-  it("does not render stale context usage from transcript fallback", async () => {
+  it.each([
+    {
+      name: "does not render stale context usage from transcript fallback",
+      transcript: usage(3_800_000, 20_000, 0, 3_820_000),
+      entry: {
+        inputTokens: 3_800_000,
+        outputTokens: 20_000,
+        totalTokens: 3_800_000,
+        totalTokensFresh: false,
+      },
+      present: ["Context: ?/1.0m"],
+      absent: ["Context: 3.8m/1.0m", "Context: 3.82m/1.0m"],
+    },
+    {
+      name: "does not let legacy cumulative session totals override fresh transcript context usage",
+      transcript: usage(10_000, 1_000, 26_000, 36_000),
+      entry: {
+        inputTokens: 16,
+        outputTokens: 5_100,
+        cacheRead: 2_300_000,
+        cacheWrite: 11_000,
+        totalTokens: 2_300_000,
+      },
+      present: ["Cache: 100% hit · 2.3m cached, 11k new", "Context: 36k/1.0m (4%)"],
+      absent: ["Context: 2.3m/1.0m"],
+    },
+  ])("$name", async ({ transcript, entry, present, absent }) => {
     await withStatusHome(async () => {
-      const sessionId = "sess-stale-transcript-context";
-      writeTranscriptUsageLog({
-        agentId: "main",
-        sessionId,
-        usage: usage(3_800_000, 20_000, 0, 3_820_000),
-      });
-
-      const text = await buildTranscriptUsageStatusMessage({
-        sessionEntry: {
-          sessionId,
-          inputTokens: 3_800_000,
-          outputTokens: 20_000,
-          totalTokens: 3_800_000,
-          totalTokensFresh: false,
-          contextTokens: 1_000_000,
-        },
-      });
-      const normalized = normalizeTestText(text);
-
-      expect(normalized).toContain("Context: ?/1.0m");
-      expect(normalized).not.toContain("Context: 3.8m/1.0m");
-      expect(normalized).not.toContain("Context: 3.82m/1.0m");
-    });
-  });
-
-  it("does not let legacy cumulative session totals override fresh transcript context usage", async () => {
-    await withStatusHome(async () => {
-      const sessionId = "sess-legacy-cumulative-context";
-      writeTranscriptUsageLog({
-        agentId: "main",
-        sessionId,
-        usage: usage(10_000, 1_000, 26_000, 36_000),
-      });
-
-      const text = await buildTranscriptUsageStatusMessage({
-        sessionEntry: {
-          sessionId,
-          inputTokens: 16,
-          outputTokens: 5_100,
-          cacheRead: 2_300_000,
-          cacheWrite: 11_000,
-          totalTokens: 2_300_000,
-          contextTokens: 1_000_000,
-        },
-      });
-      const normalized = normalizeTestText(text);
-
-      expect(normalized).toContain("Cache: 100% hit · 2.3m cached, 11k new");
-      expect(normalized).toContain("Context: 36k/1.0m (4%)");
-      expect(normalized).not.toContain("Context: 2.3m/1.0m");
+      const sessionId = "transcript-context";
+      writeTranscriptUsageLog({ agentId: "main", sessionId, usage: transcript });
+      const text = normalizeTestText(
+        await buildTranscriptUsageStatusMessage({
+          sessionEntry: { sessionId, contextTokens: 1_000_000, ...entry },
+        }),
+      );
+      present.forEach((snippet) => expect(text).toContain(snippet));
+      absent.forEach((snippet) => expect(text).not.toContain(snippet));
     });
   });
 
@@ -278,28 +247,20 @@ describe("status transcript usage and model context", () => {
   });
 
   it("keeps provider-aware lookup for legacy fallback runtime slash ids", () => {
+    const route = fallbackRoute(
+      { provider: "xiaomi", model: "mimo-v2-flash" },
+      { provider: "fake-minimax", model: "FakeMiniMax-M2.5" },
+    );
     const text = buildStatusMessage({
-      modelRefs: statusModelRefs(
-        { provider: "xiaomi", model: "mimo-v2-flash" },
-        { provider: "fake-minimax", model: "FakeMiniMax-M2.5" },
-      ),
+      ...route,
       config: providerModels(
         ["fake-minimax", "FakeMiniMax-M2.5", { contextWindow: 777_000 }],
         ["xiaomi", "mimo-v2-flash", { contextWindow: 1_048_576 }],
       ),
-      agent: {
-        model: "xiaomi/mimo-v2-flash",
-      },
       sessionEntry: {
-        providerOverride: "xiaomi",
-        modelOverride: "mimo-v2-flash",
+        ...route.sessionEntry,
+        modelProvider: undefined,
         model: "fake-minimax/FakeMiniMax-M2.5",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "xiaomi/mimo-v2-flash",
-          activeModel: "fake-minimax/FakeMiniMax-M2.5",
-          reason: "model not allowed",
-        },
         totalTokens: 49_000,
         totalTokensFresh: true,
         totalTokensVersion: 1,

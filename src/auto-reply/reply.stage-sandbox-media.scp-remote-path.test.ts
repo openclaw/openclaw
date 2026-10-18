@@ -1,4 +1,3 @@
-/** Tests sandbox media staging for SCP remote-path inputs. */
 import fs from "node:fs/promises";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -61,16 +60,14 @@ function createRemoteStageParams(home: string) {
 
 function createRemoteContexts(remotePath: string) {
   const { ctx, sessionCtx } = createSandboxMediaContexts(remotePath);
-  ctx.Provider = "imessage";
-  ctx.MediaRemoteHost = "user@gateway-host";
-  sessionCtx.Provider = "imessage";
-  sessionCtx.MediaRemoteHost = "user@gateway-host";
+  const remote = { Provider: "imessage", MediaRemoteHost: "user@gateway-host" };
+  Object.assign(ctx, remote);
+  Object.assign(sessionCtx, remote);
   return { ctx, sessionCtx };
 }
 
-async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-}
+const expectPathMissing = (targetPath: string) =>
+  expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 
 function mockDownload() {
   processExecMocks.runCommandWithTimeout.mockImplementation(async (argv: string[]) => {
@@ -133,14 +130,12 @@ describe("stageSandboxMedia scp remote paths", () => {
 
       const command = processExecMocks.runCommandWithTimeout.mock.calls[0]?.[0];
       expect(command).toEqual(expect.arrayContaining(["scp"]));
-      const remoteCacheRoot = join(CONFIG_DIR, "media", "remote-cache");
-      const expectedSafeDir = join(remoteCacheRoot, slugifySessionKey(sessionKey));
+      const cacheDir = join(CONFIG_DIR, "media", "remote-cache", slugifySessionKey(sessionKey));
       try {
-        const safeDirStats = await fs.stat(expectedSafeDir);
-        expect(safeDirStats.isDirectory()).toBe(true);
+        expect((await fs.stat(cacheDir)).isDirectory()).toBe(true);
         await expectPathMissing(join(CONFIG_DIR, "escape"));
       } finally {
-        await fs.rm(expectedSafeDir, { recursive: true, force: true });
+        await fs.rm(cacheDir, { recursive: true, force: true });
       }
     });
   });
