@@ -129,10 +129,12 @@ const loadCommandPollBackoffRuntime = createLazyRuntimeModule(
 async function recoverStuckSession(
   params: StuckSessionRecoveryRequest,
 ): Promise<StuckSessionRecoveryOutcome> {
+  // Runtime loading can outlive the diagnostic alias used by an ID-only request.
+  const incognito = isIncognitoDiagnosticSession(params);
   return loadStuckSessionRecoveryRuntime()
     .then(({ recoverStuckDiagnosticSession }) => recoverStuckDiagnosticSession(params))
     .catch((err: unknown) => {
-      if (!isIncognitoDiagnosticSession(params)) {
+      if (!incognito) {
         diag.warn(`stuck session recovery unavailable: ${String(err)}`);
       }
       return {
