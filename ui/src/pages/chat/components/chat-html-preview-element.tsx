@@ -2,7 +2,7 @@ import type {
   CanvasDocumentViewResult,
   SessionsFilesAssetsResult,
 } from "@openclaw/gateway-protocol";
-import { Show, createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { Errored, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveSandboxHostUrl } from "../../../components/sandbox-host.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
@@ -51,19 +51,14 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
   (props, host) => {
     const context = useApplication();
     const gateway = context && projectGateway(context.gateway);
-    const [view, setView] = createSignal<PreviewView>();
-    const [error, setError] = createSignal("");
     const [retry, setRetry] = createSignal(0);
-    const frameMode = createMemo(() => props.embedSandboxMode);
     let binding: PreviewBinding | undefined;
     let sandboxHost: WidgetSandboxHost | undefined;
     let frameGeneration = 0;
-    let disposed = false;
 
     const isCurrent = (candidate: PreviewBinding | undefined): candidate is PreviewBinding =>
       Boolean(
         candidate &&
-        !disposed &&
         host.isConnected &&
         binding === candidate &&
         context?.gateway.snapshot.phase === "connected" &&
@@ -76,71 +71,23 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
         candidate.sessionFileSource?.path === host.sessionFileSource?.path,
       );
 
-    // Bind the external preview RPC to the live Gateway and document identity.
-    createEffect(
-      () => [
-        props.html,
-        props.sourceIdentity,
-        props.sessionFileSource?.sessionKey,
-        props.sessionFileSource?.agentId,
-        props.sessionFileSource?.path,
-        gateway?.read(),
-        retry(),
-      ],
+    const sourceInput = createMemo(
       () => {
-        if (isCurrent(binding)) {
-          return;
-        }
-        sandboxHost?.dispose();
-        sandboxHost = undefined;
-        binding = undefined;
-        setView(undefined);
-        const client = context?.gateway.snapshot.client;
-        if (!context || !client || context.gateway.snapshot.phase !== "connected") {
-          setError(t("chat.attachments.previewUnavailable"));
-          return;
-        }
-        const current: PreviewBinding = {
-          client,
-          html: host.html,
-          sourceIdentity: host.sourceIdentity,
-          sessionFileSource: host.sessionFileSource && { ...host.sessionFileSource },
-          generation: getCanvasWidgetFrameConnectionGeneration(),
-        };
-        binding = current;
-        setError("");
-        void client
-          .request<CanvasDocumentViewResult>(
-            "canvas.document.preview",
-            { html: current.html },
-            { timeoutMs: WIDGET_LOAD_TIMEOUT_MS },
-          )
-          .then((document) => {
-            if (!isCurrent(current)) {
-              return;
-            }
-            const url = resolveSandboxHostUrl(
-              document.sandboxUrl,
-              document.sandboxPort,
-              document.sandboxOrigin,
-              context.gateway.connection.gatewayUrl,
-              window.location.origin,
-            );
-            setView({ document, binding: current, url, origin: new URL(url).origin });
-          })
-          .catch((reason: unknown) => {
-            if (isCurrent(current)) {
-              setError(formatUiError(reason));
-            }
-          });
+        const snapshot = gateway?.read().snapshot;
+        return [
+          props.html,
+          props.sourceIdentity,
+          props.sessionFileSource?.sessionKey,
+          props.sessionFileSource?.agentId,
+          props.sessionFileSource?.path,
+          snapshot?.client,
+          snapshot?.phase === "connected",
+          getCanvasWidgetFrameConnectionGeneration(),
+          retry(),
+        ] as const;
       },
+      { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
     );
-    onCleanup(() => {
-      disposed = true;
-      binding = undefined;
-      sandboxHost?.dispose();
-      sandboxHost = undefined;
-    });
 
     const ErrorNotice = (notice: { message: string }) => (
       <div class="chat-html-preview__error" role="alert">
@@ -215,7 +162,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
             }
           },
           onError: fail,
-          // Only Retry creates another transport after an unavailable proxy or render timeout.
+          // A failed frame stays terminal until Retry or a mode change.
           onReadyTimeout: () => fail(new Error(t("board.widget.sandboxUnavailable"))),
         });
         sandboxHost = transport;
@@ -259,15 +206,69 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
       );
     };
 
+    const renderDocument = (_input: ReturnType<typeof sourceInput>) => {
+      const client = context?.gateway.snapshot.client;
+      if (!context || !client || context.gateway.snapshot.phase !== "connected") {
+        binding = undefined;
+        return <ErrorNotice message={t("chat.attachments.previewUnavailable")} />;
+      }
+      const current: PreviewBinding = {
+        client,
+        html: host.html,
+        sourceIdentity: host.sourceIdentity,
+        sessionFileSource: host.sessionFileSource && { ...host.sessionFileSource },
+        generation: getCanvasWidgetFrameConnectionGeneration(),
+      };
+      binding = current;
+      onCleanup(() => {
+        if (binding === current) {
+          binding = undefined;
+        }
+      });
+      const view = createMemo<PreviewView | undefined>(
+        async () => {
+          try {
+            const document = await client.request<CanvasDocumentViewResult>(
+              "canvas.document.preview",
+              { html: current.html },
+              { timeoutMs: WIDGET_LOAD_TIMEOUT_MS },
+            );
+            if (!isCurrent(current)) {
+              return undefined;
+            }
+            const url = resolveSandboxHostUrl(
+              document.sandboxUrl,
+              document.sandboxPort,
+              document.sandboxOrigin,
+              context.gateway.connection.gatewayUrl,
+              window.location.origin,
+            );
+            return { document, binding: current, url, origin: new URL(url).origin };
+          } catch (reason) {
+            if (isCurrent(current)) {
+              throw reason;
+            }
+            return undefined;
+          }
+        },
+        { loadingValue: undefined },
+      );
+      return (
+        <Errored fallback={(reason) => <ErrorNotice message={formatUiError(reason())} />}>
+          <Show when={view()} keyed fallback={<div role="status">{t("common.loading")}</div>}>
+            {(preview) => (
+              <Show when={props.embedSandboxMode} keyed>
+                {(mode) => renderFrame(preview, mode)}
+              </Show>
+            )}
+          </Show>
+        </Errored>
+      );
+    };
+
     return (
-      <Show when={!error()} fallback={<ErrorNotice message={error()} />}>
-        <Show when={view()} keyed fallback={<div role="status">{t("common.loading")}</div>}>
-          {(preview) => (
-            <Show when={frameMode()} keyed>
-              {(mode) => renderFrame(preview, mode)}
-            </Show>
-          )}
-        </Show>
+      <Show when={sourceInput()} keyed>
+        {renderDocument}
       </Show>
     );
   },
