@@ -245,50 +245,79 @@ suite.define(() => {
     },
   );
 
-  it("keeps system chrome and mounted routing when the shell is reparented", async () => {
+  it("keeps system chrome with the mounted route across shell and viewport lifecycles", async () => {
     const { page } = await openThemedChat("claw", "light");
     await page.setViewportSize({ width: 720, height: 900 });
     await page.goto(`${suite.server.baseUrl}chat`);
-    await waitForComposer(page);
+    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
 
-    const expectChrome = (color: string) =>
-      expect
-        .poll(() =>
-          page.evaluate(() => [
-            document.documentElement.style.getPropertyValue(
-              "--control-ui-system-chrome-background",
-            ),
-            ...Array.from(
-              document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'),
-              (meta) => [meta.content, meta.getAttribute("media")],
-            ),
-          ]),
-        )
-        .toEqual([color, [color, null], [color, null]]);
+    const readChrome = () =>
+      page.evaluate(() => ({
+        color: document.documentElement.style.getPropertyValue(
+          "--control-ui-system-chrome-background",
+        ),
+        metas: Array.from(
+          document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'),
+          (meta) => ({ color: meta.content, media: meta.getAttribute("media") }),
+        ),
+      }));
+    const expectChrome = async (color: string) => {
+      await expect.poll(readChrome).toEqual({
+        color,
+        metas: [
+          { color, media: null },
+          { color, media: null },
+        ],
+      });
+    };
     const pageColor = "#faf9f7";
     const chatColor = "#f4f1ec";
     await expectChrome(chatColor);
 
-    // Boot continuity covers viewport/route transitions; this case owns reparenting.
+    // Use the shell's actual shortcut and browser history without rebuilding the runtime.
+    await page.locator(".shell-skip-link").focus();
+    await page.keyboard.press("ControlOrMeta+Shift+,");
+    await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
+    await expectChrome(pageColor);
+    await page.goBack();
+    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await expectChrome(chatColor);
     await page.locator(".chat-pane__nav-toggle").first().click();
     await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
     await page.locator(".new-session-page__message").waitFor();
     await expectChrome(chatColor);
 
+    for (const [width, height, color] of [
+      [1280, 900, pageColor],
+      [900, 450, chatColor],
+      [900, 900, pageColor],
+      [720, 900, chatColor],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      await expectChrome(color);
+    }
+
+    // Reparenting a plain Solid host keeps its mounted root and route alive.
     const reconnect = await page.locator("openclaw-app-shell").evaluate((element) => {
       const shell = element;
       const parent = shell.parentNode!;
       const next = shell.nextSibling;
       const color = () =>
         document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background");
-      shell.remove();
-      const removed = color();
-      parent.insertBefore(shell, next);
-      return {
-        removed,
-        reconnected: color(),
-        sameShell: document.querySelector("openclaw-app-shell") === shell,
-      };
+      try {
+        shell.remove();
+        const removed = color();
+        parent.insertBefore(shell, next);
+        return {
+          removed,
+          reconnected: color(),
+          sameShell: document.querySelector("openclaw-app-shell") === shell,
+        };
+      } finally {
+        if (!shell.isConnected) {
+          parent.insertBefore(shell, next);
+        }
+      }
     });
     expect(reconnect).toEqual({ removed: chatColor, reconnected: chatColor, sameShell: true });
     await expectChrome(chatColor);
