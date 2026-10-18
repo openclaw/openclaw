@@ -8,7 +8,7 @@ import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { formatGitHubItemReference } from "../../../components/github-link-target.ts";
 import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu } from "../../../components/solid/menu.tsx";
+import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import "../../../components/tooltip.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
@@ -19,39 +19,26 @@ import {
   sessionPullRequestStateIcons,
 } from "../../../lib/session-pull-request-presentation.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
+import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { GitHubPublicationAction, GitHubPublicationDetails } from "./chat-github-publication.tsx";
+import { PullRequestActions } from "./chat-pull-request-actions.tsx";
 import { ChatPullRequestChecks } from "./chat-pull-request-checks.tsx";
+import {
+  ChecksRow,
+  StatusWarning,
+  STATE_LABEL_KEYS,
+  type ChatPullRequestsProps,
+} from "./chat-pull-request-shared.tsx";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
 import "./chat-ci-details.ts";
 import "./chat-ci-automation-control.ts";
+import "./chat-pull-request-presenters.css";
+
+export { type ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 
 registerGitHubEnglish();
 
-export type ChatPullRequestsProps = {
-  pullRequests: ControlUiSessionPullRequest[];
-  gateway?: ApplicationGateway;
-  sessionKey?: string;
-  sessionId?: string;
-  presented?: PresentationValue;
-  dismissed?: boolean;
-  branch?: ControlUiSessionBranch;
-  /** Hides the branch row and its idle publish offer; retained publication outcomes stay visible. */
-  branchDismissed?: boolean;
-  status: ControlUiSessionPullRequestSnapshot["status"];
-  onDismiss: (pullRequest: ControlUiSessionPullRequest) => void;
-  onDismissBranch?: (branch: ControlUiSessionBranch) => void;
-  onOpenSessionDiff?: () => void;
-  publication?: GitHubPublicationView;
-  /** Compact row in the user-opened Details surface; actions keep their owners. */
-  compact?: boolean;
-};
-const STATE_LABEL_KEYS = {
-  merged: "chat.pullRequests.merged",
-  draft: "chat.pullRequests.draft",
-  closed: "chat.pullRequests.closed",
-  open: "chat.pullRequests.open",
-} as const;
 const CHECK_LABEL_KEYS = {
   passing: "chat.pullRequests.checksPassing",
   failing: "chat.pullRequests.checksFailing",
@@ -82,18 +69,6 @@ export function hasChatPullRequests(props: ChatPullRequestsProps): boolean {
   return props.pullRequests.length > 0 || showWorkRow(props);
 }
 
-function ChecksRow(props: { label: string; count: number; modifier: string }) {
-  return (
-    <Show when={props.count !== 0}>
-      <div class={["chat-pr__checks-row", `chat-pr__checks-row--${props.modifier}`]}>
-        <span class="chat-pr__checks-row-dot" aria-hidden="true" />
-        <span class="chat-pr__checks-row-label">{props.label}</span>
-        <span class="chat-pr__checks-row-count">{props.count}</span>
-      </div>
-    </Show>
-  );
-}
-
 function Checks(props: {
   pullRequest: ControlUiSessionPullRequest;
   compact?: boolean;
@@ -111,6 +86,63 @@ function Checks(props: {
   const parentPresented = useContext(ContentPresentation);
   const presentation = createMemo(() => projectPresentation(props.presented ?? true));
   const presented = () => parentPresented() && presentation().read();
+  const content = () => (
+    <div class="chat-pr__checks-menu" role="group" aria-label={t("chat.pullRequests.ciMonitoring")}>
+      <div class="chat-pr__checks-menu-header">
+        <span>{t("chat.pullRequests.ciMonitoring")}</span>
+        <Show when={props.pullRequest.checksUrl}>
+          {(url) => (
+            <a
+              href={url()}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={t("chat.pullRequests.openChecks")}
+            >
+              <Icon name="externalLink" />
+            </a>
+          )}
+        </Show>
+      </div>
+      <div class="chat-pr__checks-counts">
+        <ChecksRow
+          label={t("chat.pullRequests.checksFailed")}
+          count={checks()?.failed ?? 0}
+          modifier="failed"
+        />
+        <ChecksRow
+          label={t("chat.pullRequests.checksPassed")}
+          count={checks()?.passed ?? 0}
+          modifier="passed"
+        />
+        <ChecksRow
+          label={t("chat.pullRequests.checksRunning")}
+          count={checks()?.running ?? 0}
+          modifier="running"
+        />
+        <ChecksRow
+          label={t("chat.pullRequests.checksSkipped")}
+          count={checks()?.skipped ?? 0}
+          modifier="skipped"
+        />
+        <Show when={!checks()}>{t("chat.pullRequests.automationNoChecks")}</Show>
+      </div>
+      <openclaw-chat-ci-automation
+        prop:pullRequest={props.pullRequest}
+        prop:gateway={props.gateway}
+        prop:sessionKey={props.sessionKey ?? ""}
+        prop:sessionId={props.sessionId ?? ""}
+        prop:presented={presented()}
+      />
+      <Show when={checks()}>
+        <openclaw-chat-ci-details
+          prop:pullRequest={props.pullRequest}
+          prop:gateway={props.gateway}
+          prop:sessionKey={props.sessionKey ?? ""}
+          prop:presented={presented()}
+        />
+      </Show>
+    </div>
+  );
   return (
     <ChatPullRequestChecks
       label={label()}
@@ -119,80 +151,8 @@ function Checks(props: {
       presented={presented()}
       dismissed={props.dismissed}
     >
-      <div
-        class="chat-pr__checks-menu"
-        role="group"
-        aria-label={t("chat.pullRequests.ciMonitoring")}
-      >
-        <div class="chat-pr__checks-menu-header">
-          <span>{t("chat.pullRequests.ciMonitoring")}</span>
-          <a
-            href={props.pullRequest.checksUrl ?? props.pullRequest.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={t("chat.pullRequests.openChecks")}
-          >
-            <Icon name="externalLink" />
-          </a>
-        </div>
-        <div class="chat-pr__checks-counts">
-          <ChecksRow
-            label={t("chat.pullRequests.checksFailed")}
-            count={checks()?.failed ?? 0}
-            modifier="failed"
-          />
-          <ChecksRow
-            label={t("chat.pullRequests.checksPassed")}
-            count={checks()?.passed ?? 0}
-            modifier="passed"
-          />
-          <ChecksRow
-            label={t("chat.pullRequests.checksRunning")}
-            count={checks()?.running ?? 0}
-            modifier="running"
-          />
-          <ChecksRow
-            label={t("chat.pullRequests.checksSkipped")}
-            count={checks()?.skipped ?? 0}
-            modifier="skipped"
-          />
-          <Show when={!checks()}>{t("chat.pullRequests.automationNoChecks")}</Show>
-        </div>
-        <openclaw-chat-ci-automation
-          prop:pullRequest={props.pullRequest}
-          prop:gateway={props.gateway}
-          prop:sessionKey={props.sessionKey ?? ""}
-          prop:sessionId={props.sessionId ?? ""}
-          prop:presented={presented()}
-        />
-        <Show when={checks()}>
-          <openclaw-chat-ci-details
-            prop:pullRequest={props.pullRequest}
-            prop:gateway={props.gateway}
-            prop:sessionKey={props.sessionKey ?? ""}
-            prop:presented={presented()}
-          />
-        </Show>
-      </div>
+      {content()}
     </ChatPullRequestChecks>
-  );
-}
-
-function StatusWarning(props: { status: ControlUiSessionPullRequestSnapshot["status"] }) {
-  const message = () =>
-    t(
-      props.status === "rate-limited"
-        ? "chat.pullRequests.rateLimited"
-        : "chat.pullRequests.unavailable",
-    );
-  return (
-    <Show when={props.status !== "ready"}>
-      <openclaw-tooltip content={message()}>
-        <span class="chat-pr__warning" role="img" aria-label={message()}>
-          <Icon name="alertTriangle" />
-        </span>
-      </openclaw-tooltip>
-    </Show>
   );
 }
 
@@ -203,52 +163,161 @@ function WorkRow(props: {
   publication?: GitHubPublicationView;
   onDismissBranch?: (branch: ControlUiSessionBranch) => void;
   presented?: PresentationValue;
+  compact?: boolean;
 }) {
   const published = () =>
     !props.branch && props.publication?.result?.status === "published"
       ? props.publication.result
       : undefined;
   return (
-    <article
-      class="chat-pr"
-      data-state={published() ? "published" : props.branch ? "branch" : "publication"}
-    >
-      <span class="chat-pr__link chat-pr__link--static">
-        <span class="chat-pr__icon" aria-hidden="true">
-          <Icon name={published() || !props.branch ? "gitPullRequest" : "gitBranch"} />
-        </span>
-        <span class="chat-pr__identity">
-          <span class="chat-pr__repo">
-            {published()?.repository ?? props.branch?.repo ?? t("chat.pullRequests.publishPr")}
+    <Show
+      when={props.compact ? props.branch : undefined}
+      fallback={
+        <article
+          class="chat-pr"
+          data-state={published() ? "published" : props.branch ? "branch" : "publication"}
+        >
+          <span class="chat-pr__link chat-pr__link--static">
+            <span class="chat-pr__icon" aria-hidden="true">
+              <Icon name={published() || !props.branch ? "gitPullRequest" : "gitBranch"} />
+            </span>
+            <span class="chat-pr__identity">
+              <span class="chat-pr__repo">
+                {published()?.repository ?? props.branch?.repo ?? t("chat.pullRequests.publishPr")}
+              </span>
+              <span class="chat-pr__branch">{published()?.branch ?? props.branch?.branch}</span>
+            </span>
           </span>
-          <span class="chat-pr__branch">{published()?.branch ?? props.branch?.branch}</span>
-        </span>
-      </span>
-      <span class="chat-pr__meta">
-        <Show when={!published() ? props.branch : undefined}>
-          {(branch) => (
-            <SessionGitDiff
-              classPrefix="chat-pr"
-              item={branch()}
-              onOpen={props.onOpenSessionDiff}
-            />
-          )}
-        </Show>
-        <StatusWarning status={props.status} />
+          <span class="chat-pr__meta">
+            <Show when={!published() ? props.branch : undefined}>
+              {(branch) => (
+                <SessionGitDiff
+                  classPrefix="chat-pr"
+                  item={branch()}
+                  onOpen={props.onOpenSessionDiff}
+                />
+              )}
+            </Show>
+            <StatusWarning status={props.status} />
+            <Show
+              when={props.publication}
+              fallback={
+                <Show when={props.branch?.createUrl}>
+                  {(url) => (
+                    <a
+                      class="chat-pr__create"
+                      href={url()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={t("chat.pullRequests.createPrLabel", {
+                        branch: props.branch?.branch ?? "",
+                      })}
+                    >
+                      {t("chat.pullRequests.createPr")}
+                    </a>
+                  )}
+                </Show>
+              }
+            >
+              {(publication) => (
+                <GitHubPublicationAction publication={publication()} presented={props.presented} />
+              )}
+            </Show>
+            <Show when={props.branch && !published() && props.onDismissBranch}>
+              <button
+                class="chat-pr__dismiss"
+                type="button"
+                disabled={props.publication?.activity != null}
+                aria-label={t("chat.pullRequests.dismissBranch", {
+                  branch: props.branch?.branch ?? "",
+                })}
+                onClick={() => {
+                  if (props.branch) {
+                    props.onDismissBranch?.(props.branch);
+                  }
+                }}
+              >
+                <Icon name="x" />
+              </button>
+            </Show>
+          </span>
+          <Show when={props.publication}>
+            {(publication) => <GitHubPublicationDetails publication={publication()} />}
+          </Show>
+        </article>
+      }
+    >
+      {(branch) => (
+        <article class="chat-pr chat-pr--summary chat-pr--unpublished" data-state="branch">
+          <span class="chat-pr__link chat-pr__link--static">
+            <span class="chat-pr__icon" aria-hidden="true">
+              <Icon name="gitBranch" />
+            </span>
+            <span class="chat-pr__branch">{branch().branch}</span>
+          </span>
+          <SessionGitDiff classPrefix="chat-pr" item={branch()} onOpen={props.onOpenSessionDiff} />
+          <BranchActions
+            branch={branch()}
+            status={props.status}
+            publication={props.publication}
+            presented={props.presented}
+            onDismiss={props.onDismissBranch}
+          />
+        </article>
+      )}
+    </Show>
+  );
+}
+
+function BranchActions(props: {
+  branch: ControlUiSessionBranch;
+  status: ControlUiSessionPullRequestSnapshot["status"];
+  publication?: GitHubPublicationView;
+  presented?: PresentationValue;
+  onDismiss?: (branch: ControlUiSessionBranch) => void;
+}) {
+  const id = createUniqueId();
+  let menu: MenuHandle | undefined;
+  const parentPresented = useContext(ContentPresentation);
+  const presentation = createMemo(() => projectPresentation(props.presented ?? true));
+  const presented = () => parentPresented() && presentation().read();
+
+  return (
+    <Menu
+      id={"chat-pr-branch-actions-" + id}
+      class="chat-pr__actions"
+      label={t("chat.pullRequests.actions", { reference: props.branch.branch })}
+      triggerClass="chat-pr__actions-trigger"
+      trigger={<Icon name="moreHorizontal" />}
+      placement="bottom-end"
+      panelClass="chat-pr-menu chat-pr-branch-menu"
+      open={presented() ? undefined : false}
+      items={[]}
+      onBeforeShow={(event) => {
+        if (!presented()) {
+          event.preventDefault();
+        }
+      }}
+      ref={(handle) => {
+        menu = handle;
+      }}
+    >
+      <>
         <Show
           when={props.publication}
           fallback={
-            <Show when={props.branch?.createUrl}>
+            <Show when={props.branch.createUrl}>
               {(url) => (
                 <a
-                  class="chat-pr__create"
+                  class="oc-menu-item"
                   href={url()}
                   target="_blank"
                   rel="noopener noreferrer"
-                  aria-label={t("chat.pullRequests.createPrLabel", {
-                    branch: props.branch?.branch ?? "",
-                  })}
+                  aria-label={t("chat.pullRequests.createPrLabel", { branch: props.branch.branch })}
                 >
+                  <span class="oc-menu-item__icon">
+                    <Icon name="externalLink" />
+                  </span>
                   {t("chat.pullRequests.createPr")}
                 </a>
               )}
@@ -256,31 +325,39 @@ function WorkRow(props: {
           }
         >
           {(publication) => (
-            <GitHubPublicationAction publication={publication()} presented={props.presented} />
+            <div class="chat-pr-branch-menu__publication">
+              <GitHubPublicationAction
+                publication={publication()}
+                presented={presented()}
+                menuControls
+              />
+              <GitHubPublicationDetails publication={publication()} menuControls />
+            </div>
           )}
         </Show>
-        <Show when={props.branch && !published() && props.onDismissBranch}>
-          <button
-            class="chat-pr__dismiss"
-            type="button"
-            disabled={props.publication?.activity != null}
-            aria-label={t("chat.pullRequests.dismissBranch", {
-              branch: props.branch?.branch ?? "",
-            })}
-            onClick={() => {
-              if (props.branch) {
-                props.onDismissBranch?.(props.branch);
-              }
-            }}
-          >
-            <Icon name="x" />
-          </button>
+        <StatusWarning status={props.status} />
+        <Show when={props.onDismiss}>
+          <div class="chat-pr-menu__group">
+            <button
+              class="oc-menu-item"
+              data-variant="danger"
+              type="button"
+              disabled={props.publication?.activity != null}
+              aria-label={t("chat.pullRequests.dismissBranch", { branch: props.branch.branch })}
+              onClick={() => {
+                menu?.close();
+                props.onDismiss?.(props.branch);
+              }}
+            >
+              <span class="oc-menu-item__icon">
+                <Icon name="eyeOff" />
+              </span>
+              {t("chat.pullRequests.hide")}
+            </button>
+          </div>
         </Show>
-      </span>
-      <Show when={props.publication}>
-        {(publication) => <GitHubPublicationDetails publication={publication()} />}
-      </Show>
-    </article>
+      </>
+    </Menu>
   );
 }
 
@@ -318,6 +395,7 @@ export function ChatPullRequests(props: ChatPullRequestsProps) {
           }
         >
           <WorkRow
+            compact={props.compact}
             branch={branch()}
             status={props.status}
             onOpenSessionDiff={props.onOpenSessionDiff}
@@ -331,61 +409,12 @@ export function ChatPullRequests(props: ChatPullRequestsProps) {
   );
 }
 
-function PullRequestActions(props: {
-  label: string;
-  dismissLabel: string;
-  disabled: boolean;
-  presented: PresentationValue;
-  dismissed?: boolean;
-  onDismiss: () => void;
-}) {
-  const id = createUniqueId();
-  const parentPresented = useContext(ContentPresentation);
-  const presentation = createMemo(() => projectPresentation(props.presented));
-  const presented = () => parentPresented() && !props.dismissed && presentation().read();
-  return (
-    <Menu
-      id={"chat-pr-actions-" + id}
-      class="chat-pr__actions"
-      label={props.label}
-      triggerClass="chat-pr__actions-trigger"
-      trigger={<Icon name="moreHorizontal" />}
-      placement="bottom-end"
-      disabled={props.disabled}
-      items={[{ id: "dismiss", label: props.dismissLabel, disabled: props.disabled }]}
-      open={presented() ? undefined : false}
-      onBeforeShow={(event) => {
-        if (!presented()) {
-          event.preventDefault();
-        }
-      }}
-      onSelect={() => props.onDismiss()}
-    />
-  );
-}
-
 function PullRequestRow(props: {
   pullRequest: ControlUiSessionPullRequest;
   owner: ChatPullRequestsProps;
   published: boolean;
 }) {
-  const compactDescription = () =>
-    props.owner.compact
-      ? [
-          props.pullRequest.title,
-          `${props.pullRequest.owner}/${props.pullRequest.repo}`,
-          props.pullRequest.branch,
-          t(STATE_LABEL_KEYS[props.pullRequest.state]),
-          typeof props.pullRequest.additions === "number"
-            ? `+${props.pullRequest.additions.toLocaleString()}`
-            : null,
-          typeof props.pullRequest.deletions === "number"
-            ? `−${props.pullRequest.deletions.toLocaleString()}`
-            : null,
-        ]
-          .filter(Boolean)
-          .join(" · ")
-      : undefined;
+  let row: HTMLElement | undefined;
   const dismissLabel = () =>
     t("chat.pullRequests.dismiss", { reference: formatGitHubItemReference(props.pullRequest) });
   const disabled = () => props.published && props.owner.publication?.activity !== null;
@@ -395,39 +424,28 @@ function PullRequestRow(props: {
     }
     props.owner.onDismiss(props.pullRequest);
   };
+  const badge = () => {
+    const checks = props.pullRequest.checks;
+    if (props.owner.status !== "ready" || !checks) {
+      return undefined;
+    }
+    return checks.failed > 0
+      ? "failed"
+      : checks.running > 0
+        ? "running"
+        : checks.passed > 0
+          ? "passed"
+          : undefined;
+  };
   return (
     <article
-      class={["chat-pr", { "chat-pr--compact": props.owner.compact }]}
+      ref={(element) => (row = element)}
+      class={["chat-pr", { "chat-pr--compact chat-pr--summary": props.owner.compact }]}
       data-state={props.pullRequest.state}
     >
-      <Show when={props.owner.compact}>
-        <div class="chat-pr__header">
-          <span class="chat-pr__icon" aria-hidden="true">
-            <Icon name={sessionPullRequestStateIcons[props.pullRequest.state]} />
-          </span>
-          <span
-            class="chat-pr__repo"
-            title={props.pullRequest.owner + "/" + props.pullRequest.repo}
-          >
-            {props.pullRequest.owner}/{props.pullRequest.repo}
-          </span>
-          <span class="chat-pr__number">#{props.pullRequest.number}</span>
-          <PullRequestActions
-            label={t("chat.pullRequests.actions", {
-              reference: formatGitHubItemReference(props.pullRequest),
-            })}
-            dismissLabel={dismissLabel()}
-            disabled={disabled()}
-            presented={props.owner.presented ?? true}
-            dismissed={props.owner.dismissed}
-            onDismiss={dismiss}
-          />
-        </div>
-      </Show>
       <a
         class="chat-pr__link"
-        title={compactDescription()}
-        aria-description={compactDescription()}
+        data-link-reader-preview={props.owner.compact ? "off" : undefined}
         href={props.pullRequest.url}
         target="_blank"
         rel="noopener noreferrer"
@@ -436,50 +454,81 @@ function PullRequestRow(props: {
           title: props.pullRequest.title,
         })}
       >
+        <span class="chat-pr__icon" aria-hidden="true">
+          <Icon name={sessionPullRequestStateIcons[props.pullRequest.state]} />
+          <Show when={props.owner.compact && badge()}>
+            {(state) => (
+              <span class={["chat-pr__badge", `chat-pr__badge--${state()}`]}>
+                <Show when={state() !== "running"} fallback={<span class="btn__spinner" />}>
+                  <Icon name={state() === "failed" ? "x" : "check"} />
+                </Show>
+              </span>
+            )}
+          </Show>
+        </span>
         <Show when={!props.owner.compact}>
-          <span class="chat-pr__icon" aria-hidden="true">
-            <Icon name={sessionPullRequestStateIcons[props.pullRequest.state]} />
-          </span>
           <span class="chat-pr__number">{formatGitHubItemReference(props.pullRequest)}</span>
         </Show>
-        <span class="chat-pr__identity" title={compactDescription()}>
+        <span class="chat-pr__identity">
           <Show
             when={props.owner.compact}
             fallback={<span class="chat-pr__branch">{props.pullRequest.branch}</span>}
           >
-            <span class="chat-pr__title">{props.pullRequest.title}</span>
+            <HoverMarquee
+              class="chat-pr__title"
+              content={props.pullRequest.title}
+              options={{
+                host: () => (row?.closest(".chat-details[data-desktop]") ? row : undefined),
+              }}
+            />
           </Show>
         </span>
       </a>
-      <span class="chat-pr__meta">
-        <SessionGitDiff classPrefix="chat-pr" item={props.pullRequest} />
-        <Checks
-          pullRequest={props.pullRequest}
-          compact={props.owner.compact}
-          gateway={props.owner.gateway}
-          sessionKey={props.owner.sessionKey}
-          sessionId={props.owner.sessionId}
-          presented={props.owner.presented}
+      <Show
+        when={props.owner.compact}
+        fallback={
+          <span class="chat-pr__meta">
+            <SessionGitDiff classPrefix="chat-pr" item={props.pullRequest} />
+            <Checks
+              pullRequest={props.pullRequest}
+              gateway={props.owner.gateway}
+              sessionKey={props.owner.sessionKey}
+              sessionId={props.owner.sessionId}
+              presented={props.owner.presented}
+              dismissed={props.owner.dismissed}
+            />
+            <Show when={props.pullRequest.state !== "open"}>
+              <span class="chat-pr__state">{t(STATE_LABEL_KEYS[props.pullRequest.state])}</span>
+            </Show>
+            <Show
+              when={props.pullRequest.state !== "merged" || props.owner.status === "unavailable"}
+            >
+              <StatusWarning status={props.owner.status} />
+            </Show>
+            <button
+              class="chat-pr__dismiss"
+              type="button"
+              disabled={disabled()}
+              aria-label={dismissLabel()}
+              onClick={dismiss}
+            >
+              <Icon name="x" />
+            </button>
+          </span>
+        }
+      >
+        <PullRequestActions
+          label={t("chat.pullRequests.actions", {
+            reference: formatGitHubItemReference(props.pullRequest),
+          })}
+          disabled={disabled()}
+          presented={props.owner.presented ?? true}
           dismissed={props.owner.dismissed}
+          onDismiss={dismiss}
+          pullRequest={props.pullRequest}
+          owner={props.owner}
         />
-        <Show when={props.pullRequest.state !== "open"}>
-          <span class="chat-pr__state">{t(STATE_LABEL_KEYS[props.pullRequest.state])}</span>
-        </Show>
-        <Show when={props.pullRequest.state !== "merged" || props.owner.status === "unavailable"}>
-          <StatusWarning status={props.owner.status} />
-        </Show>
-        <Show when={!props.owner.compact}>
-          <button
-            class="chat-pr__dismiss"
-            type="button"
-            disabled={disabled()}
-            aria-label={dismissLabel()}
-            onClick={dismiss}
-          >
-            <Icon name="x" />
-          </button>
-        </Show>
-      </span>
+      </Show>
     </article>
   );
 }

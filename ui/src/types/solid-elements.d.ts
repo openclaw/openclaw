@@ -21,6 +21,7 @@ type ChatCiProperties = {
   pullRequest?: ControlUiSessionPullRequest;
   sessionKey: string;
   presented: boolean;
+  inline?: boolean;
 };
 type PluginViewProperties = {
   [Surface in keyof ControlUiSurfaceProps]: {
@@ -61,9 +62,10 @@ declare module "@solidjs/web" {
       "openclaw-chat-tool-review-outcome": HTMLAttributes<HTMLElement>;
       "openclaw-custodian-setup-card": HTMLAttributes<HTMLElement>;
       "openclaw-agent-memory-panel": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-ci-details": HTMLAttributes<HTMLElement> & ElementProperties<ChatCiProperties>;
+      "openclaw-chat-ci-details": HTMLAttributes<HTMLElement> &
+        ElementProperties<ChatCiProperties & { menuControls?: boolean }>;
       "openclaw-chat-ci-automation": HTMLAttributes<HTMLElement> &
-        ElementProperties<ChatCiProperties & { sessionId: string }>;
+        ElementProperties<ChatCiProperties & { sessionId: string; menuPresentation?: boolean }>;
       "openclaw-panel-empty-state": HTMLAttributes<HTMLElement>;
       "openclaw-panel-loading-skeleton": HTMLAttributes<HTMLElement> & {
         compact?: string;
