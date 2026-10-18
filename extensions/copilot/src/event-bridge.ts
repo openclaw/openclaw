@@ -50,6 +50,7 @@ export interface SessionLike {
   rpc?: {
     history?: {
       cancelBackgroundCompaction?: () => Promise<unknown>;
+      truncate?: (params: { eventId: string }) => Promise<unknown>;
     };
   };
   send(options: MessageOptions): Promise<string>;

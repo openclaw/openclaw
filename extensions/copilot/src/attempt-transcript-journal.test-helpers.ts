@@ -81,6 +81,7 @@ export function createJournalSession(
   messages: AgentMessage[] = [],
   resultContentSourceByToolName?: ReadonlyMap<string, "network">,
   echoSuppressionInstruction?: string,
+  truncateSdkHistory?: (eventId: string) => Promise<void>,
 ) {
   const session = createFakeSession();
   const journal = createAttemptTranscriptJournal({
@@ -89,6 +90,7 @@ export function createJournalSession(
     ...(echoSuppressionInstruction ? { echoSuppressionInstruction } : {}),
     messages,
     sdkSessionId: "sdk-session",
+    ...(truncateSdkHistory ? { truncateSdkHistory } : {}),
   });
   const bridge = attachEventBridge(session, {
     getSdkSessionId: () => "sdk-session",
@@ -125,6 +127,7 @@ export async function createFixture(
   trigger?: string,
   resultContentSourceByToolName?: ReadonlyMap<string, "network">,
   echoSuppressionInstruction?: string,
+  truncateSdkHistory?: (eventId: string) => Promise<void>,
 ): Promise<AttemptTranscriptJournalFixture> {
   const tempDir = sessionDirs.make();
   const target: SessionTranscriptTargetParams = {
@@ -190,6 +193,7 @@ export async function createFixture(
     [],
     resultContentSourceByToolName,
     echoSuppressionInstruction,
+    truncateSdkHistory,
   );
   return { attempt, bridge, journal, recorder, session, target, tempDir };
 }

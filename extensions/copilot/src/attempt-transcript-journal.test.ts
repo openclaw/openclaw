@@ -1108,7 +1108,13 @@ describe("Copilot attempt transcript journal", () => {
   });
 
   it("refuses a tool-free finalizer echo before it reaches the transcript", async () => {
-    const fixture = await createFixture(undefined, undefined, FINALIZER_INSTRUCTION);
+    const truncateSdkHistory = vi.fn(async () => undefined);
+    const fixture = await createFixture(
+      undefined,
+      undefined,
+      FINALIZER_INSTRUCTION,
+      truncateSdkHistory,
+    );
     await fixture.journal.persistInitialUser();
     fixture.session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
     emitAssistant(fixture.session, "echoed-finalizer", { content: FINALIZER_INSTRUCTION });
@@ -1123,5 +1129,6 @@ describe("Copilot attempt transcript journal", () => {
     expect(persisted.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(JSON.stringify(persisted.at(-1))).toContain("settled trace marker");
     expect(JSON.stringify(persisted)).not.toContain("Do not repeat completed tool calls");
+    expect(truncateSdkHistory).toHaveBeenCalledExactlyOnceWith("echoed-finalizer");
   });
 });

@@ -91,6 +91,7 @@ export function createAttemptTranscriptJournal(params: {
   messages: AgentMessage[];
   onInitialSdkUserValidated?: () => void;
   sdkSessionId: string;
+  truncateSdkHistory?: (eventId: string) => Promise<void>;
 }) {
   const hiddenTurn = params.attempt.trigger === "memory";
   const projectDisplay = (message: AgentMessage) =>
@@ -547,6 +548,14 @@ export function createAttemptTranscriptJournal(params: {
         input.toolCallIds.length === 0 &&
         isEchoedSettledTurnFinalizationAssistant(message, params.echoSuppressionInstruction)
       ) {
+        const truncateSdkHistory = params.truncateSdkHistory;
+        if (truncateSdkHistory) {
+          // The SDK keeps its own copy of this assistant event. Remove the
+          // refused suffix before the session can be resumed for a retry.
+          schedule(async () => {
+            await truncateSdkHistory(input.eventId);
+          });
+        }
         return;
       }
       schedule(async () => {

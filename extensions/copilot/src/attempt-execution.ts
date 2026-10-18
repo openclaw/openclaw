@@ -407,6 +407,9 @@ export async function runCopilotExecution(context: {
         initialSdkUserValidated = true;
       },
       sdkSessionId,
+      truncateSdkHistory: async (eventId) => {
+        await session?.rpc?.history?.truncate?.({ eventId });
+      },
     });
     bridge = attachEventBridge(session, {
       runId: input.runId,
