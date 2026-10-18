@@ -29,6 +29,8 @@ import { createExtensionDatabaseWorkersVitestConfig } from "../vitest/vitest.ext
 import { createExtensionTelegramVitestConfig } from "../vitest/vitest.extension-telegram.config.ts";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
+const databaseConfig = "test/vitest/vitest.extension-database-workers.config.ts";
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -138,19 +140,15 @@ describe("plugin prerelease Telegram extension shards", () => {
 
     expect(existsSync(FROZEN_TARGET_TELEGRAM_CONFIG_URL)).toBe(true);
     expect(matrix.include.every((row) => row.task !== "extension-file-shard")).toBe(true);
-    expect(batchRows.map((row) => row.check_name)).toEqual([
-      "checks-node-extensions-shard-1",
-      "checks-node-extensions-shard-2",
-    ]);
-    expect(batchRows.map((row) => row.extensions_csv)).toEqual(["alpha,telegram", "zeta"]);
+    expect(batchRows.map(({ check_name, extensions_csv }) => [check_name, extensions_csv])).toEqual(
+      [
+        ["checks-node-extensions-shard-1", "alpha,telegram"],
+        ["checks-node-extensions-shard-2", "zeta"],
+      ],
+    );
     expect(
       batchRows.every((row) => row.test_runtime_policy === "node" && row.requires_bun === false),
     ).toBe(true);
-    expect(
-      batchRows
-        .flatMap((row) => row.extensions_csv.split(","))
-        .filter((extensionId) => extensionId === "telegram"),
-    ).toEqual(["telegram"]);
   });
 
   it("supplements manifest-only and root tests for an older package-only planner", () => {
@@ -220,29 +218,22 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
       extensionIds: genericExtensionIds,
       shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
     });
-
+    const genericIds = genericShards.flatMap((shard) => shard.extensionIds);
     expect(genericShards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
-    expect(genericShards.flatMap((shard) => shard.extensionIds)).not.toContain("telegram");
-    expect(
-      genericShards
-        .flatMap((shard) => shard.extensionIds)
-        .toSorted((left, right) => left.localeCompare(right)),
-    ).toEqual(genericExtensionIds.toSorted((left, right) => left.localeCompare(right)));
+    expect(genericIds.toSorted()).toEqual(genericExtensionIds.toSorted());
     expect(allExtensionIds.filter((extensionId) => extensionId === "telegram")).toEqual([
       "telegram",
     ]);
     expect(
       allShards
         .flatMap((shard) => shard.planGroups)
-        .find((group) => group.config === "test/vitest/vitest.extension-telegram.config.ts"),
+        .find((group) => group.config === telegramConfig),
     ).toMatchObject({
-      config: "test/vitest/vitest.extension-telegram.config.ts",
+      config: telegramConfig,
       extensionIds: ["telegram"],
       roots: ["extensions/telegram"],
     });
-    expect(new Set(genericShards.flatMap((shard) => shard.extensionIds)).size).toBe(
-      genericExtensionIds.length,
-    );
+    expect(new Set(genericIds).size).toBe(genericExtensionIds.length);
   });
 
   it("keeps dedicated Telegram and Codex file shards inside the existing aggregate job contract", () => {
@@ -255,9 +246,11 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
     const matrix = runPluginPrereleaseManifest();
     const genericRows = matrix.include.filter((row) => row.task === "extensions-batch");
     // Codex alone took 36-60 min as one hosted batch job; it now gets file-bounded jobs.
-    const codexRows = matrix.include.filter(
-      (row) => row.task === "extension-file-shard" && row.extensions_csv === "codex",
-    );
+    const fileRows = (id: string) =>
+      matrix.include.filter(
+        (row) => row.task === "extension-file-shard" && row.extensions_csv === id,
+      );
+    const codexRows = fileRows("codex");
     const runnableCodexTestFiles = [
       ...listRunnableExtensionTestFiles(false, "codex"),
       ...listRunnableExtensionTestFiles(true, "codex"),
@@ -274,9 +267,7 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
       expect(row.includePatterns.length).toBeLessThanOrEqual(24);
       expect(row).toMatchObject({ requires_bun: false, test_runtime_policy: "node" });
     }
-    const telegramRows = matrix.include.filter(
-      (row) => row.task === "extension-file-shard" && row.extensions_csv === "telegram",
-    );
+    const telegramRows = fileRows("telegram");
     const allTelegramTestFiles = listExtensionTestFilesForRoots(["extensions/telegram"]);
     const runnableTelegramTestFiles = [
       ...listRunnableExtensionTestFiles(),
@@ -287,12 +278,8 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
     expect(genericRows.some((row) => row.extensions_csv.split(",").includes("telegram"))).toBe(
       false,
     );
-    const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
     const expectedTelegramPartitions = [
-      [
-        "test/vitest/vitest.extension-database-workers.config.ts",
-        listRunnableExtensionTestFiles(true),
-      ],
+      [databaseConfig, listRunnableExtensionTestFiles(true)],
       [telegramConfig, listRunnableExtensionTestFiles()],
     ] as const;
     const expectedRows = expectedTelegramPartitions.flatMap(([config, files]) =>
@@ -301,7 +288,6 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
         includePatterns,
       })),
     );
-    expect(telegramRows).toHaveLength(expectedRows.length);
     expect(telegramRows).toEqual(
       expectedRows.map(({ config, includePatterns }, index) =>
         expect.objectContaining({
@@ -322,7 +308,6 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
       runnableTelegramTestFiles,
     );
     expect(new Set(telegramPartitions.flat()).size).toBe(runnableTelegramTestFiles.length);
-    expect(telegramPartitions.every((partition) => partition.length <= 10)).toBe(true);
     expect(Math.max(...telegramPartitions.map((partition) => partition.length))).toBe(10);
     expect(
       allTelegramTestFiles.filter((file) => !runnableTelegramTestFiles.includes(file)).length,

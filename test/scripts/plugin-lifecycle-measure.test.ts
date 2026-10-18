@@ -1,4 +1,3 @@
-// Plugin Lifecycle Measure tests cover plugin lifecycle measure script behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -17,6 +16,74 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) => {
   });
 });
 const scriptPath = "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs";
+
+function measureFixture() {
+  const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
+  return { dir, summary: path.join(dir, "summary.tsv") };
+}
+
+function runMeasure(
+  summary: string,
+  phase: string,
+  env: NodeJS.ProcessEnv,
+  command = ["node", "-e", ""],
+  { preload = "", timeout = 5000 } = {},
+) {
+  return spawnSync(
+    "node",
+    [...(preload ? ["--import", preload] : []), scriptPath, summary, phase, "--", ...command],
+    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, ...env }, timeout },
+  );
+}
+
+function checkTermination(
+  signal: AbortSignal,
+  phase: string,
+  command: string[],
+  check: (
+    close: Awaited<ReturnType<typeof observeMeasuredChild>["closed"]>,
+    pid: number,
+  ) => void | Promise<void>,
+  { graceMs = "1500", closeStderr = false, stubborn = false } = {},
+) {
+  return fixtureLifetime.run(async () => {
+    const { dir, summary } = measureFixture();
+    const pidFile = path.join(dir, stubborn ? "descendant.pid" : "ready.pid");
+    const result = spawn(
+      stubborn ? process.execPath : "node",
+      [scriptPath, summary, phase, "--", ...command],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
+          OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: graceMs,
+          [stubborn ? "PID_FILE" : "READY_FILE"]: pidFile,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const observed = observeMeasuredChild(result);
+    let pid: number | undefined;
+    try {
+      pid = await withinTest(observed.ready, signal);
+      expect(Number.parseInt(readFileSync(pidFile, "utf8"), 10)).toBe(pid);
+      if (closeStderr) {
+        result.stderr.destroy();
+      }
+      result.kill("SIGTERM");
+      await check(await withinTest(observed.closed, signal), pid);
+    } finally {
+      if (result.exitCode === null && result.signalCode === null) {
+        result.kill("SIGTERM");
+      }
+      await observed.closed.catch(() => {});
+      if (stubborn && pid !== undefined && pid > 0 && pidExists(pid)) {
+        process.kill(pid, "SIGKILL");
+      }
+    }
+  });
+}
 
 function writeFakeGetconf(dir: string, body: string): string {
   const binDir = path.join(dir, "bin");
@@ -102,8 +169,7 @@ describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "derives proc units from getconf when overrides are absent",
     () => {
-      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
-      const summary = path.join(dir, "summary.tsv");
+      const { dir, summary } = measureFixture();
       const logPath = path.join(dir, "getconf.log");
       const binDir = writeFakeGetconf(
         dir,
@@ -134,16 +200,9 @@ describe("plugin lifecycle resource sampler", () => {
   );
 
   it("rejects loose numeric env values instead of parsing prefixes", () => {
-    const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
-    const summary = path.join(dir, "summary.tsv");
-    const result = spawnSync("node", [scriptPath, summary, "invalid-env", "--", "node", "-e", ""], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "150ms",
-      },
-      timeout: 5000,
+    const { summary } = measureFixture();
+    const result = runMeasure(summary, "invalid-env", {
+      OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "150ms",
     });
 
     expect(result.status).not.toBe(0);
@@ -153,16 +212,9 @@ describe("plugin lifecycle resource sampler", () => {
   });
 
   it("rejects zero lifecycle timeouts instead of disabling the guard", () => {
-    const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
-    const summary = path.join(dir, "summary.tsv");
-    const result = spawnSync("node", [scriptPath, summary, "invalid-env", "--", "node", "-e", ""], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "0",
-      },
-      timeout: 5000,
+    const { summary } = measureFixture();
+    const result = runMeasure(summary, "invalid-env", {
+      OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "0",
     });
 
     expect(result.status).not.toBe(0);
@@ -172,16 +224,9 @@ describe("plugin lifecycle resource sampler", () => {
   });
 
   it("rejects loose resource ceiling env values instead of parsing prefixes", () => {
-    const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
-    const summary = path.join(dir, "summary.tsv");
-    const result = spawnSync("node", [scriptPath, summary, "invalid-env", "--", "node", "-e", ""], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO: "1x",
-      },
-      timeout: 5000,
+    const { summary } = measureFixture();
+    const result = runMeasure(summary, "invalid-env", {
+      OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO: "1x",
     });
 
     expect(result.status).not.toBe(0);
@@ -193,22 +238,16 @@ describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "fails successful phases that exceed wall ceilings",
     () => {
-      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
-      const summary = path.join(dir, "summary.tsv");
-      const result = spawnSync(
-        "node",
-        [scriptPath, summary, "slow-success", "--", "node", "-e", "process.exit(0)"],
+      const { summary } = measureFixture();
+      const result = runMeasure(
+        summary,
+        "slow-success",
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            GITHUB_ACTIONS: "",
-            OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
-            OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS: "1",
-          },
-          timeout: 5000,
+          GITHUB_ACTIONS: "",
+          OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
+          OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS: "1",
         },
+        ["node", "-e", "process.exit(0)"],
       );
 
       expect(result.status).toBe(1);
@@ -219,31 +258,17 @@ describe("plugin lifecycle resource sampler", () => {
   );
 
   it.runIf(process.platform === "linux")("clamps oversized timer env values", () => {
-    const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
-    const summary = path.join(dir, "summary.tsv");
+    const { summary } = measureFixture();
     const oversizedTimerMs = "2147000001";
-    const result = spawnSync(
-      "node",
-      [
-        scriptPath,
-        summary,
-        "oversized-timers",
-        "--",
-        "node",
-        "-e",
-        "setTimeout(() => process.exit(0), 25)",
-      ],
+    const result = runMeasure(
+      summary,
+      "oversized-timers",
       {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS: oversizedTimerMs,
-          OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: oversizedTimerMs,
-          OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: oversizedTimerMs,
-        },
-        timeout: 5000,
+        OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS: oversizedTimerMs,
+        OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: oversizedTimerMs,
+        OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: oversizedTimerMs,
       },
+      ["node", "-e", "setTimeout(() => process.exit(0), 25)"],
     );
 
     expect(result.status).toBe(0);
@@ -257,8 +282,7 @@ describe("plugin lifecycle resource sampler", () => {
     "kills stubborn descendants after timeout grace despite disappearing processes",
     ({ signal }) =>
       fixtureLifetime.run(async () => {
-        const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
-        const summary = path.join(dir, "summary.tsv");
+        const { dir, summary } = measureFixture();
         const pidFile = path.join(dir, "descendant.pid");
         const procRaceMarker = path.join(dir, "proc-race");
         const preload = path.join(dir, "vanishing-proc.mjs");
@@ -284,15 +308,16 @@ fs.readdirSync = (target, options) => {
         let descendantPid: number | undefined;
 
         try {
-          const result = spawnSync(
-            "node",
+          const result = runMeasure(
+            summary,
+            "stubborn-descendant",
+            {
+              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "3000",
+              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
+              PID_FILE: pidFile,
+              PROC_RACE_MARKER: procRaceMarker,
+            },
             [
-              "--import",
-              preload,
-              scriptPath,
-              summary,
-              "stubborn-descendant",
-              "--",
               "bash",
               "-lc",
               [
@@ -301,18 +326,7 @@ fs.readdirSync = (target, options) => {
                 "exit 0",
               ].join("\n"),
             ],
-            {
-              cwd: process.cwd(),
-              encoding: "utf8",
-              env: {
-                ...process.env,
-                OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "3000",
-                OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
-                PID_FILE: pidFile,
-                PROC_RACE_MARKER: procRaceMarker,
-              },
-              timeout: 7000,
-            },
+            { preload, timeout: 7000 },
           );
 
           const resultDetails = JSON.stringify({
@@ -343,164 +357,67 @@ fs.readdirSync = (target, options) => {
   it.runIf(process.platform === "linux")(
     "forwards external termination to the measured process group",
     ({ signal }) =>
-      fixtureLifetime.run(async () => {
-        const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
-        const summary = path.join(dir, "summary.tsv");
-        const pidFile = path.join(dir, "descendant.pid");
-        let descendantPid: number | undefined;
-
-        let result: ChildProcess | undefined;
-        let observed: ReturnType<typeof observeMeasuredChild> | undefined;
-        try {
-          result = spawn(
-            process.execPath,
-            [
-              scriptPath,
-              summary,
-              "external-stop",
-              "--",
-              "bash",
-              "-lc",
-              'bash -c \'trap "" TERM; printf "%s\\n" "$$" >"$PID_FILE"; printf "fixture-ready:%s\\n" "$$"; while :; do sleep 1; done\' & wait',
-            ],
-            {
-              cwd: process.cwd(),
-              env: {
-                ...process.env,
-                OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
-                OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
-                PID_FILE: pidFile,
-              },
-              stdio: ["ignore", "pipe", "pipe"],
-            },
-          );
-
-          observed = observeMeasuredChild(result);
-          descendantPid = await withinTest(observed.ready, signal);
-          expect(Number.parseInt(readFileSync(pidFile, "utf8"), 10)).toBe(descendantPid);
-          result.kill("SIGTERM");
-          const close = await withinTest(observed.closed, signal);
+      checkTermination(
+        signal,
+        "external-stop",
+        [
+          "bash",
+          "-lc",
+          'bash -c \'trap "" TERM; printf "%s\\n" "$$" >"$PID_FILE"; printf "fixture-ready:%s\\n" "$$"; while :; do sleep 1; done\' & wait',
+        ],
+        async (close, descendantPid) => {
           expect(close.signal).toBe("SIGTERM");
           expect(close.stderr).toContain("reason=grace-elapsed signal=SIGTERM");
           await waitForPidExit(descendantPid, signal);
           expect(pidExists(descendantPid)).toBe(false);
-        } finally {
-          if (result?.exitCode === null && result.signalCode === null) {
-            result.kill("SIGTERM");
-          }
-          await observed?.closed.catch(() => {});
-          if (descendantPid !== undefined && descendantPid > 0 && pidExists(descendantPid)) {
-            process.kill(descendantPid, "SIGKILL");
-          }
-        }
-      }),
+        },
+        { graceMs: "200", stubborn: true },
+      ),
   );
 
   it.runIf(process.platform === "linux").for(["open", "closed"])(
     "exits promptly when externally terminated phases stop during grace (stderr %s)",
     (stderr, { signal }) =>
-      fixtureLifetime.run(async () => {
-        const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
-        const summary = path.join(dir, "summary.tsv");
-        const readyFile = path.join(dir, "ready.pid");
-        const result = spawn(
+      checkTermination(
+        signal,
+        "external-fast-stop",
+        [
           "node",
+          "--input-type=module",
+          "--eval",
           [
-            scriptPath,
-            summary,
-            "external-fast-stop",
-            "--",
-            "node",
-            "--input-type=module",
-            "--eval",
-            [
-              "import { writeFileSync } from 'node:fs';",
-              "process.on('SIGTERM', () => process.exit(0));",
-              "writeFileSync(process.env.READY_FILE, String(process.pid));",
-              "process.stdout.write('fixture-ready:' + process.pid + '\\n');",
-              "setInterval(() => {}, 1000);",
-            ].join("\n"),
-          ],
-          {
-            cwd: process.cwd(),
-            env: {
-              ...process.env,
-              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
-              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "1500",
-              READY_FILE: readyFile,
-            },
-            stdio: ["ignore", "pipe", "pipe"],
-          },
-        );
-
-        const observed = observeMeasuredChild(result);
-        try {
-          const readyPid = await withinTest(observed.ready, signal);
-          expect(Number.parseInt(readFileSync(readyFile, "utf8"), 10)).toBe(readyPid);
-          if (stderr === "closed") {
-            result.stderr.destroy();
-          }
-          result.kill("SIGTERM");
-          const close = await withinTest(observed.closed, signal);
-
+            "import { writeFileSync } from 'node:fs';",
+            "process.on('SIGTERM', () => process.exit(0));",
+            "writeFileSync(process.env.READY_FILE, String(process.pid));",
+            "process.stdout.write('fixture-ready:' + process.pid + '\\n');",
+            "setInterval(() => {}, 1000);",
+          ].join("\n"),
+        ],
+        (close) => {
           if (stderr === "open") {
             expectDrainedBeforeGraceDeadline(close.stderr);
           }
           expect(close.signal).toBe("SIGTERM");
-        } finally {
-          if (result.exitCode === null && result.signalCode === null) {
-            result.kill("SIGTERM");
-          }
-          await observed.closed.catch(() => {});
-        }
-      }),
+        },
+        { closeStderr: stderr === "closed" },
+      ),
   );
 
   it.runIf(process.platform === "linux")(
     "exits promptly when shell descendants drain during termination grace",
     ({ signal }) =>
-      fixtureLifetime.run(async () => {
-        const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
-        const summary = path.join(dir, "summary.tsv");
-        const readyFile = path.join(dir, "ready.pid");
-        const result = spawn(
-          "node",
-          [
-            scriptPath,
-            summary,
-            "external-descendant-drain",
-            "--",
-            "bash",
-            "-lc",
-            'trap "exit 0" TERM; bash -c \'trap "sleep 0.15; exit 0" TERM; printf "%s\\n" "$$" >"$READY_FILE"; printf "fixture-ready:%s\\n" "$$"; while :; do sleep 1; done\' & wait',
-          ],
-          {
-            cwd: process.cwd(),
-            env: {
-              ...process.env,
-              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
-              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "1500",
-              READY_FILE: readyFile,
-            },
-            stdio: ["ignore", "pipe", "pipe"],
-          },
-        );
-
-        const observed = observeMeasuredChild(result);
-        try {
-          const readyPid = await withinTest(observed.ready, signal);
-          expect(Number.parseInt(readFileSync(readyFile, "utf8"), 10)).toBe(readyPid);
-          result.kill("SIGTERM");
-          const close = await withinTest(observed.closed, signal);
-
+      checkTermination(
+        signal,
+        "external-descendant-drain",
+        [
+          "bash",
+          "-lc",
+          'trap "exit 0" TERM; bash -c \'trap "sleep 0.15; exit 0" TERM; printf "%s\\n" "$$" >"$READY_FILE"; printf "fixture-ready:%s\\n" "$$"; while :; do sleep 1; done\' & wait',
+        ],
+        (close) => {
           expectDrainedBeforeGraceDeadline(close.stderr);
           expect(close.signal).toBe("SIGTERM");
-        } finally {
-          if (result.exitCode === null && result.signalCode === null) {
-            result.kill("SIGTERM");
-          }
-          await observed.closed.catch(() => {});
-        }
-      }),
+        },
+      ),
   );
 });

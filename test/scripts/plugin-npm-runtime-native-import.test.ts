@@ -14,83 +14,64 @@ function writeFile(root: string, relative: string, content: string) {
   fs.writeFileSync(target, content);
 }
 
+function writeJson(root: string, relative: string, value: unknown) {
+  writeFile(root, relative, JSON.stringify(value));
+}
+
 function fixture(format = "esm", declaration = "peerDependencies") {
   const root = tempDirs.make("openclaw-native-import-");
+  const write = (relative: string, content: string) => writeFile(root, relative, content);
   fs.mkdirSync(path.join(root, "src"));
-  writeFile(root, "pnpm-workspace.yaml", "packages:\n  - extensions/*\n");
+  write("pnpm-workspace.yaml", "packages:\n  - extensions/*\n");
   // Setup runs source tooling with workspace aliases; native children below do not load tsx.
-  writeFile(
-    root,
-    "tsconfig.json",
-    JSON.stringify({ extends: path.resolve(import.meta.dirname, "../../tsconfig.json") }),
-  );
-  writeFile(root, "tsconfig.native.json", "{}\n");
-  writeFile(
-    root,
-    "package.json",
-    JSON.stringify({
-      name: "openclaw",
-      version: "2026.9.5",
-      type: "module",
-      exports: {
-        "./plugin-sdk/media-runtime": "./dist/plugin-sdk/media-runtime.js",
-        "./plugin-sdk/text-utility-runtime": "./dist/plugin-sdk/text-utility-runtime.js",
-        "./plugin-sdk/realtime-voice": "./dist/plugin-sdk/realtime-voice.js",
-        "./plugin-sdk/realtime-voice-provider": "./dist/plugin-sdk/realtime-voice-provider.js",
-      },
-    }),
-  );
-  writeFile(root, "dist/plugin-sdk/text-utility-runtime.js", "export {};\n");
+  writeJson(root, "tsconfig.json", {
+    extends: path.resolve(import.meta.dirname, "../../tsconfig.json"),
+  });
+  write("tsconfig.native.json", "{}\n");
+  // The supported host predates the private FFmpeg and playback facades.
+  const sdk = {
+    "text-utility-runtime": "export {};\n",
+    "media-runtime": 'export function resolveFfmpegBin() { return "host"; }\n',
+    "realtime-voice-provider": 'export const canonicalizeBase64 = () => "provider";\n',
+    "realtime-voice":
+      'export const createRealtimeVoiceOutputActivityTracker = () => "voice"; export const isRealtimeVoiceAudioAudible = () => "audible";\n',
+  };
+  writeJson(root, "package.json", {
+    name: "openclaw",
+    version: "2026.9.5",
+    type: "module",
+    exports: Object.fromEntries(
+      Object.keys(sdk).map((name) => [`./plugin-sdk/${name}`, `./dist/plugin-sdk/${name}.js`]),
+    ),
+  });
+  for (const [name, content] of Object.entries(sdk)) {
+    write(`dist/plugin-sdk/${name}.js`, content);
+  }
   for (const module of ["grapheme", "utf16-slice"]) {
     const relative = `packages/normalization-core/src/${module}.ts`;
-    writeFile(
-      root,
-      relative,
-      fs.readFileSync(path.resolve(import.meta.dirname, "../..", relative), "utf8"),
-    );
+    write(relative, fs.readFileSync(path.resolve(import.meta.dirname, "../..", relative), "utf8"));
   }
-  // The supported host predates the private FFmpeg and playback facades.
-  writeFile(
-    root,
-    "dist/plugin-sdk/media-runtime.js",
-    'export function resolveFfmpegBin() { return "host"; }\n',
-  );
-  writeFile(
-    root,
-    "dist/plugin-sdk/realtime-voice-provider.js",
-    'export const canonicalizeBase64 = () => "provider";\n',
-  );
-  writeFile(
-    root,
-    "dist/plugin-sdk/realtime-voice.js",
-    'export const createRealtimeVoiceOutputActivityTracker = () => "voice"; export const isRealtimeVoiceAudioAudible = () => "audible";\n',
-  );
-  writeFile(
-    root,
-    "node_modules/fixture-dep/package.json",
-    JSON.stringify({ name: "fixture-dep", main: "index.cjs" }),
-  );
-  writeFile(root, "node_modules/fixture-dep/index.cjs", 'exports.thirdParty = "third-party";\n');
+  writeJson(root, "node_modules/fixture-dep/package.json", {
+    name: "fixture-dep",
+    main: "index.cjs",
+  });
+  write("node_modules/fixture-dep/index.cjs", 'exports.thirdParty = "third-party";\n');
   const packageDir = path.join(root, "extensions/demo");
-  writeFile(
-    packageDir,
-    "package.json",
-    JSON.stringify({
-      name: "@openclaw/demo",
-      version: "1.0.0",
-      type: "module",
-      optionalDependencies: { "fixture-dep": "1.0.0" },
-      [declaration]: {
-        ...(declaration === "optionalDependencies" ? { "fixture-dep": "1.0.0" } : {}),
-        openclaw: "*",
-      },
-      openclaw: {
-        extensions: ["./index.ts"],
-        build: { runtimeFormat: format },
-        release: { publishToNpm: true },
-      },
-    }),
-  );
+  writeJson(packageDir, "package.json", {
+    name: "@openclaw/demo",
+    version: "1.0.0",
+    type: "module",
+    optionalDependencies: { "fixture-dep": "1.0.0" },
+    [declaration]: {
+      ...(declaration === "optionalDependencies" ? { "fixture-dep": "1.0.0" } : {}),
+      openclaw: "*",
+    },
+    openclaw: {
+      extensions: ["./index.ts"],
+      build: { runtimeFormat: format },
+      release: { publishToNpm: true },
+    },
+  });
   writeFile(
     packageDir,
     "index.ts",
@@ -106,7 +87,7 @@ function fixture(format = "esm", declaration = "peerDependencies") {
     ].join("\n"),
   );
   const entry = `./extensions/demo/dist/index.${format === "cjs" ? "cjs" : "js"}`;
-  writeFile(root, entry, 'throw new Error("Preparation must not execute plugin code");\n');
+  write(entry, 'throw new Error("Preparation must not execute plugin code");\n');
   return { root, packageDir, entry };
 }
 
@@ -135,31 +116,24 @@ function nativeImport(root: string, entry: string, format: string) {
 }
 
 function snapshot(root: string, directories: string[]) {
-  return Object.fromEntries(
-    directories
-      .flatMap((directory) => {
-        const target = path.join(root, directory);
-        return [
-          directory,
-          ...fs
-            .readdirSync(target, { recursive: true })
-            .map((name) => path.join(directory, String(name))),
-        ];
-      })
-      .map((relative) => {
-        const target = path.join(root, relative);
-        const stat = fs.statSync(target, { bigint: true });
-        return [
-          relative,
-          {
-            mtime: stat.mtimeNs,
-            hash: stat.isFile()
-              ? createHash("sha256").update(fs.readFileSync(target)).digest("hex")
-              : null,
-          },
-        ];
-      }),
-  );
+  const entries: [string, { mtime: bigint; hash: string | null }][] = [];
+  for (const directory of directories) {
+    for (const name of ["", ...fs.readdirSync(path.join(root, directory), { recursive: true })]) {
+      const relative = path.join(directory, String(name));
+      const target = path.join(root, relative);
+      const stat = fs.statSync(target, { bigint: true });
+      entries.push([
+        relative,
+        {
+          mtime: stat.mtimeNs,
+          hash: stat.isFile()
+            ? createHash("sha256").update(fs.readFileSync(target)).digest("hex")
+            : null,
+        },
+      ]);
+    }
+  }
+  return Object.fromEntries(entries);
 }
 
 describe("explicit source native-import preparation", () => {
@@ -183,16 +157,12 @@ describe("explicit source native-import preparation", () => {
   it("rejects excess build argv through the public shim without compiling", () => {
     const { root } = fixture();
     const packageDir = path.join(root, "javascript-only");
-    writeFile(
-      packageDir,
-      "package.json",
-      JSON.stringify({
-        name: "@openclaw/arity-js-fixture",
-        version: "1.0.0",
-        type: "module",
-        openclaw: { extensions: ["./index.js"] },
-      }),
-    );
+    writeJson(packageDir, "package.json", {
+      name: "@openclaw/arity-js-fixture",
+      version: "1.0.0",
+      type: "module",
+      openclaw: { extensions: ["./index.js"] },
+    });
     writeFile(packageDir, "index.js", 'throw new Error("JS-only argv proof must not execute");\n');
     writeFile(packageDir, "dist/sentinel.js", "keep\n");
     const before = snapshot(root, ["."]);
@@ -302,7 +272,7 @@ describe("explicit source native-import preparation", () => {
         expected = /safely read.*package.json/u;
         break;
       case "wrong host":
-        writeFile(root, "package.json", JSON.stringify({ name: "unrelated" }));
+        writeJson(root, "package.json", { name: "unrelated" });
         expected = /source checkout root/u;
         break;
       case "not source":
@@ -322,11 +292,7 @@ describe("explicit source native-import preparation", () => {
         expected = /not a real directory/u;
         break;
       case "unrelated host directory":
-        writeFile(
-          packageDir,
-          "node_modules/openclaw/package.json",
-          JSON.stringify({ name: "unrelated" }),
-        );
+        writeJson(packageDir, "node_modules/openclaw/package.json", { name: "unrelated" });
         writeFile(packageDir, "node_modules/openclaw/marker", "keep");
         expected = /already exists and is not a symlink/u;
         break;

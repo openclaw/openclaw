@@ -2,8 +2,6 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import JSZip from "jszip";
-import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   consumePreparedNpmPackage,
@@ -16,6 +14,10 @@ import {
   verifyPublishedNpmRegistry,
 } from "../../scripts/plugin-npm-prepared-release.mjs";
 import { createPluginPublicationArtifact } from "../../scripts/plugin-publication-artifact.mjs";
+import {
+  packNpmFixture,
+  zipNpmFixture as archive,
+} from "./plugin-npm-publication-readback.test-support.js";
 
 const producer = {
   repository: "openclaw/openclaw",
@@ -167,14 +169,6 @@ function sourcePackage(root: string, entry: ReturnType<typeof plugin>) {
   return { bytes, value, file: join(directory, "package.json") };
 }
 
-async function archive(files: Record<string, Buffer>) {
-  const zip = new JSZip();
-  for (const [name, bytes] of Object.entries(files)) {
-    zip.file(name, bytes);
-  }
-  return zip.generateAsync({ type: "nodebuffer", compression: "STORE" });
-}
-
 function artifactFetch(artifact: ReturnType<typeof metadata>, bytes: Buffer) {
   return async (input: string) => {
     if (input.endsWith(`/artifacts/${artifact.id}/zip`)) {
@@ -194,32 +188,15 @@ async function packedPluginFixture() {
   const root = tempRoot();
   const entry = plugin("demo");
   const source = sourcePackage(root, entry);
-  const packageRoot = join(root, "archive/package");
-  mkdirSync(join(packageRoot, "dist"), { recursive: true });
-  writeFileSync(join(packageRoot, "package.json"), source.bytes);
-  writeFileSync(join(packageRoot, "openclaw.plugin.json"), JSON.stringify({ id: "demo" }));
-  writeFileSync(join(packageRoot, "dist/index.js"), "export default {};\n");
-  writeFileSync(join(packageRoot, "README.md"), "Prepared plugin package.\n");
   const evidence = join(root, "evidence");
-  mkdirSync(evidence);
   const tarballName = "openclaw-demo.tgz";
   const tarballPath = join(evidence, tarballName);
-  await tar.c(
-    {
-      cwd: join(root, "archive"),
-      file: tarballPath,
-      gzip: true,
-      portable: true,
-      noPax: true,
-      mtime: new Date("1985-10-26T08:15:00.000Z"),
-    },
-    [
-      "package/package.json",
-      "package/openclaw.plugin.json",
-      "package/README.md",
-      "package/dist/index.js",
-    ],
-  );
+  await packNpmFixture(join(root, "archive"), tarballPath, {
+    "package.json": source.bytes,
+    "openclaw.plugin.json": JSON.stringify({ id: "demo" }),
+    "README.md": "Prepared plugin package.\n",
+    "dist/index.js": "export default {};\n",
+  });
   return { root, entry, source, evidence, tarballName, tarballPath };
 }
 
@@ -314,22 +291,22 @@ describe("prepared plugin npm publication", () => {
       artifactDigest: artifact.digest,
       artifactSizeBytes: artifact.size_in_bytes,
     };
-    const admitted = await downloadPreparedNpmRelease({
+    const download = {
       ...expectations(),
       sourceRoot,
       artifact: descriptor,
       token: "synthetic-token",
       fetchImpl: artifactFetch(artifact, bytes),
+    };
+    const admitted = await downloadPreparedNpmRelease({
+      ...download,
       archivePath: join(sourceRoot, "prepared.zip"),
     });
     expect(admitted.packages).toEqual(manifest.packages);
     await expect(
       downloadPreparedNpmRelease({
-        ...expectations(),
-        sourceRoot,
+        ...download,
         artifact: { ...descriptor, runAttempt: 1 },
-        token: "synthetic-token",
-        fetchImpl: artifactFetch(artifact, bytes),
       }),
     ).rejects.toThrow("approved producer");
   });

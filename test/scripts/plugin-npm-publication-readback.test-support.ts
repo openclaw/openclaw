@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
 import * as tar from "tar";
@@ -19,12 +19,36 @@ export const version = "2026.9.2-beta.1";
 const publisherName = `Publish plugin npm package (${packageName})`;
 const preflightName = `Preflight plugin npm package (${packageName})`;
 
-async function zip(entries: Record<string, Buffer>) {
+export async function zipNpmFixture(entries: Record<string, Buffer>) {
   const archive = new JSZip();
   for (const [name, bytes] of Object.entries(entries)) {
     archive.file(name, bytes);
   }
   return archive.generateAsync({ type: "nodebuffer", compression: "STORE" });
+}
+
+export async function packNpmFixture(
+  root: string,
+  file: string,
+  entries: Record<string, string | Buffer>,
+) {
+  mkdirSync(dirname(file), { recursive: true });
+  for (const [name, bytes] of Object.entries(entries)) {
+    const path = join(root, "package", name);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, bytes);
+  }
+  await tar.c(
+    {
+      cwd: root,
+      file,
+      gzip: true,
+      portable: true,
+      noPax: true,
+      mtime: new Date("1985-10-26T08:15:00Z"),
+    },
+    Object.keys(entries).map((name) => `package/${name}`),
+  );
 }
 
 export async function createNpmPublicationReadbackFixture(
@@ -56,31 +80,14 @@ export async function createNpmPublicationReadbackFixture(
     });
   }
   const sourcePackage = readFileSync(join(source.packageDir, "package.json"));
-  const packRoot = join(root, "packed/package");
-  mkdirSync(join(packRoot, "dist"), { recursive: true });
-  writeFileSync(join(packRoot, "package.json"), sourcePackage);
-  writeFileSync(join(packRoot, "openclaw.plugin.json"), JSON.stringify({ id: "demo" }));
-  writeFileSync(join(packRoot, "dist/index.js"), "export default {};\n");
-  writeFileSync(join(packRoot, "README.md"), "Qualified plugin.\n");
   const artifactDir = join(root, "artifact");
-  mkdirSync(artifactDir);
   const tarballPath = join(artifactDir, "demo.tgz");
-  await tar.c(
-    {
-      cwd: join(root, "packed"),
-      file: tarballPath,
-      gzip: true,
-      portable: true,
-      noPax: true,
-      mtime: new Date("1985-10-26T08:15:00Z"),
-    },
-    [
-      "package/package.json",
-      "package/openclaw.plugin.json",
-      "package/dist/index.js",
-      "package/README.md",
-    ],
-  );
+  await packNpmFixture(join(root, "packed"), tarballPath, {
+    "package.json": sourcePackage,
+    "openclaw.plugin.json": JSON.stringify({ id: "demo" }),
+    "dist/index.js": "export default {};\n",
+    "README.md": "Qualified plugin.\n",
+  });
   const artifactName = `plugin-npm-package-demo-${version}-npm-oidc-${producerId}-${producerAttempt}`;
   const common = {
     artifactName,
@@ -102,31 +109,14 @@ export async function createNpmPublicationReadbackFixture(
   const bytes = readFileSync(tarballPath);
   let existingBytes = bytes;
   if (mixed || fault === "archive-identity") {
-    const existingRoot = join(root, "packed-existing");
-    mkdirSync(join(existingRoot, "package"), { recursive: true });
-    writeFileSync(
-      join(existingRoot, "package/package.json"),
-      JSON.stringify({ name: "@openclaw/existing", version }),
-    );
-    writeFileSync(
-      join(existingRoot, "package/openclaw.plugin.json"),
-      JSON.stringify({ id: "existing" }),
-    );
     const existingTarball = join(root, "existing.tgz");
-    await tar.c(
-      {
-        cwd: existingRoot,
-        file: existingTarball,
-        gzip: true,
-        portable: true,
-        noPax: true,
-        mtime: new Date("1985-10-26T08:15:00Z"),
-      },
-      ["package/package.json", "package/openclaw.plugin.json"],
-    );
+    await packNpmFixture(join(root, "packed-existing"), existingTarball, {
+      "package.json": JSON.stringify({ name: "@openclaw/existing", version }),
+      "openclaw.plugin.json": JSON.stringify({ id: "existing" }),
+    });
     existingBytes = readFileSync(existingTarball);
   }
-  const qualifiedZip = await zip({
+  const qualifiedZip = await zipNpmFixture({
     "demo.tgz": bytes,
     "plugin-publication-manifest.json": readFileSync(created.manifestPath),
   });
@@ -226,7 +216,7 @@ export async function createNpmPublicationReadbackFixture(
   if (fault === "artifact") {
     receipt.artifactDigest = `sha256:${"f".repeat(64)}`;
   }
-  const receiptZip = await zip({
+  const receiptZip = await zipNpmFixture({
     "demo-npm-qualification.json": Buffer.from(JSON.stringify(receipt)),
   });
   const receiptMetadata = metadata(
@@ -248,7 +238,7 @@ export async function createNpmPublicationReadbackFixture(
     : fault === "existing-package"
       ? selected.slice(0, 1)
       : selected;
-  const planZip = await zip({
+  const planZip = await zipNpmFixture({
     "npm-publication-plan.json": Buffer.from(
       JSON.stringify({
         sourceSha,
@@ -270,6 +260,16 @@ export async function createNpmPublicationReadbackFixture(
           ]
         : allJobs;
   const ghResponses: Record<string, string> = {};
+  const runResponses = [
+    run(
+      producerId,
+      producerAttempt,
+      true,
+      mode === "prepared" || producerAttempt === runAttempt ? "success" : "failure",
+    ),
+    run(runId, publisherAttempt, true, publisherAttempt < runAttempt ? "failure" : "success"),
+    run(runId, plannerAttempt, true, plannerAttempt < runAttempt ? "failure" : "success"),
+  ];
   const respondGh = (endpoint: string) => {
     if (endpoint.endsWith(`/actions/runs/${runId}`)) {
       return JSON.stringify(run(runId, runAttempt));
@@ -286,25 +286,11 @@ export async function createNpmPublicationReadbackFixture(
       const jobs = allJobs.filter((entry) => entry.run_attempt === attempt);
       return JSON.stringify({ total_count: jobs.length, jobs });
     }
-    if (endpoint.endsWith(`/actions/runs/${producerId}/attempts/${producerAttempt}`)) {
-      return JSON.stringify(
-        run(
-          producerId,
-          producerAttempt,
-          true,
-          mode === "prepared" || producerAttempt === runAttempt ? "success" : "failure",
-        ),
-      );
-    }
-    if (endpoint.endsWith(`/actions/runs/${runId}/attempts/${publisherAttempt}`)) {
-      return JSON.stringify(
-        run(runId, publisherAttempt, true, publisherAttempt < runAttempt ? "failure" : "success"),
-      );
-    }
-    if (endpoint.endsWith(`/actions/runs/${runId}/attempts/${plannerAttempt}`)) {
-      return JSON.stringify(
-        run(runId, plannerAttempt, true, plannerAttempt < runAttempt ? "failure" : "success"),
-      );
+    const attempt = runResponses.find((value) =>
+      endpoint.endsWith(`/actions/runs/${value.id}/attempts/${value.run_attempt}`),
+    );
+    if (attempt) {
+      return JSON.stringify(attempt);
     }
     if (endpoint.endsWith("/actions/artifacts/41")) {
       return JSON.stringify(qualifiedMetadata);
@@ -318,25 +304,20 @@ export async function createNpmPublicationReadbackFixture(
     return response;
   };
   const transferResponses: Record<string, { status: number; bytes: string }> = {};
+  const artifacts = [
+    { metadata: qualifiedMetadata, zip: qualifiedZip },
+    { metadata: receiptMetadata, zip: receiptZip },
+    { metadata: planMetadata, zip: planZip },
+  ];
   const respondFetch = async (url: string) => {
     requests.push(url);
-    if (url.endsWith("/artifacts/41/zip")) {
-      return new Response(new Uint8Array(qualifiedZip));
-    }
-    if (url.endsWith("/artifacts/42/zip")) {
-      return new Response(new Uint8Array(receiptZip));
-    }
-    if (url.endsWith("/artifacts/43/zip")) {
-      return new Response(new Uint8Array(planZip));
-    }
-    if (url.endsWith("/artifacts/41")) {
-      return Response.json(qualifiedMetadata);
-    }
-    if (url.endsWith("/artifacts/42")) {
-      return Response.json(receiptMetadata);
-    }
-    if (url.endsWith("/artifacts/43")) {
-      return Response.json(planMetadata);
+    for (const artifact of artifacts) {
+      if (url.endsWith(`/artifacts/${artifact.metadata.id}/zip`)) {
+        return new Response(new Uint8Array(artifact.zip));
+      }
+      if (url.endsWith(`/artifacts/${artifact.metadata.id}`)) {
+        return Response.json(artifact.metadata);
+      }
     }
     if (url.endsWith(".tgz")) {
       if (fault === "missing-tarball") {
