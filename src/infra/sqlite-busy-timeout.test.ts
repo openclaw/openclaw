@@ -39,17 +39,25 @@ describe("runWithSqliteBusyTimeout", () => {
     expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
   });
 
-  it.each([0, 37])("retains explicit constructor timeout %s without SQL", (timeout) => {
+  it.each([
+    [-1, 0],
+    [0, 0],
+    [37, 37],
+  ])("retains explicit constructor timeout %s as %s without SQL", (timeout, expected) => {
     database = openNodeSqliteDatabase(":memory:", { timeout });
     const prepare = vi.spyOn(database, "prepare");
     const exec = vi.spyOn(database, "exec");
-    expect(readSqliteBusyTimeout(database)).toBe(timeout);
-    setSqliteBusyTimeout(database, timeout);
+    expect(readSqliteBusyTimeout(database)).toBe(expected);
+    setSqliteBusyTimeout(database, expected);
     expect(prepare).not.toHaveBeenCalled();
     expect(exec).not.toHaveBeenCalled();
     prepare.mockRestore();
     exec.mockRestore();
-    expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout });
+    expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: expected });
+    runWithSqliteBusyTimeout(database, 25, () => {
+      expect(database!.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 25 });
+    });
+    expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: expected });
   });
 
   it("restores timeout and lock reporting before the admitted operation finishes", () => {

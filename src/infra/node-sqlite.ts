@@ -293,7 +293,7 @@ export function openNodeSqliteDatabase(
     options?.readOnly !== true,
   );
   if (database.isOpen && options?.timeout !== undefined) {
-    rememberSqliteBusyTimeout(database, options.timeout);
+    rememberSqliteBusyTimeout(database, Math.max(0, options.timeout));
   }
   if (!getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources) {
     registerNodeSqliteDisposeCallback(database, () => {
