@@ -7,8 +7,8 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
-import { preserveDeferredPluginMigrationConfig } from "./deferred-plugin-migration-config.js";
 import { applyMessageQueueDefaults } from "./defaults.js";
+import { preserveDeferredPluginMigrationConfig } from "./deferred-plugin-migration-config.js";
 import { resolveKeyedAgentEntryIncludePreservation } from "./include-write-boundary.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { projectWebhookMigrationIncludeWrite, stampConfigWriteMetadata } from "./io.meta.js";
@@ -169,7 +169,7 @@ export function prepareConfigWritePayload(
     snapshot.parsed,
     undefined,
     deps.homedir(),
-  ) as OpenClawConfig;
+  ) as OpenClawConfig; // SAFETY: validation established the root shape; tilde restoration only changes path strings.
   const stampedOutputConfig = stampConfigWriteMetadata(
     preserveDeferredPluginMigrationConfig({
       sourceConfig: snapshot.parsed,
