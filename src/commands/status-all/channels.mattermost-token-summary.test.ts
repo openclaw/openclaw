@@ -42,6 +42,16 @@ describe("summarizeTokenConfig", () => {
     expect(summary.detail).not.toContain("need bot+app");
   });
 
+  it("preserves generic mixed-token summaries without plugin configuration metadata", () => {
+    const summary = summarize([
+      tokenRow({ account: { token: "configured-token" } }),
+      tokenRow({ account: { token: "" } }),
+    ]);
+
+    expect(summary.state).toBe("ok");
+    expect(summary.detail).toContain("accounts 1/2");
+  });
+
   it("keeps bot+app requirement when both fields exist", () => {
     const summary = summarize([
       tokenRow({
