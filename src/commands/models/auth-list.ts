@@ -40,11 +40,16 @@ export async function modelsAuthListCommand(
     const usage = readAuthProfileUsageStats(store, profileId);
     const expiresAt =
       profile.type === "api_key" ? undefined : timestampMsToIsoString(profile.expires);
-    const blockedActive = isActiveUnusableWindow(usage?.blockedUntil, Date.now());
+    const now = Date.now();
+    const blockedActive = isActiveUnusableWindow(usage?.blockedUntil, now);
     const blockedUntil = blockedActive ? timestampMsToIsoString(usage?.blockedUntil) : undefined;
     const blockedModel = usage?.blockedScope === "model" ? usage.blockedModel : undefined;
-    const cooldownUntil = timestampMsToIsoString(usage?.cooldownUntil);
-    const disabledUntil = timestampMsToIsoString(usage?.disabledUntil);
+    const cooldownUntil = isActiveUnusableWindow(usage?.cooldownUntil, now)
+      ? timestampMsToIsoString(usage?.cooldownUntil)
+      : undefined;
+    const disabledUntil = isActiveUnusableWindow(usage?.disabledUntil, now)
+      ? timestampMsToIsoString(usage?.disabledUntil)
+      : undefined;
     const disabledActive = Boolean(disabledUntil);
     const reason = disabledActive
       ? usage?.disabledReason
@@ -79,11 +84,15 @@ export async function modelsAuthListCommand(
         : {}),
       ...(cooldownUntil ? { cooldownUntil } : {}),
       ...(disabledUntil ? { disabledUntil } : {}),
-      ...(usage?.cooldownReason ? { cooldownReason: usage.cooldownReason } : {}),
-      ...(usage?.cooldownClassification
+      ...(cooldownUntil && usage?.cooldownReason
+        ? { cooldownReason: usage.cooldownReason }
+        : {}),
+      ...(cooldownUntil && usage?.cooldownClassification
         ? { cooldownClassification: usage.cooldownClassification }
         : {}),
-      ...(usage?.disabledReason ? { disabledReason: usage.disabledReason } : {}),
+      ...(disabledUntil && usage?.disabledReason
+        ? { disabledReason: usage.disabledReason }
+        : {}),
       ...(recoveryHint ? { recoveryHint } : {}),
     });
   }
