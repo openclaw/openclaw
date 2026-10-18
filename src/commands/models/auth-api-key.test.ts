@@ -323,6 +323,7 @@ it.each(["configured", "explicit", "ordered"])(
       selection === "explicit" ? profileId : undefined,
     );
     const config = await readConfig();
+    expect(config.auth?.profiles?.[profileId]).toMatchObject(profileConfig);
     expect(savedProfile(profileId, owner ?? null)).toMatchObject({
       key: "synthetic-new-key",
       ...metadata,
