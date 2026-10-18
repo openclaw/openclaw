@@ -1,14 +1,10 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
+import { waitForTransportReady } from "./transport-ready.js";
 
-const transportReadyMocks = vi.hoisted(() => ({
-  injectedSleepError: null as Error | null,
-}));
-
-type TransportReadyModule = typeof import("./transport-ready.js");
-let waitForTransportReady: TransportReadyModule["waitForTransportReady"];
+const transportReadyMocks = vi.hoisted(() => ({ injectedSleepError: null as Error | null }));
 
 vi.mock("./backoff.js", async (importOriginal) => {
   const { sleepWithAbort } = await importOriginal<typeof import("./backoff.js")>();
@@ -24,9 +20,7 @@ vi.mock("./backoff.js", async (importOriginal) => {
 
 describe("waitForTransportReady", () => {
   let runtime: ReturnType<typeof createTestRuntime>;
-  function wait(
-    options: Partial<Parameters<TransportReadyModule["waitForTransportReady"]>[0]> = {},
-  ) {
+  function wait(options: Partial<Parameters<typeof waitForTransportReady>[0]> = {}) {
     return waitForTransportReady({
       label: "test transport",
       timeoutMs: 500,
@@ -36,10 +30,6 @@ describe("waitForTransportReady", () => {
       ...options,
     });
   }
-  beforeAll(async () => {
-    ({ waitForTransportReady } = await import("./transport-ready.js"));
-  });
-
   beforeEach(() => {
     vi.useFakeTimers();
     runtime = createTestRuntime();
@@ -93,57 +83,42 @@ describe("waitForTransportReady", () => {
     );
   });
 
-  it("returns early when aborted", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    await wait({
-      timeoutMs: 200,
-      abortSignal: controller.signal,
-    });
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it.each([150])("stops quietly when aborted during a probe (%dms elapsed)", async (elapsedMs) => {
-    vi.setSystemTime(0);
-    const controller = new AbortController();
-    const probe = createDeferred<{ ok: boolean; error: string }>();
-    const check = vi.fn(() => probe.promise);
-    const waitPromise = wait({
-      timeoutMs: 100,
-      logAfterMs: 0,
-      abortSignal: controller.signal,
-      check,
-    });
-
-    expect(check).toHaveBeenCalledOnce();
-    controller.abort();
-    vi.setSystemTime(elapsedMs);
-    probe.resolve({ ok: false, error: "still down" });
-
-    await expect(waitPromise).resolves.toBeUndefined();
-    expect(check).toHaveBeenCalledOnce();
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("stops polling when aborted during the sleep interval", async () => {
-    const controller = new AbortController();
-    let attempts = 0;
-
-    const waitPromise = wait({
-      abortSignal: controller.signal,
-      check: async () => {
-        attempts += 1;
+  it.each(["before", "probe", "sleep"] as const)(
+    "stops quietly when aborted during %s",
+    async (phase) => {
+      vi.setSystemTime(0);
+      const controller = new AbortController();
+      const probe = createDeferred<{ ok: boolean; error: string }>();
+      const check = vi.fn(async () => {
+        if (phase === "probe") {
+          return probe.promise;
+        }
         setTimeout(() => controller.abort(), 10);
         return { ok: false, error: "still down" };
-      },
-    });
-
-    await vi.advanceTimersByTimeAsync(100);
-    await waitPromise;
-
-    expect(attempts).toBe(1);
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
+      });
+      if (phase === "before") {
+        controller.abort();
+      }
+      const waiting = wait({
+        timeoutMs: 100,
+        logAfterMs: phase === "probe" ? 0 : 100,
+        abortSignal: controller.signal,
+        check,
+      });
+      const attempts = phase === "before" ? 0 : 1;
+      expect(check).toHaveBeenCalledTimes(attempts);
+      if (phase === "probe") {
+        controller.abort();
+        vi.setSystemTime(150);
+        probe.resolve({ ok: false, error: "still down" });
+      } else {
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      await expect(waiting).resolves.toBeUndefined();
+      expect(check).toHaveBeenCalledTimes(attempts);
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
 
   it("logs repeated unknown-error retries and the final timeout message", async () => {
     const waitPromise = wait({

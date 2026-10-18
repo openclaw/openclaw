@@ -41,6 +41,19 @@ let config: OpenClawConfig;
 function check(readConfig: () => OpenClawConfig = () => config, nowMs?: number) {
   return checkTelemetryUpdate(readConfig, { surface: "gateway", fetchImpl, nowMs });
 }
+function pauseOperation<T>(type: SqliteWorkerCommand<TelemetryWorkerOperations>["type"]) {
+  const result = createDeferredCore<T>();
+  const requested = createDeferredCore();
+  const previous = execute.getMockImplementation()!;
+  execute.mockImplementation((command) => {
+    if (command.type !== type) {
+      return previous(command);
+    }
+    requested.resolve();
+    return result.promise;
+  });
+  return { ...result, requested: requested.promise };
+}
 beforeEach(async () => {
   config = { telemetry: { enabled: true } };
   testState = await createOpenClawTestState({ layout: "state-only", prefix: "telemetry-async-" });
@@ -79,27 +92,14 @@ it("retains best-effort reads and accepted updates when storage cannot admit wor
   ).toBe(0);
   expect(await resolveTelemetryStatus(config)).toMatchObject({ enabled: true, reason: "enabled" });
   expect(await check(() => config, 100)).toEqual({ version: "2026.8.24" });
-  expect(await check(() => config, 200)).toEqual({
-    version: "2026.8.24",
-  });
+  expect(await check(() => config, 200)).toEqual({ version: "2026.8.24" });
   expect(fetchImpl).toHaveBeenCalledOnce();
   expect(execute).not.toHaveBeenCalled();
 });
 
 it("coalesces a cold check through storage preparation and accepted response persistence", async () => {
-  const read = createDeferredCore<TelemetryState>();
-  const persisted = createDeferredCore<TelemetryState>();
-  const persistenceRequested = createDeferredCore();
-  execute.mockImplementation(async (command) => {
-    if (command.type === "telemetry.readState") {
-      return await read.promise;
-    }
-    if (command.type === "telemetry.persistSuccess") {
-      persistenceRequested.resolve();
-      return await persisted.promise;
-    }
-    return 3;
-  });
+  const read = pauseOperation<TelemetryState>("telemetry.readState");
+  const persisted = pauseOperation<TelemetryState>("telemetry.persistSuccess");
   let settled = false;
   const first = check(() => ({}), 100).then((value) => {
     settled = true;
@@ -109,7 +109,7 @@ it("coalesces a cold check through storage preparation and accepted response per
   try {
     expect(fetchImpl).not.toHaveBeenCalled();
     read.resolve({});
-    await persistenceRequested.promise;
+    await persisted.requested;
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(settled).toBe(false);
   } finally {
@@ -117,16 +117,17 @@ it("coalesces a cold check through storage preparation and accepted response per
     persisted.resolve({ lastPingAt: 101, latestVersion: "2026.8.25" });
     await Promise.all([first, second]);
   }
-  expect(await first).toEqual({ version: "2026.8.25" });
-  expect(await second).toEqual(await first);
+  expect(await Promise.all([first, second])).toEqual([
+    { version: "2026.8.25" },
+    { version: "2026.8.25" },
+  ]);
   expect(
     execute.mock.calls.filter(([command]) => command.type === "telemetry.persistSuccess"),
   ).toHaveLength(1);
 });
 
 it("keeps the captured endpoint and storage destination across the first read wait", async () => {
-  const read = createDeferredCore<TelemetryState>();
-  execute.mockImplementationOnce(() => read.promise);
+  const read = pauseOperation<TelemetryState>("telemetry.readState");
   const endpoint = process.env.OPENCLAW_TELEMETRY_ENDPOINT;
   const checking = check();
   const context = contexts[0];
@@ -145,20 +146,12 @@ it("keeps the captured endpoint and storage destination across the first read wa
 it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
   "honors %s when the canonical snapshot changes during the feature count",
   async (change) => {
-    const count = createDeferredCore<number>();
-    const countRequested = createDeferredCore();
-    execute.mockImplementation(async (command) => {
-      if (command.type === "telemetry.countRecentSessions") {
-        countRequested.resolve();
-        return await count.promise;
-      }
-      return command.type === "telemetry.persistSuccess" ? command.input.state : {};
-    });
+    const count = pauseOperation<number>("telemetry.countRecentSessions");
     setRuntimeConfigSnapshot(config);
     expect(getRuntimeConfig()).toBe(config);
     const checking = check(getRuntimeConfig);
     try {
-      await countRequested.promise;
+      await count.requested;
       const replacement: OpenClawConfig = {
         telemetry: { enabled: change !== "opt-out" },
         update: { checkOnStart: change !== "update-disabled" },
@@ -166,8 +159,7 @@ it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
       setRuntimeConfigSnapshot(replacement);
       expect(getRuntimeConfig()).toBe(replacement);
       expect(getRuntimeConfig()).not.toBe(config);
-      expect(config.telemetry?.enabled).toBe(true);
-      expect(config.update).toBeUndefined();
+      expect(config).toEqual({ telemetry: { enabled: true } });
       if (change === "do-not-track") {
         vi.stubEnv("DO_NOT_TRACK", "1");
       }

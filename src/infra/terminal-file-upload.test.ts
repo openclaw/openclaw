@@ -36,14 +36,21 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const storageLimitBytes = 256 * 1024 * 1024;
 const directoryLimit = 64;
 
-async function createRetainedUploads(root: string, sizes: number[] | number): Promise<string[]> {
-  const byteSizes = typeof sizes === "number" ? Array<number>(sizes).fill(0) : sizes;
+async function makeUpload(directory: string, content: string, mtime?: number) {
+  await mkdir(directory, { mode: 0o700 });
+  const file = path.join(directory, "retained.bin");
+  await writeFile(file, content);
+  if (mtime !== undefined) {
+    await utimes(directory, new Date(mtime), new Date(mtime));
+  }
+  return file;
+}
+async function createUploads(root: string, sizes: number[] | number, bytes = 0) {
+  const byteSizes = typeof sizes === "number" ? Array<number>(sizes).fill(bytes) : sizes;
   return Promise.all(
     byteSizes.map(async (size, index) => {
       const directory = path.join(root, `openclaw-terminal-upload-retained-${index}`);
-      const file = path.join(directory, "retained.bin");
-      await mkdir(directory, { mode: 0o700 });
-      await writeFile(file, "");
+      const file = await makeUpload(directory, "");
       if (size > 0) {
         await truncate(file, size);
       }
@@ -158,24 +165,18 @@ describe("terminal file upload", () => {
       const failure = await stage("blocked.bin", "AA==").catch((error: unknown) => error);
 
       expect(failure).toBeInstanceOf(Error);
-      expect(failure).toMatchObject({
-        message: expect.stringContaining("Stop all Gateway and node-host processes"),
-      });
-      expect(failure).toMatchObject({
-        message: expect.stringContaining(path.relative(root, lockDirectory)),
-      });
       expect(failure).toMatchObject({ message: expect.not.stringContaining(lockDirectory) });
-      expect(failure).toMatchObject({
-        message: expect.stringContaining("remove only this lock directory"),
-      });
-      expect(failure).toMatchObject({
-        message: expect.stringContaining(
-          process.platform === "win32"
-            ? "home directory of the account running this terminal's Gateway or node host"
-            : "system temporary directory used by this terminal's Gateway or node-host process",
-        ),
-      });
-      expect(failure).toMatchObject({ message: expect.stringContaining("then restart them") });
+      for (const message of [
+        "Stop all Gateway and node-host processes",
+        path.relative(root, lockDirectory),
+        "remove only this lock directory",
+        process.platform === "win32"
+          ? "home directory of the account running this terminal's Gateway or node host"
+          : "system temporary directory used by this terminal's Gateway or node-host process",
+        "then restart them",
+      ]) {
+        expect(failure).toMatchObject({ message: expect.stringContaining(message) });
+      }
       expect(await retainedDirectories(root)).toHaveLength(1);
       expect(await readFile(initial.path)).toEqual(Buffer.from([0]));
       if (payload === null) {
@@ -254,88 +255,64 @@ describe("terminal file upload", () => {
     expect(await stagedName("..")).toBe("upload");
   });
 
-  it.each([directoryLimit + 1])(
-    "keeps the original recovered expiry after renames in %i upload directories",
-    async (count) => {
-      vi.useFakeTimers({ now: Date.now() + 60_000 });
+  it("keeps the recovered expiry after renaming an over-budget set of upload directories", async () => {
+    const count = directoryLimit + 1;
+    vi.useFakeTimers({ now: Date.now() + 60_000 });
 
-      const remainingMs = 2 * 60 * 60 * 1000;
-      const files = await createRetainedUploads(root, count);
-      const originalTime = new Date(Date.now() - 22 * 60 * 60 * 1000);
-      await Promise.all(
-        files.map((file) => utimes(path.dirname(file), originalTime, originalTime)),
-      );
-      await ensureTerminalUploadCleanup({ tempRoot: root });
+    const remainingMs = 2 * 60 * 60 * 1000;
+    const files = await createUploads(root, count);
+    const originalTime = new Date(Date.now() - 22 * 60 * 60 * 1000);
+    await Promise.all(files.map((file) => utimes(path.dirname(file), originalTime, originalTime)));
+    await ensureTerminalUploadCleanup({ tempRoot: root });
 
-      const renamed = files.map((file) => path.join(path.dirname(file), "renamed.bin"));
-      await Promise.all(files.map((file, index) => rename(file, renamed[index]!)));
-      await vi.advanceTimersByTimeAsync(remainingMs - 1);
-      expect(await retainedDirectories(root)).toHaveLength(count);
-      expect(vi.getTimerCount()).toBe(1);
+    const renamed = files.map((file) => path.join(path.dirname(file), "renamed.bin"));
+    await Promise.all(files.map((file, index) => rename(file, renamed[index]!)));
+    await vi.advanceTimersByTimeAsync(remainingMs - 1);
+    expect(await retainedDirectories(root)).toHaveLength(count);
+    expect(vi.getTimerCount()).toBe(1);
 
-      await advanceUploadCleanup(root, 1);
+    await advanceUploadCleanup(root, 1);
 
-      expect(await retainedDirectories(root)).toHaveLength(0);
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
+    expect(await retainedDirectories(root)).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("gives replacement directories their own expiry with 64-bit file identifiers", async () => {
+    vi.useFakeTimers({ now: Date.now() + 60_000 });
 
-  it.each([{ identity: "64-bit", largeFileIds: true }])(
-    "gives a replacement directory its own expiry with $identity file identifiers",
-    async ({ largeFileIds }) => {
-      vi.useFakeTimers({ now: Date.now() + 60_000 });
-
-      const directory = path.join(root, "openclaw-terminal-upload-replaced");
-      const movedDirectory = path.join(root, "operator-kept");
-      const retentionMs = 24 * 60 * 60 * 1000;
-      const remainingMs = 2 * 60 * 60 * 1000;
-      const lstatMock = vi.mocked(lstat);
-      let inode = 2n ** 54n;
-      if (largeFileIds) {
-        lstatMock.mockImplementation(async (target, options) => {
-          const stats = await actualFs.lstat(target, options);
-          if (String(target) === directory) {
-            stats.ino = typeof stats.ino === "bigint" ? inode : Number(inode);
-          }
-          return stats;
-        });
+    const directory = path.join(root, "openclaw-terminal-upload-replaced");
+    const movedDirectory = path.join(root, "operator-kept");
+    const retentionMs = 24 * 60 * 60 * 1000;
+    const remainingMs = 2 * 60 * 60 * 1000;
+    const lstatMock = vi.mocked(lstat);
+    let inode = 2n ** 54n;
+    lstatMock.mockImplementation(async (target, options) => {
+      const stats = await actualFs.lstat(target, options);
+      if (String(target) === directory) {
+        stats.ino = typeof stats.ino === "bigint" ? inode : Number(inode);
       }
-      await mkdir(directory, { mode: 0o700 });
-      await writeFile(path.join(directory, "original.bin"), "keep outside staging");
-      const originalTime = new Date(Date.now() - retentionMs + remainingMs);
-      await utimes(directory, originalTime, originalTime);
-      await ensureTerminalUploadCleanup({ tempRoot: root });
+      return stats;
+    });
+    await makeUpload(directory, "original", Date.now() - retentionMs + remainingMs);
+    await ensureTerminalUploadCleanup({ tempRoot: root });
 
-      await rename(directory, movedDirectory);
-      inode += 1n;
-      await mkdir(directory, { mode: 0o700 });
-      await writeFile(path.join(directory, "replacement.bin"), "new upload directory");
-      const replacementTime = new Date(Date.now());
-      await utimes(directory, replacementTime, replacementTime);
-      await vi.advanceTimersByTimeAsync(remainingMs);
-      await ensureTerminalUploadCleanup({ tempRoot: root });
+    await rename(directory, movedDirectory);
+    inode += 1n;
+    const replacementFile = await makeUpload(directory, "replacement", Date.now());
+    await vi.advanceTimersByTimeAsync(remainingMs);
+    await ensureTerminalUploadCleanup({ tempRoot: root });
 
-      expect(await readFile(path.join(directory, "replacement.bin"), "utf8")).toBe(
-        "new upload directory",
-      );
-      await advanceUploadCleanup(root, retentionMs - remainingMs);
-      await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(await readFile(path.join(movedDirectory, "original.bin"), "utf8")).toBe(
-        "keep outside staging",
-      );
-    },
-  );
-
+    expect(await readFile(replacementFile, "utf8")).toBe("replacement");
+    await advanceUploadCleanup(root, retentionMs - remainingMs);
+    await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(movedDirectory, "retained.bin"), "utf8")).toBe("original");
+  });
   it("expires a future-dated upload without extending retention on each recovery scan", async () => {
     const nowMs = Date.UTC(2026, 8, 7, 12);
     const retentionMs = 1_000;
     vi.useFakeTimers({ now: nowMs });
 
     const directory = path.join(root, "openclaw-terminal-upload-future");
-    await mkdir(directory, { mode: 0o700 });
-    await writeFile(path.join(directory, "retained.bin"), "keep until expiry");
-    const future = new Date(nowMs + 2 ** 31 + retentionMs);
-    await utimes(directory, future, future);
+    const retainedFile = await makeUpload(directory, "retained", nowMs + 2 ** 31 + retentionMs);
 
     await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs });
 
@@ -344,7 +321,7 @@ describe("terminal file upload", () => {
     await vi.advanceTimersByTimeAsync(retentionMs / 2);
     await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs });
     expect((await stat(directory)).mtimeMs).toBe(nowMs);
-    expect(await readFile(path.join(directory, "retained.bin"), "utf8")).toBe("keep until expiry");
+    expect(await readFile(retainedFile, "utf8")).toBe("retained");
 
     await advanceUploadCleanup(root, retentionMs / 2);
     await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
@@ -354,7 +331,7 @@ describe("terminal file upload", () => {
   });
 
   it("admits only the last available directory across simultaneous uploads after restart", async () => {
-    await createRetainedUploads(root, directoryLimit - 1);
+    await createUploads(root, directoryLimit - 1);
 
     const results = await Promise.allSettled(
       ["first.bin", "second.bin"].map((name) => stage(name)),
@@ -371,7 +348,7 @@ describe("terminal file upload", () => {
       { length: storageLimitBytes / MAX_TERMINAL_UPLOAD_BYTES },
       (_, index) => (index === 0 ? MAX_TERMINAL_UPLOAD_BYTES - 1 : MAX_TERMINAL_UPLOAD_BYTES),
     );
-    await createRetainedUploads(root, sizes);
+    await createUploads(root, sizes);
 
     const lastByte = await stage("last-byte.bin", "AA==");
 
@@ -385,10 +362,7 @@ describe("terminal file upload", () => {
   it("keeps partially removed expired uploads charged and retries at the original deadline", async () => {
     vi.useFakeTimers({ now: Date.now() + 60_000 });
 
-    const files = await createRetainedUploads(
-      root,
-      Array.from({ length: directoryLimit }, () => storageLimitBytes / directoryLimit),
-    );
+    const files = await createUploads(root, directoryLimit, storageLimitBytes / directoryLimit);
     const expiredFile = files[0]!;
     const expiredDirectory = path.dirname(expiredFile);
     const removableFile = path.join(expiredDirectory, "removed-before-failure.bin");
@@ -420,12 +394,10 @@ describe("terminal file upload", () => {
   });
 
   it("does not treat an uninspectable retained file as free capacity", async () => {
-    const files = await createRetainedUploads(
+    const files = await createUploads(
       root,
-      Array.from(
-        { length: storageLimitBytes / MAX_TERMINAL_UPLOAD_BYTES },
-        () => MAX_TERMINAL_UPLOAD_BYTES,
-      ),
+      storageLimitBytes / MAX_TERMINAL_UPLOAD_BYTES,
+      MAX_TERMINAL_UPLOAD_BYTES,
     );
     const lstatMock = vi.mocked(lstat);
     let inspectionFailed = false;
@@ -447,7 +419,7 @@ describe("terminal file upload", () => {
   it("bounds cleanup timers for over-budget recovery and repeated external deletion", async () => {
     vi.useFakeTimers();
 
-    const files = await createRetainedUploads(root, directoryLimit + 1);
+    const files = await createUploads(root, directoryLimit + 1);
     await ensureTerminalUploadCleanup({ tempRoot: root });
 
     expect(await retainedDirectories(root)).toHaveLength(directoryLimit + 1);

@@ -8,6 +8,8 @@ import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import type { GatewayScheduler } from "./gateway-scheduler.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 
+type CampaignState = NonNullable<ReturnType<UpdateCampaignController["getState"]>>;
+const packageTarget = { kind: "package" as const, version: "2.0.0" };
 const randomUUIDMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:crypto", async () => {
@@ -64,9 +66,12 @@ describe("UpdateCampaignController", () => {
     await scheduler.stop();
   });
 
+  function expectState(state: CampaignState["state"], fields: Partial<CampaignState> = {}) {
+    expect(controller.getState()).toMatchObject({ state, ...fields });
+  }
   function announce(options: Partial<Parameters<UpdateCampaignController["announce"]>[0]> = {}) {
     controller.announce({
-      target: { kind: "package", version: "2.0.0" },
+      target: packageTarget,
       inspect: createInspectors(() => 0),
       apply,
       onChange,
@@ -77,21 +82,14 @@ describe("UpdateCampaignController", () => {
   it("keeps the countdown deadline absolute across a clock rollback and applies once", async () => {
     announce();
 
-    expect(controller.getState()).toMatchObject({
-      state: "countdown",
-      applyAtMs: 1_060_000,
-      forceAtMs: 1_900_000,
-    });
+    expectState("countdown", { applyAtMs: 1_060_000, forceAtMs: 1_900_000 });
     await clock.advanceBy(59_000);
     clock.setTime(1_050_000);
     await clock.wake();
     expect(apply).not.toHaveBeenCalled();
     await clock.advanceBy(10_000);
-    expect(controller.getState()?.state).toBe("applying");
-    expect(apply).toHaveBeenCalledWith({
-      forced: false,
-      target: { kind: "package", version: "2.0.0" },
-    });
+    expectState("applying");
+    expect(apply).toHaveBeenCalledWith({ forced: false, target: packageTarget });
     await clock.advanceBy(5 * 60_000);
     expect(apply).toHaveBeenCalledOnce();
   });
@@ -106,23 +104,20 @@ describe("UpdateCampaignController", () => {
         getTerminalSessions: () => 2,
       }),
     });
-    expect(controller.getState()?.state).toBe("waiting-for-idle");
+    expectState("waiting-for-idle");
 
     terminalPersistence = 0;
     queueSize = 1;
     clock.setTime(900_000);
     await clock.wake();
-    expect(controller.getState()?.state).toBe("waiting-for-idle");
+    expectState("waiting-for-idle");
     queueSize = 0;
     await clock.advanceBy(5_000);
-    expect(controller.getState()?.state).toBe("countdown");
+    expectState("countdown");
 
     await clock.advanceBy(60_000);
-    expect(controller.getState()?.state).toBe("applying");
-    expect(apply).toHaveBeenCalledWith({
-      forced: false,
-      target: { kind: "package", version: "2.0.0" },
-    });
+    expectState("applying");
+    expect(apply).toHaveBeenCalledWith({ forced: false, target: packageTarget });
   });
 
   it("keeps an announced countdown stable when active work begins", async () => {
@@ -135,10 +130,10 @@ describe("UpdateCampaignController", () => {
     const applyAtMs = controller.getState()?.applyAtMs;
     busy = 1;
     await clock.advanceBy(5_000);
-    expect(controller.getState()).toMatchObject({ state: "countdown", applyAtMs });
+    expectState("countdown", { applyAtMs });
 
     await clock.advanceBy(55_000);
-    expect(controller.getState()?.state).toBe("applying");
+    expectState("applying");
     expect(apply).toHaveBeenCalledWith({
       forced: false,
       target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "one", commitsBehind: 1 },
@@ -148,15 +143,10 @@ describe("UpdateCampaignController", () => {
   it("starts a fresh campaign for a newer target and clears availability", () => {
     const inspect = createInspectors(() => 1);
 
-    announce({
-      inspect,
-    });
+    announce({ inspect });
     const first = controller.getState();
     clock.setTime(1_010_000);
-    announce({
-      target: { kind: "package", version: "3.0.0" },
-      inspect,
-    });
+    announce({ target: { kind: "package", version: "3.0.0" }, inspect });
 
     expect(controller.getState()).toMatchObject({
       id: "campaign-2",
@@ -175,9 +165,9 @@ describe("UpdateCampaignController", () => {
     expect(controller.adopt()).toEqual({
       status: "adopted",
       campaignId: "campaign-1",
-      target: { kind: "package", version: "2.0.0" },
+      target: packageTarget,
     });
-    expect(controller.getState()?.state).toBe("applying");
+    expectState("applying");
     expect(controller.hold()).toBe(false);
     await clock.advanceBy(15 * 60_000);
     expect(apply).not.toHaveBeenCalled();
@@ -199,7 +189,7 @@ describe("UpdateCampaignController", () => {
     announce({ target, inspect: createInspectors(() => 1) });
 
     expect(controller.adopt(requested)).toEqual({ status: "mismatch" });
-    expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "waiting-for-idle" });
+    expectState("waiting-for-idle", { id: "campaign-1" });
     expect(onChange).toHaveBeenCalledOnce();
     expect(apply).not.toHaveBeenCalled();
 
@@ -208,7 +198,7 @@ describe("UpdateCampaignController", () => {
       campaignId: "campaign-1",
       target,
     });
-    expect(controller.getState()?.state).toBe("applying");
+    expectState("applying");
   });
 
   it("keeps an applying campaign unchanged for a conflicting adoption", async () => {
@@ -229,7 +219,7 @@ describe("UpdateCampaignController", () => {
     };
 
     expect(controller.adopt(requestedTarget)).toEqual({ status: "applying" });
-    expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "applying" });
+    expectState("applying", { id: "campaign-1" });
     expect(onChange).toHaveBeenCalledTimes(transitionCount);
     expect(apply).toHaveBeenCalledOnce();
   });
@@ -240,8 +230,7 @@ describe("UpdateCampaignController", () => {
     });
 
     expect(controller.hold()).toBe(true);
-    expect(controller.getState()).toMatchObject({
-      state: "waiting-for-idle",
+    expectState("waiting-for-idle", {
       holdUntilMs: 4_600_000,
       forceAtMs: 5_500_000,
       updatedAtMs: 1_000_000,
@@ -250,42 +239,32 @@ describe("UpdateCampaignController", () => {
     expect(controller.hold()).toBe(false);
 
     await clock.advanceBy(60 * 60_000);
-    expect(controller.getState()).toMatchObject({
-      state: "waiting-for-idle",
-      holdUntilMs: 4_600_000,
-    });
+    expectState("waiting-for-idle", { holdUntilMs: 4_600_000 });
     expect(controller.hold()).toBe(false);
     expect(scheduler.nextWakeAtMs).toBe(4_605_000);
     expect(apply).not.toHaveBeenCalled();
     await clock.advanceBy(15 * 60_000);
-    expect(controller.getState()?.state).toBe("applying");
-    expect(apply).toHaveBeenCalledWith({
-      forced: true,
-      target: { kind: "package", version: "2.0.0" },
-    });
+    expectState("applying");
+    expect(apply).toHaveBeenCalledWith({ forced: true, target: packageTarget });
   });
 
   it("holds a countdown, drops its apply deadline, and allows adoption", async () => {
     announce();
-    expect(controller.getState()?.state).toBe("countdown");
+    expectState("countdown");
 
     expect(controller.hold(10_000)).toBe(true);
-    expect(controller.getState()).toMatchObject({
-      state: "waiting-for-idle",
-      holdUntilMs: 1_010_000,
-      forceAtMs: 1_910_000,
-    });
+    expectState("waiting-for-idle", { holdUntilMs: 1_010_000, forceAtMs: 1_910_000 });
     expect(controller.getState()?.applyAtMs).toBeUndefined();
     await clock.advanceBy(9_999);
-    expect(controller.getState()?.state).toBe("waiting-for-idle");
+    expectState("waiting-for-idle");
     expect(apply).not.toHaveBeenCalled();
 
     expect(controller.adopt()).toMatchObject({
       status: "adopted",
       campaignId: "campaign-1",
-      target: { kind: "package", version: "2.0.0" },
+      target: packageTarget,
     });
-    expect(controller.getState()?.state).toBe("applying");
+    expectState("applying");
     await clock.advanceBy(20 * 60_000);
     expect(apply).not.toHaveBeenCalled();
   });
@@ -295,11 +274,7 @@ describe("UpdateCampaignController", () => {
     expect(controller.hold(10_000)).toBe(true);
 
     await clock.advanceBy(10_000);
-    expect(controller.getState()).toMatchObject({
-      state: "countdown",
-      holdUntilMs: 1_010_000,
-      applyAtMs: 1_070_000,
-    });
+    expectState("countdown", { holdUntilMs: 1_010_000, applyAtMs: 1_070_000 });
     expect(controller.hold()).toBe(false);
     expect(scheduler.nextWakeAtMs).toBe(1_015_000);
     expect(apply).not.toHaveBeenCalled();
@@ -314,26 +289,19 @@ describe("UpdateCampaignController", () => {
     expect(onChange).toHaveBeenLastCalledWith(undefined);
 
     announce(announcement);
-    expect(controller.getState()).toMatchObject({ id: "campaign-2", state: "countdown" });
+    expectState("countdown", { id: "campaign-2" });
   });
 
   it("keeps the applying campaign owner when a newer target is announced", async () => {
     const firstApply = vi.fn(async () => "handoff" as const);
     const nextApply = vi.fn(async () => "handoff" as const);
     const inspect = createInspectors(() => 0);
-    announce({
-      inspect,
-      apply: firstApply,
-    });
+    announce({ inspect, apply: firstApply });
     await clock.advanceBy(60_000);
     const applying = controller.getState();
     onChange.mockClear();
 
-    announce({
-      target: { kind: "package", version: "3.0.0" },
-      inspect,
-      apply: nextApply,
-    });
+    announce({ target: { kind: "package", version: "3.0.0" }, inspect, apply: nextApply });
     await clock.advanceBy(15 * 60_000);
 
     expect(controller.getState()).toEqual(applying);
@@ -355,15 +323,15 @@ describe("UpdateCampaignController", () => {
     const wake = clock.advanceBy(60_000);
     try {
       await applying.promise;
-      expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "applying" });
+      expectState("applying", { id: "campaign-1" });
 
       controller.clear();
       announce({ target: { kind: "package", version: "3.0.0" } });
-      expect(controller.getState()).toMatchObject({ id: "campaign-2", state: "countdown" });
+      expectState("countdown", { id: "campaign-2" });
     } finally {
       outcome.resolve("failed");
       await wake;
     }
-    expect(controller.getState()).toMatchObject({ id: "campaign-2", state: "countdown" });
+    expectState("countdown", { id: "campaign-2" });
   });
 });

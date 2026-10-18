@@ -5,6 +5,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { UpdateAdmissionContext } from "./update-admission-contract.js";
 import { runUpdateCandidateAdmission } from "./update-candidate-admission.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
@@ -27,8 +28,7 @@ let childEnv: NodeJS.ProcessEnv;
 let observedContext: unknown;
 let observedModes: { file: number; directory: number };
 let fixture: { code: number | null; stdout: string; stderr?: string; pending?: boolean };
-let spawned: Promise<void>;
-let resolveSpawned: () => void;
+let spawned: ReturnType<typeof createDeferredCore<void>>;
 
 function admit(): UpdateAdmissionVerdict {
   return {
@@ -57,6 +57,12 @@ function invalid(
 ) {
   return [name, code, verdictJson(fields, facts), "invalid-verdict"] as const;
 }
+
+const checks = (count: number, name = (index: number) => `check-${index}`) =>
+  Array.from({ length: count }, (_, index) => ({ name: name(index), status: "ok" }));
+const badChecks = (name: string, values: unknown) => invalid(name, {}, { checks: values });
+const refusal = (name: string, reasons: unknown[] = []) =>
+  invalid(name, { verdict: "refuse", reasons }, {}, 3);
 
 async function setMarker(marker: unknown): Promise<void> {
   await fs.writeFile(
@@ -105,9 +111,7 @@ beforeEach(async () => {
   };
   fixture = { code: 0, stdout: JSON.stringify(admit()) };
   contextPath = "";
-  spawned = new Promise((resolve) => {
-    resolveSpawned = resolve;
-  });
+  spawned = createDeferredCore();
   mocks.spawn.mockImplementation((_command: string, args: string[], options: SpawnOptions) => {
     child = new ChildProcess();
     Object.defineProperty(child, "pid", { value: 654 });
@@ -120,7 +124,7 @@ beforeEach(async () => {
       file: fsSync.statSync(contextPath).mode & 0o777,
       directory: fsSync.statSync(path.dirname(contextPath)).mode & 0o777,
     };
-    resolveSpawned();
+    spawned.resolve();
     if (!fixture.pending) {
       queueMicrotask(() => {
         if (fixture.stdout) {
@@ -244,9 +248,11 @@ describe("runUpdateCandidateAdmission", () => {
         OPENCLAW_NO_RESPAWN: "1",
         PROVIDER_API_KEY: "synthetic-provider-key",
       });
-      expect(env.OPENCLAW_UPDATE_RUN_ID).toBe("inherited-run");
-      expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(path.join(root, "old-source"));
-      expect(env.NODE_COMPILE_CACHE).toBe(path.join(root, "live-cache"));
+      expect(env).toMatchObject({
+        OPENCLAW_UPDATE_RUN_ID: "inherited-run",
+        OPENCLAW_DEV_SOURCE_ROOT: path.join(root, "old-source"),
+        NODE_COMPILE_CACHE: path.join(root, "live-cache"),
+      });
       await expect(fs.access(path.dirname(contextPath))).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
@@ -284,31 +290,22 @@ describe("runUpdateCandidateAdmission", () => {
         expect(result).toEqual({ owner: "candidate", verdict: reply });
         return;
       }
-      expect(result.owner).toBe("candidate");
-      expect(result.verdict?.verdict).toBe("refuse");
-      expect(result.verdict?.reasons.map((reason) => reason.code)).toEqual(
+      const verdict = result.verdict;
+      expect(result).toMatchObject({ owner: "candidate", verdict: { verdict: "refuse" } });
+      expect(verdict?.reasons.map((reason) => reason.code)).toEqual(
         reply.reasons.map((reason) => reason.code),
       );
-      expect(result.verdict?.warnings).toHaveLength(UPDATE_RUN_DIAGNOSTIC_LIMIT);
-      expect(result.verdict?.warnings[0]?.code).toBe("warning-0");
-      expect(
-        result.verdict?.warnings.every(
-          (warning) => warning.message.length <= UPDATE_RUN_TEXT_LIMIT,
-        ),
-      ).toBe(true);
-      expect(result.verdict?.facts.checks[0]).toMatchObject({
-        name: "config",
-        status: "refuse",
-      });
-      expect(result.verdict?.facts.checks[0]?.detail?.length).toBeLessThanOrEqual(
-        UPDATE_RUN_TEXT_LIMIT,
-      );
-      for (const reason of result.verdict?.reasons ?? []) {
-        expect(reason.message.length).toBeLessThanOrEqual(UPDATE_RUN_TEXT_LIMIT);
+      expect(verdict?.warnings).toHaveLength(UPDATE_RUN_DIAGNOSTIC_LIMIT);
+      expect(verdict?.warnings[0]?.code).toBe("warning-0");
+      expect(verdict?.facts.checks[0]).toMatchObject({ name: "config", status: "refuse" });
+      for (const text of [
+        verdict?.facts.checks[0]?.detail,
+        verdict?.reasons[0]?.nextAction,
+        ...(verdict?.reasons ?? []).map((reason) => reason.message),
+        ...(verdict?.warnings ?? []).map((warning) => warning.message),
+      ]) {
+        expect(text?.length).toBeLessThanOrEqual(UPDATE_RUN_TEXT_LIMIT);
       }
-      expect(result.verdict?.reasons[0]?.nextAction?.length).toBeLessThanOrEqual(
-        UPDATE_RUN_TEXT_LIMIT,
-      );
     },
   );
 
@@ -319,55 +316,23 @@ describe("runUpdateCandidateAdmission", () => {
     ["protocol mismatch", 0, verdictJson({ protocol: 2 }), "protocol-mismatch"],
     ["wrong shape", 0, JSON.stringify({ protocol: 1, verdict: "admit" }), "invalid-verdict"],
     invalid("wrong exit", {}, {}, 3),
-    invalid("empty refusal", { verdict: "refuse" }, {}, 3),
-    invalid("duplicate check", {}, { checks: [...admit().facts.checks, ...admit().facts.checks] }),
+    refusal("empty refusal"),
+    badChecks("duplicate check", [...admit().facts.checks, ...admit().facts.checks]),
     ["oversized output", 0, "x".repeat(1024 * 1024 + 1), "output-limit"],
-    invalid(
+    refusal(
       "too many reasons",
-      {
-        verdict: "refuse",
-        reasons: Array.from({ length: 33 }, () => ({
-          code: "invalid-config",
-          message: "Invalid config.",
-        })),
-      },
-      {},
-      3,
+      Array.from({ length: 33 }, () => ({
+        code: "invalid-config",
+        message: "Invalid config.",
+      })),
     ),
-    invalid(
-      "too many checks",
-      {},
-      {
-        checks: Array.from({ length: 33 }, (_, index) => ({
-          name: `check-${index}`,
-          status: "ok",
-        })),
-      },
-    ),
-    invalid(
-      "oversized reason identity",
-      {
-        verdict: "refuse",
-        reasons: [{ code: "x".repeat(81), message: "Invalid config." }],
-      },
-      {},
-      3,
-    ),
-    invalid(
-      "oversized multibyte check identity",
-      {},
-      { checks: [{ name: "é".repeat(65), status: "ok" }] },
-    ),
+    badChecks("too many checks", checks(33)),
+    refusal("oversized reason identity", [{ code: "x".repeat(81), message: "Invalid config." }]),
+    badChecks("oversized multibyte check identity", [{ name: "é".repeat(65), status: "ok" }]),
     invalid("oversized candidate version", {}, { candidateVersion: "v".repeat(129) }),
-    invalid(
+    badChecks(
       "irreducible history metadata",
-      {},
-      {
-        checks: Array.from({ length: 8 }, (_, index) => ({
-          name: `${index}${"c".repeat(127)}`,
-          status: "ok",
-        })),
-      },
+      checks(8, (index) => `${index}${"c".repeat(127)}`),
     ),
   ] as const)(
     "falls back after %s and retains the last redacted stderr diagnostic",
@@ -395,7 +360,7 @@ describe("runUpdateCandidateAdmission", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     fixture.pending = true;
     const result = run({ timeoutMs: 1_000 });
-    await spawned;
+    await spawned.promise;
     await vi.advanceTimersByTimeAsync(900);
     expect(await result).toMatchObject({
       owner: "installed",

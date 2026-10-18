@@ -6,9 +6,7 @@ import { DEFAULT_POSIX_TMP_ROOT, resolvePreferredOpenClawTmpDir } from "./tmp-op
 
 type TmpDirOptions = NonNullable<Parameters<typeof resolvePreferredOpenClawTmpDir>[0]>;
 
-function fallbackTmp(uid = 501) {
-  return path.join("/var/fallback", `openclaw-${uid}`);
-}
+const fallbackTmp = path.join("/var/fallback", "openclaw-501");
 
 function nodeErrorWithCode(code: string) {
   return Object.assign(new Error(code), { code });
@@ -35,73 +33,48 @@ function symlinkTmpDirLstat() {
 function resolveWithMocks(params: {
   lstatSync: NonNullable<TmpDirOptions["lstatSync"]>;
   fallbackLstatSync?: NonNullable<TmpDirOptions["lstatSync"]>;
-  accessSync?: NonNullable<TmpDirOptions["accessSync"]>;
-  warn?: NonNullable<TmpDirOptions["warn"]>;
-  uid?: number;
-  tmpdirPath?: string;
 }) {
-  const uid = params.uid ?? 501;
-  const fallbackPath = fallbackTmp(uid);
-  const accessSync = params.accessSync ?? vi.fn();
-  const warn = params.warn ?? vi.fn();
-  const wrappedLstatSync = vi.fn((target: string) => {
+  const accessSync = vi.fn();
+  const tmpdir = vi.fn(() => "/var/fallback");
+  const lstatSync = vi.fn((target: string) => {
     if (target === DEFAULT_POSIX_TMP_ROOT) {
       return params.lstatSync(target);
     }
-    if (target === fallbackPath) {
-      if (params.fallbackLstatSync) {
-        return params.fallbackLstatSync(target);
-      }
-      return makeDirStat({ uid });
+    if (target === fallbackTmp && params.fallbackLstatSync) {
+      return params.fallbackLstatSync(target);
     }
-    return makeDirStat({ uid });
+    return makeDirStat();
   }) as NonNullable<TmpDirOptions["lstatSync"]>;
-  const mkdirSync = vi.fn();
-  const getuid = vi.fn(() => uid);
-  const tmpdir = vi.fn(() => params.tmpdirPath ?? "/var/fallback");
   const resolved = resolvePreferredOpenClawTmpDir({
     accessSync,
-    lstatSync: wrappedLstatSync,
-    mkdirSync,
-    getuid,
+    lstatSync,
+    mkdirSync: vi.fn(),
+    getuid: () => 501,
     tmpdir,
-    warn,
+    warn: vi.fn(),
   });
-  return { resolved, accessSync, lstatSync: wrappedLstatSync, mkdirSync, tmpdir };
+  return { resolved, accessSync, tmpdir };
 }
 
 describe.skipIf(process.platform === "win32")("POSIX preferred temp directory selection", () => {
-  it("prefers /tmp/openclaw when it already exists and is writable", () => {
-    const lstatSync = vi.fn(() => makeDirStat());
-    const { resolved, accessSync, tmpdir } = resolveWithMocks({ lstatSync });
-
-    expect(lstatSync).toHaveBeenCalledTimes(1);
-    expect(accessSync).toHaveBeenCalledTimes(1);
-    expect(resolved).toBe(DEFAULT_POSIX_TMP_ROOT);
-    expect(tmpdir).not.toHaveBeenCalled();
-  });
-
   it.each([
-    {
-      name: "falls back to os.tmpdir()/openclaw when /tmp/openclaw is not a directory",
-      lstatSync: vi.fn(() => makeDirStat({ isDirectory: false, mode: 0o100644 })),
-    },
-    {
-      name: "falls back when /tmp/openclaw is a symlink",
-      lstatSync: symlinkTmpDirLstat(),
-    },
-    {
-      name: "falls back when /tmp/openclaw is not owned by the current user",
-      lstatSync: vi.fn(() => makeDirStat({ uid: 0 })),
-    },
-    {
-      name: "falls back when /tmp/openclaw is group/other writable",
-      lstatSync: vi.fn(() => makeDirStat({ mode: 0o40777 })),
-    },
-  ])("$name", ({ lstatSync }) => {
-    const { resolved, tmpdir } = resolveWithMocks({ lstatSync });
-    expect(resolved).toBe(fallbackTmp());
-    expect(tmpdir).toHaveBeenCalled();
+    ["private and writable", {}],
+    ["not a directory", { isDirectory: false, mode: 0o100644 }],
+    ["a symlink", { isSymbolicLink: true, mode: 0o120777 }],
+    ["owned by another user", { uid: 0 }],
+    ["group/other writable", { mode: 0o40777 }],
+  ] as const)("selects a safe root when /tmp/openclaw is %s", (name, shape) => {
+    const lstatSync = vi.fn(() => makeDirStat(shape));
+    const { resolved, accessSync, tmpdir } = resolveWithMocks({ lstatSync });
+    const preferred = name === "private and writable";
+    expect(resolved).toBe(preferred ? DEFAULT_POSIX_TMP_ROOT : fallbackTmp);
+    if (preferred) {
+      expect(lstatSync).toHaveBeenCalledTimes(1);
+      expect(accessSync).toHaveBeenCalledTimes(1);
+      expect(tmpdir).not.toHaveBeenCalled();
+    } else {
+      expect(tmpdir).toHaveBeenCalled();
+    }
   });
 
   it("throws when fallback path is a symlink", () => {
@@ -114,37 +87,31 @@ describe.skipIf(process.platform === "win32")("POSIX preferred temp directory se
   });
 });
 
-describe("Windows temp directory selection", () => {
-  it("skips the POSIX preferred path on Windows even when /tmp is accessible (#60713)", () => {
-    const winFallback = path.win32.join("C:\\Users\\u\\AppData\\Local\\Temp", "openclaw-501");
-    const accessSync = vi.fn();
-    const lstatSync = vi.fn((target: string) => {
-      if (target === DEFAULT_POSIX_TMP_ROOT || target === winFallback) {
-        return makeDirStat();
-      }
-      throw nodeErrorWithCode("ENOENT");
-    });
-    const mkdirSync = vi.fn();
-    const chmodSync = vi.fn();
-    const tmpdir = vi.fn(() => "C:\\Users\\u\\AppData\\Local\\Temp");
-
-    const result = resolvePreferredOpenClawTmpDir({
-      platform: "win32",
-      accessSync,
-      lstatSync,
-      mkdirSync,
-      chmodSync,
-      getuid: vi.fn(() => 501),
-      tmpdir,
-      warn: vi.fn(),
-    });
-
-    expect(result).toBe(winFallback);
-    expect(result).not.toBe(DEFAULT_POSIX_TMP_ROOT);
-    expect(tmpdir).toHaveBeenCalled();
+it("skips the POSIX preferred path on Windows even when /tmp is accessible (#60713)", () => {
+  const winFallback = path.win32.join("C:\\Users\\u\\AppData\\Local\\Temp", "openclaw-501");
+  const lstatSync = vi.fn((target: string) => {
+    if (target === DEFAULT_POSIX_TMP_ROOT || target === winFallback) {
+      return makeDirStat();
+    }
+    throw nodeErrorWithCode("ENOENT");
   });
-});
+  const tmpdir = vi.fn(() => "C:\\Users\\u\\AppData\\Local\\Temp");
 
+  const result = resolvePreferredOpenClawTmpDir({
+    platform: "win32",
+    accessSync: vi.fn(),
+    lstatSync,
+    mkdirSync: vi.fn(),
+    chmodSync: vi.fn(),
+    getuid: vi.fn(() => 501),
+    tmpdir,
+    warn: vi.fn(),
+  });
+
+  expect(result).toBe(winFallback);
+  expect(result).not.toBe(DEFAULT_POSIX_TMP_ROOT);
+  expect(tmpdir).toHaveBeenCalled();
+});
 describe.skipIf(process.platform === "win32")("POSIX temp directory admission and repair", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
@@ -155,10 +122,7 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
 
   function fixture(route: "preferred" | "fallback") {
     const directory = tempDirs.make("openclaw-temp-repair-");
-    const uid = process.getuid?.();
-    if (uid === undefined) {
-      throw new Error("POSIX temp directory proof requires a process uid");
-    }
+    const uid = process.getuid!();
     const preferredDir = path.join(directory, "preferred");
     const fallbackDir = path.join(directory, `openclaw-${uid}`);
     if (route === "fallback") {
@@ -243,91 +207,69 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
     }
   });
 
-  it.each(["preferred", "fallback"] as const)(
-    "accepts the same %s directory tightened by a competitor before repair",
-    (route) => {
-      const f = fixture(route);
-      fs.mkdirSync(f.candidate);
-      fs.chmodSync(f.candidate, 0o777);
-      const admitted = fs.lstatSync(f.candidate, { bigint: true });
+  it.each(
+    (["preferred", "fallback"] as const).flatMap((route) =>
+      (["before-open", "denied-repaired", "denied-unsafe"] as const).map((phase) => ({
+        route,
+        phase,
+      })),
+    ),
+  )("handles $phase competition on the $route directory", ({ route, phase }) => {
+    const f = fixture(route);
+    fs.mkdirSync(f.candidate);
+    fs.chmodSync(f.candidate, 0o777);
+    const admitted = fs.lstatSync(f.candidate, { bigint: true });
+    const fchmodSync = fs.fchmodSync;
+    const fchmod = vi.spyOn(fs, "fchmodSync");
+    let attempts = 0;
+    if (phase === "before-open") {
       const openSync = fs.openSync;
-      const opened: number[] = [];
       vi.spyOn(fs, "openSync").mockImplementation((candidate, flags, mode) => {
         if (candidate === f.candidate) {
           fs.chmodSync(f.candidate, 0o700);
         }
         const fd = openSync(candidate, flags, mode);
         if (candidate === f.candidate) {
-          opened.push(fd);
+          attempts++;
         }
         return fd;
       });
-      const fchmod = vi.spyOn(fs, "fchmodSync");
-
-      expect(f.resolve()).toBe(f.candidate);
-
-      expect(opened).toHaveLength(1);
-      expect(fchmod).not.toHaveBeenCalled();
-      expectPrivateDirectory(f.candidate, f.uid, admitted);
-      expect(f.warn).not.toHaveBeenCalled();
-      if (route === "preferred") {
-        expect(f.tmpdir).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it.each(
-    (
-      [
-        { route: "preferred", code: "EPERM" },
-        { route: "fallback", code: "EACCES" },
-      ] as const
-    ).flatMap((params) =>
-      [true, false].map((repaired) => ({ route: params.route, code: params.code, repaired })),
-    ),
-  )(
-    "accepts failed $code repair of the $route directory only when a competitor repaired it ($repaired)",
-    ({ route, code, repaired }) => {
-      const f = fixture(route);
-      fs.mkdirSync(f.candidate);
-      fs.chmodSync(f.candidate, 0o777);
-      const admitted = fs.lstatSync(f.candidate, { bigint: true });
-      const fchmodSync = fs.fchmodSync;
-      let attempts = 0;
-      vi.spyOn(fs, "fchmodSync").mockImplementation((fd, mode) => {
+    } else {
+      fchmod.mockImplementation((fd, mode) => {
         const stat = fs.fstatSync(fd, { bigint: true });
         if (stat.dev !== admitted.dev || stat.ino !== admitted.ino) {
           return fchmodSync(fd, mode);
         }
-        attempts += 1;
-        if (repaired) {
-          // Change the real admitted inode before simulating the losing chmod.
+        attempts++;
+        if (phase === "denied-repaired") {
           fchmodSync(fd, 0o700);
         }
-        throw nodeErrorWithCode(code);
+        throw nodeErrorWithCode(route === "preferred" ? "EPERM" : "EACCES");
       });
-
-      if (repaired) {
-        expect(f.resolve()).toBe(f.candidate);
-        expectPrivateDirectory(f.candidate, f.uid, admitted);
-        if (route === "preferred") {
-          expect(f.tmpdir).not.toHaveBeenCalled();
-        }
-      } else {
-        if (route === "preferred") {
-          expect(f.resolve()).toBe(f.fallbackDir);
-          expectPrivateDirectory(f.fallbackDir, f.uid);
-        } else {
-          expect(f.resolve).toThrow(/Unsafe fallback OpenClaw temp dir/);
-        }
-        expect(fs.lstatSync(f.candidate, { bigint: true })).toMatchObject({
-          dev: admitted.dev,
-          ino: admitted.ino,
-          mode: admitted.mode,
-        });
+    }
+    if (phase !== "denied-unsafe") {
+      expect(f.resolve()).toBe(f.candidate);
+      expectPrivateDirectory(f.candidate, f.uid, admitted);
+      if (route === "preferred") {
+        expect(f.tmpdir).not.toHaveBeenCalled();
       }
-      expect(attempts).toBe(1);
-      expect(f.warn).not.toHaveBeenCalled();
-    },
-  );
+    } else {
+      if (route === "preferred") {
+        expect(f.resolve()).toBe(f.fallbackDir);
+        expectPrivateDirectory(f.fallbackDir, f.uid);
+      } else {
+        expect(f.resolve).toThrow(/Unsafe fallback OpenClaw temp dir/);
+      }
+      expect(fs.lstatSync(f.candidate, { bigint: true })).toMatchObject({
+        dev: admitted.dev,
+        ino: admitted.ino,
+        mode: admitted.mode,
+      });
+    }
+    if (phase === "before-open") {
+      expect(fchmod).not.toHaveBeenCalled();
+    }
+    expect(attempts).toBe(1);
+    expect(f.warn).not.toHaveBeenCalled();
+  });
 });
