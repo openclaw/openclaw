@@ -64,15 +64,26 @@ function fixture(repair = false) {
   return { options, pathname, state, leases, run };
 }
 
-function indexSql(pathname: string) {
-  const database = openNodeSqliteDatabase(pathname, { readOnly: true });
+function withNative<T>(
+  pathname: string,
+  run: (db: ReturnType<typeof openNodeSqliteDatabase>) => T,
+  readOnly = false,
+) {
+  const database = openNodeSqliteDatabase(pathname, { readOnly });
   try {
-    return database
-      .prepare("SELECT sql FROM sqlite_schema WHERE name='idx_agent_cache_expiry'")
-      .get()?.sql;
+    return run(database);
   } finally {
     database.close();
   }
+}
+
+function indexSql(pathname: string) {
+  return withNative(
+    pathname,
+    (db) =>
+      db.prepare("SELECT sql FROM sqlite_schema WHERE name='idx_agent_cache_expiry'").get()?.sql,
+    true,
+  );
 }
 
 function holdIntegrity(pathname: string) {
@@ -128,14 +139,11 @@ it.each(["integrity-shaped", "falsy", "native-failure"] as const)(
   async (kind) => {
     const f = fixture(true);
     if (kind === "native-failure") {
-      const writer = openNodeSqliteDatabase(f.pathname);
-      try {
-        writer.exec(
+      withNative(f.pathname, (db) =>
+        db.exec(
           "PRAGMA foreign_keys=OFF; INSERT INTO memory_index_chunk_recall_metadata (chunk_id,importance) VALUES ('missing',1)",
-        );
-      } finally {
-        writer.close();
-      }
+        ),
+      );
     }
     const gate = holdIntegrity(f.pathname);
     const refused = kind === "falsy" ? 0 : new Error("initiating authority retired");
@@ -163,12 +171,9 @@ it.each(["integrity-shaped", "falsy", "native-failure"] as const)(
     expect(f.leases()).toEqual([]);
     expect(getOpenClawAgentDatabaseIfOpen(f.options)).toBeUndefined();
     if (kind === "native-failure") {
-      const writer = openNodeSqliteDatabase(f.pathname);
-      try {
-        writer.exec("DELETE FROM memory_index_chunk_recall_metadata WHERE chunk_id='missing'");
-      } finally {
-        writer.close();
-      }
+      withNative(f.pathname, (db) =>
+        db.exec("DELETE FROM memory_index_chunk_recall_metadata WHERE chunk_id='missing'"),
+      );
     }
     // Refusal neither quarantines the file nor lends stale authority to a fresh caller.
     await expect(
@@ -313,56 +318,47 @@ it("retains both authority refusal and recoverable lease cleanup failure", async
   expect(f.leases()).toEqual([]);
 });
 
-it("checks lost database ownership before consulting the initiating caller again", async () => {
-  const f = fixture();
-  const gate = holdIntegrity(f.pathname);
-  let ownerRetired = false;
-  const forbiddenRead = vi.fn();
-  const work = f.run(
-    () => "forbidden",
-    () => {
-      if (ownerRetired) {
-        forbiddenRead();
-        throw new Error("caller consulted after owner retirement");
-      }
-    },
-  );
-  await gate.entered.promise;
-  ownerRetired = true;
-  closeOpenClawAgentDatabaseByPath(f.pathname);
-  gate.release.resolve();
-  await expect(work).rejects.toThrow(/revoked/);
-  expect(forbiddenRead).not.toHaveBeenCalled();
-  expect(gate.joined()).toBe(true);
-  expect(f.leases()).toEqual([]);
-});
-
-it("does not treat a database-owner failure as a repairable integrity verdict", async () => {
-  const f = fixture(true);
-  const gate = holdIntegrity(f.pathname);
-  const failedOwner = new Error("shared database owner could not be checked");
-  failedOwner.name = "SqliteIntegrityError";
-  let ownerFailed = false;
-  const callerRead = vi.fn();
-  const work = f.run(
-    () => "forbidden",
-    () => {
-      if (ownerFailed) {
-        callerRead();
-      }
-    },
-  );
-  await gate.entered.promise;
-  ownerFailed = true;
-  vi.spyOn(agentLeases, "assertOpenClawAgentDatabaseLease").mockImplementation(() => {
-    throw failedOwner;
-  });
-  gate.release.resolve();
-  await expect(work).rejects.toBe(failedOwner);
-  expect(callerRead).not.toHaveBeenCalled();
-  expect(indexSql(f.pathname)).toBe(wrongIndex);
-  expect(f.leases()).toEqual([]);
-});
+it.each(["revoked", "integrity-shaped failure"] as const)(
+  "checks database-owner %s before consulting the initiating caller",
+  async (kind) => {
+    const f = fixture(kind === "integrity-shaped failure");
+    const gate = holdIntegrity(f.pathname);
+    const failedOwner = new Error("shared database owner could not be checked");
+    failedOwner.name = "SqliteIntegrityError";
+    let ownerRetired = false;
+    const callerRead = vi.fn();
+    const work = f.run(
+      () => "forbidden",
+      () => {
+        if (ownerRetired) {
+          callerRead();
+          if (kind === "revoked") {
+            throw new Error("caller consulted after owner retirement");
+          }
+        }
+      },
+    );
+    await gate.entered.promise;
+    ownerRetired = true;
+    if (kind === "revoked") {
+      closeOpenClawAgentDatabaseByPath(f.pathname);
+    } else {
+      vi.spyOn(agentLeases, "assertOpenClawAgentDatabaseLease").mockImplementation(() => {
+        throw failedOwner;
+      });
+    }
+    gate.release.resolve();
+    if (kind === "revoked") {
+      await expect(work).rejects.toThrow(/revoked/);
+      expect(gate.joined()).toBe(true);
+    } else {
+      await expect(work).rejects.toBe(failedOwner);
+      expect(indexSql(f.pathname)).toBe(wrongIndex);
+    }
+    expect(callerRead).not.toHaveBeenCalled();
+    expect(f.leases()).toEqual([]);
+  },
+);
 
 it("revokes pending native writes before draining retained resources in its root", async () => {
   const f = fixture();
@@ -401,12 +397,11 @@ it("revokes pending native writes before draining retained resources in its root
     await closing;
   }
   expect(closed).toBe(true);
-  const database = openNodeSqliteDatabase(f.pathname, { readOnly: true });
-  try {
-    expect(
-      database.prepare("SELECT key FROM cache_entries WHERE scope='close-order'").all(),
-    ).toEqual([]);
-  } finally {
-    database.close();
-  }
+  expect(
+    withNative(
+      f.pathname,
+      (db) => db.prepare("SELECT key FROM cache_entries WHERE scope='close-order'").all(),
+      true,
+    ),
+  ).toEqual([]);
 });
