@@ -27,6 +27,8 @@ async function readMessages(config: OpenClawConfig, sessionKey: string): Promise
   const { storePath, entry } = await loadGatewaySessionEntryReadOnlyInWorker({
     cfg: config,
     key: sessionKey,
+    // The child Gateway's writes cannot invalidate this process's retained exact-row facts.
+    exactRead: false,
   });
   if (!entry?.sessionId) {
     return [];
@@ -166,7 +168,7 @@ describeLive("session event wake through a live Gateway", () => {
               heartbeat: {
                 every: "24h",
                 target: busySibling ? "last" : "none",
-                prompt: `Call heartbeat_respond with outcome progress, notify false, summary ${monitorReply}. Do no other work.`,
+                prompt: `Reply exactly ${monitorReply}. Do no other work.`,
               },
             },
           },
