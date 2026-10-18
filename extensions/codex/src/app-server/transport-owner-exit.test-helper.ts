@@ -18,9 +18,13 @@ function exitNow(target: { launcher: ChildProcess; native: number }): never {
   // process.exit can drop pending asynchronous pipe writes; keep this proof.
   writeSync(
     1,
-    execFileSync("ps", ["-o", "pid=,ppid=,stat=", "-p", `${target.launcher.pid},${target.native}`], {
-      encoding: "utf8",
-    }),
+    execFileSync(
+      "ps",
+      ["-o", "pid=,ppid=,stat=", "-p", `${target.launcher.pid},${target.native}`],
+      {
+        encoding: "utf8",
+      },
+    ),
   );
   process.exit(0);
 }
