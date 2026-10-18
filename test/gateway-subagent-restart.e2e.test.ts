@@ -288,7 +288,8 @@ it.skipIf(process.platform === "win32").for([
           url: instance.url,
           token: instance.gatewayToken,
           clientName: "gateway-client",
-          mode: "backend",
+          // Recovery needs the durable owner profile prepared for user clients.
+          mode: "test",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
             path: instance.state.path("proof-device.sqlite"),
@@ -494,6 +495,13 @@ it.skipIf(process.platform === "win32").for([
           );
           observations.childKey = child.key;
           observations.beforeShutdown = persistedChild({ runId: childRunId });
+          expect(observations.beforeShutdown).toMatchObject({
+            operatorRecoverySource: {
+              agentId: "main",
+              sessionKey: PARENT_KEY,
+              sourceRunId: originalRunId,
+            },
+          });
           expect(
             JSON.stringify(await client.request("chat.history", { sessionKey: PARENT_KEY })),
           ).toContain(PARENT_FINAL);
