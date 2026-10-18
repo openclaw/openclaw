@@ -548,6 +548,9 @@ openclaw sessions compact "agent:work:main" --agent work --json
 - `--timeout <ms>`: optional client-side RPC timeout in milliseconds.
 - `--json`: print the raw RPC payload.
 
+Human-readable compaction reports escape terminal control characters in session
+keys and error details. JSON output preserves the original values.
+
 The command exits non-zero when the Gateway reports a failed compaction or is
 unreachable, so crons and scripts never mistake a silent no-op for success.
 A missing session is an error in both modes. An existing session with no history
