@@ -248,14 +248,10 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
     const activationStarted = createDeferred();
     const activation = createDeferred();
     const completed = createDeferred();
-    const context = connectedContext(
-      {
-        gatewayUrl: localGateway(),
-        request: (method) =>
-          method === "plugins.controlUi.list" ? response.promise : Promise.resolve({ ok: true }),
-      },
-      configForRuntime(),
+    const request = vi.fn((method: string) =>
+      method === "plugins.controlUi.list" ? response.promise : Promise.resolve({ ok: true }),
     );
+    const context = connectedContext({ gatewayUrl: localGateway(), request }, configForRuntime());
     vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
       activationStarted.resolve();
       await activation.promise;
@@ -287,6 +283,10 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
       await completed.promise;
       expect(runtime.registryStatus).toBe(outcome === "catalog-failed" ? "failed" : "complete");
       if (outcome === "catalog-failed") {
+        expect(runtime.errors).toEqual([{ pluginId: "host", message: "Catalog unavailable" }]);
+        expect(initializeControlUiPlugin).not.toHaveBeenCalled();
+        expect(request.mock.calls).toEqual([["plugins.controlUi.list", {}]]);
+        expect(runtime.isLoading("review")).toBe(false);
         response = createDeferred<PluginsControlUiCatalog>();
         const retry = runtime.refresh();
         expect(runtime.registryStatus).toBe("pending");
@@ -301,12 +301,6 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
 );
 
 it.each([
-  {
-    scenario: "catalog RPC failure",
-    native: false,
-    catalogError: true,
-    error: "plugin registry is no longer active",
-  },
   {
     scenario: "cross-origin native plugin",
     remote: true,
@@ -342,14 +336,10 @@ it.each([
     requiresAuth = true,
     loads = false,
     resourceBasePath = "",
-    catalogError = false,
     error = null,
   }) => {
     vi.stubGlobal("isSecureContext", secure);
     const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "plugins.controlUi.list" && catalogError) {
-        throw new Error(error ?? undefined);
-      }
       return method === "plugins.controlUi.list"
         ? catalog(
             native
@@ -376,22 +366,18 @@ it.each([
     runtime.start();
     expect(refresh).toHaveBeenCalledTimes(remote ? 0 : 1);
     await runtime.refresh();
-    expect(runtime.errors).toEqual(
-      error ? [{ pluginId: catalogError ? "host" : "review", message: error }] : [],
-    );
+    expect(runtime.errors).toEqual(error ? [{ pluginId: "review", message: error }] : []);
     const reports = request.mock.calls
       .filter(([method]) => method === "plugins.controlUi.report")
       .map(([, params]) => params);
     expect(reports).toEqual(
-      error && !catalogError
-        ? [{ pluginId: "review", revision: "one", status: "failed", error }]
-        : [],
+      error ? [{ pluginId: "review", revision: "one", status: "failed", error }] : [],
     );
     expect(refresh).toHaveBeenCalledTimes(remote ? 0 : 2);
     expect(initializeControlUiPlugin).toHaveBeenCalledTimes(loads ? 1 : 0);
     expect(runtime.registrations("pages")).toEqual([]);
     expect(runtime.isLoading("review")).toBe(false);
-    expect(runtime.registryStatus).toBe(catalogError ? "failed" : "complete");
+    expect(runtime.registryStatus).toBe("complete");
   },
 );
 

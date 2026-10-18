@@ -6,10 +6,9 @@ import type { ControlUiHost, ControlUiViewContext } from "../../../src/plugin-sd
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { acquireBoardProviderForSession, type BoardProviderLease } from "../lib/board/provider.ts";
+import { acquireBoardProviderForSession } from "../lib/board/provider.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "./control-ui-dashboard.tsx";
-import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
 
 type DashboardElement = HTMLElementTagNameMap["openclaw-plugin-session-dashboard"];
@@ -29,11 +28,10 @@ const boardTabs = () =>
     position,
     chatDock: "right",
   }));
-const mainTab = () => boardTabs().slice(0, 1);
 const snapshot = (
   sessionKey: string,
   widgets: BoardWidget[] = [],
-  tabs = widgets.length ? mainTab() : [],
+  tabs = widgets.length ? boardTabs().slice(0, 1) : [],
 ) => ({ sessionKey, revision: 1, tabs, widgets });
 
 async function settle(element: DashboardElement) {
@@ -74,33 +72,24 @@ function widget(overrides: Partial<BoardWidget> = {}): BoardWidget {
   };
 }
 
-function createClient(
-  widgets: BoardWidget[] = [],
-  tabs = widgets.length ? mainTab() : [],
-  load?: (params?: BoardGetParams) => unknown,
-) {
-  const removeListener = vi.fn();
+function createClient(widgets: BoardWidget[] = [], load?: (params?: BoardGetParams) => unknown) {
   let listener: GatewayEventListener | undefined;
-  const request = vi.fn(async (_method: string, params?: BoardGetParams) =>
-    load
-      ? load(params)
-      : snapshot(
-          params?.sessionKey === "global"
-            ? `agent:${params.agentId}:global`
-            : (params?.sessionKey ?? "agent:main:unknown"),
-          widgets,
-          tabs,
-        ),
-  );
+  const removeListener = vi.fn(() => {
+    listener = undefined;
+  });
+  const request = vi.fn(async (_method: string, params?: BoardGetParams) => {
+    if (load) {
+      return load(params);
+    }
+    const key = params?.sessionKey ?? "agent:main:unknown";
+    return snapshot(key === "global" ? `agent:${params?.agentId}:global` : key, widgets);
+  });
   return {
     client: {
       request,
       addEventListener: vi.fn((next: GatewayEventListener) => {
         listener = next;
-        return () => {
-          listener = undefined;
-          removeListener();
-        };
+        return removeListener;
       }),
     } as unknown as GatewayBrowserClient,
     request,
@@ -128,7 +117,6 @@ async function mountDashboard(
     await Promise.resolve();
   });
   await element.updateComplete;
-  expect(element.querySelector(".plugin-session-dashboard__toggle")).not.toBeNull();
   return element;
 }
 
@@ -186,19 +174,13 @@ it.each([
     onTestFinished(() => provider.remove());
     document.body.append(provider);
     const { client, request } = createClient([
-      widget({
-        name: "owner",
-        contentKind: "plugin",
-        pluginKind: "identity:context",
-      }),
+      widget({ contentKind: "plugin", pluginKind: "identity:context" }),
     ]);
     const session = { sessionKey, agentId: "writer" };
     const initial: BoardGetParams = hydrateOwner ? { sessionKey } : session;
     const element = await mountDashboard(initial, client, {}, provider);
 
-    await vi.waitFor(() => {
-      expect(nativeOwner(element), element.innerHTML).not.toBeNull();
-    });
+    await vi.waitFor(() => expect(nativeOwner(element)).not.toBeNull());
     expect(request).toHaveBeenCalledWith("board.get", initial);
     expect(nativeOwner(element)?.textContent).toBe(`${initial.agentId}/${sessionKey}`);
     if (hydrateOwner) {
@@ -221,16 +203,15 @@ it.each([
 
 it("waits for the initial gateway snapshot before choosing its expanded state", async () => {
   const sessionKey = "agent:main:delayed";
-  const initial = snapshot(sessionKey, [widget()]);
-  const pending = createDeferred<typeof initial>();
-  const { client, request } = createClient([], [], () => pending.promise);
+  const pending = createDeferred<ReturnType<typeof snapshot>>();
+  const { client, request } = createClient([], () => pending.promise);
   const element = await mountDashboard({ sessionKey }, client);
 
   await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
   expect(expanded(element)).toBe("false");
   expect(emptyLabel(element)).toBeNull();
 
-  pending.resolve(initial);
+  pending.resolve(snapshot(sessionKey, [widget()]));
 
   await vi.waitFor(() => expect(expanded(element)).toBe("true"));
   expect(element.querySelector("openclaw-board-view")).not.toBeNull();
@@ -244,7 +225,6 @@ it("updates mounted dashboard controls immediately when gateway permissions chan
   });
 
   const board = await boardView(element);
-  await board.updateComplete;
   await vi.waitFor(() =>
     expect(board.querySelector('[data-test-id="board-grant-allow"]')).not.toBeNull(),
   );
@@ -253,11 +233,10 @@ it("updates mounted dashboard controls immediately when gateway permissions chan
   expect([board.canMutate, board.canGrant]).toEqual([true, true]);
   expect(allow.disabled).toBe(false);
 
-  await setPermissions(element, false);
-  expect(allow.disabled).toBe(true);
-
-  await setPermissions(element, true);
-  expect(allow.disabled).toBe(false);
+  for (const permitted of [false, true]) {
+    await setPermissions(element, permitted);
+    expect(allow.disabled).toBe(!permitted);
+  }
   expect(request).toHaveBeenCalledOnce();
 });
 
@@ -268,48 +247,38 @@ it.each([
   "shares $session.sessionKey gateway state without leaking dashboard capabilities in $order order",
   async ({ order, session }) => {
     const { client, request, removeListener } = createClient([widget()]);
-    let chat: BoardProviderLease | undefined;
-    let dashboard: DashboardElement | undefined;
-    const mount = () => mountDashboard(session, client, { canMutate: true, canGrant: false });
+    const acquireChat = () =>
+      acquireBoardProviderForSession(session, client, true, true, true, true, true);
+    let chat = order === "chat-first" ? acquireChat() : undefined;
+    onTestFinished(() => chat?.release());
+    const dashboard = await mountDashboard(session, client, { canMutate: true, canGrant: false });
+    chat ??= acquireChat();
 
-    try {
-      if (order === "chat-first") {
-        chat = acquireBoardProviderForSession(session, client, true, true, true, true, true);
-        dashboard = await mount();
-      } else {
-        dashboard = await mount();
-        chat = acquireBoardProviderForSession(session, client, true, true, true, true, true);
-      }
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("board.get", session);
+    const board = await boardView(dashboard);
+    const chatCapabilities = {
+      canPinWidgets: true,
+      canPinMcpApps: true,
+      canMutate: true,
+      canGrant: true,
+    };
+    expect(chat.provider).toMatchObject(chatCapabilities);
+    expect(board).toMatchObject({ canMutate: true, canGrant: false });
 
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      expect(request).toHaveBeenCalledWith("board.get", session);
-      const board = await boardView(dashboard);
-      const chatCapabilities = {
-        canPinWidgets: true,
-        canPinMcpApps: true,
-        canMutate: true,
-        canGrant: true,
-      };
-      expect(chat.provider).toMatchObject(chatCapabilities);
-      expect(board).toMatchObject({ canMutate: true, canGrant: false });
+    dashboard.canMutate = false;
+    await settle(dashboard);
 
-      dashboard.canMutate = false;
-      await settle(dashboard);
+    expect(dashboard.querySelector("openclaw-board-view")).toBe(board);
+    expect(board.canMutate).toBe(false);
+    expect(chat.provider).toMatchObject(chatCapabilities);
+    expect(request).toHaveBeenCalledOnce();
 
-      expect(dashboard.querySelector("openclaw-board-view")).toBe(board);
-      expect(board.canMutate).toBe(false);
-      expect(chat.provider).toMatchObject(chatCapabilities);
-      expect(request).toHaveBeenCalledOnce();
-
-      dashboard.remove();
-      await dashboard.updateComplete;
-      expect(removeListener).not.toHaveBeenCalled();
-      chat.release();
-      expect(removeListener).toHaveBeenCalledOnce();
-    } finally {
-      dashboard?.remove();
-      chat?.release();
-    }
+    dashboard.remove();
+    await dashboard.updateComplete;
+    expect(removeListener).not.toHaveBeenCalled();
+    chat.release();
+    expect(removeListener).toHaveBeenCalledOnce();
   },
 );
 
@@ -335,7 +304,7 @@ it("retains local choices across refreshes and initializes each replacement afte
     [widget(), widget({ name: "research", tabId: "research", position: 1 })],
     boardTabs(),
   );
-  const { client, request, changed } = createClient([], [], (target) =>
+  const { client, request, changed } = createClient([], (target) =>
     target?.sessionKey === `${sessionKey}-pending`
       ? pending.promise
       : target?.sessionKey === `${sessionKey}-next`
@@ -389,17 +358,15 @@ it("releases its provider through detached updates and reacquires only after rec
   const element = await mountDashboard({ sessionKey: "agent:main:workboard-disposal" }, client);
   await vi.waitFor(() => expect(request).toHaveBeenCalled());
 
-  element.remove();
-  await element.updateComplete;
-
-  expect(removeListener).toHaveBeenCalledOnce();
-  expect(request).toHaveBeenCalledOnce();
-
-  document.body.append(element);
-  await element.updateComplete;
-  expect(request).toHaveBeenCalledTimes(2);
-  element.remove();
-  await element.updateComplete;
-  expect(removeListener).toHaveBeenCalledTimes(2);
-  expect(request).toHaveBeenCalledTimes(2);
+  for (const count of [1, 2]) {
+    if (count === 2) {
+      document.body.append(element);
+      await element.updateComplete;
+      expect(request).toHaveBeenCalledTimes(2);
+    }
+    element.remove();
+    await element.updateComplete;
+    expect(removeListener).toHaveBeenCalledTimes(count);
+    expect(request).toHaveBeenCalledTimes(count);
+  }
 });

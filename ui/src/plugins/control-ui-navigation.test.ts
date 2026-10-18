@@ -13,14 +13,12 @@ import "./control-ui-contributions.solid.tsx";
 
 const originalLocation = window.location.href;
 const pointer = (init: MouseEventInit = {}) =>
-  new MouseEvent("contextmenu", { bubbles: true, ...init });
+  new MouseEvent("contextmenu", { bubbles: true, cancelable: true, ...init });
 const keyboard = (key: string, init: KeyboardEventInit = {}) =>
-  new KeyboardEvent("keydown", { bubbles: true, key, ...init });
-function registrations(
-  navigation: Partial<ControlUiHost["navigation"]>,
-  signal = new AbortController().signal,
-) {
-  return (
+  new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, ...init });
+const registrations =
+  (navigation: Partial<ControlUiHost["navigation"]>, signal = new AbortController().signal) =>
+  (
     id: string,
     value: Partial<ControlUiNavigationItem> = {},
     pluginId = "example",
@@ -31,26 +29,22 @@ function registrations(
     host: { navigation } as unknown as ControlUiHost,
     value: { id, label: id, page: { id: "boards" }, ...value },
   });
-}
 const contribution = (key: string) =>
   Object.assign(document.createElement("openclaw-plugin-contributions"), {
-    kind: "navigation",
     navigationKey: `example/${key}`,
   });
-function providerFor(
+const providerFor = (
   entries: ControlUiRegistration<ControlUiNavigationItem>[],
   subscribe = (_listener: () => void) => () => {},
-) {
-  return createApplicationContextProvider({
+) =>
+  createApplicationContextProvider({
     plugins: { registrations: () => entries, subscribe },
     router: { subscribe },
   } as unknown as ApplicationContext);
-}
-function expectIcon(element: Element, name: "activity" | "layers") {
+const expectIcon = (element: Element, name: "activity" | "layers") =>
   expect([...element.querySelectorAll("svg path")].map((path) => path.getAttribute("d"))).toEqual(
     iconData[name].children.filter(([tag]) => tag === "path").map(([, attrs]) => attrs.d),
   );
-}
 afterEach(() => {
   document.body.replaceChildren();
   window.history.replaceState(null, "", originalLocation);
@@ -89,11 +83,9 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
     { container: menuRoot },
   );
   const [parent, pinned, plain] = contributions;
-  const links = [
-    parent!.querySelector("a")!,
-    parent!.querySelector(".nav-item--child")!,
-    pinned!.querySelector("a")!,
-  ];
+  const links = [...parent!.querySelectorAll("a"), pinned!.querySelector("a")!];
+  expect(links).toHaveLength(3);
+  expect(links[1]?.classList.contains("nav-item--child")).toBe(true);
   const open = (link: Element, event: Event) => {
     link.dispatchEvent(event);
     flush();
@@ -101,15 +93,13 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
   };
   const currentMenu = () => menuRoot.querySelector(".sidebar-plugin-navigation-menu");
   for (const [index, event] of [
-    pointer({ cancelable: true, clientX: 24, clientY: 32 }),
-    keyboard("F10", { cancelable: true, shiftKey: true }),
-    keyboard("ContextMenu", { cancelable: true }),
+    pointer({ clientX: 24, clientY: 32 }),
+    keyboard("F10", { shiftKey: true }),
+    keyboard("ContextMenu"),
   ].entries()) {
     const menu = open(links[index]!, event);
-    expect(menu).not.toBeNull();
-    expect(menu.parentElement?.querySelector<HTMLElement>(".oc-menu-trigger")?.style.left).toBe(
-      index === 0 ? "24px" : "8px",
-    );
+    const trigger = menu.parentElement?.querySelector<HTMLElement>(".oc-menu-trigger");
+    expect(trigger?.style.left).toBe(index === 0 ? "24px" : "8px");
     const item = menu.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
     expect(item.textContent?.trim()).toBe("Delete board…");
     expect(item).toMatchObject({ dataset: { variant: "danger" } });
@@ -129,10 +119,7 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
   flush();
   expect(currentMenu()).toBeNull();
 
-  for (const event of [
-    pointer({ cancelable: true }),
-    keyboard("ContextMenu", { cancelable: true }),
-  ]) {
+  for (const event of [pointer(), keyboard("ContextMenu")]) {
     expect(open(plain!.querySelector("a")!, event)).toBeNull();
     expect(event.defaultPrevented).toBe(false);
   }
@@ -148,10 +135,7 @@ it("shows the active plugin section's ordered children and leaves pinned childre
   const openPage = vi.fn();
   const registration = registrations({
     openPage,
-    pageHref: (page) =>
-      page.id === "special"
-        ? "/special"
-        : `/boards${page.params ? `?${new URLSearchParams(page.params)}` : ""}`,
+    pageHref: ({ id, params }) => `/${id}${params ? `?${new URLSearchParams(params)}` : ""}`,
   });
   const childEntry = (
     id: string,
@@ -195,11 +179,8 @@ it("shows the active plugin section's ordered children and leaves pinned childre
     ["/elsewhere", undefined, 0],
   ] as const) {
     window.history.replaceState(null, "", location);
-    for (const listener of listeners) {
-      listener();
-    }
-    await parent.updateComplete;
-    await pinned.updateComplete;
+    listeners.forEach((listener) => listener());
+    await Promise.all([parent.updateComplete, pinned.updateComplete]);
     expect(parent.querySelectorAll(".nav-item--child")).toHaveLength(childCount);
     expect(parent.querySelector('.nav-item--child[aria-current="page"]')?.textContent?.trim()).toBe(
       activeChild,

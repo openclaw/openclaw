@@ -1,32 +1,24 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentIdentityResult } from "../api/types.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
 } from "../app/gateway-store.test-support.ts";
-import type { ApplicationGateway } from "../app/gateway.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
-import type {
-  ChatHistoryResponse,
-  ChatHistoryResult,
-} from "../pages/chat/chat-history-snapshot.ts";
+import type { ChatHistoryResponse } from "../pages/chat/chat-history-snapshot.ts";
 import "./control-ui-session-summary.tsx";
 
-const gateways: ApplicationGateway[] = [];
 afterEach(async () => {
   document.body.replaceChildren();
   await Promise.resolve();
-  for (const gateway of gateways.splice(0)) {
-    gateway.stop();
-  }
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
 function setup(identity?: () => AgentIdentityResult) {
   const { gateway, current } = createGatewayStoreTestStore();
-  gateways.push(gateway);
+  onTestFinished(() => gateway.stop());
   gateway.start();
   current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
   const requests: Array<{
@@ -56,9 +48,9 @@ function setup(identity?: () => AgentIdentityResult) {
   const emit = (event: string, key = "agent:main:one", agentId = "main") =>
     current().opts.onEvent?.(createGatewayEvent(event, { sessionKey: key, agentId }));
   const shown = (text: string) => vi.waitFor(() => expect(element.textContent).toContain(text));
-  const reply = async (index: number, text: string) => {
+  const reply = async (index: number, text: string, data: ChatHistoryResponse = history(text)) => {
     await vi.waitFor(() => expect(requests).toHaveLength(index + 1));
-    requests[index]!.resolve(history(text));
+    requests[index]!.resolve(data);
     await shown(text);
   };
   const calls = (method: string) =>
@@ -75,9 +67,9 @@ const textBlock = (text: string, phase?: string) => ({
   text,
   ...(phase ? { textSignature: JSON.stringify({ v: 1, phase }) } : {}),
 });
-function history(text: string): ChatHistoryResult {
-  return { messages: [{ role: "assistant", content: [textBlock(text)] }] };
-}
+const history = (text: string) => ({
+  messages: [{ role: "assistant", content: [textBlock(text)] }],
+});
 function useClock() {
   vi.useFakeTimers();
   vi.spyOn(Math, "random").mockReturnValue(0);
@@ -147,10 +139,9 @@ it.each(["session", "agent", "connection", "gateway"] as const)(
 );
 
 it("normalizes visible message text without reviving assistant commentary or tool output", async () => {
-  const { element, requests, shown } = setup();
-  await vi.waitFor(() => expect(requests).toHaveLength(1));
+  const { element, reply } = setup();
   const context = 'Context: ⟦openclaw:ctx⟧\n{"internal": "hidden-envelope"}';
-  requests[0]!.resolve({
+  await reply(0, "Visible answer", {
     messages: [
       { role: "user", content: `Visible request\n\n${context}` },
       { role: "assistant", phase: "commentary", content: "Hidden commentary" },
@@ -170,7 +161,6 @@ it("normalizes visible message text without reviving assistant commentary or too
       { role: "assistant", content: context },
     ],
   });
-  await shown("Visible answer");
   expect(element.textContent).toContain("Visible request");
   expect(element.textContent).toContain("Reviewer");
   expect(messages(element)).toHaveLength(2);
@@ -200,7 +190,6 @@ it("paces durable events and retains one catch-up during a pending load", async 
   await vi.advanceTimersByTimeAsync(0);
   expect(requests).toHaveLength(2);
   await vi.advanceTimersByTimeAsync(5_000);
-  await vi.waitFor(() => expect(requests).toHaveLength(3));
   await reply(2, "Final reply");
   expect(element.textContent).not.toContain("Initial reply");
 
@@ -217,25 +206,23 @@ it("paces durable events and retains one catch-up during a pending load", async 
 
 it("catches up with cursors, retains a bounded tail, and replaces it after a reset", async () => {
   useClock();
-  const { element, requests, emit, shown } = setup();
+  const { element, requests, emit, reply, shown } = setup();
   const message = (seq: number) => ({
     role: "assistant",
     content: [textBlock(`Reply ${seq}.`)],
     __openclaw: { id: `reply-${seq}`, seq },
   });
   const sessionInfo = { key: "agent:main:one", sessionId: "one", kind: "direct" as const };
-  await vi.waitFor(() => expect(requests).toHaveLength(1));
-  requests[0]!.resolve({
+  await reply(0, "Reply 20.", {
     messages: Array.from({ length: 20 }, (_, index) => message(index + 1)),
     deltaCursor: "cursor-20",
     sessionInfo,
   });
-  await shown("Reply 20.");
 
   emit("session.message");
   await vi.advanceTimersByTimeAsync(5_000);
   expect(requests[1]!.params).toMatchObject({ cursor: "cursor-20", maxChars: 12000 });
-  requests[1]!.resolve({
+  await reply(1, "Reply 21.", {
     kind: "delta",
     deltaCursor: "cursor-21",
     sessionInfo,
@@ -246,7 +233,6 @@ it("catches up with cursors, retains a bounded tail, and replaces it after a res
       message: message(seq),
     })),
   });
-  await shown("Reply 21.");
   expect(element.textContent).toContain("Reply 2.");
   expect(element.textContent).not.toContain("Reply 1.");
   expect(messages(element)).toHaveLength(20);

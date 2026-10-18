@@ -1,7 +1,8 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiSessionListSnapshot } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { AssistantDock, type AssistantDockOwner } from "../app/assistant-dock.ts";
@@ -21,16 +22,6 @@ import { createControlUiPluginHost } from "./control-ui-host.ts";
 import { type ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 
-function createOwner(client?: GatewayBrowserClient) {
-  return {
-    client,
-    abort: new AbortController(),
-    descriptor: { pluginId: "review" },
-    disposers: new Set<() => void>(),
-    contributions: { navigation: new Map(), panels: new Map() },
-  } as Omit<ControlUiPluginOwner, "host">;
-}
-
 const subscribe = () => () => undefined;
 const subscriptions = Object.fromEntries(
   ["gateway", "sessions", "agents", "agentSelection", "theme"].map((name) => [name, { subscribe }]),
@@ -47,7 +38,13 @@ function createHost(
   runtime?: ControlUiPluginRuntime,
   client?: GatewayBrowserClient,
 ) {
-  const owner = createOwner(client);
+  const owner = {
+    client,
+    abort: new AbortController(),
+    descriptor: { pluginId: "review" },
+    disposers: new Set<() => void>(),
+    contributions: { navigation: new Map(), panels: new Map() },
+  } as Omit<ControlUiPluginOwner, "host">;
   const activeRuntime =
     runtime ??
     ({
@@ -80,16 +77,18 @@ const sessionSnapshot = (
   };
 };
 
-function createRosterHost(request: GatewayBrowserClient["request"]) {
+function createRosterHost(request: GatewayBrowserClient["request"], assistantDock?: AssistantDock) {
   const client = { request } as GatewayBrowserClient;
   const { gateway } = createGatewayHarness(client);
   const agents = createAgentCapability(gateway);
   const sessions = createTestSessionCapability(gateway);
   const context = {
+    ...subscriptions,
     gateway,
     agents,
     sessions,
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
+    assistantDock,
   } as unknown as ApplicationContext;
   const runtime = new ControlUiPluginRuntime(() => context);
   runtime.start();
@@ -102,6 +101,8 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
   };
   onTestFinished(dispose);
   return {
+    activate: () => createHost(context, runtime, client),
+    activation,
     context,
     host: activation.host,
     runtime,
@@ -130,10 +131,7 @@ async function observeGlobal(
   await vi.waitFor(() =>
     expect(listener.mock.lastCall?.[0].result?.sessions).toEqual(queried.sessions),
   );
-  const session = listener.mock.lastCall?.[0].result?.sessions[0];
-  if (!session) {
-    throw new Error("Expected the queried global session");
-  }
+  const session = expectDefined(listener.mock.lastCall?.[0].result?.sessions[0], "queried session");
   return { sessionKey: session.key, agentId: session.agentId };
 }
 
@@ -182,11 +180,14 @@ describe("native UI roster refresh", () => {
     const fixture = createRosterHost(request);
     const linkedListener = sessionListener();
     const researchListener = sessionListener();
+    const query = {
+      search: "linked",
+      archived: "all" as const,
+      configuredAgentsOnly: false,
+      limit: 1,
+    };
     await fixture.sessions.refresh({ agentId: "main" });
-    fixture.host.sessions.observe(
-      { search: "linked", archived: "all", configuredAgentsOnly: false, limit: 1 },
-      linkedListener,
-    );
+    fixture.host.sessions.observe(query, linkedListener);
     fixture.host.sessions.observe({ agentId: "research", limit: 2 }, researchListener);
     await vi.waitFor(() => {
       expect(linkedListener).toHaveBeenLastCalledWith(sessionSnapshot(found));
@@ -202,23 +203,16 @@ describe("native UI roster refresh", () => {
         includeGlobal: true,
         includeUnknown: true,
         excludeDock: true,
-        configuredAgentsOnly: false,
-        limit: 1,
-        archived: "all",
-        search: "linked",
+        ...query,
       },
     ]);
-    const delivered = linkedListener.mock.lastCall?.[0].result?.sessions[0];
-    if (!delivered) {
-      throw new Error("Expected the observer to receive a session row");
-    }
+    const delivered = expectDefined(linkedListener.mock.lastCall?.[0].result?.sessions[0], "row");
     Object.assign(delivered, { label: "Plugin-local edit" });
+    const { archived, ...options } = query;
     expect(
       fixture.sessions.listSnapshot({
-        search: "linked",
-        archivedFilter: "all",
-        configuredAgentsOnly: false,
-        limit: 1,
+        ...options,
+        archivedFilter: archived,
       }).result?.sessions[0]?.label,
     ).toBe("Linked session");
     expect(fixture.host.sessions.rows).toEqual(primary.sessions);
@@ -243,8 +237,7 @@ describe("native UI roster refresh", () => {
     request.mockRejectedValueOnce(new Error("Refresh unavailable"));
     await expect(observer.refresh()).rejects.toThrow("Refresh unavailable");
     expect(listener).toHaveBeenLastCalledWith(sessionSnapshot(found, "Refresh unavailable"));
-    expect(fixture.sessions.state.result).toBeNull();
-    expect(fixture.sessions.state.error).toBeNull();
+    expect(fixture.sessions.state).toMatchObject({ result: null, error: null });
   });
 
   it("ends session query callbacks and refresh authority when its view is disposed", async () => {
@@ -630,18 +623,9 @@ it("adapts dock operations, publishes snapshots, and retires activation and view
     },
   };
   const detach = dock.attach(panel);
-  const client = new GatewayBrowserClient({ url: "ws://gateway.example.test" });
-  const { gateway } = createGatewayHarness(client);
-  const context = {
-    ...subscriptions,
-    assistantDock: dock,
-    config: createApplicationConfigCapability({ resourceBasePath: "" }),
-    gateway,
-  } as unknown as ApplicationContext;
-  const runtime = new ControlUiPluginRuntime(() => context);
-  runtime.start();
-  const first = createHost(context, runtime, client);
-  const second = createHost(context, runtime, client);
+  const fixture = createRosterHost(vi.fn(), dock);
+  const first = fixture.activation;
+  const second = fixture.activate();
   const notified = vi.fn(() => second.host.dock?.openSessionKey);
   const stop = second.host.subscribe(notified);
   const params = {
@@ -653,8 +637,6 @@ it("adapts dock operations, publishes snapshots, and retires activation and view
   onTestFinished(() => {
     stop();
     detach();
-    runtime.dispose();
-    client.stop();
   });
   expect(first.host.dock?.openSessionKey).toBeNull();
   first.host.dock?.openSession(params);
