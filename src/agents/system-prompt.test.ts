@@ -141,6 +141,21 @@ describe("buildAgentSystemPrompt", () => {
       ["## Documentation", "Docs: /tmp/openclaw/docs", "Source: /tmp/openclaw"],
     ],
     [
+      "points can't-do claims at session capabilities and the docs index",
+      { toolNames: ["read", "session_status"] },
+      [
+        "Can't-do claims: a missing tool or failed call shows this session's limits, not OpenClaw's; check `session_status` with `capabilities=true`, then the docs index https://docs.openclaw.ai/llms.txt before saying OpenClaw can't.",
+      ],
+    ],
+    [
+      "never names an unavailable capability route in can't-do guidance",
+      { toolNames: ["read"], sandboxInfo: { enabled: true } },
+      [
+        "Can't-do claims: a missing tool or failed call shows this session's limits, not OpenClaw's; say what you could not check.",
+      ],
+      ["capabilities=true", "llms.txt"],
+    ],
+    [
       "acknowledges unavailable docs retrieval in a sandbox without web tools",
       { toolNames: ["read"], sandboxInfo: { enabled: true } },
       [

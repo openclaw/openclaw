@@ -11,6 +11,12 @@ export function buildDocumentationSection(params: {
     params.sandboxed &&
     !docsPath &&
     !["web_fetch", "web_search", "browser"].some((name) => params.availableTools.has(name));
+  const capabilityChecks = [
+    params.availableTools.has("session_status")
+      ? "`session_status` with `capabilities=true`"
+      : undefined,
+    docsUnavailable ? undefined : "the docs index https://docs.openclaw.ai/llms.txt",
+  ].filter((check): check is string => check !== undefined);
   return [
     "## Documentation",
     docsPath ? `Docs: ${docsPath}` : "Docs: https://docs.openclaw.ai",
@@ -29,6 +35,7 @@ export function buildDocumentationSection(params: {
       : docsUnavailable
         ? undefined
         : "If docs are silent/stale, say so and inspect GitHub source.",
+    `Can't-do claims: a missing tool or failed call shows this session's limits, not OpenClaw's; ${capabilityChecks.length ? `check ${capabilityChecks.join(", then ")} before saying OpenClaw can't.` : "say what you could not check."}`,
     "Diagnosis: run `openclaw status` when possible; ask only if blocked.",
     "",
   ].filter((line): line is string => line !== undefined);
