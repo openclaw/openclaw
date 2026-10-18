@@ -62,6 +62,7 @@ import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import {
   REASONING_ONLY_RETRY_BODY,
   SETTLED_TOOL_TERMINAL_CONTINUATION_BODY,
+  withRecoveryDeliveryContract,
 } from "../agents/recovery-nudge-text.js";
 
 // A finalizer answer that quotes a different recovery nudge before reporting the
@@ -659,7 +660,11 @@ class FakeWorkerGateway {
       return;
     }
     if (plan === "echoed-terminal") {
-      this.sendTextTurn(output, "stop", SETTLED_TOOL_TERMINAL_CONTINUATION_BODY);
+      this.sendTextTurn(
+        output,
+        "stop",
+        withRecoveryDeliveryContract(SETTLED_TOOL_TERMINAL_CONTINUATION_BODY),
+      );
       return;
     }
     if (plan === "diagnostic-terminal") {
