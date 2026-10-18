@@ -93,6 +93,7 @@ async function resolveHelloWithModelDefaults(params: {
   return { result, resolveDefaultReasoningLevel, typing };
 }
 
+// mock-isolation: Use the synthetic target-session agent scope instead of operator configuration.
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentEntries: mocks.listAgentEntries,
 }));
@@ -101,6 +102,7 @@ vi.mock("../../agents/defaults.js", () => ({
   DEFAULT_CONTEXT_TOKENS: 8192,
 }));
 
+// mock-isolation: Keep target-session selection independent of provider policy discovery.
 vi.mock("../../agents/fast-mode.js", () => ({
   resolveFastModeState: mocks.resolveFastModeState,
 }));
@@ -109,11 +111,13 @@ vi.mock("../../agents/sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
 }));
 
+// mock-isolation: Keep target-session selection independent of provider policy discovery.
 vi.mock("../../agents/thinking-runtime.js", () => ({
   resolveEffectiveAgentRuntime: ({ provider }: { provider: string }) =>
     provider === "openai" ? "codex" : "openclaw",
 }));
 
+// mock-isolation: Control command eligibility for synthetic target-session turns.
 vi.mock("../commands-text-routing.js", () => ({
   shouldHandleTextCommands: mocks.shouldHandleTextCommands,
 }));
@@ -144,6 +148,7 @@ vi.mock("./directive-handling.parse.js", async () => {
   };
 });
 
+// mock-isolation: Capture target-session directive application without mutating a real session.
 vi.mock("./get-reply-directives-apply.js", () => ({
   applyInlineDirectiveOverrides: mocks.applyInlineDirectiveOverrides,
 }));
@@ -152,6 +157,7 @@ vi.mock("./runtime-policy-session-key.js", () => ({
   resolveRuntimePolicySessionKey: ({ sessionKey }: { sessionKey?: string }) => sessionKey,
 }));
 
+// mock-isolation: Observe execution overrides without modifying real session state.
 vi.mock("./get-reply-exec-overrides.js", () => ({
   resolveReplyExecOverrides: mocks.resolveReplyExecOverrides,
 }));
@@ -160,6 +166,7 @@ vi.mock("./get-reply-fast-path.js", () => ({
   shouldUseReplyFastTestRuntime: vi.fn(() => false),
 }));
 
+// mock-isolation: Supply synthetic group activation without loading channel runtime policy.
 vi.mock("./groups.js", () => ({
   defaultGroupActivation: vi.fn(() => "always"),
   resolveGroupRequireMention: mocks.resolveGroupRequireMention,

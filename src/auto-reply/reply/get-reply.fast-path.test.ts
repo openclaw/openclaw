@@ -53,6 +53,7 @@ vi.mock("./commands.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./commands.js")>()),
   handleCommands: mocks.handleCommands,
 }));
+// mock-isolation: Supply deterministic status output without invoking live status providers.
 vi.mock("./commands-status.js", () => ({
   buildStatusReply: mocks.buildStatusReply,
 }));
@@ -60,6 +61,7 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   readPreparedModelCatalog: mocks.loadModelCatalog,
 }));
+// mock-isolation: Use a synthetic workspace inventory without reading operator workspace files.
 vi.mock("../../agents/workspace.js", () => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",
   ensureAgentWorkspace: mocks.ensureAgentWorkspace,

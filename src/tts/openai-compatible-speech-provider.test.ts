@@ -38,6 +38,7 @@ const { postJsonRequestMock, resolveProviderHttpRequestConfigMock } = vi.hoisted
   })),
 }));
 
+// mock-isolation: Capture speech HTTP requests while retaining real response decoding, with no network access.
 vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   const { assertOkOrThrowHttpError, readProviderBinaryResponse } =
     await import("../agents/provider-http-errors.js");

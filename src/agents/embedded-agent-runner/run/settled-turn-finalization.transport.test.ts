@@ -2,7 +2,6 @@ import { once } from "node:events";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
-import { json } from "node:stream/consumers";
 import { promisify } from "node:util";
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import { Type } from "typebox";
@@ -113,28 +112,35 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
   const websocket = failure === "WebSocket";
   const apiKey = websocket ? syntheticLoopbackJwt() : "synthetic-loopback-key";
   const requests: Array<{ tools?: unknown[] }> = [];
-  const server = createServer(async (request, response) => {
-    requests.push(await json(request));
-    if (requests.length === 2) {
-      if (failure === "terminated") {
-        response.writeHead(200, {
-          "content-type": "text/event-stream",
-          "cache-control": "no-store",
-        });
-        response.write(`data: ${JSON.stringify(responseEvents(false)[0])}\n\n`, () =>
-          response.destroy(),
+  const server = createServer((request, response) => {
+    request.setEncoding("utf8");
+    let body = "";
+    request.on("data", (chunk: string) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      requests.push(JSON.parse(body));
+      if (requests.length === 2) {
+        if (failure === "terminated") {
+          response.writeHead(200, {
+            "content-type": "text/event-stream",
+            "cache-control": "no-store",
+          });
+          response.write(`data: ${JSON.stringify(responseEvents(false)[0])}\n\n`, () =>
+            response.destroy(),
+          );
+          return;
+        }
+        response.writeHead(503, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: { message: "upstream connect error: connection refused", type: "server_error" },
+          }),
         );
         return;
       }
-      response.writeHead(503, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({
-          error: { message: "upstream connect error: connection refused", type: "server_error" },
-        }),
-      );
-      return;
-    }
-    writeOpenAiResponsesSse(response, responseEvents(requests.length === 1));
+      writeOpenAiResponsesSse(response, responseEvents(requests.length === 1));
+    });
   });
   const sockets = new WebSocketServer({ server });
   sockets.on("connection", (socket) => {
@@ -285,13 +291,14 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
       },
     );
     input.finalization.harness.finalizeSettledTurn = finalize;
+    const runAttempt = vi.spyOn(input.finalization.harness, "runAttempt");
     const before = prepareEmbeddedRunTerminal({ ...input.terminalBase, ...input.initial });
     expect(before.payloadsWithToolMedia).toEqual([expect.objectContaining({ isError: true })]);
     const result = await prepareTerminalWithSettledTurnFinalization(input);
 
     expect(result.finalizationOutcome).toBe("answered");
     expect(finalize).toHaveBeenCalledOnce();
-    expect(input.finalization.harness.runAttempt).not.toHaveBeenCalled();
+    expect(runAttempt).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledOnce();
     expect(fs.readFileSync(note, "utf8")).toBe("saved\n");
     expect(requests.map((request) => request.tools?.length ?? 0)).toEqual([1, 1, 0]);

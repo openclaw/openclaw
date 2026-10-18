@@ -77,9 +77,13 @@ const screenMocks = vi.hoisted(() => ({
   })),
 }));
 
+// mock-isolation: Supply deterministic node identity and Gateway responses without a live connection.
 vi.mock("./gateway.js", () => gatewayMocks);
+// mock-isolation: Supply deterministic node identity and Gateway responses without a live connection.
 vi.mock("./nodes-utils.js", () => nodeUtilsMocks);
+// mock-isolation: Keep host camera and screen capture outside node-tool dispatch proof.
 vi.mock("../../cli/nodes-camera.js", () => nodesCameraMocks);
+// mock-isolation: Keep host camera and screen capture outside node-tool dispatch proof.
 vi.mock("../../cli/nodes-screen.js", () => screenMocks);
 
 let createNodesTool: typeof import("./nodes-tool.js").createNodesTool;

@@ -71,6 +71,7 @@ function holdFirstStagedChunk() {
       held.resolve();
       return true;
     }
+    return false;
   });
   return {
     held: held.promise,

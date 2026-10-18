@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+// mock-isolation: Keep plugin discovery outside the tool-factory lineage contract.
 vi.mock("../openclaw-plugin-tools.js", () => ({ resolveOpenClawPluginToolsForOptions: () => [] }));
 
 vi.mock("../openclaw-tools.media-factory-plan.js", async (importOriginal) => {
@@ -48,26 +49,33 @@ vi.mock("./agents-list-tool.js", () => ({
   createAgentsListTool: () => mocks.stubTool("agents_list"),
 }));
 
+// mock-isolation: Capture tool-constructor ownership without initializing unrelated tool runtimes.
 vi.mock("./cron-tool.js", () => ({ createCronTool: () => mocks.stubTool("cron") }));
 
+// mock-isolation: Capture tool-constructor ownership without initializing unrelated tool runtimes.
 vi.mock("./gateway-tool.js", () => ({ createGatewayTool: () => mocks.stubTool("gateway") }));
 
+// mock-isolation: Capture tool-constructor ownership without initializing unrelated tool runtimes.
 vi.mock("./image-generate-tool.js", () => ({
   createImageGenerateTool: mocks.imageGenerateToolOptions,
 }));
 
+// mock-isolation: Capture tool-constructor ownership without initializing unrelated tool runtimes.
 vi.mock("./image-tool.js", () => ({ createImageTool: () => mocks.stubTool("view_image") }));
 
 vi.mock("./message-tool-execution.js", () => ({
   createMessageTool: () => mocks.stubTool("message"),
 }));
 
+// mock-isolation: Capture tool-constructor ownership without initializing unrelated tool runtimes.
 vi.mock("./music-generate-tool.js", () => ({
   createMusicGenerateTool: mocks.musicGenerateToolOptions,
 }));
 
+// mock-isolation: Capture tool-constructor ownership without initializing unrelated tool runtimes.
 vi.mock("./nodes-tool.js", () => ({ createNodesTool: () => mocks.stubTool("nodes") }));
 
+// mock-isolation: Capture tool-constructor ownership without initializing unrelated tool runtimes.
 vi.mock("./pdf-tool.js", () => ({ createPdfTool: () => mocks.stubTool("pdf") }));
 
 vi.mock("./session-status-tool.js", () => ({
@@ -82,20 +90,24 @@ vi.mock("./sessions-list-tool.js", () => ({
   createSessionsListTool: () => mocks.stubTool("sessions_list"),
 }));
 
+// mock-isolation: Capture tool-constructor ownership without initializing unrelated tool runtimes.
 vi.mock("./sessions-send-tool.js", () => ({ createSessionsSendTool: mocks.sendToolOptions }));
 
+// mock-isolation: Capture tool-constructor ownership without initializing unrelated tool runtimes.
 vi.mock("./sessions-spawn-tool.js", () => ({ createSessionsSpawnTool: mocks.spawnToolOptions }));
 
 vi.mock("./sessions-yield-tool.js", () => ({
   createSessionsYieldTool: () => mocks.stubTool("sessions_yield"),
 }));
 
+// mock-isolation: Capture tool-constructor ownership without initializing unrelated tool runtimes.
 vi.mock("./subagents-tool.js", () => ({ createSubagentsTool: mocks.subagentsToolOptions }));
 
 vi.mock("./transcripts-tool.js", () => ({
   createTranscriptsTool: () => mocks.stubTool("transcripts"),
 }));
 
+// mock-isolation: Capture tool-constructor ownership without initializing unrelated tool runtimes.
 vi.mock("./video-generate-tool.js", () => ({
   createVideoGenerateTool: mocks.videoGenerateToolOptions,
 }));
@@ -117,7 +129,9 @@ const createTools = (runSessionKey?: string) =>
     disablePluginTools: true,
   });
 const expectKey = (captured: typeof mocks.spawnToolOptions, agentSessionKey: string) =>
-  expect(captured).toHaveBeenCalledWith(expect.objectContaining({ agentSessionKey }));
+  expect(captured.mock.calls.map(([options]) => options)).toContainEqual(
+    expect.objectContaining({ agentSessionKey }),
+  );
 
 beforeEach(() => {
   setRuntimeConfigSnapshot({});

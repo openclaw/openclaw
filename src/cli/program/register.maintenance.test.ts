@@ -27,10 +27,15 @@ const { doctorCommand, triageCommand, dashboardCommand, resetCommand, uninstallC
   mocks;
 const runDoctorLintCli = vi.mocked(runDoctorLintCliEntry);
 
+// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
 vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctorCommand }));
+// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
 vi.mock("../../commands/triage.js", () => ({ triageCommand: mocks.triageCommand }));
+// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
 vi.mock("../../commands/dashboard.js", () => ({ dashboardCommand: mocks.dashboardCommand }));
+// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
 vi.mock("../../commands/reset.js", () => ({ resetCommand: mocks.resetCommand }));
+// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
 vi.mock("../../commands/uninstall.js", () => ({ uninstallCommand: mocks.uninstallCommand }));
 
 vi.mock("../../commands/doctor-lint.js", async (importOriginal) => ({

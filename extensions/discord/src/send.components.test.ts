@@ -102,7 +102,8 @@ it.each(["send", "edit"] as const)("awaits registry settlement after %s", async 
     expect(platformMock).toHaveBeenCalledOnce();
     expect(requestBody(platformMock)).toMatchObject({ allowed_mentions: { parse: [] } });
     if (operation === "send") {
-      expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(delivery));
+      expect(onDeliveryResult).toHaveBeenCalledOnce();
+      expect(onDeliveryResult.mock.calls[0]?.[0]).toMatchObject(delivery);
       const error = new Error("registry write failed");
       registration.reject(error);
       expect(await outcome).toEqual({ error });

@@ -301,7 +301,12 @@ describe("web_fetch output contract", () => {
       .execute("expanded-error", { url: "https://example.com/expanded-error" })
       .then(
         () => "",
-        (error: Error) => error.message,
+        (error: unknown) => {
+          if (!(error instanceof Error)) {
+            throw error;
+          }
+          return error.message;
+        },
       );
     const prefix = "Web fetch failed (500): ";
     expect(message.startsWith(prefix)).toBe(true);

@@ -36,10 +36,12 @@ const preflightMock = vi.hoisted(() => vi.fn());
 const readSnapshotMock = vi.hoisted(() => vi.fn());
 const publishConfigMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Control startup preflight outcomes without running real repair operations.
 vi.mock("../../commands/startup-config-preflight.js", () => ({
   runStartupConfigPreflight: preflightMock,
 }));
 
+// mock-isolation: Use explicit invalid and legacy config fixtures without reading operator config.
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readSnapshotMock,
   setRuntimeConfigSnapshot: publishConfigMock,

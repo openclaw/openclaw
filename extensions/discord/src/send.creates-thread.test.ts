@@ -105,8 +105,8 @@ it.each([false, true])("keeps chunked replies in one thread (explicit=%s)", asyn
       Array.from({ length: 3 }, () => ({ kind: "channel", id: "701" })),
     );
   }
+  expect(result?.receipt?.threadId).toBe(explicit ? undefined : "701");
   expect(result?.receipt).toMatchObject({
-    threadId: explicit ? undefined : "701",
     platformMessageIds: explicit ? ["message-2"] : ["starter", "message-1", "message-2"],
   });
 });

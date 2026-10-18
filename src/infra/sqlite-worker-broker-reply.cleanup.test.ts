@@ -30,10 +30,13 @@ vi.mock("node:sqlite", () => ({ DatabaseSync: effects.forbidden }));
 vi.mock("node:child_process", () =>
   effects.forbid("spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"),
 );
+// mock-isolation: Fail if pure reply settlement reaches unrelated native retention or transfer effects.
 vi.mock("../state/openclaw-state-worker-error.js", () =>
   effects.forbid("retainOpenClawStateWorkerErrorPayload"),
 );
+// mock-isolation: Fail if pure reply settlement reaches unrelated native retention or transfer effects.
 vi.mock("./sqlite-transaction.js", () => effects.forbid("retainSqliteWriteAdmissionService"));
+// mock-isolation: Fail if pure reply settlement reaches unrelated native retention or transfer effects.
 vi.mock("./sqlite-worker-transfer.js", () =>
   effects.forbid("createSqliteWorkerTransferOwner", "createSqliteWorkerTransferReceiver"),
 );

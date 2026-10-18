@@ -545,7 +545,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     runtime,
     state,
     prepare: () => runtime.tts.prepareTtsRequest({ cfg, text }),
-    async runTest(run: () => Promise<void>) {
+    async runTest(this: void, run: () => Promise<void>) {
       try {
         await withEnvAsync(
           {

@@ -149,9 +149,10 @@ describe("terminal preparation delivery custody", () => {
         attempt.toolMediaUrls = ["/tmp/current.pdf"];
       }
       input.terminalBase.mergeToolMedia = carry.merge;
+      const finalizeSettledTurn = vi.spyOn(input.finalization.harness, "finalizeSettledTurn");
       const settled = await prepareTerminalWithSettledTurnFinalization(input);
       expect(input.terminalBase.runParams.resolveReplyDelivery).toHaveBeenCalledWith(2);
-      expect(input.finalization.harness.finalizeSettledTurn).not.toHaveBeenCalled();
+      expect(finalizeSettledTurn).not.toHaveBeenCalled();
       expect(settled).toMatchObject({
         finalizationOutcome: "not-attempted",
         prepared: { replyDeliveryState: observation === "missing" ? "missing" : "pending" },

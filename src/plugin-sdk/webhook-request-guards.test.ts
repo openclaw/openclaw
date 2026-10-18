@@ -144,7 +144,8 @@ describe("readJsonWebhookBodyOrReject", () => {
   ] as const)("handles %s JSON bodies", async (_name, chunk, expected, statusCode, body) => {
     const { result, res } = await readJsonBody([chunk]);
     expect(result).toEqual(expected);
-    expect(res).toMatchObject({ statusCode, body });
+    expect(res.statusCode).toBe(statusCode);
+    expect(res.body).toBe(body);
   });
 });
 

@@ -68,12 +68,15 @@ prepareModelCatalogThinkingPolicies({
   },
 });
 
+// mock-isolation: Observe parsed directive overrides without applying live session changes.
 vi.mock("./get-reply-directives-apply.js", () => ({
   applyInlineDirectiveOverrides: (...args: unknown[]) => mocks.apply(...args),
 }));
+// mock-isolation: Control command eligibility independently of the directive parser under test.
 vi.mock("../commands-text-routing.js", () => ({
   shouldHandleTextCommands: (...args: unknown[]) => mocks.shouldHandle(...args),
 }));
+// mock-isolation: Supply fixture skill commands without scanning the user's workspace.
 vi.mock("../../skills/discovery/chat-commands.runtime.js", () => ({
   prepareSkillCommandsForWorkspace: (...args: unknown[]) => mocks.listForWorkspace(...args),
 }));

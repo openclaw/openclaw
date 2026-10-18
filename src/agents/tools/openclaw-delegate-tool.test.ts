@@ -12,6 +12,7 @@ import * as callerScope from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { createOpenClawDelegateToolsForRun as createTools } from "./openclaw-delegate-tool.js";
 
+// mock-isolation: Observe delegated Gateway calls without executing privileged Gateway operations.
 vi.mock("./in-process-gateway.js", () => ({ callInProcessGatewayTool: vi.fn() }));
 
 const callGateway = vi.mocked(callInProcessGatewayTool);

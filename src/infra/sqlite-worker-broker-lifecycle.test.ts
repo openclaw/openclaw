@@ -17,6 +17,7 @@ import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.
 
 const createCpuTrackedWorker = vi.hoisted(() => vi.fn());
 vi.mock("./worker-cpu.js", () => ({ createCpuTrackedWorker }));
+// mock-isolation: Use synthetic workers without selecting a native SQLite library.
 vi.mock("./bun-sqlite-library.js", () => ({ ensureSqliteLibrarySelected() {} }));
 
 function runtimeFixture(

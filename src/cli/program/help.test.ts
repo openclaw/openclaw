@@ -9,10 +9,12 @@ import { captureStdout } from "./program.test-helpers.js";
 const formatCliBannerLineMock = vi.hoisted(() => vi.fn(() => "BANNER-LINE"));
 const resolveCommitHashMock = vi.hoisted(() => vi.fn<() => string | null>(() => "abc1234"));
 
+// mock-isolation: Make help link formatting deterministic across terminal capabilities.
 vi.mock("../../../packages/terminal-core/src/links.js", () => ({
   formatDocsLink: (_path: string, full: string) => `https://${full}`,
 }));
 
+// mock-isolation: Suppress banner side effects while checking command help output.
 vi.mock("../banner.js", () => ({
   formatCliBannerLine: formatCliBannerLineMock,
   hasEmittedCliBanner: () => false,

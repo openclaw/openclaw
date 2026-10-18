@@ -30,10 +30,15 @@ const runtimeMock = {
   exit: vi.fn(),
 };
 
+// mock-isolation: Capture CLI output setup without changing process-wide logging or terminal output.
 vi.mock("../../globals.js", () => ({ setVerbose: setVerboseMock }));
+// mock-isolation: Capture CLI output setup without changing process-wide logging or terminal output.
 vi.mock("../../runtime.js", () => ({ defaultRuntime: runtimeMock }));
+// mock-isolation: Capture CLI output setup without changing process-wide logging or terminal output.
 vi.mock("../banner.js", () => ({ emitCliBanner: emitCliBannerMock }));
+// mock-isolation: Capture CLI output setup without changing process-wide logging or terminal output.
 vi.mock("../../logging/console.js", () => ({ routeLogsToStderr: routeLogsToStderrMock }));
+// mock-isolation: Control config readiness while testing preaction ordering.
 vi.mock("./config-guard.js", () => ({ ensureConfigReady: configReadyMock }));
 
 vi.mock("../../plugins/runtime/runtime-registry-loader.js", async (importOriginal) => ({
@@ -45,6 +50,7 @@ vi.mock("../state-dir-gateway-check.js", () => ({
   checkCliGatewayStateDir: vi.fn(async () => ({ kind: "allow" })),
 }));
 
+// mock-isolation: Observe bootstrap ordering without selecting live Gateway state.
 vi.mock("../gateway-cli/pre-bootstrap.js", () => ({
   prepareGatewayRunBootstrap: prepareGatewayMock,
   recheckGatewayRunBootstrap: recheckGatewayMock,

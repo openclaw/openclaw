@@ -97,7 +97,7 @@ function sendHarness(messageIds: string[] = [], channel?: ChannelType, failure?:
     ...mocks,
     send: (
       text: string,
-      options: Parameters<typeof sendMessageDiscord>[2] = {},
+      options: Partial<Parameters<typeof sendMessageDiscord>[2]> = {},
       to = "channel:789",
     ) => sendMessageDiscord(to, text, { ...clientOptions(mocks.rest), ...options }),
   };
@@ -761,7 +761,9 @@ it.each(mutations)(
   "stops the %s retry when the caller aborts during backoff",
   async (_name, mock, _route, run) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const mocks = makeDiscordRest();
     mocks[mock].mockRejectedValue(httpError(502));
     const controller = new AbortController();

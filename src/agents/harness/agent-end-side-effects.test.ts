@@ -26,6 +26,7 @@ import {
   runAgentHarnessAgentEndHook,
 } from "./lifecycle-hook-helpers.js";
 
+// mock-isolation: Capture workshop scheduling without running background experience reviews.
 vi.mock("../../skills/workshop/experience-review-default.js", () => ({
   scheduleSkillExperienceReview: vi.fn(),
   scheduleUnusedWorkshopSkillArchive: vi.fn(),

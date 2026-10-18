@@ -181,7 +181,7 @@ it.each([
           expect(assistant?.idempotencyKey).toBe(outcome.value?.assistantTranscriptIdempotencyKey);
           expect.soft(effects).toHaveLength(1);
           const harness = getRegisteredAgentHarness(`acp-${agent}`)?.harness;
-          assert(harness?.loadModelCatalog, "Native catalog operation missing");
+          assert(harness?.loadModelCatalog !== undefined, "Native catalog operation missing");
           expect(
             await harness.loadModelCatalog({
               config,

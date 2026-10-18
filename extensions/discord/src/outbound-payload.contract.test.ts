@@ -7,10 +7,13 @@ import { discordOutbound } from "./outbound-adapter.js";
 import { recordDiscordMessageCreateAmbiguity } from "./retry.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 
-const sendPayload = discordOutbound.sendPayload;
-if (!sendPayload) {
-  throw new Error("Expected Discord outbound sendPayload");
-}
+const sendPayload = (() => {
+  const handler = discordOutbound.sendPayload;
+  if (!handler) {
+    throw new Error("Expected Discord outbound sendPayload");
+  }
+  return handler;
+})();
 
 it("plain text delegates to sendText", async () => {
   resetGlobalHookRunner();

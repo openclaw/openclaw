@@ -164,7 +164,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
                 transcript,
               );
               const harness = getRegisteredAgentHarness("acp-qwen")?.harness;
-              assert(harness?.loadModelCatalog, "Native catalog operation missing");
+              assert(harness?.loadModelCatalog !== undefined, "Native catalog operation missing");
               await expect(
                 harness.loadModelCatalog({
                   config: disabledConfig,
