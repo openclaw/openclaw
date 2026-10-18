@@ -114,6 +114,14 @@ export async function dispatchCronDelivery(
     record("not-delivered", detail);
     return finish({ kind: "error", error: detail, errorKind: "delivery-target" });
   };
+  const finishInterrupted = () => {
+    const error = params.abortReason();
+    if (!sentByTool) {
+      record("not-delivered", error);
+    }
+    // An unfinished child still owns execution; a completed reader owns only delivery here.
+    return finish(params.spawnOnlyHandoff ? { kind: "error", error } : undefined);
+  };
 
   if (!params.deliveryRequested) {
     if (params.deliveryPlan.mode === "none" && params.spawnOnlyHandoff) {
@@ -149,7 +157,7 @@ export async function dispatchCronDelivery(
   }
 
   if (params.isAborted()) {
-    return finish({ kind: "error", error: params.abortReason() });
+    return finishInterrupted();
   }
   if (
     !sentByTool &&
@@ -166,15 +174,26 @@ export async function dispatchCronDelivery(
   }
   if (!sentByTool && (synthesizedText || params.spawnOnlyHandoff)) {
     const initial = synthesizedText ?? "";
-    const child = await resolveDescendantSubagentFollowup({
-      sessionKey: params.runSessionKey,
-      runStartedAt: params.runStartedAt,
-      timeoutMs: params.timeoutMs,
-      deliveryBestEffort: params.deliveryBestEffort,
-      spawnOnlyHandoff: params.spawnOnlyHandoff,
-      initialSynthesizedText: initial,
-      abortSignal: params.abortSignal,
-    });
+    let child: Awaited<ReturnType<typeof resolveDescendantSubagentFollowup>>;
+    try {
+      child = await resolveDescendantSubagentFollowup({
+        sessionKey: params.runSessionKey,
+        runStartedAt: params.runStartedAt,
+        timeoutMs: params.timeoutMs,
+        deliveryBestEffort: params.deliveryBestEffort,
+        spawnOnlyHandoff: params.spawnOnlyHandoff,
+        initialSynthesizedText: initial,
+        abortSignal: params.abortSignal,
+      });
+    } catch (error) {
+      if (!params.isAborted()) {
+        throw error;
+      }
+      return finishInterrupted();
+    }
+    if (params.isAborted()) {
+      return finishInterrupted();
+    }
     if (child.finalDisposition === "silent") {
       deliveryPayloads = deliveryPayloads.filter((payload) =>
         hasOutboundReplyContent({ ...payload, text: undefined }, { trimText: true }),
@@ -236,9 +255,6 @@ export async function dispatchCronDelivery(
   deliveryPayloads = normalized.payload;
   if (synthesizedText) {
     outputText = synthesizedText;
-  }
-  if (params.isAborted()) {
-    return finish({ kind: "error", error: params.abortReason() });
   }
 
   const conversationRuntime = await conversationResult.load();
