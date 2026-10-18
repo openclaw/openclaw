@@ -26,7 +26,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { lazySidebarElements } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { closeSlot, openSlot, setSidebarDock } from "./sidebar-layout.ts";
+import { closeSlot, openSlot, setSidebarDock, type SidebarSlotId } from "./sidebar-layout.ts";
 
 interface ActivePanelOwner {
   sidebarRegion: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null;
@@ -46,6 +46,7 @@ interface SessionPanelToggleOptions {
   current: () => ActivePanelOwner | null;
   pending: { requests: Map<SessionPanelToggleSlot, PendingSessionPanelToggle> };
   updateSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
+  onOpenPanel?: (slot: SidebarSlotId) => void;
 }
 
 const panelToggleEvents = [
@@ -99,6 +100,9 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
       layout = setSidebarDock(layout, detail.dock);
     }
     options.updateSidebarLayout(layout);
+    if (detail.open) {
+      options.onOpenPanel?.(slot);
+    }
   }
 
   function handle(
@@ -164,6 +168,7 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
         });
       }
       options.updateSidebarLayout(layout);
+      options.onOpenPanel?.(slot);
       return;
     }
     const existing = options.pending.requests.get(slot);
@@ -174,6 +179,7 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     ) {
       existing.events.push(event);
       options.updateSidebarLayout(layout);
+      options.onOpenPanel?.(slot);
       return;
     }
     const queue: PendingSessionPanelToggle = {
@@ -188,6 +194,7 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
       owner.state.sessionKey === sessionKey;
     options.pending.requests = new Map(options.pending.requests).set(slot, queue);
     options.updateSidebarLayout(layout);
+    options.onOpenPanel?.(slot);
     void Promise.all([
       customElements.whenDefined("openclaw-chat-sidebar-region"),
       customElements.whenDefined(tagName),

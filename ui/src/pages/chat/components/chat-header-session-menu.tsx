@@ -412,7 +412,7 @@ function ChatHeaderSessionMenuContent(
       );
       if (action && !action.disabled) {
         close();
-        action.onActivate();
+        void action.onActivate();
       }
       return;
     }

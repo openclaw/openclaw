@@ -24,6 +24,7 @@ export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle
 export class TranscriptLayoutOwner {
   private viewport: HTMLDivElement | null = null;
   private observers: ResizeObserver[] = [];
+  private composerFloat: HTMLElement | null = null;
   private readonly rangeHeights = new WeakMap<HTMLElement, number>();
 
   constructor(private readonly onClamp: (before: number, after: number) => void) {}
@@ -39,7 +40,7 @@ export class TranscriptLayoutOwner {
     return (
       height !== viewport.clientHeight ||
       style.paddingTop !== viewport.style.paddingTop ||
-      style.paddingBottom !== viewport.style.paddingBottom
+      this.bottomPadding(slot, style) !== viewport.style.paddingBottom
     );
   }
 
@@ -55,8 +56,8 @@ export class TranscriptLayoutOwner {
     }
     const resize = (entries: ResizeObserverEntry[]) => {
       const entry = entries.find((candidate) => candidate.target === slot);
-      if (this.viewport === viewport && entry) {
-        this.sync(entry.borderBoxSize[0]);
+      if (this.viewport === viewport) {
+        this.sync(entry?.borderBoxSize[0]);
       }
     };
     // Padding and viewport size can change independently; neither box covers both.
@@ -80,7 +81,23 @@ export class TranscriptLayoutOwner {
     if (!rect.width || !rect.height) {
       return;
     }
-    const { paddingTop, paddingBottom } = style;
+    const floating =
+      slot
+        .closest(".chat-main__conversation-frame")
+        ?.querySelector<HTMLElement>(
+          '.agent-chat__composer-shell[data-mobile-composer="true"] > .agent-chat__composer-float',
+        ) ?? null;
+    if (floating !== this.composerFloat) {
+      if (this.composerFloat) {
+        this.observers[0]?.unobserve(this.composerFloat);
+      }
+      this.composerFloat = floating;
+      if (floating) {
+        this.observers[0]?.observe(floating);
+      }
+    }
+    const { paddingTop } = style;
+    const paddingBottom = this.bottomPadding(slot, style);
     const width = `${rect.width}px`;
     const height = `${rect.height}px`;
     if (
@@ -99,6 +116,19 @@ export class TranscriptLayoutOwner {
     if (before !== null) {
       this.publishResize(before);
     }
+  }
+
+  private bottomPadding(slot: HTMLElement, style: CSSStyleDeclaration): string {
+    const floating = this.composerFloat;
+    if (!floating || floating.getClientRects().length === 0) {
+      return style.paddingBottom;
+    }
+    const bounds = floating.getBoundingClientRect();
+    if (bounds.height === 0) {
+      return style.paddingBottom;
+    }
+    const overlap = Math.max(0, slot.getBoundingClientRect().bottom - bounds.top);
+    return `${Math.max(Number.parseFloat(style.paddingBottom) || 0, overlap > 0 ? overlap + 4 : 0)}px`;
   }
 
   commitRange(element: HTMLElement, height: number): void {
@@ -139,6 +169,7 @@ export class TranscriptLayoutOwner {
       observer.disconnect();
     }
     this.observers = [];
+    this.composerFloat = null;
     this.viewport = null;
   }
 }
