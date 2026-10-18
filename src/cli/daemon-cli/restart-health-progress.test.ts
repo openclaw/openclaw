@@ -6,6 +6,8 @@ import {
   makeGatewayService,
   monotonicClock,
   requestStartupProbe,
+  portUsage,
+  waitForRunningGateway,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
 } from "./restart-health.test-helpers.js";
@@ -19,12 +21,7 @@ describe("restart startup progress", () => {
 
   it("observes explicit startup phases before readiness at 90000 ms", async () => {
     const readyAtMs = 90_000;
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000 }],
-      hints: [],
-    });
+    inspectPortUsage.mockResolvedValue(portUsage([{ pid: 8000 }]));
     requestStartupProbe.mockImplementation(async () => ({
       statusCode: monotonicClock.nowMs < readyAtMs ? 503 : 200,
       body: JSON.stringify(
@@ -35,9 +32,7 @@ describe("restart startup progress", () => {
     }));
     callGateway.mockImplementation(gatewayHealthResponse());
     const onProgress = vi.fn();
-    const result = await waitForGatewayHealthyRestart({
-      service: makeGatewayService({ status: "running", pid: 8000 }),
-      port: 18789,
+    const result = await waitForRunningGateway({
       requirePluginHealth: false,
       timeoutMs: 60_000,
       onProgress,
@@ -52,71 +47,46 @@ describe("restart startup progress", () => {
     expect(callGateway).toHaveBeenCalledTimes(0);
   });
 
-  it.each([{ statusCode: 503, body: '{"status":"draining","pendingReason":"shutdown"}' }])(
-    "does not mistake another HTTP readiness outcome for startup: %j",
-    async (response) => {
-      inspectPortUsage.mockResolvedValue({
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000 }],
-        hints: [],
-      });
-      requestStartupProbe.mockResolvedValue(response);
-      callGateway.mockImplementation(gatewayHealthResponse());
-      const result = await waitForGatewayHealthyRestart({
-        service: makeGatewayService({ status: "running", pid: 8000 }),
-        port: 18789,
-        requirePluginHealth: false,
-      });
-      expect(result).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 0 });
-    },
-  );
+  it("does not mistake draining HTTP readiness for startup", async () => {
+    inspectPortUsage.mockResolvedValue(portUsage([{ pid: 8000 }]));
+    requestStartupProbe.mockResolvedValue({
+      statusCode: 503,
+      body: '{"status":"draining","pendingReason":"shutdown"}',
+    });
+    callGateway.mockImplementation(gatewayHealthResponse());
+    const result = await waitForRunningGateway({
+      requirePluginHealth: false,
+    });
+    expect(result).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 0 });
+  });
 
-  it.each([
-    {
-      name: "owned listener running the wrong build",
-      listenerPid: 8000,
+  it("does not let HTTP startup hide an owned listener running the wrong build", async () => {
+    inspectPortUsage.mockResolvedValue(portUsage([{ pid: 8000 }]));
+    requestStartupProbe.mockResolvedValue({
+      statusCode: 503,
+      body: '{"status":"starting","pendingReason":"plugin-convergence"}',
+    });
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "previous-version", buildId: "previous-build" },
+      }),
+    );
+    const result = await waitForRunningGateway({
+      timeoutMs: 2_000,
+      requireRunningService: true,
+      requirePluginHealth: false,
       expectedBuildId: "candidate-build",
-      outcome: "build-id-mismatch",
-      failureReason: /build did not match/,
-    },
-  ])(
-    "does not let HTTP startup hide $name",
-    async ({ listenerPid, expectedBuildId, outcome, failureReason }) => {
-      inspectPortUsage.mockResolvedValue({
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: listenerPid }],
-        hints: [],
-      });
-      requestStartupProbe.mockResolvedValue({
-        statusCode: 503,
-        body: '{"status":"starting","pendingReason":"plugin-convergence"}',
-      });
-      callGateway.mockImplementation(
-        gatewayHealthResponse({
-          server: { version: "previous-version", buildId: "previous-build" },
-        }),
-      );
-      const result = await waitForGatewayHealthyRestart({
-        service: makeGatewayService({ status: "running", pid: 8000 }),
-        port: 18789,
-        timeoutMs: 2_000,
-        requireRunningService: true,
-        requirePluginHealth: false,
-        expectedBuildId,
-      });
-      expect(result).toMatchObject({ healthy: false, waitOutcome: outcome });
-      expect(
-        formatGatewayRestartFailure({ health: result, port: 18789, defaultTimeoutSeconds: 60 })
-          .failMessage,
-      ).toMatch(failureReason);
-      expect(result.buildIdMismatch).toEqual({
-        expected: expectedBuildId,
-        actual: "previous-build",
-      });
-    },
-  );
+    });
+    expect(result).toMatchObject({ healthy: false, waitOutcome: "build-id-mismatch" });
+    expect(
+      formatGatewayRestartFailure({ health: result, port: 18789, defaultTimeoutSeconds: 60 })
+        .failMessage,
+    ).toMatch(/build did not match/);
+    expect(result.buildIdMismatch).toEqual({
+      expected: "candidate-build",
+      actual: "previous-build",
+    });
+  });
 
   it.each([null, 1])("observes delayed child readiness with exitCode=%s", async (exitCode) => {
     const child = { pid: process.pid, exitCode, signalCode: null };
@@ -330,9 +300,7 @@ describe("restart startup progress", () => {
           Math.floor(monotonicClock.nowMs / 30_000) % 2 === 0 ? [] : [{ pid: listenerPid }],
         hints: [],
       }));
-      const health = await waitForGatewayHealthyRestart({
-        service: makeGatewayService({ status: "running", pid: 8000 }),
-        port: 18789,
+      const health = await waitForRunningGateway({
         requirePluginHealth: false,
       });
       expect(health).toMatchObject({

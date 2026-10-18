@@ -1,6 +1,6 @@
 // Daemon probe tests cover gateway probe command behavior and output.
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import { assert, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { gatewayProbeResultSawGateway } from "../../commands/gateway-health-auth-diagnostic.js";
 import { probeGatewayStatus } from "./probe.js";
 import type { DaemonStatus } from "./status.gather.js";
@@ -35,34 +35,39 @@ function createDaemonStatus(rpc: NonNullable<DaemonStatus["rpc"]>): DaemonStatus
   };
 }
 
+const probeDefaults = { url: "ws://127.0.0.1:19191", timeoutMs: 5_000 };
+const credentialConfig = {
+  gateway: {
+    auth: { mode: "token", token: { source: "exec", provider: "vault", id: "gateway/token" } },
+  },
+  secrets: { providers: { vault: { source: "exec", command: "/bin/false" } } },
+} as const;
+const rpcDefaults = {
+  token: "temp-token",
+  password: undefined,
+  tlsFingerprint: undefined,
+  preauthHandshakeTimeoutMs: undefined,
+  localPortOverride: undefined,
+  method: "status",
+  timeoutMs: 5_000,
+  sharedStateMode: "read-only",
+  skipImplicitAuth: true,
+  serviceTargetUrl: probeDefaults.url,
+  onHelloOk: expect.any(Function),
+};
+const probe = (options: Partial<Parameters<typeof probeGatewayStatus>[0]> = {}) =>
+  probeGatewayStatus({ ...probeDefaults, ...options });
+
 describe("probeGatewayStatus", () => {
+  beforeEach(() => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+  });
   const pairingPendingAuth = {
     role: null,
     scopes: [],
     capability: "pairing_pending",
   } as const;
-
-  function mockPairingPendingCloseProbe(error: string | null) {
-    probeGatewayMock.mockResolvedValueOnce({
-      ok: false,
-      error,
-      close: { code: 1008, reason: "pairing required" },
-      auth: pairingPendingAuth,
-      gatewayReached: true,
-    });
-  }
-
-  function expectPairingPendingCloseResult(result: Awaited<ReturnType<typeof probeGatewayStatus>>) {
-    expect(result).toEqual({
-      ok: false,
-      kind: "connect",
-      capability: "pairing_pending",
-      gatewayReached: true,
-      auth: pairingPendingAuth,
-      connectFailure: { kind: "pairing-required" },
-      error: "gateway closed (1008): pairing required",
-    });
-  }
 
   it("projects allowlisted connect failure details without serializing raw payloads", async () => {
     probeGatewayMock.mockResolvedValueOnce({
@@ -78,16 +83,11 @@ describe("probeGatewayStatus", () => {
       gatewayReached: true,
     });
 
-    const result = await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
-      timeoutMs: 5_000,
+    const result = await probe({
       json: true,
     });
 
     assert(!result.ok);
-    if (result.ok) {
-      throw new Error("expected failed gateway probe");
-    }
     expect(result.connectFailure).toEqual({
       kind: "pairing-required",
       detailCode: "PAIRING_REQUIRED",
@@ -101,28 +101,20 @@ describe("probeGatewayStatus", () => {
     expect(json).not.toContain("scope-upgrade");
   });
 
-  it.each(["connect ECONNREFUSED 127.0.0.1:19191"])(
-    "does not treat an unvalidated transport close with error %s as a Gateway response",
-    async (error) => {
-      probeGatewayMock.mockResolvedValueOnce({
-        ok: false,
-        error,
-        close: { code: 1006, reason: "" },
-      });
+  it("does not treat an unvalidated transport close as a Gateway response", async () => {
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "connect ECONNREFUSED 127.0.0.1:19191",
+      close: { code: 1006, reason: "" },
+    });
 
-      const result = await probeGatewayStatus({
-        url: "ws://127.0.0.1:19191",
-        timeoutMs: 5_000,
-        json: true,
-      });
+    const result = await probe({
+      json: true,
+    });
 
-      assert(!result.ok);
-      if (result.ok) {
-        throw new Error("expected failed gateway probe");
-      }
-      expect(gatewayProbeResultSawGateway(result)).toBe(false);
-    },
-  );
+    assert(!result.ok);
+    expect(gatewayProbeResultSawGateway(result)).toBe(false);
+  });
 
   it("omits unknown detail codes from serialized daemon status", async () => {
     probeGatewayMock.mockResolvedValueOnce({
@@ -136,16 +128,11 @@ describe("probeGatewayStatus", () => {
       auth: pairingPendingAuth,
     });
 
-    const result = await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
-      timeoutMs: 5_000,
+    const result = await probe({
       json: true,
     });
 
     assert(!result.ok);
-    if (result.ok) {
-      throw new Error("expected failed gateway probe");
-    }
     expect(result.connectFailure).toEqual({ kind: "gateway-rejected" });
 
     const json = JSON.stringify(createDaemonStatus(result));
@@ -153,168 +140,73 @@ describe("probeGatewayStatus", () => {
     expect(json).not.toContain("do-not-print-unknown");
   });
 
-  it.each([undefined])(
-    "uses a status RPC with local port override %s when requireRpc is enabled",
-    async (localPortOverride) => {
-      callGatewayMock.mockReset();
-      probeGatewayMock.mockReset();
-      callGatewayMock.mockImplementationOnce(async (opts) => {
-        opts.onHelloOk?.({
-          server: { version: "2026.8.1", buildId: "build-1", connId: "conn-1" },
-          auth: { role: "operator", scopes: ["operator.admin"] },
-        });
-        return { runtimeVersion: "2026.8.1", status: "ok" };
+  it("uses one timeout-bound status RPC when requireRpc is enabled", async () => {
+    callGatewayMock.mockImplementationOnce(async (opts) => {
+      opts.onHelloOk?.({
+        server: { version: "2026.8.1", buildId: "build-1", connId: "conn-1" },
+        auth: { role: "operator", scopes: ["operator.admin"] },
       });
+      return { runtimeVersion: "2026.8.1", status: "ok" };
+    });
 
-      const result = await probeGatewayStatus({
-        url: "ws://127.0.0.1:19191",
-        token: "temp-token",
-        tlsFingerprint: "abc123",
-        timeoutMs: 5_000,
-        json: true,
-        requireRpc: true,
-        localPortOverride,
-        configPath: "/tmp/openclaw-daemon/openclaw.json",
-      });
-
-      expect(result).toEqual({
-        ok: true,
-        kind: "read",
-        capability: "admin_capable",
-        auth: {
-          role: "operator",
-          scopes: ["operator.admin"],
-          capability: "admin_capable",
-        },
-        server: {
-          version: "2026.8.1",
-          buildId: "build-1",
-          connId: "conn-1",
-        },
-        version: "2026.8.1",
-      });
-      expect(probeGatewayMock).not.toHaveBeenCalled();
-      expect(callGatewayMock).toHaveBeenCalledOnce();
-      expect(callGatewayMock).toHaveBeenCalledWith({
-        localPortOverride,
-        token: "temp-token",
-        password: undefined,
-        tlsFingerprint: "abc123",
-        preauthHandshakeTimeoutMs: undefined,
-        method: "status",
-        timeoutMs: 5_000,
-        sharedStateMode: "read-only",
-        skipImplicitAuth: true,
-        configPath: "/tmp/openclaw-daemon/openclaw.json",
-        serviceTargetUrl: "ws://127.0.0.1:19191",
-        onHelloOk: expect.any(Function),
-      });
-    },
-  );
-
-  it("keeps required status to one timeout-bound RPC", async () => {
-    callGatewayMock.mockReset();
-    probeGatewayMock.mockReset();
-    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
     const config = {};
-
-    await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
-      token: "temp-token",
+    const result = await probe({
       config,
-      preauthHandshakeTimeoutMs: 30_000,
       timeoutMs: 30_000,
+      preauthHandshakeTimeoutMs: 30_000,
+      token: "temp-token",
+      tlsFingerprint: "abc123",
+      json: true,
       requireRpc: true,
+      configPath: "/tmp/openclaw-daemon/openclaw.json",
     });
 
-    expect(probeGatewayMock).not.toHaveBeenCalled();
-    expect(callGatewayMock).toHaveBeenCalledOnce();
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      token: "temp-token",
-      password: undefined,
-      tlsFingerprint: undefined,
-      preauthHandshakeTimeoutMs: 30_000,
-      config,
-      localPortOverride: undefined,
-      method: "status",
-      timeoutMs: 30_000,
-      sharedStateMode: "read-only",
-      skipImplicitAuth: true,
-      serviceTargetUrl: "ws://127.0.0.1:19191",
-      onHelloOk: expect.any(Function),
-    });
-  });
-
-  it("omits config-backed credentials from the status RPC when disabled", async () => {
-    callGatewayMock.mockReset();
-    probeGatewayMock.mockReset();
-    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
-    probeGatewayMock.mockResolvedValueOnce({
+    expect(result).toEqual({
       ok: true,
+      kind: "read",
+      capability: "admin_capable",
       auth: {
         role: "operator",
         scopes: ["operator.admin"],
         capability: "admin_capable",
       },
+      server: {
+        version: "2026.8.1",
+        buildId: "build-1",
+        connId: "conn-1",
+      },
+      version: "2026.8.1",
     });
-    const config = {
-      gateway: {
-        auth: {
-          mode: "token",
-          token: { source: "exec", provider: "vault", id: "gateway/token" },
-        },
-      },
-      secrets: {
-        providers: {
-          vault: { source: "exec", command: "/bin/false" },
-        },
-      },
-    } as const;
+    expect(probeGatewayMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      ...rpcDefaults,
+      config,
+      timeoutMs: 30_000,
+      preauthHandshakeTimeoutMs: 30_000,
+      tlsFingerprint: "abc123",
+      configPath: "/tmp/openclaw-daemon/openclaw.json",
+    });
+  });
 
-    await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
+  it("omits config-backed credentials from the status RPC when disabled", async () => {
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
+    const config = credentialConfig;
+
+    const result = await probe({
       token: "temp-token",
       config,
-      timeoutMs: 5_000,
       requireRpc: true,
       allowRpcConfigCredentials: false,
     });
 
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      token: "temp-token",
-      password: undefined,
-      tlsFingerprint: undefined,
-      preauthHandshakeTimeoutMs: undefined,
-      method: "status",
-      timeoutMs: 5_000,
-      sharedStateMode: "read-only",
-      skipImplicitAuth: true,
-      onHelloOk: expect.any(Function),
-      localPortOverride: undefined,
-      serviceTargetUrl: "ws://127.0.0.1:19191",
-    });
+    expect(result).toMatchObject({ ok: true, capability: "read_only" });
+    expect(callGatewayMock).toHaveBeenCalledWith(rpcDefaults);
   });
 
   it("fails before the status RPC when config credentials are disabled without explicit auth", async () => {
-    callGatewayMock.mockReset();
-    probeGatewayMock.mockReset();
-
-    const result = await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
-      config: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: { source: "exec", provider: "vault", id: "gateway/token" },
-          },
-        },
-        secrets: {
-          providers: {
-            vault: { source: "exec", command: "/bin/false" },
-          },
-        },
-      },
-      timeoutMs: 5_000,
+    const result = await probe({
+      config: credentialConfig,
       requireRpc: true,
       allowRpcConfigCredentials: false,
     });
@@ -331,31 +223,35 @@ describe("probeGatewayStatus", () => {
   });
 
   it("prefers the close reason over a generic timeout when both are present", async () => {
-    callGatewayMock.mockReset();
-    probeGatewayMock.mockReset();
-    mockPairingPendingCloseProbe("timeout");
-
-    const result = await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
-      timeoutMs: 5_000,
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "timeout",
+      close: { code: 1008, reason: "pairing required" },
+      auth: pairingPendingAuth,
+      gatewayReached: true,
     });
 
-    expectPairingPendingCloseResult(result);
+    const result = await probe({});
+
+    expect(result).toEqual({
+      ok: false,
+      kind: "connect",
+      capability: "pairing_pending",
+      gatewayReached: true,
+      auth: pairingPendingAuth,
+      connectFailure: { kind: "pairing-required" },
+      error: "gateway closed (1008): pairing required",
+    });
   });
 
   it("redacts credential-bearing URLs echoed in probe failure text", async () => {
-    callGatewayMock.mockReset();
-    probeGatewayMock.mockReset();
     probeGatewayMock.mockResolvedValueOnce({
       ok: false,
       error: "connect failed to ws://user:secret@gw.example.com:18789?token=abc123",
       close: null,
     });
 
-    const result = await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
-      timeoutMs: 5_000,
-    });
+    const result = await probe({});
 
     assert(!result.ok);
     expect(result.error).not.toContain("secret");
@@ -364,16 +260,11 @@ describe("probeGatewayStatus", () => {
   });
 
   it("redacts credential-bearing URLs in thrown probe errors", async () => {
-    callGatewayMock.mockReset();
-    probeGatewayMock.mockReset();
     probeGatewayMock.mockRejectedValueOnce(
       new Error("dial ws://user:secret@gw.example.com:18789 refused"),
     );
 
-    const result = await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
-      timeoutMs: 5_000,
-    });
+    const result = await probe({});
 
     assert(!result.ok);
     expect(result.error).not.toContain("secret");
@@ -381,8 +272,6 @@ describe("probeGatewayStatus", () => {
   });
 
   it("preserves event-loop evidence when an admitted status RPC times out", async () => {
-    callGatewayMock.mockReset();
-    probeGatewayMock.mockReset();
     callGatewayMock.mockImplementationOnce(async (opts) => {
       opts.onHelloOk({
         auth: { role: "operator", scopes: ["operator.read"] },
@@ -410,10 +299,8 @@ describe("probeGatewayStatus", () => {
       throw error;
     });
 
-    const result = await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
+    const result = await probe({
       token: "temp-token",
-      timeoutMs: 5_000,
       requireRpc: true,
     });
 
@@ -431,8 +318,6 @@ describe("probeGatewayStatus", () => {
   });
 
   it("passes an explicit CLI --url override to callGateway", async () => {
-    callGatewayMock.mockReset();
-    probeGatewayMock.mockReset();
     callGatewayMock.mockImplementationOnce(async (opts) => {
       opts.onHelloOk?.({
         server: { version: "2026.8.1", buildId: "build-1", connId: "conn-1" },
@@ -442,11 +327,9 @@ describe("probeGatewayStatus", () => {
     });
 
     const urlOverride = "wss://explicit.example:19001";
-    await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
+    await probe({
       urlOverride,
       token: "explicit-token",
-      timeoutMs: 5_000,
       requireRpc: true,
     });
 
