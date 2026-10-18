@@ -217,7 +217,11 @@ describe("CI automation popup scope", () => {
     h.read = oldRead.promise;
     await h.open(false);
     expect(h.request.mock.calls.some(([method]) => method === "cron.list")).toBe(true);
-    await h.paint("replacement");
+    const signal = h.calls("cron.list")[0]?.[2]?.signal;
+    h.element.sessionId = "replacement";
+    expect(signal?.aborted).toBe(true);
+    expect(h.root.open).toBe(false);
+    await h.element.updateComplete;
     h.jobs = [];
     h.read = undefined;
     await h.open();
@@ -226,6 +230,36 @@ describe("CI automation popup scope", () => {
     expect(h.checkbox().checked).toBe(false);
     expect(h.checkbox().closest("fieldset")?.disabled).toBe(false);
     expect(h.root.textContent).not.toContain("fix-first");
+  });
+
+  it("retires old inventory before another toggle can target a replacement session", async () => {
+    await h.open();
+    h.element.sessionId = "replacement";
+    // The old DOM is still present until Solid commits the new presentation.
+    h.checkbox("autoMerge").click();
+    expect(h.calls("cron.add")).toHaveLength(0);
+    await h.settle();
+    expect(h.root.open).toBe(false);
+  });
+
+  it("settles an admitted write while hidden and refreshes when presented again", async () => {
+    const pending = createDeferred<{ job: CronJob }>();
+    h.writes["cron.add"] = pending.promise;
+    await h.open();
+    h.checkbox().click();
+    h.element.presented = false;
+    h.jobs = [job("first")];
+    pending.resolve({ job: h.jobs[0]! });
+    await h.settle();
+    expect(h.calls("cron.add")).toHaveLength(1);
+    expect(h.calls("cron.list")).toHaveLength(1);
+    expect(h.checkbox().checked).toBe(true);
+    expect(h.checkbox().disabled).toBe(false);
+    h.element.presented = true;
+    await h.settle();
+    expect(h.root.open).toBe(true);
+    expect(h.calls("cron.list")).toHaveLength(2);
+    expect(h.calls("cron.add")).toHaveLength(1);
   });
 
   it.each(["session", "auth", "gateway"])(

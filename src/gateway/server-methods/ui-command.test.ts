@@ -261,7 +261,7 @@ describe("ui.command gateway method", () => {
         turn.revoke(steerer.profileId);
         expectRejected(await execute(steerer.profileId), "Bob's access changed; ask them again");
         expectTarget(await execute(owner.profileId), "alice-tab");
-        turn.complete();
+        await turn.complete();
         expect(turn.releaseCounts.get(steerer.profileId)).toBe(2);
         expectRejected(await execute(owner.profileId));
       });
@@ -317,7 +317,7 @@ describe("ui.command gateway method", () => {
         }),
       );
       expect(ambiguous.broadcastToConnIds).not.toHaveBeenCalled();
-      turn.complete();
+      await turn.complete();
       const ended = await request();
       expectRejected(ended);
     });

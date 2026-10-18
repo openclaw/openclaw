@@ -3,10 +3,10 @@ import type { QuestionRequestParams } from "../../packages/gateway-protocol/src/
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../agents/embedded-agent-runner/run-state.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,

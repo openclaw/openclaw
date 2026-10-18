@@ -14,7 +14,7 @@ import type { ReplyPayload } from "../types.js";
 import { setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 
 const { a2aChannelPlugin } = await loadBundledPluginFacade<{ a2aChannelPlugin: ChannelPlugin }>({
   pluginId: "a2a",
@@ -95,7 +95,6 @@ function createTurn(params: {
       key: "main",
       current: () => undefined,
       publish: () => undefined,
-      adopt: () => undefined,
     },
     sendPolicy: "allow",
     preflightCompactionApplied: false,

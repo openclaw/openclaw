@@ -1,8 +1,10 @@
 import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
+import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMattermostRuntime } from "../runtime.js";
-import type { MattermostAccountConfig } from "../types.js";
+import type { MattermostConfig } from "../types.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import type { MattermostPost } from "./client.js";
 import type { MattermostIngressPost } from "./monitor-ingress.js";
@@ -28,7 +30,11 @@ describe("Mattermost bot-owned thread mention policy", () => {
     hasParticipation.mockReset().mockResolvedValue(false);
   });
 
-  function setup(config: Partial<MattermostAccountConfig> = {}, botUsername = "bot") {
+  function setup(
+    config: Partial<MattermostConfig> = {},
+    botUsername = "bot",
+    accountId = "default",
+  ) {
     const cfg: OpenClawConfig = {
       channels: {
         mattermost: {
@@ -40,14 +46,14 @@ describe("Mattermost bot-owned thread mention policy", () => {
         },
       },
     };
-    const account = resolveMattermostAccount({ cfg, accountId: "default" });
+    const account = resolveMattermostAccount({ cfg, accountId });
     const core = createPluginRuntimeMock();
     core.channel.mentions.buildMentionRegexes = () => [];
     core.channel.groups.resolveRequireMention = resolveChannelGroupRequireMention;
     core.channel.routing.resolveAgentRoute = () => ({
       agentId: "main",
       channel: "mattermost",
-      accountId: "default",
+      accountId,
       sessionKey: "agent:main:mattermost:channel:room",
       mainSessionKey: "agent:main:main",
       lastRoutePolicy: "session",
@@ -88,6 +94,7 @@ describe("Mattermost bot-owned thread mention policy", () => {
     } as unknown as MattermostMonitorContext;
     const handler = createMattermostPostHandler(monitor);
     return {
+      core,
       root,
       request,
       receive: (post: Partial<MattermostIngressPost> = {}) =>
@@ -105,6 +112,84 @@ describe("Mattermost bot-owned thread mention policy", () => {
         ),
     };
   }
+
+  it("keeps participated-thread follow-ups enabled by default", async () => {
+    const f = setup();
+    hasParticipation.mockResolvedValue(true);
+
+    await f.receive();
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch.mock.calls[0]?.[1].ctxPayload).toMatchObject({
+      BodyForAgent: "Continue the discussion",
+      WasMentioned: true,
+    });
+  });
+
+  it.each([
+    { accountId: "default", admitted: true },
+    { accountId: "work", admitted: false },
+  ])(
+    "applies account implicit-mention policy before channel policy for $accountId",
+    async ({ accountId, admitted }) => {
+      const f = setup(
+        {
+          implicitMentions: { threadParticipation: true },
+          accounts: { work: { implicitMentions: { threadParticipation: false } } },
+        },
+        "bot",
+        accountId,
+      );
+      hasParticipation.mockResolvedValue(true);
+
+      await f.receive();
+
+      expect(dispatch).toHaveBeenCalledTimes(admitted ? 1 : 0);
+      if (admitted) {
+        expect(dispatch.mock.calls[0]?.[1].ctxPayload).toMatchObject({
+          AccountId: "default",
+          WasMentioned: true,
+        });
+      }
+    },
+  );
+
+  it.each([
+    {
+      activation: "explicit mentions",
+      message: "@bot continue the discussion",
+      expected: { BodyForAgent: "continue the discussion", WasMentioned: true },
+    },
+    {
+      activation: "authorized commands",
+      message: "/reset",
+      expected: {
+        BodyForAgent: "/reset",
+        WasMentioned: true,
+        CommandAuthorized: true,
+        CommandSource: "text",
+      },
+    },
+  ])(
+    "keeps $activation independent from disabled implicit mentions",
+    async ({ message, expected }) => {
+      const f = setup({
+        implicitMentions: { threadParticipation: false },
+        groupAllowFrom: ["sender"],
+      });
+      f.core.channel.commands.isControlCommandMessage = isControlCommandMessage;
+      f.core.channel.commands.shouldHandleTextCommands = shouldHandleTextCommands;
+      hasParticipation.mockResolvedValue(true);
+
+      await f.receive();
+      expect(dispatch).not.toHaveBeenCalled();
+
+      await f.receive({ id: "activated-follow-up", message });
+
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch.mock.calls[0]?.[1].ctxPayload).toMatchObject(expected);
+    },
+  );
 
   it.each([
     {

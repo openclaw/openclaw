@@ -18,7 +18,7 @@ import {
   wrapBrowserExternalJson,
   wrapBrowserExternalText,
 } from "./browser-tool.snapshot.js";
-import { EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS } from "./browser/act-policy.js";
+import { BROWSER_ACT_KIND_FACTS } from "./browser/act-kinds.js";
 import type { BrowserBatchAbort } from "./browser/client-actions-types.js";
 import {
   browserAct,
@@ -56,26 +56,16 @@ function withLocalActTimeout(
   request: BrowserActRequest,
   usesChromeMcp: boolean,
 ): BrowserActRequest {
+  const facts = BROWSER_ACT_KIND_FACTS[request.kind];
   if (
     ("timeoutMs" in request && request.timeoutMs !== undefined) ||
-    (usesChromeMcp && !EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS.has(request.kind))
+    (usesChromeMcp && !facts?.existingSessionTimeout) ||
+    facts?.timeout !== "default"
   ) {
     return request;
   }
-  switch (request.kind) {
-    case "click":
-    case "type":
-    case "hover":
-    case "scrollIntoView":
-    case "drag":
-    case "select":
-    case "fill":
-    case "evaluate":
-    case "wait":
-      return { ...request, timeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS };
-    default:
-      return request;
-  }
+  const timedRequest = { ...request, timeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS };
+  return timedRequest;
 }
 
 function formatAgentTab(source: BrowserTab): Record<string, unknown> {

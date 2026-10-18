@@ -354,8 +354,8 @@ function PaletteSearch(props: {
               <For each={group()[1]} keyed={(item) => item.id}>
                 {(item) => {
                   // Search can move a session between groups; both keys own this row.
-                  const key = untrack(() => `${item().category}:${item().id}`);
-                  onCleanup(() => props.optionElements.delete(key));
+                  const initialKey = untrack(() => `${item().category}:${item().id}`);
+                  onCleanup(() => props.optionElements.delete(initialKey));
                   const index = () => results().items.indexOf(item());
                   const active = () => index() === results().activeIndex;
                   const agentId = () =>
@@ -368,7 +368,7 @@ function PaletteSearch(props: {
                       : undefined;
                   return (
                     <div
-                      ref={(element) => props.optionElements.set(key, element)}
+                      ref={(element) => props.optionElements.set(initialKey, element)}
                       id={getOptionId(index())}
                       class={[
                         "cmd-palette__item",
@@ -446,15 +446,13 @@ function PaletteSearch(props: {
 
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   const current = () => props.readProps();
-  // The palette retains one draft owner and picker for this view's lifetime.
-  const { mentionMenu, onMentionChange } = untrack(current);
   createEffect(
-    () => current().draft.mentionDirectory,
-    (directory) => mentionMenu.syncDirectory(directory),
+    () => [current().mentionMenu, current().draft.mentionDirectory] as const,
+    ([mentionMenu, directory]) => mentionMenu.syncDirectory(directory),
   );
   createEffect(
-    createMemo(() => mentionMenu.open),
-    onMentionChange,
+    createMemo(() => current().mentionMenu.open),
+    () => current().onMentionChange(),
     { defer: true },
   );
   const results = createMemo(() => resolvePaletteResults(current()));

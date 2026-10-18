@@ -26,10 +26,10 @@ import {
 } from "../../infra/update-run-recovery.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
-import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
 import { admitUpdateCommandRun } from "./update-command-run.js";
-import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
+import { getNodeRuntimeFixture } from "./update-command-runtime-recovery.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
+import { collectServiceInspectionFailureFacts } from "./update-command-service-plan.js";
 import * as servicePlan from "./update-command-service-plan.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -59,7 +59,7 @@ it.each([
 ] as const)(
   "preserves verified ownership and warns on unavailable inspection (%s)",
   async (scenario) => {
-    stubNodeRuntime();
+    const serviceNode = getNodeRuntimeFixture().execPath;
     const home = dirs.make("update-loaded-admission-");
     const callerState = path.join(home, ".openclaw-caller");
     const serviceState = path.join(home, ".openclaw-service");
@@ -110,7 +110,7 @@ it.each([
       fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
       fs.writeFileSync(
         sourcePath,
-        `[Service]\nExecStart=${process.execPath} ${root}/dist/entry.js gateway\n`,
+        `[Service]\nExecStart=${serviceNode} ${root}/dist/entry.js gateway\n`,
       );
     }
     const snapshot = () => snapshotUpdateFixtureTree(home);
@@ -124,7 +124,7 @@ it.each([
       scenario === "unresolved-root"
         ? ["opaque-launcher"]
         : [
-            process.execPath,
+            serviceNode,
             path.join(scenario === "stale-install" ? foreignRoot : root, "dist", "entry.js"),
             "gateway",
           ];

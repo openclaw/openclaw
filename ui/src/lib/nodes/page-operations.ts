@@ -162,17 +162,14 @@ async function loadInventory(
   const generation = state.requestGeneration;
   try {
     if (kind === "nodes") {
-      const res = await client.request<{ nodes?: NodeListNode[] }>("node.list", {});
+      const res = await client.request<{ nodes: NodeListNode[] }>("node.list", {});
       if (isCurrentNodesRequest(state, client, generation)) {
-        state.nodes = Array.isArray(res.nodes) ? res.nodes : [];
+        state.nodes = res.nodes;
       }
     } else {
-      const res = await client.request<Partial<DevicePairingList>>("device.pair.list", {});
+      const res = await client.request<DevicePairingList>("device.pair.list", {});
       if (isCurrentNodesRequest(state, client, generation)) {
-        state.devicesList = {
-          pending: Array.isArray(res?.pending) ? res.pending : [],
-          paired: Array.isArray(res?.paired) ? res.paired : [],
-        };
+        state.devicesList = res;
       }
     }
   } catch (err) {

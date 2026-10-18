@@ -257,24 +257,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 74553,
-    "roughTokens": 18639
+    "chars": 75031,
+    "roughTokens": 18758
   },
   "openClawDeveloperInstructions": {
-    "chars": 3354,
-    "roughTokens": 839
+    "chars": 3490,
+    "roughTokens": 873
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 27730,
-    "roughTokens": 6933
+    "chars": 27866,
+    "roughTokens": 6967
   },
   "totalWithDynamicToolsJson": {
-    "chars": 102285,
-    "roughTokens": 25572
+    "chars": 102899,
+    "roughTokens": 25725
   },
   "userInputText": {
     "chars": 879,
@@ -483,9 +483,9 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search.
+Deferred searchable OpenClaw dynamic tools available: openclaw.automations, openclaw.gateway, openclaw.nodes, openclaw.session_status, openclaw.sessions_history, openclaw.sessions_list, openclaw.sessions_search, openclaw.sessions_send, openclaw.subagents, openclaw.tts, openclaw.web_fetch, openclaw.web_search.
 
-Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have.
+Call directly listed tools by their exact qualified names. Use `tool_search` for deferred tools when it is directly callable. Otherwise use Codex's native JavaScript `exec` to filter `ALL_TOOLS` and invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Do not repeat a completed call to retrieve a result you already have.
 
 Use Codex native `spawn_agent` for work that only needs Codex-native tools. `spawn_agent` and the other native collaboration tools may be deferred. Native children cannot execute OpenClaw-owned dynamic tools, even when they inherit their schemas. For new delegated work that needs OpenClaw tools, use `sessions_spawn` with `runtime="subagent"` from the start. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Do not respawn existing work to switch tool routes.
 

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { readOpenClawAgentDatabaseIdentity as databaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -125,7 +125,7 @@ it.each(["foreign partition", "new destination"])("hands off %s", async (kind) =
   const sourceBefore = readClaim(source);
   const siblingBefore = readClaim(sibling);
   if (foreign) {
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [source.key, entry.sessionId],
       assertAllowed: () => {},

@@ -259,6 +259,11 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.infra.config.ts",
     },
     {
+      title: "routes ACP cancellation custody to its host broker owner",
+      target: "src/acp/control-plane/manager.cancel-session.producer-custody.worker.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+    },
+    {
       title: "routes process targets to the process config",
       target: "src/process/exec.test.ts",
       config: "test/vitest/vitest.process.config.ts",

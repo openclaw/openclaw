@@ -1,11 +1,8 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSubscribedSessionHarness } from "../../agents/embedded-agent-subscribe.e2e-harness.js";
+import * as questionDispatch from "../../agents/harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { resetPendingAskUserQuestionsForTest } from "../../agents/tools/ask-user-tool.test-support.js";
 import { createSecretsTool } from "../../agents/tools/secrets-tool.js";
@@ -20,6 +17,7 @@ import {
   requireToolResultHandler,
   setNoAbort,
 } from "./dispatch-from-config.test-support.js";
+import { beforeSettlement, expectCallCounts } from "./reply-contract.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -38,85 +36,85 @@ beforeEach(async () => {
 });
 afterEach(() => resetPendingAskUserQuestionsForTest());
 
-describe("credential prompt dispatch boundary", () => {
-  it.for<
-    [
-      name: string,
-      link: boolean,
-      route: boolean,
-      failure: boolean,
-      terminal: boolean,
-      deny: boolean,
-    ]
-  >([
-    ["quiet group link", true, false, false, false, false],
-    ["quiet group blocker", false, false, false, false, false],
-    ["queued transport failure", true, false, true, false, false],
-    ["routed transport failure", true, true, true, false, false],
-    ["terminal before delivery", true, false, false, true, false],
-    ["explicit send-policy denial", true, false, false, false, true],
-  ])(
-    "settles the producer's %s without plaintext controls",
-    async ([_name, link, route, failure, terminal, deny], { signal }) => {
-      setNoAbort();
-      hookMocks.runner.hasHooks.mockReturnValue(false);
-      installThreadingTestPlugin({ id: "telegram" });
-      const answer = createDeferred<unknown>();
-      const transport = createDeferred();
-      const received = createDeferred<unknown>();
-      const sessionKey = "agent:main:telegram:group:credential-proof";
-      const runId = "credential-dispatch-run";
-      const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
-      let questionId = "";
-      let questionStatus = "pending";
-      gateway
-        .mockReset()
-        .mockImplementation(async (method: string, _opts: unknown, params: unknown) => {
-          if (method === "question.request") {
-            questionId = String(asNullableRecord(params)?.id);
-            return { id: questionId };
-          }
-          if (method === "question.list") {
-            return { questions: questionId ? [{ id: questionId, status: questionStatus }] : [] };
-          }
-          if (method === "question.waitAnswer") {
-            return await answer.promise;
-          }
-          if (method === "question.resolve") {
-            questionStatus = "cancelled";
-            answer.resolve({ status: "cancelled" });
-            return { ok: true };
-          }
-          throw new Error(`unexpected method ${method}`);
-        });
-      const deliver = vi.fn(async (payload: ReplyPayload, info: { kind: string }) => {
-        if (info.kind !== "tool") {
-          return;
+const settledResult = <T>(promise: Promise<T>) =>
+  promise.then(
+    (result) => ({ result }),
+    (error: unknown) => ({ error }),
+  );
+
+it.for([
+  ["quiet group link", true, false, false, false, false],
+  ["quiet group blocker", false, false, false, false, false],
+  ["queued transport failure", true, false, true, false, false],
+  ["routed transport failure", true, true, true, false, false],
+  ["terminal before delivery", true, false, false, true, false],
+  ["explicit send-policy denial", true, false, false, false, true],
+] as const)(
+  "settles the producer's %s without plaintext controls",
+  async ([_name, link, route, failure, terminal, deny], { signal }) => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    installThreadingTestPlugin({ id: "telegram" });
+    const answer = createDeferred<unknown>();
+    const transport = createDeferred();
+    const received = createDeferred<unknown>();
+    const sessionKey = "agent:main:telegram:group:credential-proof";
+    const runId = "credential-dispatch-run";
+    const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
+    let questionId = "";
+    let questionStatus = "pending";
+    gateway
+      .mockReset()
+      .mockImplementation(async (method: string, _opts: unknown, params: unknown) => {
+        if (method === "question.request") {
+          questionId = String(asNullableRecord(params)?.id);
+          return { id: questionId };
         }
-        received.resolve(payload);
-        await transport.promise;
-        if (failure) {
-          throw new Error("transport failed");
+        if (method === "question.list") {
+          return { questions: questionId ? [{ id: questionId, status: questionStatus }] : [] };
         }
+        if (method === "question.waitAnswer") {
+          return await answer.promise;
+        }
+        if (method === "question.resolve") {
+          questionStatus = "cancelled";
+          answer.resolve({ status: "cancelled" });
+          return { ok: true };
+        }
+        throw new Error(`unexpected method ${method}`);
       });
-      mocks.routeReply.mockImplementation(async (params: unknown) => {
-        received.resolve(asNullableRecord(params)?.payload);
-        await transport.promise;
-        return failure
-          ? { ok: false, delivered: false, error: "not delivered" }
-          : { ok: true, delivered: true };
-      });
-      const cfg: OpenClawConfig = {
-        gateway: link ? { publicOrigin: "https://console.example.test" } : {},
-        ...(deny ? { session: { sendPolicy: { default: "deny" } } } : {}),
-      };
-      const dispatcher = createReplyDispatcher({ deliver });
-      const progress = vi.fn();
-      let toolOutcome: Promise<unknown> | undefined;
-      let unsubscribe: (() => void) | undefined;
-      const producerCalled = createDeferred();
-      const callbackFinished = createDeferred();
-      const dispatch = dispatchReplyFromConfig({
+    const deliver = vi.fn(async (payload: ReplyPayload, info: { kind: string }) => {
+      if (info.kind !== "tool") {
+        return;
+      }
+      received.resolve(payload);
+      await transport.promise;
+      if (failure) {
+        throw new Error("transport failed");
+      }
+    });
+    mocks.routeReply.mockImplementation(async (params: unknown) => {
+      received.resolve(asNullableRecord(params)?.payload);
+      await transport.promise;
+      return failure
+        ? { ok: false, delivered: false, error: "not delivered" }
+        : { ok: true, delivered: true };
+    });
+    const cfg: OpenClawConfig = {
+      gateway: link ? { publicOrigin: "https://console.example.test" } : {},
+      ...(deny ? { session: { sendPolicy: { default: "deny" } } } : {}),
+    };
+    const dispatcher = createReplyDispatcher({ deliver });
+    const progress = vi.fn();
+    let toolOutcome: Promise<unknown> | undefined;
+    let unsubscribe: (() => void) | undefined;
+    const producerCalled = createDeferred();
+    const callbackFinished = createDeferred();
+    const questionResolverSpy = vi
+      .spyOn(questionDispatch, "resolveAgentQuestionGatewayCall")
+      .mockReturnValue(gateway);
+    const dispatch = settledResult(
+      dispatchReplyFromConfig({
         ctx: buildTestCtx({
           SessionKey: sessionKey,
           Provider: route ? "webchat" : "telegram",
@@ -165,84 +163,77 @@ describe("credential prompt dispatch boundary", () => {
             toolCallId: "credential-call",
             args,
           });
-          toolOutcome = createSecretsTool({ sessionKey, runId, gatewayCall: gateway })
-            .execute("credential-call", args)
-            .then(
-              (result) => ({ result }),
-              (error: unknown) => ({ error }),
-            );
+          toolOutcome = settledResult(
+            createSecretsTool({ sessionKey, runId }).execute("credential-call", args),
+          );
           await toolOutcome;
           return undefined;
         },
-      }).then(
-        (result) => ({ result }),
-        (error: unknown) => ({ error }),
+      }),
+    );
+    try {
+      await beforeSettlement(
+        producerCalled.promise,
+        dispatch,
+        signal,
+        "dispatch settled before the producer ran",
       );
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            producerCalled.promise,
+      if (terminal || deny) {
+        transport.resolve();
+        await callbackFinished.promise;
+        expectCallCounts(0, deliver, mocks.routeReply);
+        answer.resolve({ status: "cancelled" });
+      } else {
+        const payload = asNullableRecord(
+          await beforeSettlement(
+            received.promise,
             dispatch,
-            "dispatch settled before the producer ran",
+            signal,
+            "dispatch settled before delivery",
           ),
-          signal,
         );
-        if (terminal || deny) {
-          transport.resolve();
-          await callbackFinished.promise;
-          expect(deliver).not.toHaveBeenCalled();
-          expect(mocks.routeReply).not.toHaveBeenCalled();
-          answer.resolve({ status: "cancelled" });
+        expect(route ? mocks.routeReply : deliver).toHaveBeenCalledOnce();
+        expect(payload?.channelData).toEqual({ askUser: { questionId } });
+        expect(payload).not.toHaveProperty("presentation");
+        expect(payload).not.toHaveProperty("interactive");
+        expect(payload?.text).toContain(
+          link
+            ? `https://console.example.test/ask/${questionId}`
+            : "Credential request unavailable here",
+        );
+        expect(questionStatus).toBe("pending");
+        expect(gateway.mock.calls.some(([method]) => method === "question.resolve")).toBe(false);
+        await expect(
+          claimPendingAgentQuestionAnswer({ sessionKey, text: "not-a-credential" }),
+        ).resolves.toBe(false);
+        transport.resolve();
+        await callbackFinished.promise;
+        if (link && !failure) {
+          answer.resolve({
+            status: "answered",
+            answers: { answers: { secret_value: ["stored"] } },
+          });
+          await expect(toolOutcome).resolves.toMatchObject({
+            result: { details: { status: "stored" } },
+          });
         } else {
-          const payload = asNullableRecord(
-            await withinTest(
-              awaitGateBeforeSettlement(
-                received.promise,
-                dispatch,
-                "dispatch settled before delivery",
-              ),
-              signal,
-            ),
-          );
-          expect(route ? mocks.routeReply : deliver).toHaveBeenCalledOnce();
-          expect(payload?.channelData).toEqual({ askUser: { questionId } });
-          expect(payload).not.toHaveProperty("presentation");
-          expect(payload).not.toHaveProperty("interactive");
-          expect(payload?.text).toContain(
-            link
-              ? `https://console.example.test/ask/${questionId}`
-              : "Credential request unavailable here",
-          );
-          expect(questionStatus).toBe("pending");
-          expect(gateway.mock.calls.some(([method]) => method === "question.resolve")).toBe(false);
-          await expect(
-            claimPendingAgentQuestionAnswer({ sessionKey, text: "not-a-credential" }),
-          ).resolves.toBe(false);
-          transport.resolve();
-          await callbackFinished.promise;
-          if (link && !failure) {
-            answer.resolve({
-              status: "answered",
-              answers: { answers: { secret_value: ["stored"] } },
-            });
-            await expect(toolOutcome).resolves.toMatchObject({
-              result: { details: { status: "stored" } },
-            });
-          } else {
-            await expect(toolOutcome).resolves.toMatchObject({
-              error: new Error("credential-request prompt delivery failed"),
-            });
-            expect(questionStatus).toBe("cancelled");
-          }
+          await expect(toolOutcome).resolves.toMatchObject({
+            error: new Error("credential-request prompt delivery failed"),
+          });
+          expect(questionStatus).toBe("cancelled");
         }
-        expect(progress).not.toHaveBeenCalled();
-        await expect(dispatch).resolves.toHaveProperty("result");
-      } finally {
+      }
+      expect(progress).not.toHaveBeenCalled();
+      await expect(dispatch).resolves.toHaveProperty("result");
+    } finally {
+      try {
         transport.resolve();
         answer.resolve({ status: "cancelled" });
         await dispatch;
+      } finally {
         unsubscribe?.();
+        questionResolverSpy.mockRestore();
       }
-    },
-  );
-});
+    }
+  },
+);

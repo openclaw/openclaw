@@ -1,6 +1,9 @@
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { resolveSourceReplyDeliveryMode } from "../../../auto-reply/reply/source-reply-delivery-mode.js";
-import { buildMessageToolTargetGuidance } from "../../../auto-reply/source-reply-delivery-mode.js";
+import {
+  buildMessageToolFinalityGuidance,
+  buildMessageToolTargetGuidance,
+} from "../../../auto-reply/source-reply-delivery-mode.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -13,6 +16,7 @@ type TurnDeliveryFacts = {
   channel?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
+  messageToolFinalByDefault?: boolean;
 };
 
 /**
@@ -52,6 +56,10 @@ export function buildTurnDeliveryContextFragments(
     facts.requireExplicitMessageTarget ?? session.requireExplicitMessageTarget;
   if (requireExplicitTarget !== session.requireExplicitMessageTarget) {
     lines.push(`Message tool: ${buildMessageToolTargetGuidance(requireExplicitTarget)}`);
+  }
+  const finality = buildMessageToolFinalityGuidance(facts.messageToolFinalByDefault);
+  if (finality) {
+    lines.push(finality);
   }
   return lines.length > 0 ? [{ kind: "runtime-instruction", text: lines.join("\n") }] : [];
 }

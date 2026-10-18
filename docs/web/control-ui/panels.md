@@ -127,6 +127,12 @@ Eligibility is per session and per host. Gateway-local sessions start the provid
 
 Standalone operator sessions, including the main terminal page and terminal focus presentation, are connection-owned. Leaving the main terminal route does not close its PTY; returning to its terminal session URL reattaches it. The main page and the dock keep separate terminal tabs. A page reload, laptop sleep, or network blip detaches one on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached connection-owned sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). Attaching one of these sessions remains tmux-style take-over.
 
+During a connection blip, the terminal keeps its tabs, scrollback, selection, and
+upload batch visible. Input pauses until the original sessions reconnect;
+keystrokes are never queued for later replay. Interrupted uploads remain available
+for an explicit retry. A failed session-list or attach request does not discard
+the saved session IDs.
+
 A shell that exits normally with code zero closes its terminal tab automatically, including after `logout`, `exit`, or EOF. Closing the last terminal tab closes its panel, whether docked right or bottom, unless other tool tabs remain. Nonzero exits, signals, disconnects, and errors stay visible for inspection. The fullscreen terminal keeps its new-session control available after the last tab closes.
 
 Closing a connecting tab cancels that opening or attachment request. Other tabs and queued requests remain available, and a late response does not reopen the cancelled tab or display its error.
@@ -220,6 +226,10 @@ same item from chat selects its existing tab. Links inside the reader and URLs
 entered in the address bar navigate the current tab, with independent Back and
 Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
 including their loaded documents while you switch between them.
+
+Loaded reader documents and link previews stay visible while the same Gateway
+reconnects. The reader refreshes after reconnect without clearing its address
+draft. Changing Gateway or losing reader access clears the protected content.
 
 Opening or loading an item keeps keyboard focus where you are typing. The
 **+** button focuses the address bar so you can enter a new URL.

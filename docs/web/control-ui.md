@@ -41,6 +41,8 @@ badges remain visible on every shape.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
 
+If the New Session page fails during its initial render, the UI attempts one automatic page reload per browser tab. A repeated failure shows **Retry** instead of starting a reload loop. Automatic recovery is skipped if session storage is unavailable, the serving document cannot be reached, or unsaved work blocks reloading. Errors after the composer has rendered use in-page retry instead.
+
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
 A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen.
@@ -115,6 +117,13 @@ Closed Terminal, Browser, and Desktop panels initialize when you open them rathe
 
 Minimizing and reopening the Dashboard side panel preserves loaded MCP Apps and their unsaved in-app input while the app lease remains valid.
 
+MCP Apps and Canvas previews also retain their loaded frames through a connection
+blip to the same Gateway. Gateway-backed actions pause until reconnection; they
+are not queued for replay. MCP discovery keeps its last results while offline.
+If an app times out during initialization, use **Retry** to load it again.
+Changing Gateway, losing access, or selecting different content retires the old
+frame and its local state.
+
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
 Metadata refreshes wait for an in-progress model-runtime replacement to publish. An agent whose model runtime is unavailable does not interrupt commands or model choices for healthy agents; its metadata becomes available when its owner publishes.
@@ -172,7 +181,10 @@ messages. This changes only presentation, not stored messages or run ownership.
 
 When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
-Approval blocks and tool failures keep their separate outcomes.
+Approval blocks and tool failures keep their separate outcomes. A failed command
+with a reported zero exit code still shows **failed** in its summary and expanded
+result. Nonzero exit codes remain visible as diagnostics; captured output and
+reported exit facts are unchanged.
 
 Failed replies show **Try again** at the right of the heading. A compact
 **Copy error** icon beside the title appears on hover or keyboard focus, and
@@ -219,7 +231,8 @@ menu to inspect the conversation's background exec commands. It is separate from
 time. **Finished** starts collapsed; click its heading to expand or collapse the
 list. Selecting a process opens its recent output. **Stop** targets that exact
 process, not the parent conversation or another command with the same name.
-Hidden panels stop refreshing. Output follows the process owner's temporary
+Details and Processes panels viewing the same session share one refresh every
+five seconds. Hidden panels and browser tabs stop refreshing. Output follows the process owner's temporary
 retention limits; viewing it does not drain output waiting for the agent.
 
 Select a session's title in the chat header to rename it. Enter saves the name;

@@ -126,7 +126,7 @@ describe("maybePruneSandboxes", () => {
           sessionKey: "agent:main:main",
           createdAtMs: Date.now() - 4 * 60 * 60 * 1000,
           lastUsedAtMs: Date.now() - 2 * 60 * 60 * 1000,
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
         },
       ],
     });
@@ -204,7 +204,7 @@ describe("maybePruneSandboxes", () => {
       sessionKey: `agent:${agentId}:main`,
       createdAtMs: now - 4 * 60 * 60 * 1000,
       lastUsedAtMs: now - 2 * 60 * 60 * 1000,
-      image: "openclaw-sandbox:bookworm-slim",
+      image: "openclaw-sandbox:trixie-slim",
     });
     registryMocks.readRegistry.mockResolvedValue({
       entries: [entry("main-container", "main"), entry("work-container", "work")],
@@ -250,7 +250,7 @@ describe("maybePruneSandboxes", () => {
           sessionKey: "shared",
           createdAtMs: now - 4 * 60 * 60 * 1000,
           lastUsedAtMs: now - 2 * 60 * 60 * 1000,
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
         },
       ],
     });
@@ -306,7 +306,7 @@ describe("maybePruneSandboxes", () => {
           sessionKey: "agent:main:main",
           createdAtMs: Date.now(),
           lastUsedAtMs: Number.MAX_SAFE_INTEGER,
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
         },
       ],
     });
@@ -328,7 +328,7 @@ describe("maybePruneSandboxes", () => {
           sessionKey: "agent:coder:main",
           createdAtMs: now - 4 * 60 * 60 * 1000,
           lastUsedAtMs: now - 2 * 60 * 60 * 1000,
-          image: "openclaw-sandbox-browser:bookworm-slim",
+          image: "openclaw-sandbox-browser:trixie-slim",
           cdpPort: 9222,
         },
       ],

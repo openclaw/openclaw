@@ -7,11 +7,17 @@ import {
 import { resolveSessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { captureRpcSourceScopeMatcher } from "../session-runtime-scope.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
@@ -82,13 +88,26 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
     let selection: Awaited<ReturnType<typeof prepareChatHistorySessionRead>>;
     let operator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
     try {
-      const pending = context.chatAbortControllers.get(params.runId);
       const target = sessionAccessAuthority.target;
+      const projectedTarget = getSessionRowProjection(context)?.sharingTarget({
+        agentId: target.agentId,
+        key: target.sessionKey,
+      });
+      const resolveGatewayContext = context.resolveGatewayContext;
+      const pending = getRpcSourceForGateway(params.runId, resolveGatewayContext);
+      const pendingIdentity = pending && getRpcSourceIdentity(pending);
       if (
-        pending?.sessionId === target.sessionId &&
-        pending.sessionKey === target.sessionKey &&
-        chatRunBelongsToAgent(pending, target.agentId) &&
-        (pending.projectSessionTerminalPending || pending.projectSessionTerminalPersistence)
+        pending &&
+        projectedTarget &&
+        captureRpcSourceScopeMatcher({
+          storePath: projectedTarget.storePath,
+          resolveGatewayContext,
+        })(pending) &&
+        pendingIdentity?.sessionId === target.sessionId &&
+        pendingIdentity.sessionKey === target.sessionKey &&
+        chatRunBelongsToAgent(pendingIdentity, target.agentId) &&
+        (pending.adapter.projectSessionTerminalPending ||
+          pending.adapter.projectSessionTerminalPersistence)
       ) {
         // Successful finals precede their durable row update. Join that existing
         // owner before taking the history snapshot; a null reply is not retried.
@@ -124,7 +143,8 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
           current.lifecycleRunId ||
           resolveSessionWorkStartError(canonicalKey, current) ||
           resolveVisibleActiveSessionRunState({
-            context,
+            storePath,
+            resolveGatewayContext,
             requestedKey: params.sessionKey,
             canonicalKey,
             sessionId,

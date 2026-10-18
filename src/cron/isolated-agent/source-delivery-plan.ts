@@ -25,6 +25,9 @@ export function resolveCronSourceDeliveryPlan(params: {
       force: false,
       requireExplicitTarget: announce,
       requireExplicitTargetEvidence: announce,
+      // The target is configured, not a conversation to answer: a send to it is
+      // delivery, and the job's post-send work must still run.
+      finalByDefault: false,
     },
     fallback: {
       directDelivery: announce,

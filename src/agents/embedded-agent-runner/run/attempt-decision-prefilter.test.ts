@@ -5,13 +5,24 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { AgentDefaultsBaseSchema } from "../../../config/zod-schema.agent-defaults-base.js";
-import type { evaluateDecisionInRegistry } from "../../../decisions/runtime.js";
-import type { DecisionOutcome } from "../../../decisions/types.js";
+import type {
+  DecisionEvaluation,
+  evaluateDecisionV2InRegistry,
+} from "../../../decisions/runtime.js";
+import type { DecisionAnswerV2, DecisionOutcomeV2 } from "../../../decisions/types-v2.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { evaluateAttemptDecisionToolPrefilter } from "./attempt-decision-prefilter.js";
 
-const mocks = vi.hoisted(() => ({ evaluate: vi.fn<typeof evaluateDecisionInRegistry>() }));
-vi.mock("../../../decisions/runtime.js", () => ({ evaluateDecisionInRegistry: mocks.evaluate }));
+const mocks = vi.hoisted(() => ({ evaluate: vi.fn<typeof evaluateDecisionV2InRegistry>() }));
+// mock-isolation: Test prefilter policy independently of registry/model preparation; runtime-v2 covers the real host.
+vi.mock("../../../decisions/runtime.js", () => ({
+  evaluateDecisionV2Operation: async (
+    ...args: Parameters<typeof evaluateDecisionV2InRegistry>
+  ) => ({
+    outcome: await mocks.evaluate(...args),
+  }),
+  completeDecisionEvaluation: (evaluation: DecisionEvaluation) => evaluation.outcome,
+}));
 vi.mock("../../../plugins/runtime/gateway-request-scope.js", () => ({
   getPluginRegistryForContext: () => null,
 }));
@@ -23,7 +34,7 @@ const config: OpenClawConfig = {
     }),
   },
 };
-const answer = (): Extract<DecisionOutcome, { status: "ok" }> => ({
+const answer = (): Extract<DecisionOutcomeV2, { status: "ok" }> => ({
   status: "ok",
   provenance: { providerId: "fixture", rubricVersion: "9", runtimeGeneration: "test" },
   result: {
@@ -74,13 +85,16 @@ describe("Decision prefilter policy", () => {
     expect(mocks.evaluate).toHaveBeenCalledOnce();
     const [batch, options, registry, selectedConfig] = mocks.evaluate.mock.calls[0]!;
     expect(batch.state).toEqual({
-      recentConversation: [
-        { user: "1", assistant: "1" },
-        { user: "2", assistant: "2" },
-      ],
-      latestRequest: "Hello",
-      beforePromptBuild: promptBuildFields,
-      omittedContext: { olderConversation: true, toolPayloads: false },
+      type: "json",
+      value: {
+        recentConversation: [
+          { user: "1", assistant: "1" },
+          { user: "2", assistant: "2" },
+        ],
+        latestRequest: "Hello",
+        beforePromptBuild: promptBuildFields,
+        omittedContext: { olderConversation: true, toolPayloads: false },
+      },
     });
     expect(Object.keys(batch.questions)).toEqual([
       "missing_request_context",
@@ -127,8 +141,8 @@ describe("Decision prefilter policy", () => {
         expect(mocks.evaluate).not.toHaveBeenCalled();
       } else {
         expect(mocks.evaluate.mock.calls[0]?.[0].state).toMatchObject({
-          latestRequest: userMessage,
-          beforePromptBuild: promptBuildFields,
+          type: "json",
+          value: { latestRequest: userMessage, beforePromptBuild: promptBuildFields },
         });
       }
     },
@@ -137,14 +151,19 @@ describe("Decision prefilter policy", () => {
   it.each(["missing_request_context", "next_response_needs_tools"])(
     "requires a strong Boolean no for %s",
     async (id) => {
-      for (const value of [
-        undefined,
-        { type: "choice" as const, choice: "no", probabilities: { no: 1 }, confidence: 1 },
-        ...[0.349, 0.35, 0.9].map((probabilityTrue) => ({
-          type: "boolean" as const,
-          probabilityTrue,
-        })),
-      ]) {
+      const cases: [DecisionAnswerV2 | undefined, boolean][] = [
+        [undefined, false],
+        [{ type: "choice", choice: "no", probabilities: { no: 1 }, confidence: 1 }, false],
+        [{ type: "boolean", probabilityTrue: 0.349 }, true],
+        [{ type: "boolean", probabilityTrue: 0.35 }, false],
+        [{ type: "boolean", probabilityTrue: 0.9 }, false],
+        [{ type: "boolean", probabilityTrue: 0.1, answer: false }, true],
+        [{ type: "boolean", probabilityTrue: 0.1, answer: true }, false],
+        [{ type: "boolean", probabilityTrue: 0.1, answer: null }, false],
+        [{ type: "boolean", answer: false }, false],
+        [{ type: "error", code: "provider-error" }, false],
+      ];
+      for (const [value, shouldPruneTools] of cases) {
         const outcome = answer();
         const answers = { ...outcome.result.answers };
         if (value) {
@@ -154,7 +173,7 @@ describe("Decision prefilter policy", () => {
         }
         mocks.evaluate.mockResolvedValue({ ...outcome, result: { ...outcome.result, answers } });
         expect((await evaluateAttemptDecisionToolPrefilter(params())).shouldPruneTools).toBe(
-          value?.type === "boolean" && value.probabilityTrue < 0.35,
+          shouldPruneTools,
         );
       }
     },

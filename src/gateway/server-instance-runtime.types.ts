@@ -4,6 +4,7 @@ import type { SubagentCompletionToolHandoffRegistration } from "../agents/subage
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import type { SessionControllerInput } from "../sessions/session-controller.contracts.js";
 import type {
   AgentTurnStartOwner,
   InternalAgentTurnFacadeFactory,
@@ -13,6 +14,8 @@ import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 export type GatewayInstanceAgentDispatchOptions = {
   /** Exact source custody to re-admit; the instance reads its private durable record itself. */
   restartRecoveryOperatorTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
+  /** Exact process-local source reserved by a durable lifecycle owner. */
+  controllerInput?: SessionControllerInput;
   assertAdmissionCurrent?: () => void;
   /** Refresh source facts immediately before dispatch; the accepted turn owns execution. */
   prepareDispatchCurrent?: () => Promise<void>;

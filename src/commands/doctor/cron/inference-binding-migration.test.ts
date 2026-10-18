@@ -181,7 +181,6 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
         job: migratedJob,
         agentId: "main",
         startedAtMs: Date.now(),
-        observed: undefined,
       });
       const handle = runOpenClawStateWriteTransaction(({ db }) =>
         claimCronRunReceiptInDatabaseForTest({ database: db, prepared }),

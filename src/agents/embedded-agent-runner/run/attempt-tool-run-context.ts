@@ -4,6 +4,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -63,10 +64,18 @@ export function buildEmbeddedAttemptToolRunContext(
     conversationToolPolicy?: GroupToolPolicyConfig;
     trace?: DiagnosticTraceContext;
     currentInboundAudio?: boolean;
+    sessionId?: string;
+    sessionKey?: string;
     replyOperation?: { readonly acceptedSteeredInboundAudio: boolean };
   },
 ) {
-  const { currentInboundAudio, replyOperation } = params;
+  const { currentInboundAudio } = params;
+  const currentOwner = getCurrentSessionControllerOwner();
+  const replyOperation =
+    params.replyOperation ??
+    (currentOwner?.sessionId === params.sessionId && currentOwner?.key === params.sessionKey
+      ? currentOwner
+      : undefined);
   // Collector output is mandatory result transport, even on a narrowed tool surface.
   const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
     forceMessageTool: params.forceMessageTool,

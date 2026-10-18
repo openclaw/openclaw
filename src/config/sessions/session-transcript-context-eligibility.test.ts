@@ -28,7 +28,6 @@ import {
 } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError as ProjectionUnavailable } from "./session-transcript-projection-error.js";
 import {
-  hasUnclassifiedSessionTranscriptEvents,
   prepareSessionTranscriptProjection as prepareProjection,
   claimPreparedSessionTranscriptProjectionInTransaction as claimProjection,
   deletePreparedSessionTranscriptProjectionChunkInTransaction as deleteProjectionChunk,
@@ -201,7 +200,6 @@ it("converges an older current-watermark rebuild and a following append without 
     }, scope);
     await waitForSessionTranscriptIndexReconcile(scope);
 
-    expect(hasUnclassifiedSessionTranscriptEvents(db, sessionId)).toBe(false);
     expect(sessionTranscriptIndexNeedsReconcile(db, sessionId)).toBe(false);
     expect(rawRows(db).slice(0, before.length)).toEqual(before);
     expect(projectionRows(db).slice(0, expectedRows.length)).toEqual(expectedRows);
@@ -265,7 +263,7 @@ it.each(["interrupted", "rewrite", "delete"])(
       const plan = f.plan();
       f.write(() => f.publish(plan, true));
       // Removing the last NULL is not publication: only finalization publishes the projection.
-      expect(hasUnclassifiedSessionTranscriptEvents(db, sessionId)).toBe(false);
+      expect(projectionRows(db).map((row) => row.context_eligible)).toEqual([1]);
       expect(() => withCurrentProjectionSnapshot(scope, () => "visible")).toThrow(
         ProjectionUnavailable,
       );

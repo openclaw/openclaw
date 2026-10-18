@@ -134,6 +134,60 @@ describe("UsageInsights", () => {
       button.closest(".usage-summary-card")?.querySelector(".usage-summary-value")?.textContent,
     ).toBe("8");
   });
+  it("hides cost shares while the overall total is a lower bound", () => {
+    const container = document.createElement("div");
+    const complete = { ...totals, totalCost: 10 };
+    const partialTotals = { ...complete, usageReport: { state: "unavailable" as const } };
+    mountSolid(
+      () =>
+        UsageInsights({
+          totals: partialTotals,
+          aggregates: {
+            ...aggregates,
+            byProvider: [{ provider: "openai", count: 1, totals: complete }],
+          },
+          stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
+    );
+    flush();
+    // A complete provider's share of an incomplete total is unknown, not 100%.
+    expect(container.textContent).toContain("openai");
+    expect(container.textContent).not.toContain("of cost");
+  });
+
+  it("labels usage without a known price as unpriced, never free", () => {
+    const container = document.createElement("div");
+    const unpriced = { ...totals, totalCost: 0, missingCostEntries: 3 };
+    mountSolid(
+      () =>
+        UsageInsights({
+          totals: unpriced,
+          aggregates: {
+            ...aggregates,
+            byProvider: [{ provider: "ollama", count: 1, totals: unpriced }],
+          },
+          stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
+    );
+    flush();
+    const provider = [...container.querySelectorAll(".usage-list-item")].find((item) =>
+      item.textContent?.includes("ollama"),
+    );
+    expect(provider?.querySelector(".usage-list-value")?.textContent).toContain("Unpriced");
+    expect(provider?.textContent).not.toContain("$0.00");
+  });
 });
 
 describe("usage overview presentation owners", () => {
@@ -200,6 +254,43 @@ describe("SessionsCard", () => {
     label: key,
     agentId: "main",
     usage: { ...totals, totalTokens: tokens },
+  });
+
+  it("exposes the selected session view to assistive technology", () => {
+    const base = createUsageProps();
+    const [display, setDisplay] = createSignal(base.display);
+    const onChange = vi.fn((patch: Partial<UsageProps["display"]>) =>
+      setDisplay((current) => ({ ...current, ...patch })),
+    );
+    const usage = {
+      ...base,
+      get display() {
+        return display();
+      },
+      callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onChange } },
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    const view = mountSolid(() => SessionsCard({ sessions: [], usage, totalSessions: 0 }), {
+      container,
+    });
+    flush();
+
+    const all = view.getByRole<HTMLButtonElement>("button", { name: "All", pressed: true });
+    const recent = view.getByRole<HTMLButtonElement>("button", {
+      name: "Recently viewed",
+      pressed: false,
+    });
+    recent.click();
+    flush();
+    expect(onChange).toHaveBeenLastCalledWith({ sessionsTab: "recent" });
+    expect(view.getByRole("button", { name: "Recently viewed", pressed: true })).toBe(recent);
+    expect(view.getByRole("button", { name: "All", pressed: false })).toBe(all);
+
+    all.click();
+    flush();
+    expect(onChange).toHaveBeenLastCalledWith({ sessionsTab: "all" });
+    expect(view.getByRole("button", { name: "All", pressed: true })).toBe(all);
+    expect(view.getByRole("button", { name: "Recently viewed", pressed: false })).toBe(recent);
   });
 
   it("preserves sort focus while waiting for the server to reorder rows", () => {
@@ -302,7 +393,7 @@ describe("SessionsCard", () => {
     expect(onSelectSession).toHaveBeenLastCalledWith("Alpha", true, ["Beta", "Alpha"]);
   });
 
-  it("keeps metadata and unavailable usage labels localized without replacing a row", async () => {
+  it("keeps metadata and lower-bound usage labels localized without replacing a row", async () => {
     const restoreI18n = captureI18nStateForTesting();
     const entry = session("Alpha");
     const sessionUsage = entry.usage!;
@@ -337,8 +428,10 @@ describe("SessionsCard", () => {
       const value = () => row?.querySelector(".session-bar-value")?.textContent;
       const average = () => container.querySelector(".sessions-card-stats > span")?.textContent;
       expect(row?.querySelector(".session-bar-meta")?.textContent).toContain("dur:1m");
-      expect(value()).toBe("unknown");
-      expect(average()).toContain("unknown");
+      // A response that ended before final usage leaves its subtotal as a lower bound.
+      expect(value()).toMatch(/^≥ \d/);
+      expect(average()).toMatch(/^≥ /);
+      const englishValue = value();
       await i18n.setLocale("de");
       flush();
       expect(container.querySelector(".session-bar-row")).toBe(row);
@@ -348,16 +441,17 @@ describe("SessionsCard", () => {
         unitDisplay: "narrow",
       }).format(1);
       expect(row?.querySelector(".session-bar-meta")?.textContent).toContain(`dur:${germanMinute}`);
-      expect(value()).toBe("unbekannt");
-      expect(average()).toContain("unbekannt");
+      // The lower bound keeps the same number in every locale.
+      expect(value()).toBe(englishValue);
+      expect(average()).toMatch(/^≥ /);
       setDisplay({ ...base.display, chartMode: "cost" });
       flush();
-      expect(value()).toBe("unbekannt");
+      expect(value()).toMatch(/^≥ \$/);
       await i18n.setLocale("en");
       flush();
       expect(container.querySelector(".session-bar-row")).toBe(row);
-      expect(value()).toBe("unknown");
-      expect(average()).toContain("unknown");
+      expect(value()).toBe("≥ $0.00");
+      expect(average()).toMatch(/^≥ \$/);
     } finally {
       await restoreI18n();
     }

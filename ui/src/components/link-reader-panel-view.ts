@@ -8,6 +8,7 @@ import { iconData, type IconName } from "./icon-data.ts";
 import type { LinkReaderImages } from "./link-reader-images.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { createIconElement } from "./markdown-icon.ts";
+import type { PanelHostedTab } from "./panel-hosted-tabs.ts";
 import { panelTabStripCss } from "./panel-tab-strip-styles.ts";
 import dockPanelStyles from "./dock-panel.css?inline";
 import linkReaderContentStyles from "./link-reader-content.css?inline";
@@ -30,7 +31,7 @@ export const linkReaderViewStyles = [
   linkReaderContentStyles,
 ];
 
-export function readerIcon(name: string | undefined, ownerDocument: Document) {
+function readerIcon(name: string | undefined, ownerDocument: Document) {
   const icon =
     name && Object.hasOwn(iconData, name)
       ? (name as IconName) // SAFETY: The own-key guard admits only names in the built-in catalog.
@@ -77,7 +78,13 @@ type PanelView =
   | { status: "idle" | "loading" }
   | { status: "error"; message: string }
   | ReaderReadyView;
-export type ReaderTab = { id: string; history: LinkReaderTarget[]; index: number; view: PanelView };
+export type ReaderTab = {
+  id: string;
+  history: LinkReaderTarget[];
+  index: number;
+  view: PanelView;
+  reloadPending: boolean;
+};
 export function tabTarget(tab: ReaderTab | undefined): LinkReaderTarget | null {
   return tab?.history[tab.index] ?? null;
 }
@@ -89,4 +96,23 @@ export function tabLabel(tab: ReaderTab): string {
   return target
     ? target.reader.label + " · " + new URL(target.href).pathname
     : t("linkReader.newTab");
+}
+
+export type LinkReaderPanelState = {
+  urlDraft: string;
+  invalidUrl: boolean;
+  tabLimitUrl: string | null;
+  tabs: ReaderTab[];
+  activeId: string | null;
+};
+
+export function readerHostedTabs(tabs: ReaderTab[], ownerDocument: Document): PanelHostedTab[] {
+  return tabs.map((tab) => ({
+    id: tab.id,
+    label: tabLabel(tab),
+    url: tabTarget(tab)?.href,
+    title: tabTarget(tab)?.href,
+    icon: readerIcon(tabTarget(tab)?.reader.icon, ownerDocument),
+    className: tab.view.status === "loading" ? "is-connecting" : "",
+  }));
 }

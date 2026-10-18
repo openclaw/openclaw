@@ -34,6 +34,7 @@ type SidebarRegionHeaderProps = RegionProps & {
   host: RegionElement;
   hostedRevision: () => number;
   refreshHostedTabs: () => void;
+  onFocusActiveReady: (focus: ((options?: FocusOptions) => void) | null) => void;
 };
 
 type RegionTab = SolidPanelTabStripTab & {
@@ -43,16 +44,8 @@ type RegionTab = SolidPanelTabStripTab & {
   iconName?: IconName;
 };
 
-export function readRegionPanelHost(host: HTMLElement, slot: SidebarSlotId): Element | null {
-  const container = host.parentElement?.querySelector(`[data-panel-slot="${slot}"]`);
-  // Native panel views have an interop wrapper; raw plugin content still owns its first element.
-  return (
-    container?.querySelector("[data-sidebar-panel-host]") ?? container?.firstElementChild ?? null
-  );
-}
-
-export function readRegionHostedTabs(host: HTMLElement, panel: SidebarPanel) {
-  return readPanelHostedTabs(readRegionPanelHost(host, panel.slot));
+export function readRegionHostedTabs(host: RegionElement, panel: SidebarPanel) {
+  return readPanelHostedTabs(host.readPanelHost(panel.slot));
 }
 
 export function sidebarPanelType(definitions: SidebarPanelDefinition[], slot: SidebarSlotId) {
@@ -221,6 +214,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
           badge: tab.badge,
           className: tab.className,
           closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
+          closeDisabled: tab.closeDisabled,
           group: panel.id,
           draggable: false,
           reorderId: panel.id,
@@ -281,6 +275,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     >
       <div class="side-panel__header-tabs">
         <PanelTabStrip
+          onFocusActiveReady={props.onFocusActiveReady}
           renderIcon={(tab) => (
             <Show
               when={tab().hostedTab}

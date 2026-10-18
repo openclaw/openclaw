@@ -46,6 +46,7 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import * as providerChoices from "../plugins/provider-auth-choices.js";
+import * as providerRuntime from "../plugins/providers.runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -467,7 +468,7 @@ it.each([
       ],
     };
     setup.deps.resolveManifestProviderAuthChoice = () => choice;
-    setup.deps.resolvePluginProviders = () => [provider];
+    vi.spyOn(providerRuntime, "resolvePluginProvidersCore").mockReturnValue([provider]);
     mockPluginRegistry(["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)));
     const phases: string[] = [];
     const verifySetup = vi.fn(async () => {

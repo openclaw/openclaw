@@ -41,7 +41,6 @@ type RosterProps = {
   host: RosterHost;
   active: boolean;
   sections: SidebarVisibleSections["sections"];
-  involvingMe: boolean;
 };
 
 function cachedRosterCards(host: RosterHost) {
@@ -130,13 +129,6 @@ export function SidebarAgentRoster(props: RosterProps) {
     }
     return next;
   });
-  createEffect(
-    () => [store(), props.involvingMe] as const,
-    ([rosterStore, involvingMe]) => {
-      rosterStore.setInvolvingMe(involvingMe);
-    },
-  );
-  createEffect(store, (rosterStore) => () => rosterStore.setInvolvingMe(false));
   // Sidebar queries keep the last admitted selection while the roster is parked.
   const queryCollapsed = createMemo<ReadonlySet<string> | null>((previous) =>
     presented() ? hiddenAgentSections() : (previous ?? null),

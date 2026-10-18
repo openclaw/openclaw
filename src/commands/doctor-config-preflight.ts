@@ -1,4 +1,3 @@
-/** Config preflight for Doctor: legacy migration, recovery, and snapshot loading. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
 import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";

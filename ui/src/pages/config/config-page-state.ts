@@ -76,29 +76,12 @@ import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
-import { createConfigViewState } from "./view-state.ts";
+import { createConfigViewState, createMediaDeviceState } from "./view-state.ts";
 import type { ConfigProps, ConfigViewState } from "./view-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
-
-function createMediaDeviceState(): Omit<
-  NonNullable<ConfigProps["microphone"]>,
-  "selectedDeviceId"
-> & {
-  loaded: boolean;
-  requestsPermission: boolean;
-} {
-  return {
-    devices: [],
-    permissionRequired: true,
-    loading: false,
-    error: null,
-    loaded: false,
-    requestsPermission: false,
-  };
-}
 
 export function extractQuickSettingsSecurity(root: Record<string, unknown>): SecurityOverview {
   const gateway = asConfigRecord(root.gateway);
@@ -151,7 +134,10 @@ export function createConfigPage(
     : null;
   // Imperative owner notifications can arrive while a descendant is rendering.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
-  const invalidate = () => publish((value) => value + 1);
+  const invalidate = () => {
+    publish((value) => value + 1);
+    onSettled(afterCommit);
+  };
   const [presentation, setPresentation] = createStore<{
     formModes: Partial<Record<ConfigPageId, ConfigProps["formMode"]>>;
     selections: Partial<Record<ConfigPageId, ConfigSelection>>;
@@ -205,6 +191,7 @@ export function createConfigPage(
     const state = context.runtimeConfig.state;
     return asConfigRecord(state.configForm ?? state.configSnapshot?.config) ?? {};
   }
+
   function mutationDisabled() {
     revision();
     return isCuratedConfigMutationDisabled();
@@ -345,7 +332,7 @@ export function createConfigPage(
   }
 
   function afterCommit() {
-    if (!targetBlockId || scrollFrame !== null) {
+    if (!connected || !targetBlockId || scrollFrame !== null) {
       return;
     }
     scrollFrame = requestAnimationFrame(() => {
@@ -1032,8 +1019,6 @@ export function createConfigPage(
   };
   // Route changes synchronize the config owners, lazy requests, and polling.
   createEffect(route, (next) => updateRoute(next.pageId, next.routeData));
-  // Scroll the requested settings section after its DOM has committed.
-  createEffect(revision, () => afterCommit());
   onSettled(() => {
     // These notifications admit requests and retire connection-scoped work synchronously.
     const subscriptions = [

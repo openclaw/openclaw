@@ -68,6 +68,7 @@ function makeSandboxAdmissionParams(
 ): RunCronAgentTurnParams {
   const mergedCfg: OpenClawConfig = {
     ...cfg,
+    session: { ...cfg.session, store: path.join(workspaceDir, "sessions.json") },
     agents: {
       ...cfg.agents,
       entries: {
@@ -171,7 +172,11 @@ describe("cron isolated-agent sandbox placement admission", () => {
     });
     resolveThinkingDefaultMock.mockReturnValue("off");
     resolveCronSessionMock.mockReturnValue(
-      makeCronSession({ sessionEntry: makeCronSessionEntry({ sessionId }), isNewSession: true }),
+      makeCronSession({
+        storePath: path.join(tempDir, "sessions.json"),
+        sessionEntry: makeCronSessionEntry({ sessionId }),
+        isNewSession: true,
+      }),
     );
     // Exercise the real fallback loop and real runCliAgent child-process launch.
     runWithModelFallbackMock.mockImplementation((params) =>
@@ -275,6 +280,7 @@ describe("cron isolated-agent sandbox placement admission", () => {
     };
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
+        storePath: path.join(tempDir, "sessions.json"),
         sessionEntry: makeCronSessionEntry({ sessionId, sandbox: "required" }),
         isNewSession: true,
       }),
@@ -332,7 +338,11 @@ describe("cron isolated-agent sandbox placement admission", () => {
     expect(fs.existsSync(markerPath)).toBe(false);
 
     resolveCronSessionMock.mockReturnValue(
-      makeCronSession({ sessionEntry: makeCronSessionEntry({ sessionId }), isNewSession: true }),
+      makeCronSession({
+        storePath: path.join(tempDir, "sessions.json"),
+        sessionEntry: makeCronSessionEntry({ sessionId }),
+        isNewSession: true,
+      }),
     );
     const mainResult = await runCronIsolatedAgentTurn(
       makeSandboxAdmissionParams(cfg, tempDir, undefined, "agent:main:main"),

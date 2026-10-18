@@ -59,7 +59,6 @@ export type SessionEntryWorkerPreparation = (
 ) => {
   prepare: () => Promise<void>;
   beforeWrite: () => void;
-  runOptions?: { retireNativeOnFailure: true };
 };
 
 export async function withSessionEntryWorker<T>(
@@ -271,7 +270,7 @@ export async function withSessionEntryWorker<T>(
                       preparation?.beforeWrite();
                       return withWriterReads(worker, () => operation(worker));
                     },
-                    readOptions ?? preparation?.runOptions,
+                    readOptions,
                   );
                 },
               };

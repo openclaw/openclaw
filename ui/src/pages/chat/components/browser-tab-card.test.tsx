@@ -53,7 +53,7 @@ function gatewayContext(
   const listeners = new Set<() => void>();
   const themeListeners = new Set<() => void>();
   const snapshot = {
-    client: { request } as unknown as GatewayBrowserClient,
+    client: { request, connected: true } as unknown as GatewayBrowserClient,
     phase: "connected",
     hello: { features: { methods }, auth: { role: "operator", scopes } },
   } as ApplicationGatewaySnapshot;

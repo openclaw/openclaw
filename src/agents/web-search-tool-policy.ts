@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveEffectiveToolPolicy, resolveGroupToolPolicy } from "./agent-tools.policy.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
-import type { SandboxToolPolicy } from "./sandbox.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,

@@ -19,7 +19,6 @@ import {
 import {
   dequeueLaneQueue,
   enqueueLaneQueue,
-  type CommandLaneTaskMarker,
   getDefaultLaneConcurrency,
   getLaneState,
   getQueueState,
@@ -47,21 +46,13 @@ export {
   isGatewayWorkAdmissionClosed as isGatewayDraining,
   markGatewayRestartDraining as markGatewayDraining,
 } from "./gateway-work-admission.js";
-export type { CommandLaneTaskMarker } from "./command-queue.state.js";
 export type { CommandLaneSnapshot } from "./command-queue.types.js";
-export class CommandLaneClearedError extends Error {
-  constructor(lane?: string) {
-    super(lane ? `Command lane "${lane}" cleared` : "Command lane cleared");
-    this.name = "CommandLaneClearedError";
-  }
-}
-
 /**
  * Dedicated error type thrown when an active command exceeds its caller-owned
  * lane timeout. The underlying task may still be unwinding, but the lane is
  * released so queued work is not blocked forever.
  */
-class CommandLaneTaskTimeoutError extends Error {
+export class CommandLaneTaskTimeoutError extends Error {
   constructor(
     lane: string,
     details:
@@ -130,7 +121,8 @@ function retireIdleScopedCommandLane(state: LaneState): void {
     state.queue.length > 0 ||
     (!state.lane.startsWith(SUBAGENT_LANE_PREFIX) &&
       (state.maxConcurrent !== 1 ||
-        (!state.lane.startsWith("session:") &&
+        // Setup-probe lanes bound setup concurrency; they do not order session turns.
+        (!state.lane.startsWith("session:probe-") &&
           !state.lane.startsWith("nested:") &&
           !state.lane.startsWith("cli:") &&
           !state.lane.startsWith("context-engine-turn-maintenance:"))))
@@ -157,12 +149,8 @@ function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]):
   }
 }
 
-async function runQueueEntryTask(
-  entry: QueueEntry,
-  marker: CommandLaneTaskMarker,
-): Promise<unknown> {
-  const { lane } = marker;
-  const taskPromise = Promise.resolve().then(() => entry.task(marker));
+async function runQueueEntryTask(entry: QueueEntry, lane: string): Promise<unknown> {
+  const taskPromise = Promise.resolve().then(() => entry.task());
   const taskTimeoutMs = entry.taskTimeoutMs;
   if (taskTimeoutMs === undefined) {
     return await taskPromise;
@@ -357,11 +345,7 @@ function drainLane(
             );
           }
           logLaneDequeue(lane, waitedMs, state.queue.length);
-          return await runQueueEntryTask(entry, {
-            lane,
-            taskId,
-            generation: taskGeneration,
-          });
+          return await runQueueEntryTask(entry, lane);
         } finally {
           // Admission diagnostics and task cleanup can throw too. Release and
           // pump exactly once, without letting an old generation free new work.
@@ -509,7 +493,7 @@ export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
 
 export function enqueueCommandInLane<T>(
   lane: string,
-  task: (marker: CommandLaneTaskMarker) => Promise<T>,
+  task: () => Promise<T>,
   opts?: CommandQueueEnqueueOptions,
 ): Promise<T> {
   if (opts?.abortSignal?.aborted) {
@@ -529,7 +513,7 @@ export function enqueueCommandInLane<T>(
   }
   return new Promise<T>((resolve, reject) => {
     const entry: QueueEntry = {
-      task: (marker) => runInAsyncContext(runWithGatewayRootWorkReadmission, () => task(marker)),
+      task: () => runInAsyncContext(runWithGatewayRootWorkReadmission, task),
       resolve: (value) => resolve(value as T),
       reject,
       enqueuedAt: Math.floor(performance.now()),
@@ -583,7 +567,10 @@ export function enqueueCommandInLane<T>(
   });
 }
 
-export function getQueueSize(lane: string = CommandLane.Main, matches?: CommandLaneEntryFilter) {
+export function getQueueSize(
+  lane: string = CommandLane.Main,
+  matches?: (target: CommandQueueEnqueueOptions["sessionTarget"]) => boolean,
+) {
   const state = getQueueState().lanes.get(normalizeLane(lane));
   if (!state) {
     return 0;
@@ -591,7 +578,14 @@ export function getQueueSize(lane: string = CommandLane.Main, matches?: CommandL
   if (!matches) {
     return getLaneDepth(state);
   }
-  let count = selectQueuedCommandEntries(state, matches).length;
+  let count = 0;
+  for (const queue of [state.queue.foreground, state.queue.normal, state.queue.background]) {
+    for (let entry = queue.head; entry; entry = entry.next) {
+      if (matches(entry.sessionTarget)) {
+        count += 1;
+      }
+    }
+  }
   for (const target of state.activeTasks.values()) {
     if (matches(target)) {
       count += 1;
@@ -632,101 +626,12 @@ export function listCommandLaneTotals() {
   }));
 }
 
-/**
- * Active task ids for a lane. Ids are process-monotonic, so recovery can
- * detect a turn that started after a point in time it captured earlier.
- */
-export function getCommandLaneActiveTaskIds(lane: string = CommandLane.Main): number[] {
-  const state = getQueueState().lanes.get(normalizeLane(lane));
-  return state ? [...state.activeTasks.keys()] : [];
-}
-
-/** Return whether this exact lane task still owns an active queue slot. */
-export function isCommandLaneTaskMarkerCurrent(marker: CommandLaneTaskMarker | undefined): boolean {
-  if (!marker) {
-    return false;
-  }
-  const state = getQueueState().lanes.get(normalizeLane(marker.lane));
-  return state?.generation === marker.generation && state.activeTasks.has(marker.taskId);
-}
-
 export function getTotalQueueSize() {
   let total = 0;
   for (const s of getQueueState().lanes.values()) {
     total += getLaneDepth(s);
   }
   return total;
-}
-
-type CommandLaneEntryFilter = (target: CommandQueueEnqueueOptions["sessionTarget"]) => boolean;
-
-function selectQueuedCommandEntries(state: LaneState, matches: CommandLaneEntryFilter) {
-  const entries: QueueEntry[] = [];
-  for (const queue of [state.queue.foreground, state.queue.normal, state.queue.background]) {
-    for (let entry = queue.head; entry; entry = entry.next) {
-      if (matches(entry.sessionTarget)) {
-        entries.push(entry);
-      }
-    }
-  }
-  return entries;
-}
-
-export function countQueuedCommandsInLane(lane: string, matches: CommandLaneEntryFilter): number {
-  const state = getQueueState().lanes.get(normalizeLane(lane));
-  return state ? selectQueuedCommandEntries(state, matches).length : 0;
-}
-
-export function clearCommandLane(
-  lane: string = CommandLane.Main,
-  matches?: CommandLaneEntryFilter,
-) {
-  const cleaned = normalizeLane(lane);
-  const state = getQueueState().lanes.get(cleaned);
-  if (!state) {
-    return 0;
-  }
-  if (matches) {
-    const entries = selectQueuedCommandEntries(state, matches);
-    if (getQueueState().lanes.get(cleaned) !== state) {
-      return 0;
-    }
-    let removed = 0;
-    for (const entry of entries) {
-      if (removeLaneQueueEntry(state.queue, entry)) {
-        removed += 1;
-        entry.reject(new CommandLaneClearedError(cleaned));
-      }
-    }
-    return removed;
-  }
-  const removed = state.queue.length;
-  let entry: QueueEntry | undefined;
-  while ((entry = dequeueLaneQueue(state.queue))) {
-    entry.reject(new CommandLaneClearedError(cleaned));
-  }
-  return removed;
-}
-
-/**
- * Force a single lane back to idle and immediately pump any queued entries.
- * Used only by recovery paths after the owner has already attempted to abort
- * the active work; stale completions from the previous generation are ignored.
- */
-export function resetCommandLane(lane: string = CommandLane.Main): number {
-  const cleaned = normalizeLane(lane);
-  const state = getQueueState().lanes.get(cleaned);
-  if (!state) {
-    return 0;
-  }
-  const released = state.activeTasks.size;
-  state.generation += 1;
-  state.activeTasks.clear();
-  state.draining = false;
-  // Clearing activeTasks may release multiple shared slots. Re-arbitrate the
-  // whole group so the reset lane cannot reclaim them ahead of older siblings.
-  drainReadyCommandLane(cleaned);
-  return released;
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   createMemo,
   createSignal,
   onCleanup,
+  onSettled,
   Show,
   untrack,
   useContext,
@@ -17,6 +18,7 @@ import {
   mcpAppWidgetNameForViewId,
   type BoardProvider,
 } from "../../../lib/board/provider.ts";
+import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import type {
   CanvasToolPreview,
@@ -30,6 +32,7 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme } from "../../../lib/widget-theme.ts";
@@ -46,6 +49,7 @@ registerMcpAppEnglish();
 
 type WidgetCardOptions = {
   rawText?: string | null;
+  toggleRawDetails?: () => boolean;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
@@ -136,12 +140,18 @@ const WIDGET_FRAME_MAX_HEIGHT = 8000;
 // Frames register on load so messages can be matched to their owning preview.
 const widgetFrameRegistry = new Set<HTMLIFrameElement>();
 const widgetFrameResize = new WeakMap<HTMLIFrameElement, (height: number) => void>();
+const widgetFramePromptActive = new WeakMap<HTMLIFrameElement, () => boolean>();
+const loadedWidgetFrames = new WeakSet<HTMLIFrameElement>();
 // Keyed by window, not a module boolean: non-isolated test workers swap the
 // global window between files while module state persists.
 const widgetSizeListenerWindows = new WeakSet<Window>();
 
 function handleWidgetPromptMessage(frame: HTMLIFrameElement, data: unknown) {
-  if (!isRecord(data) || data.type !== WIDGET_PROMPT_MESSAGE_TYPE) {
+  if (
+    !isRecord(data) ||
+    data.type !== WIDGET_PROMPT_MESSAGE_TYPE ||
+    !widgetFramePromptActive.get(frame)?.()
+  ) {
     return;
   }
   void dispatchWidgetPrompt(frame, data.prompt, frame.getAttribute("src") ?? "");
@@ -174,7 +184,7 @@ function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
   }
   adoptedWidgetPromptFrames.add(frame);
   pendingWidgetPromptPorts.delete(source);
-  port.addEventListener("message", (message: MessageEvent) => {
+  listen(port, "message", (message) => {
     handleWidgetPromptMessage(frame, message.data);
   });
   port.start();
@@ -189,7 +199,7 @@ function installWidgetPromptOfferListener() {
   }
   widgetPromptOfferListenerWindows.add(window);
   // Window-lifetime transport: offers can arrive before any preview frame mounts.
-  window.addEventListener("message", (event: MessageEvent) => {
+  listen(window, "message", (event) => {
     const data: unknown = event.data;
     if (!isRecord(data) || data.type !== WIDGET_PROMPT_OFFER_MESSAGE_TYPE) {
       return;
@@ -227,7 +237,7 @@ function installWidgetSizeListener() {
   }
   widgetSizeListenerWindows.add(window);
   // Window-lifetime transport shared by the registered iframe islands.
-  window.addEventListener("message", (event: MessageEvent) => {
+  listen(window, "message", (event) => {
     const data: unknown = event.data;
     if (
       !isRecord(data) ||
@@ -262,18 +272,21 @@ type PreviewFrameParams = {
   title: string;
   src?: string;
   frameKey?: string;
-  connectionGeneration?: number;
   height?: number;
   onHeightChange?: (height: number) => void;
   sandbox?: string;
   promptCapable?: boolean;
 };
 
-function WidgetFrame(props: { params: PreviewFrameParams }) {
+function WidgetFrame(props: {
+  params: PreviewFrameParams;
+  promptAllowed: () => boolean;
+  onFrame: (frame: HTMLIFrameElement) => void;
+}) {
   let frame: HTMLIFrameElement | undefined;
   const [reportedHeight, setReportedHeight] = createSignal<number>();
   // Prompt policy is fixed by the outer URL/sandbox identity.
-  const promptCapable = untrack(() => props.params.promptCapable);
+  const initialPromptCapable = untrack(() => props.params.promptCapable);
   installWidgetSizeListener();
   // A hosted bridge keeps the initialized document through capability refreshes.
   // Failed HTTP documents never adopt a bridge and can be replaced on refresh.
@@ -286,19 +299,24 @@ function WidgetFrame(props: { params: PreviewFrameParams }) {
   const height = () => reportedHeight() ?? props.params.height;
   const Frame = () => {
     let element!: HTMLIFrameElement;
+    onSettled(() => {
+      widgetFramePromptActive.set(element, () => props.promptAllowed());
+      widgetFrameResize.set(element, (nextHeight) => {
+        setReportedHeight(nextHeight);
+        props.params.onHeightChange?.(nextHeight);
+      });
+    });
     onCleanup(() => {
       widgetFrameRegistry.delete(element);
       widgetFrameResize.delete(element);
+      widgetFramePromptActive.delete(element);
     });
     return (
       <iframe
         ref={(next) => {
           element = next;
           frame = next;
-          widgetFrameResize.set(next, (nextHeight) => {
-            setReportedHeight(nextHeight);
-            props.params.onHeightChange?.(nextHeight);
-          });
+          props.onFrame(next);
         }}
         src={src() || undefined}
         class="chat-tool-card__preview-frame"
@@ -306,8 +324,9 @@ function WidgetFrame(props: { params: PreviewFrameParams }) {
         sandbox={props.params.sandbox ?? ""}
         style={height() ? `height:${height()}px;min-height:${height()}px` : ""}
         onLoad={() => {
+          loadedWidgetFrames.add(element);
           widgetFrameRegistry.add(element);
-          if (promptCapable) {
+          if (initialPromptCapable) {
             promptEligibleFrames.add(element);
             tryAdoptWidgetPromptPort(element);
           }
@@ -317,7 +336,7 @@ function WidgetFrame(props: { params: PreviewFrameParams }) {
       />
     );
   };
-  if (promptCapable) {
+  if (initialPromptCapable) {
     installWidgetPromptOfferListener();
   }
   // Use a truthy tuple because an empty src still renders the sandboxed frame.
@@ -330,13 +349,29 @@ function WidgetFrame(props: { params: PreviewFrameParams }) {
 }
 
 function PreviewFrame(props: { params: PreviewFrameParams }) {
-  const identity = createMemo(
+  let frame: HTMLIFrameElement | undefined;
+  const presentation = createCanvasFramePresentation(
     () =>
-      `${props.params.sandbox ?? ""}\0${props.params.frameKey ?? ""}\0${props.params.src ? 1 : 0}\0${props.params.connectionGeneration ?? 0}`,
+      `${props.params.sandbox ?? ""}\0${props.params.frameKey ?? ""}\0${props.params.src ? 1 : 0}`,
+    () => props.params.src,
+    () =>
+      Boolean(
+        frame &&
+        (adoptedWidgetPromptFrames.has(frame) ||
+          (!props.params.sandbox?.includes("allow-scripts") && loadedWidgetFrames.has(frame))),
+      ),
   );
   return (
-    <Show when={identity()} keyed>
-      {(_key) => <WidgetFrame params={props.params} />}
+    <Show when={presentation.identity()} keyed>
+      {(_key) => (
+        <WidgetFrame
+          params={{ ...props.params, src: presentation.src() }}
+          promptAllowed={presentation.active}
+          onFrame={(next) => {
+            frame = next;
+          }}
+        />
+      )}
     </Show>
   );
 }
@@ -372,9 +407,6 @@ function WidgetContent(props: {
                   props.options?.allowExternalEmbedUrls ?? false,
                 ),
                 frameKey: props.preview.url?.trim() || props.preview.viewId?.trim(),
-                connectionGeneration: isInternalCanvasEntryUrl(props.preview.url)
-                  ? getCanvasWidgetFrameConnectionGeneration()
-                  : undefined,
                 height:
                   props.options?.widgetLayout?.read(
                     `frame:${props.preview.url?.trim() || props.preview.viewId?.trim()}`,
@@ -449,17 +481,11 @@ function handleWidgetExportAction(
   value: WidgetAction,
   dropdown: HTMLElement,
   title: string | undefined,
+  toggleRawDetails: (() => boolean) | undefined,
 ): WidgetRawDetailsLabel | void {
   // Raw details belong to the enclosing tool card; canvas islands own their iframe DOM.
   if (value === "raw-details") {
-    const host = dropdown.closest(".chat-tool-card__widget-host");
-    const toggle = host?.querySelector<HTMLButtonElement>(
-      ".chat-tool-card__widget-raw .chat-tool-card__raw-toggle",
-    );
-    // Solid commits the toggle after this handler; derive its next label before clicking.
-    const willExpand = toggle?.getAttribute("aria-expanded") !== "true";
-    toggle?.click();
-    return toggle && willExpand ? "chat.toolCards.hideRawDetails" : "chat.toolCards.showRawDetails";
+    return toggleRawDetails?.() ? "chat.toolCards.hideRawDetails" : "chat.toolCards.showRawDetails";
   }
   const frame = dropdown
     .closest(".chat-tool-card__preview")
@@ -585,12 +611,11 @@ function CanvasPreview(props: {
   const canExportImage = () => !props.preview.mcpApp && isInternalCanvasEntryUrl(props.preview.url);
   const hasMenu = () => canExportImage() || Boolean(props.options?.rawText);
   const hasActions = () => Boolean(canPin() || hasMenu());
-  const placementRef = widgetActionsPlacementRef(hasActions, () => props.options);
   const pinLabel = () =>
     t(pinned() ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard");
   return (
     <div
-      ref={placementRef}
+      ref={widgetActionsPlacementRef(hasActions, () => props.options)}
       class="chat-tool-card__preview"
       data-content-kind={props.preview.mcpApp ? "mcp-app" : "canvas-html"}
       data-has-widget-actions={hasActions() ? "" : undefined}
@@ -619,7 +644,14 @@ function CanvasPreview(props: {
             <WidgetCardMenu
               canExportImage={canExportImage()}
               hasRawDetails={Boolean(props.options?.rawText)}
-              onAction={(value, menu) => handleWidgetExportAction(value, menu, props.preview.title)}
+              onAction={(value, menu) =>
+                handleWidgetExportAction(
+                  value,
+                  menu,
+                  props.preview.title,
+                  props.options?.toggleRawDetails,
+                )
+              }
             />
           </Show>
         </div>

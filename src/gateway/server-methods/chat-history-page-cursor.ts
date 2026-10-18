@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ChatHistoryParams } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type {
   ChatHistoryPageAnchor,
   ChatHistoryPageCursor,
@@ -41,6 +42,29 @@ export function decodeChatHistoryPageCursor(
   } catch {
     return null;
   }
+}
+
+export function resolveChatHistorySelectorError(
+  { offset, messageId, cursor, sessionId }: ChatHistoryParams,
+  pageCursor: ChatHistoryPageCursor | null | undefined,
+  retainedSessionId: string | undefined,
+): string | undefined {
+  if (pageCursor === null) {
+    return "invalid history page cursor";
+  }
+  if (offset !== undefined && messageId !== undefined) {
+    return "offset and messageId cannot be used together";
+  }
+  if (cursor !== undefined && (offset !== undefined || messageId !== undefined)) {
+    return "cursor cannot be used with offset or messageId";
+  }
+  if (sessionId !== undefined && messageId === undefined) {
+    return "sessionId requires messageId";
+  }
+  if (pageCursor && retainedSessionId && pageCursor.sessionId !== retainedSessionId) {
+    return "history page cursor does not belong to retained transcript";
+  }
+  return undefined;
 }
 
 export function resolveChatHistoryPageCursors(

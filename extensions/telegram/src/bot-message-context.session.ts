@@ -71,6 +71,7 @@ function replyTargetToChainEntry(
   replyTarget: TelegramReplyTarget,
   media?: TelegramMediaRef,
 ): TelegramReplyChainEntry {
+  const { forwardedFrom } = replyTarget;
   return {
     ...(replyTarget.id ? { messageId: replyTarget.id } : {}),
     sender: replyTarget.sender,
@@ -88,16 +89,10 @@ function replyTargetToChainEntry(
         }
       : {}),
     ...(replyTarget.kind === "quote" ? { isQuote: true } : {}),
-    ...(replyTarget.forwardedFrom?.from ? { forwardedFrom: replyTarget.forwardedFrom.from } : {}),
-    ...(replyTarget.forwardedFrom?.fromId
-      ? { forwardedFromId: replyTarget.forwardedFrom.fromId }
-      : {}),
-    ...(replyTarget.forwardedFrom?.fromUsername
-      ? { forwardedFromUsername: replyTarget.forwardedFrom.fromUsername }
-      : {}),
-    ...(replyTarget.forwardedFrom?.date
-      ? { forwardedDate: replyTarget.forwardedFrom.date * 1000 }
-      : {}),
+    ...(forwardedFrom?.from ? { forwardedFrom: forwardedFrom.from } : {}),
+    ...(forwardedFrom?.fromId ? { forwardedFromId: forwardedFrom.fromId } : {}),
+    ...(forwardedFrom?.fromUsername ? { forwardedFromUsername: forwardedFrom.fromUsername } : {}),
+    ...(forwardedFrom?.date ? { forwardedDate: forwardedFrom.date * 1000 } : {}),
   };
 }
 
@@ -298,6 +293,8 @@ export async function buildTelegramInboundContextPayload(
     const visibleEntry = {
       ...entry,
       ...selectedReplyEntry,
+      // The saved file owns classification, including images sent as Telegram documents.
+      ...(entry.mediaPath ? { mediaKind: entry.mediaKind, mediaType: entry.mediaType } : {}),
       // Preserve authenticated identity while Telegram's selected quote body wins.
       sender: entry.sender,
       senderId: entry.senderId,

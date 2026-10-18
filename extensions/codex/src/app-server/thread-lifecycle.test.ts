@@ -585,6 +585,7 @@ describe("Codex app-server native code mode config", () => {
       ),
     ];
     const instructions = buildDeveloperInstructions(params, {
+      nativeCodeModeEnabled: true,
       dynamicTools: [
         yieldTool,
         {
@@ -602,15 +603,17 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions.includes("`openclaw_direct.sessions_yield`")).toBe(true);
     expect(instructions.includes("native `wait_agent`")).toBe(true);
     expect(instructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: alpha_tool, skill_workshop, zeta_tool.",
+      "Deferred searchable OpenClaw dynamic tools available: openclaw_direct.alpha_tool, openclaw_direct.skill_workshop, openclaw_direct.zeta_tool.",
     );
     expect(instructions).toContain("## Skill Workshop");
     expect(instructions).toContain(
       "Use Codex native `spawn_agent` for work that only needs Codex-native tools",
     );
-    expect(instructions).toContain("Use `tool_search` to find a tool that is not listed");
     expect(instructions).toContain(
-      "Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have.",
+      "Use `tool_search` for deferred tools when it is directly callable",
+    );
+    expect(instructions).toContain(
+      "Do not repeat a completed call to retrieve a result you already have.",
     );
     expect(instructions).not.toContain("On code-mode-only models");
     expect(instructions).toContain(
@@ -753,8 +756,8 @@ describe("Codex app-server native code mode config", () => {
         });
         expect(request.config?.["code_mode.direct_only_tool_namespaces"]).toBeUndefined();
         expect(request.config?.["features.code_mode_only"]).toBe(nativeCodeModeOnlyEnabled);
-        expect(request.developerInstructions?.includes("On code-mode-only models")).toBe(
-          nativeCodeModeOnlyEnabled,
+        expect(request.developerInstructions?.includes("`tool_search`")).toBe(
+          !nativeCodeModeOnlyEnabled,
         );
       }
     },

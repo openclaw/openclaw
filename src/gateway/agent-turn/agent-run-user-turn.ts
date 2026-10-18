@@ -147,7 +147,6 @@ export async function prepareAgentRunUserTurn(params: {
   settleWakeReplay?: RequesterSettleWakeReplay;
   abortSignal?: AbortSignal;
   getAbortStopReason?: () => string;
-  deferTimeoutCompletion?: (settle: () => void) => boolean;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
@@ -420,25 +419,19 @@ export async function prepareAgentRunUserTurn(params: {
     if (trackRequesterCompletion && recorder && !recorder.getProcessingCompletion?.()) {
       const recordAbort = () => {
         const stopReason = params.getAbortStopReason?.() ?? "rpc";
-        const settle = () => {
-          void completeUserTurnProcessing(
-            recorder,
-            buildAgentRunTerminalOutcome({
-              status: stopReason === "timeout" ? "timeout" : "error",
-              stopReason,
-            }),
-          ).catch((error: unknown) => {
-            params.context.logGateway.warn(
-              `requester input cancellation persistence failed: ${formatForLog(error)}`,
-            );
-          });
-        };
-        // Give the timed-out producer its existing terminal grace to supply
-        // final facts. Stop starts one retained write that finalization joins.
-        if (stopReason === "timeout" && params.deferTimeoutCompletion?.(settle)) {
+        // Intentional Stop seals non-retry custody immediately. A timeout
+        // retains its source until the producer publishes its actual terminal facts.
+        if (stopReason === "timeout") {
           return;
         }
-        settle();
+        void completeUserTurnProcessing(
+          recorder,
+          buildAgentRunTerminalOutcome({ status: "error", stopReason }),
+        ).catch((error: unknown) => {
+          params.context.logGateway.warn(
+            `private input cancellation persistence failed: ${formatForLog(error)}`,
+          );
+        });
       };
       // Abort reserves terminal ownership before notifying listeners. Record
       // the stop while that exact controller still exists, even after input consumption.
@@ -522,7 +515,7 @@ export async function releaseStoppedAgentRunUserTurn(
   prepared: PreparedAgentRunUserTurn,
   abort: Pick<ReturnType<typeof registerChatAbortController>, "controller" | "entry">,
 ): Promise<void> {
-  const stopReason = abort.entry?.abortStopReason;
+  const stopReason = abort.entry?.adapter.abortStopReason;
   const outcome = buildAgentRunTerminalOutcome({ status: "error", stopReason });
   const cancelled =
     abort.controller.signal.aborted &&

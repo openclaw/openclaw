@@ -112,7 +112,7 @@ export function connectCdpClient(bridge: ExtensionRelayBridge) {
 export const relayFrames = (socket: FakeWebSocket) =>
   socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
 
-export function relayRequest(socket: FakeWebSocket, firstSeq = 1000) {
+function relayRequest(socket: FakeWebSocket, firstSeq = 1000) {
   let seq = firstSeq;
   return async (message: Record<string, unknown>) => {
     const id = ++seq;

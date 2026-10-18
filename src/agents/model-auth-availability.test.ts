@@ -480,8 +480,6 @@ describe("createModelAuthAvailabilityResolver", () => {
       env: { OPENAI_API_KEY: "environment-key" },
       profileId: "openai:oauth-missing",
       profile: { type: "oauth" as const, provider: "openai", access: "", refresh: "" },
-      route: platformRoute,
-      mode: "api-key",
     },
     {
       label: "OAuth environment after unavailable Platform auth",
@@ -491,8 +489,6 @@ describe("createModelAuthAvailabilityResolver", () => {
       env: { OPENAI_API_KEY: "environment-token" },
       profileId: "openai:platform-missing",
       profile: { type: "api_key" as const, provider: "openai", key: "" },
-      route: subscriptionRoute,
-      mode: "oauth",
     },
     // An environment credential named nowhere in config is not authorized to
     // stand in for a declared profile, including a declared profile that turned

@@ -21,9 +21,9 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
-  beginSessionWorkAdmission,
-  consumeSessionWorkAdmissionHandoff,
-} from "../../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  consumeSessionEffectHandoff,
+} from "../../../sessions/session-controller.lifecycle.js";
 import { observeSessionWorkAdmissionDrain } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -232,14 +232,18 @@ describe("pending spawn invocation authority", () => {
       ).toBe(false);
       const entered = createDeferred();
       const resume = createDeferred();
-      const slow = await beginSessionWorkAdmission({
+      const slow = await beginSessionEffect({
         scope: storePath,
         identities: [key(slowId), `${slowId}-session`],
         assertAllowed: () => {},
         onInterrupt: () => slow.release(),
       });
       const restoreDrain = observeSessionWorkAdmissionDrain(async (params, released) => {
-        if (params.scope === storePath && Array.from(params.identities).includes(key(slowId))) {
+        const matchesSlowTarget =
+          "target" in params
+            ? params.target.storeScope === storePath && params.target.aliases.includes(key(slowId))
+            : params.scope === storePath && Array.from(params.identities).includes(key(slowId));
+        if (matchesSlowTarget) {
           expect(released).toBe(true);
           entered.resolve();
           await resume.promise;
@@ -252,7 +256,7 @@ describe("pending spawn invocation authority", () => {
         "main",
         "spawn-authority-test",
       );
-      let fresh: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      let fresh: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
       const freshInterrupted = vi.fn();
       const dispatch = vi.fn();
       const expectCompletedSibling = () => {
@@ -270,7 +274,7 @@ describe("pending spawn invocation authority", () => {
         expectCompletedSibling();
         const admitted = await freshAdmission.admit("embedded");
         bindGatewayContextResolver(admitted, () => context as unknown as GatewayRequestContext);
-        fresh = await beginSessionWorkAdmission({
+        fresh = await beginSessionEffect({
           scope: storePath,
           identities: [key("b"), "b-session"],
           assertAllowed: () => {},
@@ -419,7 +423,7 @@ describe("pending spawn invocation authority", () => {
         return { runId: "accepted-task-run", status: "accepted" } as T;
       },
     });
-    let lease: ReturnType<typeof consumeSessionWorkAdmissionHandoff>;
+    let lease: ReturnType<typeof consumeSessionEffectHandoff>;
     let cancellation: ReturnType<typeof killSubagentRunAdmin> | undefined;
     try {
       const spawned = await inGateway(context, () =>
@@ -439,17 +443,26 @@ describe("pending spawn invocation authority", () => {
       const entry = subagentRuns.get(spawned.runId!)!;
       const child = loadSessionEntry({ storePath, sessionKey: spawned.childSessionKey! })!;
       const identities = [spawned.childSessionKey!, child.sessionId];
-      const work = await beginSessionWorkAdmission({
+      const work = await beginSessionEffect({
         scope: storePath,
         identities,
+        run: {
+          runId: entry.runId,
+          sessionKey: entry.childSessionKey,
+          sessionId: child.sessionId,
+          agentId: entry.childAgentId,
+        },
         assertAllowed: () => {},
       });
       const interrupted = createDeferred();
-      lease = consumeSessionWorkAdmissionHandoff({
+      lease = consumeSessionEffectHandoff({
         scope: storePath,
         identities,
         handoffId: work.createHandoff(),
-        onInterrupt: () => interrupted.resolve(),
+        onInterrupt: () => {
+          interrupted.resolve();
+          return { runId: entry.runId };
+        },
       });
       const { generation, createdAt, taskRunId, schedulerSlotId } = entry;
       const runtimeOwner = getSubagentRunRuntimeKey(entry);

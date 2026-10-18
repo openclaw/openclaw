@@ -13,6 +13,9 @@ import {
 } from "../config/sessions/session-input-actor.js";
 import {
   composeSessionSourceAssertion,
+  runWithSessionSourceScope,
+  prepareSessionSourceAuthority,
+  type SessionSourceAssertion,
   createDynamicSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -477,8 +480,23 @@ export function createUserTurnTranscriptRecorder(
       throw error;
     }
   };
-  const persistPrepared = (options: Parameters<typeof persistPreparedWithoutActor>[0]) =>
-    withSessionInputActor(inputActorBinding, () => persistPreparedWithoutActor(options));
+  const persistPrepared = (options: Parameters<typeof persistPreparedWithoutActor>[0]) => {
+    const persist = () =>
+      withSessionInputActor(inputActorBinding, () => persistPreparedWithoutActor(options));
+    const guard: SessionSourceAssertion | undefined = params.sessionTurnMutation?.assertCurrent;
+    if (!guard?.prepareSessionSourceScope || (!options.message && persistedResult)) {
+      return persist();
+    }
+    // Goal admission may enter a worker-owned database runtime. Prepare sharing
+    // predicates before that boundary, rather than recursively reading its writer.
+    const source = Object.assign(() => guard(), {
+      async prepareSessionSourceScope() {
+        const prepared = await prepareSessionSourceAuthority(guard);
+        return { ...prepared, scopedSources: new Map([[guard, prepared]]) };
+      },
+    });
+    return runWithSessionSourceScope(source, persist);
+  };
   const recorder: UserTurnTranscriptRecorder = {
     get message() {
       return message;
@@ -509,6 +527,7 @@ export function createUserTurnTranscriptRecorder(
             ...options,
             requestFingerprint: params.pendingInputRequestFingerprint,
             trackCompletion: params.trackInputCompletion,
+            retryInterrupted: params.sessionTurnMutation?.kind === "goal",
             replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
             message: candidate,
             onCommitted: (receipt) => {

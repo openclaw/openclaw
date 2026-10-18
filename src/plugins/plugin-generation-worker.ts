@@ -1,3 +1,4 @@
+import path from "node:path";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -75,6 +76,8 @@ export async function preparePluginGenerationArtifact(
   });
   const readOnly = isArtifactPreservingStateRead();
   const admission = nativeAdmissionStateFor();
+  const admissionRoot = path.resolve(params.rootDir);
+  const admissionOwner = admission.owners.get(admissionRoot);
   const root = createPluginSourceCaptureRoot(
     storage.stateDir,
     "plugin-preparation-",
@@ -184,6 +187,7 @@ export async function preparePluginGenerationArtifact(
   );
   function accept(reply: GenerationWorkerReply): unknown {
     resources = reply.resources;
+    codec.releaseReceivedHandles(reply.released ?? []);
     if ("error" in reply) {
       // Reload recovery distinguishes unavailable old source from fatal preparation errors.
       const error =
@@ -308,9 +312,12 @@ export async function preparePluginGenerationArtifact(
       managedRoot: root.managedRoot,
       callbackPort: port2,
       admission: {
-        owners: admission.owners,
+        // One artifact uses one owner; shared native indexes still serve dependencies outside it.
+        owners: new Map(admissionOwner ? [[admissionRoot, admissionOwner]] : []),
         managedRoots: admission.managedRoots,
-        receipts: admission.receipts,
+        receipts: new Map(
+          [...admission.receipts].filter(([key]) => key.startsWith(`${admissionRoot}\0`)),
+        ),
         files: admission.files,
         namespaces: admission.namespaces,
       },

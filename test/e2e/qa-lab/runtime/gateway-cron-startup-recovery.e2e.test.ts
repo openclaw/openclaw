@@ -1,9 +1,5 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
-import { resetConfigOverrides } from "../../../../src/config/runtime-overrides.js";
-import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { createCronRunHandle, finishCronRun } from "../../../../src/cron/service/run-history.js";
 import { createCronServiceState } from "../../../../src/cron/service/state.js";
@@ -13,38 +9,12 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
-import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
-import { resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { createTestGatewayScheduler } from "../../../../src/test-utils/gateway-scheduler-clock.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
-
-const GATEWAY_ENV_KEYS = [
-  "HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-] as const;
+import { prepareRecoveryHome, resetGatewayState } from "./gateway-startup-routing.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function resetGatewayState(): void {
-  resetConfigOverrides();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest({ preserveListeners: true });
-  resetSystemEventsForTest();
-}
 
 function cronJob(params: {
   id: string;
@@ -75,33 +45,12 @@ describe("Gateway cron startup recovery", () => {
   afterEach(resetGatewayState);
 
   it("reports lifecycle-owned retry and disable state through cron.list", async () => {
-    const envSnapshot = captureEnv([...GATEWAY_ENV_KEYS]);
     const tempHome = tempDirs.make("openclaw-gateway-cron-recovery-");
-    const stateDir = path.join(tempHome, ".openclaw");
-    const bundledPluginsDir = path.join(tempHome, "empty-bundled-plugins");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await Promise.all([
-      fs.mkdir(stateDir, { recursive: true }),
-      fs.mkdir(bundledPluginsDir, { recursive: true }),
-    ]);
-
     const token = `gateway-cron-recovery-${process.pid}`;
-    for (const [key, value] of Object.entries({
-      HOME: tempHome,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_GATEWAY_TOKEN: token,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "0",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    })) {
-      setTestEnvValue(key, value);
-    }
-    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+    const { stateDir, configPath, workspaceDir, envSnapshot } = await prepareRecoveryHome(
+      tempHome,
+      token,
+    );
     closeOpenClawStateDatabaseForTest();
 
     const startedAtMs = Date.now() - 30_000;
@@ -109,33 +58,12 @@ describe("Gateway cron startup recovery", () => {
     const persistedRetryAtMs = Date.now() + 120_000;
     const historyRetryAtMs = Date.now() + 60_000;
     const jobs = [
-      cronJob({
-        id: "persisted-retry-without-history",
-        startedAtMs,
-        nextRunAtMs: persistedRetryAtMs,
-      }),
-      cronJob({ id: "persisted-retry", startedAtMs, nextRunAtMs: persistedRetryAtMs }),
-      cronJob({ id: "history-retry", startedAtMs, nextRunAtMs: startedAtMs }),
-      cronJob({
-        id: "persisted-disable",
-        startedAtMs,
-        enabled: false,
-        nextRunAtMs: startedAtMs,
-      }),
-      cronJob({
-        id: "recurring-history",
-        startedAtMs,
-        nextRunAtMs: startedAtMs,
-        recurring: true,
-      }),
-    ];
-    const historyNextRunAtMs = new Map<string, number | undefined>([
-      ["persisted-retry-without-history", undefined],
-      ["persisted-retry", historyRetryAtMs],
-      ["history-retry", historyRetryAtMs],
-      ["persisted-disable", historyRetryAtMs],
-      ["recurring-history", historyRetryAtMs],
-    ]);
+      { id: "persisted-retry-without-history", nextRunAtMs: persistedRetryAtMs },
+      { id: "persisted-retry", nextRunAtMs: persistedRetryAtMs },
+      { id: "history-retry", nextRunAtMs: startedAtMs },
+      { id: "persisted-disable", nextRunAtMs: startedAtMs, enabled: false },
+      { id: "recurring-history", nextRunAtMs: startedAtMs, recurring: true },
+    ].map((job) => cronJob({ startedAtMs, ...job }));
     const storePath = path.join(stateDir, "cron", "jobs.json");
     const executionState = createCronServiceState({
       scheduler: createTestGatewayScheduler(),
@@ -169,7 +97,7 @@ describe("Gateway cron startup recovery", () => {
           error: 'Session "agent:main:cron:recovery" changed while starting work. Retry.',
           runAtMs: startedAtMs,
           durationMs: endedAtMs - startedAtMs,
-          nextRunAtMs: historyNextRunAtMs.get(job.id),
+          nextRunAtMs: job.id === "persisted-retry-without-history" ? undefined : historyRetryAtMs,
         },
       });
     }
@@ -177,7 +105,7 @@ describe("Gateway cron startup recovery", () => {
 
     const config = {
       agents: {
-        defaults: { workspace: path.join(tempHome, "workspace"), skipBootstrap: true },
+        defaults: { workspace: workspaceDir, skipBootstrap: true },
         entries: { main: {} },
       },
       gateway: { auth: { mode: "token", token } },
@@ -216,23 +144,18 @@ describe("Gateway cron startup recovery", () => {
       );
       const recovered = new Map(response.jobs.map((job) => [job.id, job] as const));
 
-      expect(recovered.get("persisted-retry-without-history")).toMatchObject({
-        enabled: true,
-        state: { nextRunAtMs: persistedRetryAtMs },
-      });
-      expect(recovered.get("persisted-retry")).toMatchObject({
-        enabled: true,
-        state: { nextRunAtMs: persistedRetryAtMs },
-      });
-      expect(recovered.get("history-retry")).toMatchObject({
-        enabled: true,
-        state: { nextRunAtMs: historyRetryAtMs },
-      });
-      expect(recovered.get("persisted-disable")?.enabled).toBe(false);
-      expect(recovered.get("persisted-disable")?.state.nextRunAtMs).toBeUndefined();
-      expect(recovered.get("recurring-history")).toMatchObject({
-        enabled: true,
-        state: { nextRunAtMs: historyRetryAtMs },
+      for (const [id, nextRunAtMs] of [
+        ["persisted-retry-without-history", persistedRetryAtMs],
+        ["persisted-retry", persistedRetryAtMs],
+        ["history-retry", historyRetryAtMs],
+        ["recurring-history", historyRetryAtMs],
+      ] as const) {
+        expect(recovered.get(id)).toMatchObject({ enabled: true, state: { nextRunAtMs } });
+      }
+      const disabled = recovered.get("persisted-disable");
+      expect({ enabled: disabled?.enabled, nextRunAtMs: disabled?.state.nextRunAtMs }).toEqual({
+        enabled: false,
+        nextRunAtMs: undefined,
       });
     } finally {
       if (gateway) {

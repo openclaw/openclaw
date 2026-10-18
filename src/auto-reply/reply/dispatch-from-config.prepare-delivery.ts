@@ -127,7 +127,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       ? beginReplyOperationFinalizationWork(replyOperation, RUN_STALE_TAKEOVER_MS)
       : undefined;
     try {
-      return await maybeApplyTtsToReplyPayload({
+      const ttsPayload = await maybeApplyTtsToReplyPayload({
         ...ttsContext,
         payload,
         kind,
@@ -136,9 +136,10 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
           state.inboundAudio ||
           state.getDispatchReplyOperation()?.acceptedSteeredInboundAudio === true,
       });
+      replyOperation?.watchdog.progress("finalization", "reply:tts_prepared");
+      return ttsPayload;
     } finally {
       finishFinalizationWork?.();
-      replyOperation?.recordActivity();
     }
   };
   const replyContextAccountId = routeReplyChannel
@@ -243,6 +244,9 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     // Routed sends settle here: the transport result is the settlement. This is
     // the single routed choke point, so every routed lane feeds the turn ledger.
     turnLedger.recordRoutedDelivery(options?.kind ?? "final", payload, result);
+    if (result.delivered && !result.ambiguous) {
+      state.getDispatchReplyOperation()?.watchdog.progress("finalization", "reply:routed_delivery");
+    }
     return result;
   };
 

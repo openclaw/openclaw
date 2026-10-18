@@ -1,14 +1,36 @@
 // Matrix tests cover startup plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CoreConfig } from "../../types.js";
-import type { MatrixAccountPatch } from "../config-update.js";
-import type { MatrixManagedDeviceInfo } from "../device-health.js";
 import type { MatrixProfileSyncResult } from "../profile.js";
 import type { MatrixOwnDeviceVerificationStatus } from "../sdk.js";
 import type { MatrixStartupVerificationOutcome } from "./startup-verification.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 
-type MatrixStartupMaintenanceDeps = NonNullable<Parameters<typeof runMatrixStartupMaintenance>[1]>;
+const deps = vi.hoisted(() => ({
+  summarizeMatrixDeviceHealth:
+    vi.fn<typeof import("../device-health.js").summarizeMatrixDeviceHealth>(),
+  syncMatrixOwnProfile: vi.fn<typeof import("../profile.js").syncMatrixOwnProfile>(),
+  ensureMatrixStartupVerification:
+    vi.fn<typeof import("./startup-verification.js").ensureMatrixStartupVerification>(),
+  updateMatrixAccountConfig:
+    vi.fn<typeof import("../config-update.js").updateMatrixAccountConfig>(),
+}));
+
+vi.mock("../device-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../device-health.js")>()),
+  summarizeMatrixDeviceHealth: deps.summarizeMatrixDeviceHealth,
+}));
+vi.mock("../profile.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../profile.js")>()),
+  syncMatrixOwnProfile: deps.syncMatrixOwnProfile,
+}));
+vi.mock("./startup-verification.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./startup-verification.js")>()),
+  ensureMatrixStartupVerification: deps.ensureMatrixStartupVerification,
+}));
+vi.mock("../config-update.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config-update.js")>()),
+  updateMatrixAccountConfig: deps.updateMatrixAccountConfig,
+}));
 
 function createVerificationStatus(
   overrides: Partial<MatrixOwnDeviceVerificationStatus> = {},
@@ -78,31 +100,18 @@ async function expectMatrixStartupAbort(promise: Promise<unknown>): Promise<void
   expect(error.message).toBe("Matrix startup aborted");
 }
 
-function createDeps(
-  overrides: Partial<MatrixStartupMaintenanceDeps> = {},
-): MatrixStartupMaintenanceDeps {
-  return {
-    summarizeMatrixDeviceHealth: vi.fn(() => ({
-      currentDeviceId: null,
-      staleOpenClawDevices: [] as MatrixManagedDeviceInfo[],
-      currentOpenClawDevices: [] as MatrixManagedDeviceInfo[],
-    })),
-    syncMatrixOwnProfile: vi.fn(async () => createProfileSyncResult()),
-    ensureMatrixStartupVerification: vi.fn(async () =>
-      createStartupVerificationOutcome("verified"),
-    ),
-    updateMatrixAccountConfig: vi.fn(
-      (cfg: CoreConfig, _accountId: string, _patch: MatrixAccountPatch) => cfg,
-    ),
-    ...overrides,
-  };
-}
-
 describe("runMatrixStartupMaintenance", () => {
-  let deps: MatrixStartupMaintenanceDeps;
-
   beforeEach(() => {
-    deps = createDeps();
+    deps.summarizeMatrixDeviceHealth.mockReset().mockReturnValue({
+      currentDeviceId: null,
+      staleOpenClawDevices: [],
+      currentOpenClawDevices: [],
+    });
+    deps.syncMatrixOwnProfile.mockReset().mockResolvedValue(createProfileSyncResult());
+    deps.ensureMatrixStartupVerification
+      .mockReset()
+      .mockResolvedValue(createStartupVerificationOutcome("verified"));
+    deps.updateMatrixAccountConfig.mockReset().mockImplementation((cfg) => cfg);
   });
 
   function createParams(): Parameters<typeof runMatrixStartupMaintenance>[0] {
@@ -157,7 +166,7 @@ describe("runMatrixStartupMaintenance", () => {
     );
     vi.mocked(deps.updateMatrixAccountConfig).mockReturnValue(updatedCfg);
 
-    await runMatrixStartupMaintenance(params, deps);
+    await runMatrixStartupMaintenance(params);
 
     expect(deps.syncMatrixOwnProfile).toHaveBeenCalledTimes(1);
     const [profileSyncParams] = vi.mocked(deps.syncMatrixOwnProfile).mock.calls.at(0) ?? [];
@@ -211,7 +220,7 @@ describe("runMatrixStartupMaintenance", () => {
     vi.mocked(deps.ensureMatrixStartupVerification).mockResolvedValue(
       createStartupVerificationOutcome("pending"),
     );
-    await runMatrixStartupMaintenance(params, deps);
+    await runMatrixStartupMaintenance(params);
 
     expect(params.logger.warn).toHaveBeenCalledWith(
       "matrix: stale OpenClaw devices detected for @bot:example.org: DEV123. Run 'openclaw matrix devices prune-stale --account ops' to keep encrypted-room trust healthy.",
@@ -231,7 +240,7 @@ describe("runMatrixStartupMaintenance", () => {
       createStartupVerificationOutcome("cooldown", { retryAfterMs: 321 }),
     );
 
-    await runMatrixStartupMaintenance(params, deps);
+    await runMatrixStartupMaintenance(params);
 
     expect(params.logVerboseMessage).toHaveBeenCalledWith(
       "matrix: skipped startup verification request due to cooldown (retryAfterMs=321)",
@@ -241,7 +250,7 @@ describe("runMatrixStartupMaintenance", () => {
       createStartupVerificationOutcome("request-failed", { error: "boom" }),
     );
 
-    await runMatrixStartupMaintenance(params, deps);
+    await runMatrixStartupMaintenance(params);
 
     expect(params.logger.debug).toHaveBeenCalledWith(
       "Matrix startup verification request failed (non-fatal)",
@@ -259,7 +268,7 @@ describe("runMatrixStartupMaintenance", () => {
       return createProfileSyncResult();
     });
 
-    await expectMatrixStartupAbort(runMatrixStartupMaintenance(params, deps));
+    await expectMatrixStartupAbort(runMatrixStartupMaintenance(params));
     expect(deps.ensureMatrixStartupVerification).not.toHaveBeenCalled();
   });
 });

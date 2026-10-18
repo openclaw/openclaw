@@ -11,7 +11,7 @@ import {
   type AgentAssistantProjection,
   type AgentAssistantSourceReceipt,
 } from "../infra/agent-events.js";
-import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { normalizeTextForComparison } from "./embedded-agent-helpers/messaging-dedupe.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
