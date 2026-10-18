@@ -11,7 +11,7 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 export async function readLocalWorkspaceReviewBase(params: {
   agentId: string;
   sessionKey: string;
-  entry: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "worktree">;
+  entry: Pick<InternalSessionEntry, "sessionId" | "worktree">;
   cwd: string;
   assertCurrent: () => void;
 }) {
@@ -35,8 +35,7 @@ export async function readLocalWorkspaceReviewBase(params: {
     row.worktree_id !== binding.id ||
     row.agent_id !== params.agentId ||
     row.session_key !== params.sessionKey ||
-    row.session_id !== params.entry.sessionId ||
-    row.lifecycle_revision !== (params.entry.lifecycleRevision ?? null)
+    row.session_id !== params.entry.sessionId
   ) {
     throw new Error("Local workspace review binding belongs to another session incarnation");
   }

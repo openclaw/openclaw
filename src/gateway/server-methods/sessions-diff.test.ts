@@ -533,7 +533,6 @@ describe("loadSessionDiff", () => {
         { agent_id: "other" },
         { session_key: "agent:main:other" },
         { session_id: "replaced" },
-        { lifecycle_revision: "replaced" },
       ]) {
         await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
           store.update(store.get()!, patch),
@@ -544,7 +543,6 @@ describe("loadSessionDiff", () => {
             agent_id: "main",
             session_key: sessionKey,
             session_id: "s1",
-            lifecycle_revision: null,
           }),
         );
       }

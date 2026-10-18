@@ -122,14 +122,7 @@ export const localWorkspaceReadOperations = {
           db,
           query(db)
             .selectFrom(table)
-            .select([
-              "worktree_id",
-              "agent_id",
-              "session_key",
-              "session_id",
-              "lifecycle_revision",
-              "base_commit",
-            ])
+            .select(["worktree_id", "agent_id", "session_key", "session_id", "base_commit"])
             .where("worktree_id", "=", input.id),
         )
       : undefined,
