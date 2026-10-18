@@ -19,6 +19,20 @@ export function assertFields<T extends object>(actual: T, expected: Partial<T>) 
   }
 }
 
+export async function settleCleanup(steps: Array<() => Promise<unknown>>, message: string) {
+  const errors: unknown[] = [];
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length) {
+    throw new AggregateError(errors, message);
+  }
+}
+
 export async function withInstalledRestoration<T>(
   inspect: () => Promise<T>,
   restore: () => Promise<void>,
@@ -65,10 +79,10 @@ function captureCommandOutput(
     return { kind, unavailable: "response is not a JSON object" };
   }
   // Only these fixed diagnostic fields may cross into retained evidence, never config/auth/argv.
-  const fields = (input: unknown, keys: string[]) => {
+  const fields = (input: unknown, keys: string) => {
     const source = asOptionalRecord(input);
     return Object.fromEntries(
-      keys.map((key) => {
+      keys.split(" ").map((key) => {
         const field = source?.[key];
         return [
           key,
@@ -84,24 +98,24 @@ function captureCommandOutput(
   if (kind === "published-update") {
     return {
       kind,
-      ...fields(value, ["status", "mode", "reason", "durationMs"]),
-      before: fields(value.before, ["version", "buildId", "sha"]),
-      after: fields(value.after, ["version", "buildId", "sha"]),
+      ...fields(value, "status mode reason durationMs"),
+      before: fields(value.before, "version buildId sha"),
+      after: fields(value.after, "version buildId sha"),
       recovery: fields(
         value.recovery,
-        "serviceRestartSafe reason version buildId packageRollbackVerified".split(" "),
+        "serviceRestartSafe reason version buildId packageRollbackVerified",
       ),
       steps: Array.isArray(value.steps)
         ? value.steps.slice(0, 40).map((entry: unknown) => {
             const step = asOptionalRecord(entry);
             return Object.assign(
-              fields(step, ["name", "exitCode", "durationMs", "signal", "killed", "termination"]),
-              step?.exitCode !== 0 ? fields(step, ["stdoutTail", "stderrTail"]) : {},
+              fields(step, "name exitCode durationMs signal killed termination"),
+              step?.exitCode !== 0 ? fields(step, "stdoutTail stderrTail") : {},
               {
                 failureFacts: Array.isArray(step?.failureFacts)
                   ? step.failureFacts
                       .slice(0, 8)
-                      .map((fact: unknown) => fields(fact, ["check", "code", "message"]))
+                      .map((fact: unknown) => fields(fact, "check code message"))
                   : undefined,
               },
             );
@@ -114,8 +128,8 @@ function captureCommandOutput(
   if (kind === "install") {
     return {
       kind,
-      ...fields(value, ["action", "ok", "result", "message", "error"]),
-      service: fields(service, ["label", "loaded", "loadedText", "notLoadedText"]),
+      ...fields(value, "action ok result message error"),
+      service: fields(service, "label loaded loadedText notLoadedText"),
       warnings: Array.isArray(value.warnings)
         ? value.warnings
             .slice(0, 5)
@@ -129,38 +143,24 @@ function captureCommandOutput(
   return {
     kind,
     service: {
-      ...fields(service, ["loaded", "inspectionReason"]),
-      loadState: fields(service?.loadState, ["status", "detail", "inspectionReason"]),
+      ...fields(service, "loaded inspectionReason"),
+      loadState: fields(service?.loadState, "status detail inspectionReason"),
       runtime: {
         ...fields(
           runtime,
-          "status state pid detail inspectionReason missingUnit lastRunTime lastRunResult".split(
-            " ",
-          ),
+          "status state pid detail inspectionReason missingUnit lastRunTime lastRunResult",
         ),
-        inspectionFailure: fields(runtime?.inspectionFailure, ["code", "detail", "timeoutMs"]),
+        inspectionFailure: fields(runtime?.inspectionFailure, "code detail timeoutMs"),
       },
     },
     rpc: {
-      ...fields(rpc, ["ok", "kind", "url", "error", "gatewayReached"]),
-      server: fields(rpc?.server, ["version", "buildId"]),
+      ...fields(rpc, "ok kind url error gatewayReached"),
+      server: fields(rpc?.server, "version buildId"),
     },
-    gateway: fields(value.gateway, ["port", "version", "bindMode", "bindHost", "probeUrl"]),
-    port: fields(value.port, ["port", "status"]),
+    gateway: fields(value.gateway, "port version bindMode bindHost probeUrl"),
+    port: fields(value.port, "port status"),
   };
 }
-
-type CommandSettlement = {
-  startedAtMs: number;
-  observedAtMs?: number;
-  launcherReadyAtMs?: number;
-  commandSpawnedAtMs?: number;
-  commandPid?: number;
-  exitAtMs?: number;
-  closeAtMs?: number;
-  stdout: { lastDataAtMs?: number; closeAtMs?: number };
-  stderr: { lastDataAtMs?: number; closeAtMs?: number };
-};
 
 export type CommandRecord = {
   args: string[];
@@ -170,7 +170,6 @@ export type CommandRecord = {
   signal: string | null;
   joined: boolean;
   elapsedMs: number;
-  settlement?: CommandSettlement;
   failureOutput?: { stdout: string; stderr: string; captureTruncated: boolean };
   serviceOutput?: ReturnType<typeof captureCommandOutput>;
   publishedUpdate?: ReturnType<typeof captureCommandOutput>;
@@ -190,10 +189,6 @@ export async function run(
 ) {
   const { expectedStderr = [], observeService } = options;
   const started = performance.now();
-  const settlement: CommandSettlement | undefined =
-    options.commandBudget === "published-update"
-      ? { startedAtMs: Date.now(), stdout: {}, stderr: {} }
-      : undefined;
   let child: ChildProcess | undefined;
   const output = { stdout: "", stderr: "" };
   let truncated = false;
@@ -214,39 +209,8 @@ export async function run(
       signal,
       onReady(launched) {
         child = launched;
-        if (settlement) {
-          settlement.observedAtMs = Date.now();
-          launched.on("message", (message: unknown) => {
-            const control = asOptionalRecord(message);
-            if (typeof control?.job !== "string") {
-              return;
-            }
-            if (control.type === "ready") {
-              settlement.launcherReadyAtMs ??= Date.now();
-            } else if (
-              control.type === "spawned" &&
-              typeof control.pid === "number" &&
-              Number.isSafeInteger(control.pid) &&
-              control.pid > 0
-            ) {
-              settlement.commandSpawnedAtMs ??= Date.now();
-              settlement.commandPid ??= control.pid;
-            }
-          });
-          launched.once("close", () => {
-            settlement.closeAtMs = Date.now();
-          });
-          for (const stream of ["stdout", "stderr"] as const) {
-            launched[stream]?.once("close", () => {
-              settlement[stream].closeAtMs = Date.now();
-            });
-          }
-        }
         for (const stream of ["stdout", "stderr"] as const) {
           launched[stream]?.on("data", (chunk: Buffer) => {
-            if (settlement) {
-              settlement[stream].lastDataAtMs = Date.now();
-            }
             output[stream] += chunk.toString();
             if (output[stream].length > 262144) {
               truncated = true;
@@ -255,9 +219,6 @@ export async function run(
           });
         }
         launched.once("exit", (exitCode, receivedSignal) => {
-          if (settlement) {
-            settlement.exitAtMs = Date.now();
-          }
           code = exitCode;
           exitSignal = receivedSignal;
           beforeCleanup = inspectManagedProcessGroup(launched, { errorPolicy: "indeterminate" });
@@ -311,7 +272,6 @@ export async function run(
     beforeCleanup,
     joined: afterCleanup === "dead" && !hasUnjoinedWork(failure),
     elapsedMs: performance.now() - started,
-    ...(settlement ? { settlement } : {}),
     ...(failureOutput ? { failureOutput } : {}),
     ...(observeService
       ? { serviceOutput: captureCommandOutput(observeService, stdout, truncated, diagnostic) }

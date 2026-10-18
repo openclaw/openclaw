@@ -9,6 +9,7 @@ import { normalizeWindowsTaskIdentity } from "./constants.js";
 import {
   assertFields,
   run,
+  settleCleanup,
   withInstalledRestoration,
   type CommandRecord,
 } from "./schtasks.installed-command.test-support.js";
@@ -140,43 +141,34 @@ async function withInstalledStartupEntries(
       await lifetime.verifyCleanup(async () => {
         // A live alias fixture must restore and join its Gateway before removing its definition.
         await settleBeforeRemoval?.();
-        let validationFailure: unknown;
-        try {
-          for (const snapshot of snapshots) {
-            assert.equal(probeScheduledTaskExists(snapshot.task.taskName), true);
-            assert.equal(await readTaskXml(snapshot.task.taskName), snapshot.xml);
-            assert.deepEqual(await fs.readFile(snapshot.task.configPath), snapshot.config);
-          }
-          assert.deepEqual(
-            await Promise.all(sourcePaths.map((pathname) => hashFile(pathname))),
-            sourceHashes,
-          );
-          for (const [index, pathname] of startupPaths.entries()) {
-            assert.deepEqual(await fs.readFile(pathname), startupBytes[index]);
-          }
-          if (entries === "alias-only") {
-            for (const pathname of canonicalPaths) {
+        await settleCleanup(
+          [
+            async () => {
+              for (const snapshot of snapshots) {
+                assert.equal(probeScheduledTaskExists(snapshot.task.taskName), true);
+                assert.equal(await readTaskXml(snapshot.task.taskName), snapshot.xml);
+                assert.deepEqual(await fs.readFile(snapshot.task.configPath), snapshot.config);
+              }
+              assert.deepEqual(
+                await Promise.all(sourcePaths.map((pathname) => hashFile(pathname))),
+                sourceHashes,
+              );
+              for (const [index, pathname] of startupPaths.entries()) {
+                assert.deepEqual(await fs.readFile(pathname), startupBytes[index]);
+              }
+              if (entries === "alias-only") {
+                for (const pathname of canonicalPaths) {
+                  await assert.rejects(fs.lstat(pathname), { code: "ENOENT" });
+                }
+              }
+            },
+            ...createdPaths.map((pathname) => async () => {
+              await fs.rm(pathname);
               await assert.rejects(fs.lstat(pathname), { code: "ENOENT" });
-            }
-          }
-        } catch (error) {
-          validationFailure = error;
-        }
-        const results = await Promise.allSettled(
-          createdPaths.map(async (pathname) => {
-            await fs.rm(pathname);
-            await assert.rejects(fs.lstat(pathname), { code: "ENOENT" });
-          }),
+            }),
+          ],
+          "Startup sibling cleanup failed",
         );
-        const errors = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (validationFailure) {
-          errors.unshift(validationFailure);
-        }
-        if (errors.length) {
-          throw new AggregateError(errors, "Startup sibling cleanup failed");
-        }
       });
     },
     "Installed Startup diagnostics failed",
@@ -202,14 +194,13 @@ export async function inspectInstalledStartupSiblings(
   },
 ) {
   const { selected, launcher, expectedStatus, doctor, deepStatus } = params;
+  const isLauncher = (name: string) =>
+    normalizeWindowsTaskIdentity(name) === normalizeWindowsTaskIdentity(launcher.taskName);
   return withInstalledStartupEntries(params, "canonical", async (startupPaths) => {
     const report = await doctor(selected);
     assert.equal(report.checksRun, 1);
     const findings = report.findings.filter(
-      (finding) =>
-        finding.target &&
-        normalizeWindowsTaskIdentity(finding.target) ===
-          normalizeWindowsTaskIdentity(launcher.taskName),
+      (finding) => finding.target && isLauncher(finding.target),
     );
     assert.equal(findings.length, 2);
     for (const pathname of startupPaths) {
@@ -222,11 +213,7 @@ export async function inspectInstalledStartupSiblings(
     assertFields(status, { service: expectedStatus.service, gateway: expectedStatus.gateway });
     assert.deepEqual(status.rpc.server, expectedStatus.rpc.server);
     const { extraServices } = startupStatusExtrasSchema.parse(value);
-    const siblings = extraServices.filter(
-      (service) =>
-        normalizeWindowsTaskIdentity(service.label) ===
-        normalizeWindowsTaskIdentity(launcher.taskName),
-    );
+    const siblings = extraServices.filter((service) => isLauncher(service.label));
     assert.equal(siblings.length, 2);
     for (const pathname of startupPaths) {
       const found = siblings.filter((service) => service.windowsStartupEntry === pathname);
@@ -248,7 +235,7 @@ export async function inspectInstalledSelectedStartupFallback(
   const { execSchtasks } = await import("./schtasks-exec.js");
   const { probeScheduledTaskState } = await import("./schtasks-state-probe.js");
   const { readScheduledTaskRuntime } = await import("./schtasks-runtime.js");
-  const { readTaskXml, readRelatedProcessDiagnostics } =
+  const { captureTaskDefinition, readRelatedProcessDiagnostics } =
     await import("./schtasks.integration-observation.test-support.js");
   const assertStopped = async () => {
     const runtime = await readScheduledTaskRuntime(selected.env, { requireLoaded: true });
@@ -262,10 +249,10 @@ export async function inspectInstalledSelectedStartupFallback(
     { ...params, launcher: selected },
     "canonical-and-alias",
     async (startupPaths) => {
-      const originalXml = await readTaskXml(selected.taskName);
-      assert.ok(originalXml);
-      const restorePath = path.join(selected.rootDir, "startup-restore-task.xml");
-      await fs.writeFile(restorePath, `\uFEFF${originalXml}`, "utf16le");
+      const saved = await captureTaskDefinition(
+        selected.taskName,
+        path.join(selected.rootDir, "startup-restore-task.xml"),
+      );
       return withInstalledRestoration(
         async () => {
           assert.equal((await execSchtasks(["/Delete", "/F", "/TN", selected.taskName])).code, 0);
@@ -328,12 +315,7 @@ export async function inspectInstalledSelectedStartupFallback(
         },
         async () => {
           await lifetime.verifyCleanup(async () => {
-            assert.equal(
-              (await execSchtasks(["/Create", "/F", "/TN", selected.taskName, "/XML", restorePath]))
-                .code,
-              0,
-            );
-            assert.equal(await readTaskXml(selected.taskName), originalXml);
+            await saved.restore();
             assert.equal(probeScheduledTaskState(selected.taskName).status, "found");
             await assertStopped();
           });
@@ -361,39 +343,25 @@ export async function inspectInstalledStartupAliasBuildRefusal(params: {
   waitForLoopbackPortRelease: (port: number) => Promise<void>;
   recordProgress: (phase: string, error?: Error) => Promise<void>;
 }) {
-  const {
-    toolingEntry,
-    selected,
-    peer,
-    expectedSelected,
-    expectedPeer,
-    readStatus,
-    commands,
-    signal,
-    lifetime,
-    admissions,
-    admissionPath,
-    waitForLoopbackPortRelease,
-    recordProgress,
-  } = params;
+  const { selected, peer, expectedPeer, readStatus } = params;
   const { execSchtasks } = await import("./schtasks-exec.js");
   const { readStartupEntryCommand, resolveStartupEntryPaths } =
     await import("./schtasks-layout.js");
   const { resolveFallbackRuntime } = await import("./schtasks-runtime.js");
   const { probeScheduledTaskState } = await import("./schtasks-state-probe.js");
-  const { readTaskXml, readRelatedProcessDiagnostics } =
+  const { captureTaskDefinition, readRelatedProcessDiagnostics } =
     await import("./schtasks.integration-observation.test-support.js");
   const { mergeGatewayServiceEnv } = await import("./service-env-merge.js");
-  const originalXml = await readTaskXml(peer.taskName);
-  assert.ok(originalXml);
+  const saved = await captureTaskDefinition(
+    peer.taskName,
+    path.join(peer.rootDir, "startup-alias-restore-task.xml"),
+  );
   assert.equal(probeScheduledTaskState(peer.taskName).status, "found");
-  const restorePath = path.join(peer.rootDir, "startup-alias-restore-task.xml");
-  await fs.writeFile(restorePath, `\uFEFF${originalXml}`, "utf16le");
   const canonicalPaths = resolveStartupEntryPaths(peer.env);
   const peerRpcSchema = installedStatusSchema.pick({ rpc: true, gateway: true });
   let deletionAttempted = false;
   return withInstalledStartupEntries(
-    { selected, launcher: peer, lifetime, admissions, admissionPath },
+    { ...params, launcher: peer },
     "alias-only",
     async (startupPaths) => {
       const aliasPath = startupPaths[0];
@@ -408,7 +376,7 @@ export async function inspectInstalledStartupAliasBuildRefusal(params: {
       const verifyContinuity = async () => {
         await assertAliasOnly();
         const selectedStatus = installedStatusSchema.parse(await readStatus(selected));
-        assert.deepEqual(selectedStatus, expectedSelected);
+        assert.deepEqual(selectedStatus, params.expectedSelected);
         // A missing Task and noncanonical alias cannot supply the ordinary service status PID.
         const peerStatus = peerRpcSchema.parse(await readStatus(peer));
         assert.deepEqual(peerStatus, peerRpcSchema.parse(expectedPeer));
@@ -427,14 +395,14 @@ export async function inspectInstalledStartupAliasBuildRefusal(params: {
       assert.equal((await execSchtasks(["/Delete", "/F", "/TN", peer.taskName])).code, 0);
       await verifyContinuity();
       const refusal = await assertInstalledSiblingBuildRefusal({
-        toolingEntry,
+        toolingEntry: params.toolingEntry,
         startupEntry: aliasPath,
         selected,
         peer,
-        commands,
-        signal,
+        commands: params.commands,
+        signal: params.signal,
         verifyContinuity,
-        recordProgress,
+        recordProgress: params.recordProgress,
       });
       return {
         ...refusal,
@@ -450,50 +418,34 @@ export async function inspectInstalledStartupAliasBuildRefusal(params: {
       if (!deletionAttempted) {
         return;
       }
-      const cleanupErrors: unknown[] = [];
-      try {
-        assert.equal(
-          (await execSchtasks(["/Create", "/F", "/TN", peer.taskName, "/XML", restorePath])).code,
-          0,
-        );
-        assert.equal(await readTaskXml(peer.taskName), originalXml);
-        assert.equal(probeScheduledTaskState(peer.taskName).status, "found");
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-      try {
-        // Run the guarded owner in the installed profile, outside Vitest's synthetic account.
-        await run(
-          [peer.entry, "--profile", peer.profile, "gateway", "stop", "--force", "--json"],
-          peer.env,
-          peer.rootDir,
-          commands,
-        );
-        await recordProgress("startup-alias-cleanup:command-result");
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-      try {
-        await waitForLoopbackPortRelease(peer.gatewayPort);
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-      try {
-        const remaining = readRelatedProcessDiagnostics([
-          packageRoot(peer.installRoot),
-          peer.profile,
-          peer.scriptPath,
-        ]);
-        assertFields(remaining, { ok: true, truncated: false, processes: [] });
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-      if (cleanupErrors.length) {
-        throw new AggregateError(
-          cleanupErrors,
-          "Startup alias peer restoration or settlement failed",
-        );
-      }
+      await settleCleanup(
+        [
+          async () => {
+            await saved.restore();
+            assert.equal(probeScheduledTaskState(peer.taskName).status, "found");
+          },
+          async () => {
+            // Run the guarded owner in the installed profile, outside Vitest's synthetic account.
+            await run(
+              [peer.entry, "--profile", peer.profile, "gateway", "stop", "--force", "--json"],
+              peer.env,
+              peer.rootDir,
+              params.commands,
+            );
+            await params.recordProgress("startup-alias-cleanup:command-result");
+          },
+          () => params.waitForLoopbackPortRelease(peer.gatewayPort),
+          async () => {
+            const remaining = readRelatedProcessDiagnostics([
+              packageRoot(peer.installRoot),
+              peer.profile,
+              peer.scriptPath,
+            ]);
+            assertFields(remaining, { ok: true, truncated: false, processes: [] });
+          },
+        ],
+        "Startup alias peer restoration or settlement failed",
+      );
     },
   );
 }

@@ -6,15 +6,7 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import type { PortUsage } from "../infra/ports-types.js";
 import "./test-helpers/schtasks-base-mocks.js";
-import {
-  inspectPortUsageMock,
-  killProcessTreeMock,
-  resetSchtasksBaseMocks,
-  schtasksCalls,
-  schtasksResponses,
-  withWindowsEnv,
-  writeGatewayScript,
-} from "./test-helpers/schtasks-fixtures.js";
+import * as fixture from "./test-helpers/schtasks-fixtures.js";
 const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
   vi.fn<(port: number) => number[]>(() => []),
 );
@@ -43,8 +35,7 @@ vi.mock("node:child_process", async () => {
 });
 
 vi.mock("../infra/gateway-processes.js", () => ({
-  findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
-    findVerifiedGatewayListenerPidsOnPortSync(port),
+  findVerifiedGatewayListenerPidsOnPortSync,
 }));
 vi.mock("../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
 vi.mock("../gateway/call.js", () => ({ callGatewayCli }));
@@ -95,7 +86,7 @@ export const GATEWAY_OWNER: GatewayOwnerLeaseIdentity = {
 
 export function pushSuccessfulSchtasksResponses(count: number) {
   for (let i = 0; i < count; i += 1) {
-    schtasksResponses.push({ ...SUCCESS_RESPONSE });
+    fixture.schtasksResponses.push({ ...SUCCESS_RESPONSE });
   }
 }
 
@@ -105,7 +96,7 @@ export function freePortUsage() {
 
 export function busyPortUsage(pid: number, options: { commandLine?: string } = {}) {
   return {
-    port: GATEWAY_PORT,
+    ...freePortUsage(),
     status: "busy" as const,
     listeners: [
       {
@@ -115,19 +106,18 @@ export function busyPortUsage(pid: number, options: { commandLine?: string } = {
         ...(options.commandLine ? { commandLine: options.commandLine } : {}),
       },
     ],
-    hints: [],
   };
 }
 
 export function expectGatewayTermination(pid: number) {
   if (process.platform === "win32") {
-    expect(killProcessTreeMock).not.toHaveBeenCalled();
-    return;
+    expect(fixture.killProcessTreeMock).not.toHaveBeenCalled();
+  } else {
+    expect(fixture.killProcessTreeMock).toHaveBeenCalledWith(pid, { graceMs: 300 });
   }
-  expect(killProcessTreeMock).toHaveBeenCalledWith(pid, { graceMs: 300 });
 }
 export function scheduledTaskProbeResult(
-  state = schtasksCalls.some(([action]) => action === "/Run") ? 4 : 3,
+  state = fixture.schtasksCalls.some(([action]) => action === "/Run") ? 4 : 3,
 ) {
   return spawnSyncResult(
     JSON.stringify({
@@ -152,7 +142,7 @@ export function mockWindowsTaskkillSuccess() {
     if (/tasklist\.exe$/i.test(exeText)) {
       const pid = Number(args?.find((arg) => arg.startsWith("PID eq "))?.slice(7));
       const gone =
-        taskkillPids().includes(pid) || schtasksCalls.some(([action]) => action === "/End");
+        taskkillPids().includes(pid) || fixture.schtasksCalls.some(([action]) => action === "/End");
       const stdout = gone ? "No tasks" : `"node.exe","${pid}","Console","1","1 K"`;
       return spawnSyncResult(stdout);
     }
@@ -191,11 +181,11 @@ export function setTaskStateProbeResult(state: number | null | (() => number | n
 }
 
 export function mockLingeringGatewayListener(pid: number, after: PortUsage = freePortUsage()) {
-  inspectPortUsageMock.mockImplementation(async () => {
+  fixture.inspectPortUsageMock.mockImplementation(async () => {
     const terminated =
       process.platform === "win32"
         ? taskkillPids().includes(pid)
-        : killProcessTreeMock.mock.calls.some(([candidate]) => candidate === pid);
+        : fixture.killProcessTreeMock.mock.calls.some(([candidate]) => candidate === pid);
     return terminated ? after : busyPortUsage(pid, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE });
   });
 }
@@ -204,20 +194,19 @@ export async function withPreparedGatewayTask(
   run: (context: { env: Record<string, string>; stdout: PassThrough }) => Promise<void>,
   launcherSuffix = "",
 ) {
-  await withWindowsEnv("openclaw-win-stop-", async ({ env }) => {
-    await writeGatewayScript(env, GATEWAY_PORT);
+  await fixture.withWindowsEnv("openclaw-win-stop-", async ({ env }) => {
+    await fixture.writeGatewayScript(env, GATEWAY_PORT);
     if (launcherSuffix) {
       const scriptPath = resolveTaskScriptPath(env);
       const script = await fs.readFile(scriptPath, "utf8");
       await fs.writeFile(scriptPath, `${script.trimEnd()} ${launcherSuffix}\r\n`);
     }
-    const stdout = new PassThrough();
-    await run({ env, stdout });
+    await run({ env, stdout: new PassThrough() });
   });
 }
 
 beforeEach(() => {
-  resetSchtasksBaseMocks();
+  fixture.resetSchtasksBaseMocks();
   callGatewayCli.mockReset().mockRejectedValue(new Error("unsupported method"));
   readGatewayOwnerLease.mockReset();
   readWindowsProcessStartTimeSync.mockReset().mockReturnValue(GATEWAY_OWNER.startedAt);
@@ -231,7 +220,7 @@ beforeEach(() => {
         ? scheduledTaskProbeResult()
         : spawnSyncResult("-2147024891", 1),
     );
-  inspectPortUsageMock.mockResolvedValue(freePortUsage());
+  fixture.inspectPortUsageMock.mockResolvedValue(freePortUsage());
 });
 
 afterEach(() => {

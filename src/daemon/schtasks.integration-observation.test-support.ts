@@ -1,10 +1,12 @@
-// Native task/process inspection and sanitized proof rendering.
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect } from "vitest";
+import { z } from "zod";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
@@ -25,14 +27,16 @@ export const TASK_LOGON_S4U = 2;
 const TASK_LOGON_INTERACTIVE_TOKEN = 3;
 export const TASK_RUNLEVEL_LEAST_PRIVILEGE = 0;
 
-export type ScheduledTaskPrincipal = {
-  enabled: boolean;
-  lastRunTime: string;
-  lastTaskResult: number;
-  logonType: number;
-  runLevel: number;
-  taskState: number;
-};
+const integer = z.number().refine(Number.isInteger);
+const principalSchema = z.object({
+  enabled: z.boolean(),
+  lastRunTime: z.string(),
+  lastTaskResult: integer,
+  logonType: integer,
+  runLevel: integer,
+  taskState: integer,
+});
+export type ScheduledTaskPrincipal = z.infer<typeof principalSchema>;
 
 export type WindowsProcessDiagnostic = {
   CommandLine?: string | null;
@@ -75,6 +79,22 @@ export async function readTaskXml(taskName: string): Promise<string | null> {
   return result.code === 0
     ? result.stdout.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "")
     : null;
+}
+
+export async function captureTaskDefinition(taskName: string, restorePath: string) {
+  const xml = await readTaskXml(taskName);
+  assert.ok(xml);
+  await fs.writeFile(restorePath, `\uFEFF${xml}`, "utf16le");
+  return {
+    xml,
+    async restore() {
+      assert.equal(
+        (await execSchtasks(["/Create", "/F", "/TN", taskName, "/XML", restorePath])).code,
+        0,
+      );
+      assert.equal(await readTaskXml(taskName), xml);
+    },
+  };
 }
 
 export async function readTaskDefinitionSnapshot(
@@ -138,29 +158,11 @@ export function readTaskPrincipal(taskName: string): ScheduledTaskPrincipal {
       }`,
     );
   }
-  const parsed = JSON.parse(result.stdout.trim()) as Partial<ScheduledTaskPrincipal>;
-  if (
-    typeof parsed.enabled !== "boolean" ||
-    typeof parsed.logonType !== "number" ||
-    !Number.isInteger(parsed.logonType) ||
-    typeof parsed.runLevel !== "number" ||
-    !Number.isInteger(parsed.runLevel) ||
-    typeof parsed.taskState !== "number" ||
-    !Number.isInteger(parsed.taskState) ||
-    typeof parsed.lastTaskResult !== "number" ||
-    !Number.isInteger(parsed.lastTaskResult) ||
-    typeof parsed.lastRunTime !== "string"
-  ) {
+  const parsed = principalSchema.safeParse(JSON.parse(result.stdout.trim()));
+  if (!parsed.success) {
     throw new Error(`Scheduled Task principal returned invalid data for ${taskName}`);
   }
-  return {
-    enabled: parsed.enabled,
-    lastRunTime: parsed.lastRunTime,
-    lastTaskResult: parsed.lastTaskResult,
-    logonType: parsed.logonType,
-    runLevel: parsed.runLevel,
-    taskState: parsed.taskState,
-  };
+  return parsed.data;
 }
 
 export function readRelatedProcessDiagnostics(needles: string[]): {
@@ -337,16 +339,17 @@ export function assertUnattendedLeastPrivilegeTask(params: {
   expect(params.taskXml).toMatch(/<BootTrigger(?:\s[^>]*)?\/?>/u);
   expect(params.taskXml).toMatch(/<LogonTrigger(?:\s[^>]*)?\/?>/u);
   const normalizePath = (value: string) => path.win32.normalize(value).toLowerCase();
-  const command = decodeXml(params.taskXml.match(/<Command>([^<]*)<\/Command>/u)?.[1] ?? "");
-  const args = decodeXml(params.taskXml.match(/<Arguments>([^<]*)<\/Arguments>/u)?.[1] ?? "");
-  const workingDirectory = decodeXml(
-    params.taskXml.match(/<WorkingDirectory>([^<]*)<\/WorkingDirectory>/u)?.[1] ?? "",
-  );
-  expect(normalizePath(command)).toBe(normalizePath(getWindowsCmdExePath()));
-  expect(args).toBe(`/d /s /c ""${params.scriptPath}""`);
-  expect(normalizePath(workingDirectory)).toBe(
-    normalizePath(path.win32.dirname(params.scriptPath)),
-  );
+  const field = (tag: string) =>
+    decodeXml(params.taskXml.match(new RegExp(`<${tag}>([^<]*)</${tag}>`, "u"))?.[1] ?? "");
+  expect({
+    command: normalizePath(field("Command")),
+    args: field("Arguments"),
+    cwd: normalizePath(field("WorkingDirectory")),
+  }).toEqual({
+    command: normalizePath(getWindowsCmdExePath()),
+    args: `/d /s /c ""${params.scriptPath}""`,
+    cwd: normalizePath(path.win32.dirname(params.scriptPath)),
+  });
   assertLeastPrivilegeTask(params);
 }
 

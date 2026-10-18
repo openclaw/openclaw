@@ -11,11 +11,7 @@ import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
-import {
-  buildTaskScript,
-  encodeWindowsLauncherScript,
-  readScheduledTaskCommand,
-} from "./schtasks-layout.js";
+import * as layout from "./schtasks-layout.js";
 import {
   resolveScheduledTaskOwnedGatewayPids,
   terminateScheduledTaskGatewayListeners,
@@ -41,7 +37,8 @@ function observeChild(child: ChildProcess, children: LaunchedChild[], rejectErro
   return launched;
 }
 
-const encodeCmd = (content: string) => encodeWindowsLauncherScript({ format: "cmd", content });
+const encodeCmd = (content: string) =>
+  layout.encodeWindowsLauncherScript({ format: "cmd", content });
 
 const launchCapture = vi.hoisted(() => ({
   observe: undefined as ((child: ChildProcess, options?: SpawnOptions) => void) | undefined,
@@ -132,15 +129,17 @@ server.listen(port, "127.0.0.1", () => {
         message,
       ];
       const content =
-        buildTaskScript({
-          programArguments,
-          workingDirectory: dir,
-          environment: {
-            OPENCLAW_TEST_LAUNCHER_VALUE: "retained",
-            OPENCLAW_TEST_LOG_PATH: "gateway.log output.log",
-            NODE_OPTIONS: "",
-          },
-        }).trimEnd() + ` >> ${redirectTarget} 2>&1\r\n`;
+        layout
+          .buildTaskScript({
+            programArguments,
+            workingDirectory: dir,
+            environment: {
+              OPENCLAW_TEST_LAUNCHER_VALUE: "retained",
+              OPENCLAW_TEST_LOG_PATH: "gateway.log output.log",
+              NODE_OPTIONS: "",
+            },
+          })
+          .trimEnd() + ` >> ${redirectTarget} 2>&1\r\n`;
       const originalBytes = encodeCmd(content);
       await fs.writeFile(scriptPath, originalBytes);
       const env = { OPENCLAW_TASK_SCRIPT: scriptPath };
@@ -182,11 +181,13 @@ server.listen(port, "127.0.0.1", () => {
         ),
       ).toEqual(observed.argv);
       if (!normalized) {
-        await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
-          "Effective Scheduled Task service command could not be inspected.",
-        );
+        await expect(
+          layout.readScheduledTaskCommand(env, { requireEffective: true }),
+        ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
       }
-      const installed = await readScheduledTaskCommand(env, { requireEffective: normalized });
+      const installed = await layout.readScheduledTaskCommand(env, {
+        requireEffective: normalized,
+      });
       expect(installed?.workingDirectory).toBe(dir);
       expect(installed?.environment?.OPENCLAW_TEST_LAUNCHER_VALUE).toBe("retained");
       if (normalized) {
@@ -265,11 +266,12 @@ server.listen(port, "127.0.0.1", () => {
   );
 });
 
-describe("Windows Startup fallback environment", () => {
-  it.for([
-    { name: "different casing", key: "openclaw_test_fallback_case" },
-    { name: "matching casing", key: "OPENCLAW_TEST_FALLBACK_CASE" },
-  ])("preserves the saved override with $name", async ({ key }, context) => {
+it.for([
+  { name: "different casing", key: "openclaw_test_fallback_case" },
+  { name: "matching casing", key: "OPENCLAW_TEST_FALLBACK_CASE" },
+])(
+  "Windows Startup fallback environment preserves the saved override with $name",
+  async ({ key }, context) => {
     if (process.platform !== "win32" && key !== key.toUpperCase()) {
       context.skip("Case-insensitive environment names require Windows");
     }
@@ -308,9 +310,9 @@ fs.renameSync(file + ".tmp", file);
     const scriptPath = path.join(dir, "gateway.cmd");
     await fs.writeFile(
       scriptPath,
-      encodeWindowsLauncherScript({
+      layout.encodeWindowsLauncherScript({
         format: "cmd",
-        content: buildTaskScript({
+        content: layout.buildTaskScript({
           programArguments: [process.execPath, childPath, reportPath],
           workingDirectory: dir,
           environment: {
@@ -336,5 +338,5 @@ fs.renameSync(file + ".tmp", file);
       expect(observed).toMatchObject({ pid: child.pid, control: "control" });
       expect(observed.value, "PR122658_ENV_OVERRIDE_LOST").toBe("configured");
     });
-  });
-});
+  },
+);

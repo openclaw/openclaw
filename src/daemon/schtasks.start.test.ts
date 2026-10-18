@@ -110,6 +110,10 @@ async function packageEntry(root: string, name = "openclaw") {
   return entry;
 }
 
+const nodeCommand = (entry: string, args = "gateway") => `"C:\\Node\\node.exe" "${entry}" ${args}`;
+const writeLauncher = (file: string, command: string) =>
+  fs.writeFile(file, `@echo off\r\n${command}\r\n`);
+
 function startTask(
   env: Record<string, string>,
   options: Omit<Parameters<typeof startScheduledTask>[0], "env" | "stdout"> = {},
@@ -123,10 +127,7 @@ async function fixture(kind = "gateway") {
   native.scriptPath = "C:\\fixture\\gateway.cmd";
   const file = path.join(root, "gateway.cmd");
   native.files.set(native.scriptPath, file);
-  await fs.writeFile(
-    file,
-    `@echo off\r\n"C:\\Node\\node.exe" "${entry}" ${kind === "node" ? "node run" : "gateway"}\r\n`,
-  );
+  await writeLauncher(file, nodeCommand(entry, kind === "node" ? "node run" : "gateway"));
   native.taskName = kind === "node" ? "OpenClaw Node" : "OpenClaw Gateway";
   const env: Record<string, string> = {
     USERPROFILE: root,
@@ -144,7 +145,7 @@ it.each(["owned", "foreign", "missing launcher"] as const)(
   async (scenario) => {
     const { env, root, file } = await fixture();
     if (scenario === "foreign") {
-      await fs.writeFile(file, '@echo off\r\n"C:\\Windows\\notepad.exe" gateway\r\n');
+      await writeLauncher(file, '"C:\\Windows\\notepad.exe" gateway');
     } else if (scenario === "missing launcher") {
       await fs.unlink(file);
     }
@@ -235,13 +236,13 @@ it.each(["foreign entrypoint filename", "wrong profile", "multiple commands"])(
     const { env, file, root, entry } = await fixture();
     if (kind === "foreign entrypoint filename") {
       const foreignEntry = await packageEntry(path.join(root, "foreign"), "unrelated");
-      await fs.writeFile(file, `@echo off\r\n"C:\\Node\\node.exe" "${foreignEntry}" gateway\r\n`);
+      await writeLauncher(file, nodeCommand(foreignEntry));
     } else {
       const program =
         kind === "wrong profile"
-          ? `"C:\\Node\\node.exe" "${entry}" --profile other gateway`
-          : `"C:\\Node\\node.exe" "${entry}" gateway\r\necho additional-command`;
-      await fs.writeFile(file, `@echo off\r\n${program}\r\n`);
+          ? nodeCommand(entry, "--profile other gateway")
+          : `${nodeCommand(entry)}\r\necho additional-command`;
+      await writeLauncher(file, program);
     }
     await expect(startTask(env)).rejects.toThrow();
     expect(native.calls.filter((args) => args[0] === "/Change" || args[0] === "/Run")).toEqual([]);
@@ -257,10 +258,7 @@ it.each(["definition", "entrypoint", "authority"])(
     native.afterEnable = async () => {
       if (kind === "definition") {
         const replacementEntry = await packageEntry(path.join(root, "replacement"));
-        await fs.writeFile(
-          file,
-          `@echo off\r\n"C:\\Node\\node.exe" "${replacementEntry}" gateway\r\n`,
-        );
+        await writeLauncher(file, nodeCommand(replacementEntry));
       } else if (kind === "entrypoint") {
         await fs.writeFile(entry, "export const changed = true;\n");
       } else {
@@ -335,7 +333,7 @@ it.each([
     kind === "ambient only"
       ? ""
       : `set "OPENCLAW_WRAPPER=${kind === "mismatched" ? "C:\\fixture\\different-wrapper.exe" : wrapper}"\r\n`;
-  await fs.writeFile(file, `@echo off\r\n${saved}"${wrapper}" gateway\r\n`);
+  await writeLauncher(file, `${saved}"${wrapper}" gateway`);
   if (kind === "changed after enable") {
     native.afterEnable = () => fs.writeFile(executable, "replacement executable\n");
   }
