@@ -33,11 +33,7 @@ const referencesTo = (...objects: object[]) => objects.map((object) => new WeakR
 
 async function assertCollected(references: WeakRef<object>[]) {
   await collectForRetentionCheck(`sqlite-${scenario}`);
-  assert.equal(
-    references.filter((reference) => reference.deref()).length,
-    0,
-    `${scenario} retained completed caller state`,
-  );
+  assert.equal(references.filter((reference) => reference.deref()).length, 0);
 }
 
 function captureStagingCaller() {
@@ -53,10 +49,7 @@ async function checkStaging() {
   // Per-request custody has its own lifetime; this caller only creates the reusable owner.
   const directory = await allocateWorkerOwnedSqliteSnapshotDirectory(root!, false);
   try {
-    assert.ok(
-      existsSync(directory.directory),
-      "The real native resource must allocate a directory",
-    );
+    assert.ok(existsSync(directory.directory));
     await assertCollected(references);
     assert.equal(captureSqliteSnapshotStagingOwner(), owner);
     const second = await allocateWorkerOwnedSqliteSnapshotDirectory(root!, false);
@@ -83,7 +76,7 @@ async function completeStateOpening() {
       (scope) => scope.execute(readCommand),
       {
         assertCurrent() {
-          assert.equal(callerContext.getStore(), caller, "Admission must retain current authority");
+          assert.equal(callerContext.getStore(), caller);
           assert.equal(authority.prompt.byteLength, 1024 * 1024);
         },
       },
@@ -183,10 +176,8 @@ async function checkAgentOpening() {
 }
 
 async function checkHistoryClose() {
-  const { persistSessionTranscriptTurn, replaceSessionEntrySync } =
-    await import("../config/sessions/session-accessor.js");
-  const { readSessionTranscriptHistoryEventPage } =
-    await import("../config/sessions/session-accessor.sqlite-history-events.js");
+  const sessions = await import("../config/sessions/session-accessor.js");
+  const history = await import("../config/sessions/session-accessor.sqlite-history-events.js");
   const { openOpenClawAgentDatabase } = await import("../state/openclaw-agent-db.js");
   const { OpenClawAgentDatabaseReadOnlyScope } =
     await import("../state/openclaw-agent-db-readonly-scope.js");
@@ -200,8 +191,8 @@ async function checkHistoryClose() {
   };
   const reader = new OpenClawAgentDatabaseReadOnlyScope();
   try {
-    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    await persistSessionTranscriptTurn(scope, {
+    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await sessions.persistSessionTranscriptTurn(scope, {
       messages: [
         { eventId: "message", parentId: null, message: { role: "user", content: "hello" } },
       ],
@@ -211,7 +202,7 @@ async function checkHistoryClose() {
     await closeOpenClawAgentDatabasesAsync(root);
     const reference = reader.run(target, () => {
       const result = withOpenClawAgentDatabaseReadOnly(({ db }) => {
-        const page = readSessionTranscriptHistoryEventPage(scope, {
+        const page = history.readSessionTranscriptHistoryEventPage(scope, {
           offset: 0,
           maxMessages: 1,
           readOnly: true,

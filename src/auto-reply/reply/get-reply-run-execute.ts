@@ -269,7 +269,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     imageSourceIndexes: promptMediaSourceIndexes,
   });
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
-  // prompt-prelude substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for
+  // Prompt preparation substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for
   // bodyless turns; storage stays bare (the LLM boundary re-injects it), while
   // room-event lines that merely contain the marker keep their real text.
   const userTurnTranscriptText =

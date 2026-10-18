@@ -86,7 +86,6 @@ packages/model-catalog-core/package.json
 packages/model-catalog-core/src/canonical-model-key.ts
 packages/model-catalog-core/src/configured-model-refs.ts
 packages/model-catalog-core/src/index.ts
-packages/model-catalog-core/src/model-catalog-context-windows.ts
 packages/model-catalog-core/src/model-catalog-normalize.ts
 packages/model-catalog-core/src/model-catalog-pricing.ts
 packages/model-catalog-core/src/model-catalog-reasoning.ts
@@ -462,7 +461,6 @@ src/channels/plugins/meta-normalization.ts
 src/channels/plugins/module-loader.ts
 src/channels/plugins/optional-public-artifact.ts
 src/channels/plugins/package-state-probes.ts
-src/channels/plugins/persisted-auth-state.ts
 src/channels/plugins/registry-loaded.ts
 src/channels/plugins/setup-contract.ts
 src/channels/registry-lookup.ts
@@ -1681,7 +1679,6 @@ src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/context.ts
 src/process/spawn-broker/execa-client.ts
-src/process/spawn-broker/execa-message.ts
 src/process/spawn-broker/execa-protocol.ts
 src/process/spawn-broker/file-reads.ts
 src/process/spawn-broker/host.ts

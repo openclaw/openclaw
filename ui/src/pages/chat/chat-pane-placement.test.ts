@@ -552,19 +552,13 @@ describe("cloud placement stop confirmation authority", () => {
     "new-placement",
     "removed",
   ] as const)("uses the current owner state after confirmation (%s)", async (change) => {
-    const request = dialogs.mockRequest(async (_method: string) => ({ ok: true }));
-    const reconcileMutation = vi.fn<SessionCapability["reconcileMutation"]>(async () => ({
-      status: "refreshed",
-    }));
-    const client = createGatewayBrowserClientFixture({ request });
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture({ reconcileMutation }),
-    });
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.reclaim"],
+    const { pane, state, request, reconcileMutation } = createPlacementPane(
+      dialogs,
+      undefined,
       ["operator.write"],
+      ["sessions.reclaim"],
     );
+    const client = pane.context.gateway.snapshot.client;
     const session = activePlacementSession();
     state.sessionKey = session.key;
     state.currentSessionId = session.sessionId;

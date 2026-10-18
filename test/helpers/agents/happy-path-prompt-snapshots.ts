@@ -11,7 +11,6 @@ import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
 } from "../../../src/auto-reply/reply/inbound-meta.js";
-import { buildReplyPromptEnvelope } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { normalizeChatType } from "../../../src/channels/chat-type.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
@@ -30,6 +29,7 @@ import {
 import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
+import { preparePromptSnapshotReply } from "./prepared-reply-prompt.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO,
@@ -372,19 +372,15 @@ function textStats(value: string): { chars: number; roughTokens: number } {
   };
 }
 
-function createPrompt(ctx: TemplateContext, body: string): string {
+async function createPrompt(ctx: TemplateContext, body: string): Promise<string> {
   const inboundUserContext = buildInboundUserContextPrefix(ctx);
   const promptBody = [inboundUserContext, body].filter(Boolean).join("\n\n");
-  return buildReplyPromptEnvelope({
+  const prepared = await preparePromptSnapshotReply({
     ctx,
-    sessionCtx: ctx,
-    baseBody: promptBody,
-    hasUserBody: true,
-    inboundUserContext: "",
-    isBareSessionReset: false,
-    startupAction: "new",
-    prefixedBody: promptBody,
-  }).prefixedCommandBody;
+    body,
+    workspaceDir: WORKSPACE_DIR,
+  });
+  return prepared.buildPromptBodies({ prefixedBody: promptBody }).prefixedCommandBody;
 }
 
 function createExtraSystemPrompt(params: {
@@ -617,7 +613,7 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       ],
       trigger: "user",
       ctx: telegramDirectCtx,
-      prompt: createPrompt(
+      prompt: await createPrompt(
         telegramDirectCtx,
         telegramDirectCtx.BodyStripped ?? telegramDirectCtx.Body ?? "",
       ),
@@ -640,7 +636,7 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       ],
       trigger: "user",
       ctx: discordGroupCtx,
-      prompt: createPrompt(
+      prompt: await createPrompt(
         discordGroupCtx,
         discordGroupCtx.BodyStripped ?? discordGroupCtx.Body ?? "",
       ),
@@ -666,7 +662,10 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       ],
       trigger: "heartbeat",
       ctx: heartbeatCtx,
-      prompt: createPrompt(heartbeatCtx, heartbeatCtx.BodyStripped ?? heartbeatCtx.Body ?? ""),
+      prompt: await createPrompt(
+        heartbeatCtx,
+        heartbeatCtx.BodyStripped ?? heartbeatCtx.Body ?? "",
+      ),
       extraSystemPrompt: createExtraSystemPrompt({
         ctx: heartbeatCtx,
         chatContext: buildSourceConversationContext({
