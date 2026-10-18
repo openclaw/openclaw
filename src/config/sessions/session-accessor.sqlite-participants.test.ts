@@ -111,6 +111,14 @@ const participant = (
   lastPromptedAt = firstPromptedAt,
 ) => ({ identity, contributionCount, firstPromptedAt, lastPromptedAt });
 
+const participantView = (
+  identity: (id: string) => SessionParticipantIdentity,
+  ...ids: string[]
+) => ({
+  participants: ids.map((id) => ({ identity: identity(id) })),
+  participantCount: ids.length,
+});
+
 type ParticipantScope = Parameters<typeof recordSessionParticipant>[0];
 const listEntries = (scope: Parameters<typeof listSessionEntriesCore>[0]) =>
   listSessionEntriesCore({ ...scope, projection: "list" });
@@ -164,9 +172,9 @@ it.each(["local", "foreign"])(
   "publishes fresh participants after an untracked %s write during patch preparation",
   withState(async (state, writer: string) => {
     const scope = await seedSession(state, "changed");
+    const database = openOpenClawAgentDatabase(scope);
     recordParticipant(scope, remote("before"), 1);
     listEntries(scope);
-    const database = openOpenClawAgentDatabase(scope);
     let published: ReturnType<typeof readPreparedSessionEntryChange>;
     const unsubscribe = sessionChanges.subscribeProjection((change) => {
       if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
@@ -193,8 +201,7 @@ it.each(["local", "foreign"])(
       );
       const expected = {
         label: "committed",
-        participants: [{ identity: remote("after") }],
-        participantCount: 1,
+        ...participantView(remote, "after"),
       };
       expect(published?.entry).toMatchObject(expected);
       expect(loadSessionEntry(scope)).toMatchObject(expected);
@@ -208,10 +215,9 @@ it(
   "reuses participant facts across metadata patches",
   withState(async (state) => {
     const scope = await seedSession(state, "busy");
-    recordParticipant(scope, remote("existing"), 1);
-    const read = () => readEntry(scope);
-    read();
     const database = openOpenClawAgentDatabase(scope);
+    recordParticipant(scope, remote("existing"), 1);
+    readEntry(scope);
     using reads = watchSql(database, participantProjection);
     for (let index = 0; index < 100; index++) {
       await patchSessionEntryCore(scope, () => ({ label: `Update ${index}` }), {
@@ -222,10 +228,9 @@ it(
     expect(reads.counts.matches).toBe(0);
     recordParticipant(scope, remote("new"), 2);
     expect(reads.counts.matches).toBe(1);
-    expect(read()).toMatchObject({
+    expect(readEntry(scope)).toMatchObject({
       label: "Update 99",
-      participants: ["existing", "new"].map((id) => ({ identity: remote(id) })),
-      participantCount: 2,
+      ...participantView(remote, "existing", "new"),
     });
   }),
 );
@@ -269,10 +274,7 @@ it.each(["participant", "external-entry"] as const)(
     };
     const expected =
       kind === "participant"
-        ? {
-            participants: ["a", "b", "c"].map((id) => ({ identity: profile(id) })),
-            participantCount: 3,
-          }
+        ? participantView(profile, "a", "b", "c")
         : { label: "c", updatedAt: 30 };
     let observed: ReturnType<typeof read>;
     runOpenClawAgentWriteTransaction((database) => {
@@ -365,30 +367,42 @@ it.each([
   }),
 );
 
-it(
-  "rejects raw-transaction inserts without changing rows",
-  withState(async (state) => {
+it.each(["raw", "nested"] as const)(
+  "preserves committed rows after a %s transaction failure",
+  withState(async (state, mode: "raw" | "nested") => {
     const scope = await seedSession(state, "raw-transaction");
+    const database = openOpenClawAgentDatabase(scope);
     recordParticipant(scope, profile("a"), 10);
     const read = () => listEntries(scope);
     const before = read();
     const participantsBefore = readParticipants(scope);
-    const database = openOpenClawAgentDatabase(scope);
     const rows = database.db.prepare(
       "SELECT * FROM session_participants ORDER BY actor_id, identity_namespace",
     );
     const rowsBefore = rows.all();
-    database.db.exec("BEGIN");
-    try {
-      expect(() => recordParticipant(scope, profile("b"), 20)).toThrow(
-        "must use runOpenClawAgentWriteTransaction",
-      );
-      expect(rows.all()).toEqual(rowsBefore);
-    } finally {
-      database.db.exec("ROLLBACK");
+    if (mode === "raw") {
+      database.db.exec("BEGIN");
+      try {
+        expect(() => recordParticipant(scope, profile("b"), 20)).toThrow(
+          "must use runOpenClawAgentWriteTransaction",
+        );
+        expect(rows.all()).toEqual(rowsBefore);
+      } finally {
+        database.db.exec("ROLLBACK");
+      }
+    } else {
+      const attempt = () =>
+        runOpenClawAgentWriteTransaction(() => {
+          recordParticipant(scope, profile("b"), 20);
+          throw new Error("rollback participant");
+        }, scope);
+      runOpenClawAgentWriteTransaction(() => {
+        expect(attempt).toThrow("rollback participant");
+      }, scope);
     }
     expect(read()).toEqual(before);
     expect(readParticipants(scope)).toEqual(participantsBefore);
+    expect(readParticipants(scope)).toHaveLength(1);
   }),
 );
 
@@ -396,18 +410,17 @@ it(
   "publishes participants only after the outer commit",
   withState(async (state) => {
     const scope = await seedSession(state, "participant-events");
-    recordParticipant(scope, profile("a"), 10);
-    const read = () => readEntry(scope);
-    read();
     const database = openOpenClawAgentDatabase(scope);
-    const observed: Array<{ inTransaction: boolean; entry: ReturnType<typeof read> }> = [];
+    recordParticipant(scope, profile("a"), 10);
+    readEntry(scope);
+    const observed: Array<{ inTransaction: boolean; entry: ReturnType<typeof readEntry> }> = [];
     const unsubscribe = onSessionLifecycleEvent((event) => {
       if (
         event.reason === "participants" &&
         event.agentId === scope.agentId &&
         event.sessionKey === scope.sessionKey
       ) {
-        observed.push({ inTransaction: database.db.isTransaction, entry: read() });
+        observed.push({ inTransaction: database.db.isTransaction, entry: readEntry(scope) });
       }
     });
     try {
@@ -426,16 +439,8 @@ it(
         }, scope);
         expect(observed).toEqual([]);
       }, scope);
-      expect(observed).toHaveLength(2);
-      for (const observation of observed) {
-        expect(observation).toMatchObject({
-          inTransaction: false,
-          entry: {
-            participants: ["a", "b"].map((id) => ({ identity: profile(id) })),
-            participantCount: 2,
-          },
-        });
-      }
+      const final = { inTransaction: false, entry: participantView(profile, "a", "b") };
+      expect(observed).toMatchObject([final, final]);
       expect(readParticipants(scope)).toEqual([
         participant(profile("a"), 2, 10, 30),
         participant(profile("b"), 1, 40),
@@ -446,33 +451,13 @@ it(
   }),
 );
 
-it(
-  "preserves participants across nested rollback",
-  withState(async (state) => {
-    const scope = await seedSession(state, "rollback");
-    recordParticipant(scope, profile("a"), 10);
-    const read = () => listEntries(scope);
-    const before = read();
-    const attempt = () =>
-      runOpenClawAgentWriteTransaction(() => {
-        recordParticipant(scope, profile("b"), 20);
-        throw new Error("rollback participant");
-      }, scope);
-    runOpenClawAgentWriteTransaction(() => {
-      expect(attempt).toThrow("rollback participant");
-    }, scope);
-    expect(read()).toEqual(before);
-    expect(readParticipants(scope)).toHaveLength(1);
-  }),
-);
-
 it.each(["participant", "owner"] as const)(
   "keeps cache projection errors from rolling back a recorded %s",
   withState(async (state, mutation: "participant" | "owner") => {
     const scope = await seedSession(state, "projection-error");
+    const database = openOpenClawAgentDatabase(scope);
     recordParticipant(scope, profile("a"), 10);
     listEntries(scope);
-    const database = openOpenClawAgentDatabase(scope);
     corruptIdentity(requireNativeSqliteDatabase(database.db));
     if (mutation === "participant") {
       expect(recordParticipant(scope, profile("b"), 20)).toBe("inserted");
@@ -583,11 +568,11 @@ it(
   "projects worker contributions only when order changes",
   withState(async (state) => {
     const scope = await seedSession(state, "worker-counts");
+    const database = openOpenClawAgentDatabase(scope);
     recordParticipant(scope, remote("first"), 10);
     recordParticipant(scope, remote("second"), 20);
     listSessionParticipantsReadOnly(scope);
     listEntries(scope);
-    const database = openOpenClawAgentDatabase(scope);
     await using worker = openWorker(database);
     const record = (promptedAt: number) =>
       worker.record(scope, { identity: remote("second"), promptedAt });
@@ -602,13 +587,13 @@ it(
       participant(remote("first"), 1, 10),
       participant(remote("second"), 2, 20, 30),
     ]);
-    const participants = ["second", "first"].map((id) => ({ identity: remote(id) }));
+    const participants = participantView(remote, "second", "first");
     expect(record(5)).toEqual({
       value: "updated",
       projectionChanged: true,
-      participants: { participants, participantCount: 2 },
+      participants,
     });
-    expect(loadSessionEntry(scope)).toMatchObject({ participants, participantCount: 2 });
+    expect(loadSessionEntry(scope)).toMatchObject(participants);
     expect(readParticipants(scope)?.[0]).toEqual(participant(remote("second"), 3, 5, 30));
     worker.assertSettled();
   }),
