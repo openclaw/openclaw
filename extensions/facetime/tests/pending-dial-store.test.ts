@@ -1,8 +1,4 @@
-import type {
-  PluginStateCompareIntent,
-  PluginStateCompareResult,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { PendingFaceTimeDial } from "../src/outbound-call.js";
 import { PendingFaceTimeDialStore } from "../src/pending-dial-store.js";
@@ -44,12 +40,8 @@ function createBackend(initial?: StoredDial) {
     register: vi.fn(write),
     lookup: vi.fn(async (_key: string) => value),
     observe: vi.fn(async (_key: string) => ({ value, comparison: String(revision) })),
-    compareAndApply: vi.fn(
-      async (
-        _key: string,
-        comparison: string,
-        intent: PluginStateCompareIntent<StoredDial>,
-      ): Promise<PluginStateCompareResult<StoredDial>> => {
+    compareAndApply: vi.fn<PluginStateKeyedStore<StoredDial, 2>["compareAndApply"]>(
+      async (_key, comparison, intent) => {
         if (comparison !== String(revision)) {
           return { status: "conflict", current: { value, comparison: String(revision) } };
         }

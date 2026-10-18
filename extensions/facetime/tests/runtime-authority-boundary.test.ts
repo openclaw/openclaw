@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { once } from "node:events";
 import net from "node:net";
+import { createInterface } from "node:readline";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createPluginStateKeyedStoreV2ForTests,
@@ -62,7 +63,6 @@ const openStore = () =>
 
 class WireHelper {
   readonly actions: Array<Record<string, unknown>> = [];
-  private buffer = "";
   private frames: Array<Record<string, unknown>> = [];
   private waiting: ((frame: Record<string, unknown>) => void) | undefined;
   private epoch = "";
@@ -73,28 +73,23 @@ class WireHelper {
 
   constructor(readonly socket: net.Socket) {
     socket.setEncoding("utf8");
-    socket.on("data", (chunk) => {
-      this.buffer += String(chunk);
-      let end: number;
-      while ((end = this.buffer.indexOf("\n")) >= 0) {
-        const frame = JSON.parse(this.buffer.slice(0, end)) as Record<string, unknown>;
-        this.buffer = this.buffer.slice(end + 1);
-        if (this.serving) {
-          const payload = this.decode(frame);
-          this.actions.push(payload);
-          this.send({
-            transactionId: payload.transactionId,
-            ...(payload.action === "find-outgoing-call"
-              ? { found: true, call_uuid: "recovered-call" }
-              : { found: false, cancelled: true, tombstoned: true }),
-          });
-        } else if (this.waiting) {
-          const resolve = this.waiting;
-          this.waiting = undefined;
-          resolve(frame);
-        } else {
-          this.frames.push(frame);
-        }
+    createInterface({ input: socket }).on("line", (line) => {
+      const frame = JSON.parse(line) as Record<string, unknown>;
+      if (this.serving) {
+        const payload = this.decode(frame);
+        this.actions.push(payload);
+        this.send({
+          transactionId: payload.transactionId,
+          ...(payload.action === "find-outgoing-call"
+            ? { found: true, call_uuid: "recovered-call" }
+            : { found: false, cancelled: true, tombstoned: true }),
+        });
+      } else if (this.waiting) {
+        const resolve = this.waiting;
+        this.waiting = undefined;
+        resolve(frame);
+      } else {
+        this.frames.push(frame);
       }
     });
   }
@@ -110,14 +105,13 @@ class WireHelper {
 
   private decode(frame: Record<string, unknown>) {
     const payload = String(frame.payload_json);
+    const sequence = ++this.received;
     expect(frame).toMatchObject({
       connection_epoch: this.epoch,
       direction: "server-to-helper",
-      sequence: ++this.received,
+      sequence,
+      auth: mac(this.key, `message\nserver-to-helper\n${this.epoch}\n${sequence}\n${payload}`),
     });
-    expect(frame.auth).toBe(
-      mac(this.key, `message\nserver-to-helper\n${this.epoch}\n${this.received}\n${payload}`),
-    );
     return JSON.parse(payload) as Record<string, unknown>;
   }
 

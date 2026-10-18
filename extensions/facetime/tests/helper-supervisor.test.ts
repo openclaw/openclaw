@@ -14,12 +14,7 @@ const completed: CommandResult = {
   killed: false,
   termination: "exit",
 };
-const injection = (target = "FaceTime") => [
-  "/bin/bash",
-  "/tmp/facetime/scripts/inject-helper.sh",
-  "--app",
-  target,
-];
+const injection = ["/bin/bash", "/tmp/facetime/scripts/inject-helper.sh", "--app", "FaceTime"];
 const cancellable = { timeoutMs: 120_000, killProcessTree: true, signal: expect.any(AbortSignal) };
 
 describe("FaceTime helper supervisor", () => {
@@ -37,7 +32,9 @@ describe("FaceTime helper supervisor", () => {
     return { supervisor: activeSupervisor, run, logger };
   }
   function expectStatus(expected: Partial<ReturnType<FaceTimeHelperSupervisor["status"]>[number]>) {
-    expect(activeSupervisor.status()).toContainEqual(expect.objectContaining(expected));
+    expect(activeSupervisor.status()).toContainEqual(
+      expect.objectContaining({ target: "FaceTime", ...expected }),
+    );
   }
   function onlyFaceTimeInstalled() {
     vi.mocked(existsSync).mockImplementation(
@@ -83,7 +80,6 @@ describe("FaceTime helper supervisor", () => {
     await vi.advanceTimersByTimeAsync(6_000);
     expect(run).toHaveBeenCalledTimes(1);
     expectStatus({
-      target: "FaceTime",
       attempts: 1,
       connected: false,
       injecting: false,
@@ -103,7 +99,6 @@ describe("FaceTime helper supervisor", () => {
     await vi.advanceTimersByTimeAsync(16_000);
 
     expectStatus({
-      target: "FaceTime",
       connected: false,
       injecting: false,
       retryScheduled: true,
@@ -117,12 +112,12 @@ describe("FaceTime helper supervisor", () => {
     supervisor.stale("com.apple.FaceTime", 1234);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(run).not.toHaveBeenCalled();
-    expectStatus({ target: "FaceTime", stale: true, staleProcessId: 1234 });
+    expectStatus({ stale: true, staleProcessId: 1234 });
     vi.spyOn(process, "kill").mockImplementation(() => {
       throw Object.assign(new Error("process exited"), { code: "ESRCH" });
     });
     await vi.advanceTimersByTimeAsync(2_001);
-    expect(run).toHaveBeenCalledWith(injection(), expect.objectContaining(cancellable));
+    expect(run).toHaveBeenCalledWith(injection, expect.objectContaining(cancellable));
   });
 
   it("warns once while stale helper processes keep reconnecting", () => {
@@ -136,10 +131,10 @@ describe("FaceTime helper supervisor", () => {
     expect(logger.warn).toHaveBeenLastCalledWith(
       "[facetime] Restart FaceTime to load the updated OpenClaw helper",
     );
-    expectStatus({ target: "FaceTime", stale: true, staleProcessId: 1234, retryScheduled: true });
+    expectStatus({ stale: true, staleProcessId: 1234, retryScheduled: true });
     supervisor.stale("com.apple.FaceTime", 5678);
     expect(logger.warn).toHaveBeenCalledTimes(1);
-    expectStatus({ target: "FaceTime", staleProcessId: 5678 });
+    expectStatus({ staleProcessId: 5678 });
     supervisor.connected("com.apple.FaceTime");
     supervisor.stale("com.apple.FaceTime", 9012);
     expect(logger.warn).toHaveBeenCalledTimes(2);

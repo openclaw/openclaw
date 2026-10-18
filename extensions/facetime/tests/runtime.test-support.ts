@@ -92,9 +92,7 @@ vi.mock("../src/setup.js", () => ({
   runFaceTimeSetup: vi.fn(async () => ({ status: "ready", checks: [] })),
 }));
 
-vi.mock("../src/talk-driver.js", () => ({
-  startFaceTimeTalkDriver: mocks.startTalk,
-}));
+vi.mock("../src/talk-driver.js", () => ({ startFaceTimeTalkDriver: mocks.startTalk }));
 
 vi.mock("../src/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/config.js")>();
@@ -111,39 +109,50 @@ vi.mock("../src/config.js", async (importOriginal) => {
 import { resolveFaceTimeConfig } from "../src/config.js";
 import { createFaceTimeRuntime } from "../src/runtime.js";
 
-export function completeAction(owner: Record<string, unknown>) {
+export const carrierPeer = {
+  bundleIdentifier: "com.apple.FaceTime",
+  processId: 4321,
+  processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
+  connectionGeneration: 7,
+};
+export const commandResult = (stdout = "", code = 0) => ({ code, stdout, stderr: "" });
+export const mutedResult = (outcome: string, muted: boolean) => ({
+  outcome,
+  muted,
+  is_uplink_muted: muted,
+});
+export function helperResult<T>(
+  helperResults: T[],
+  topologyComplete = true,
+  topologyGeneration = 1,
+) {
   return {
-    helpersContacted: 2,
-    topologyGeneration: 1,
-    topologyComplete: true,
-    helperResults: [owner, { outcome: "absent", found: false }],
-    ...owner,
+    helpersContacted: helperResults.length,
+    topologyGeneration,
+    topologyComplete,
+    helperResults,
   };
+}
+
+export function completeAction(owner: Record<string, unknown>) {
+  return { ...helperResult([owner, { outcome: "absent", found: false }]), ...owner };
 }
 
 export function completeSharedAction(owner: Record<string, unknown>) {
   return {
-    helpersContacted: 2,
-    topologyGeneration: 1,
-    topologyComplete: true,
-    helperResults: [
+    ...helperResult([
       { ...owner, helperBundleIdentifier: "com.apple.FaceTime" },
       { ...owner, helperBundleIdentifier: "com.apple.mobilephone" },
-    ],
+    ]),
     ...owner,
   };
 }
 
 export function completeAbsence() {
-  return {
-    helpersContacted: 2,
-    topologyGeneration: 1,
-    topologyComplete: true,
-    helperResults: [
-      { outcome: "absent", found: false },
-      { outcome: "absent", found: false },
-    ],
-  };
+  return helperResult([
+    { outcome: "absent", found: false },
+    { outcome: "absent", found: false },
+  ]);
 }
 
 export function emptyState() {
@@ -176,31 +185,18 @@ export async function pendingDialState(overrides: Record<string, unknown> = {}) 
 }
 
 export function pendingDialCarrierResult() {
-  return {
-    helpersContacted: 2,
-    topologyGeneration: 1,
-    topologyComplete: true,
-    helperResults: [
-      {
-        found: true,
-        call_uuid: "approved-call",
-        helperBundleIdentifier: "com.apple.FaceTime",
-        helperPeer: {
-          bundleIdentifier: "com.apple.FaceTime",
-          processId: 4321,
-          processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
-          connectionGeneration: 7,
-        },
-      },
-      {
-        found: false,
-        helperBundleIdentifier: "com.apple.mobilephone",
-      },
-    ],
-  };
+  return helperResult([
+    {
+      found: true,
+      call_uuid: "approved-call",
+      helperBundleIdentifier: "com.apple.FaceTime",
+      helperPeer: { ...carrierPeer },
+    },
+    { found: false, helperBundleIdentifier: "com.apple.mobilephone" },
+  ]);
 }
 
-export function pendingDialCancellationResult() {
+export function pendingDialCancellationResult(callUUID?: string) {
   return {
     helpersContacted: 2,
     helperResults: [
@@ -209,13 +205,14 @@ export function pendingDialCancellationResult() {
         cancelled: true,
         tombstoned: true,
         found: false,
+        ...(callUUID ? { call_uuid: callUUID } : {}),
       },
       { helperBundleIdentifier: "com.apple.mobilephone", cancelled: false, found: false },
     ],
   };
 }
 
-export function incomingCall(status = 4) {
+export function incomingCall(status = 4, overrides: Record<string, unknown> = {}) {
   return {
     event: "ft-call-status-changed",
     data: {
@@ -238,7 +235,18 @@ export function incomingCall(status = 4) {
         is_voip: true,
         is_emergency: false,
       },
+      ...overrides,
     },
+  };
+}
+
+export function dialReply(call_uuid = "outbound-call", extra: Record<string, unknown> = {}) {
+  return {
+    call_uuid,
+    muted: true,
+    is_uplink_muted: true,
+    transport: incomingCall().data.transport,
+    ...extra,
   };
 }
 
@@ -253,19 +261,12 @@ export async function createRuntime(
     config: resolveFaceTimeConfig({ ownerHandles }),
     fullConfig: {} as never,
     runtime: {
-      system: {
-        runCommandWithTimeout: mocks.systemRun,
-      },
+      system: { runCommandWithTimeout: mocks.systemRun },
       state: storeOpeners ?? {
         openKeyedStoreV2: () => state,
       },
     } as never,
-    logger: {
-      info: vi.fn(),
-      warn: mocks.warn,
-      debug: vi.fn(),
-      error: vi.fn(),
-    },
+    logger: { info: vi.fn(), warn: mocks.warn, debug: vi.fn(), error: vi.fn() },
     pluginRoot: "/plugin",
   });
 }
@@ -297,6 +298,22 @@ export function createTalkDriver(params: {
   };
 }
 
+export function failTalkStartup(until?: Promise<void>) {
+  const error = new Error("capture failed during startup");
+  const startup: { released: boolean; closure?: Promise<boolean> } = { released: false };
+  mocks.startTalk.mockImplementationOnce(
+    async (params: { onFailure(error: Error): Promise<boolean> }) => {
+      startup.closure = params.onFailure(error);
+      void startup.closure.then(() => {
+        startup.released = true;
+      });
+      await (until ? Promise.race([startup.closure, until]) : startup.closure);
+      throw error;
+    },
+  );
+  return startup;
+}
+
 afterAll(() => resetPluginStateStoreForTests());
 
 export async function resetRuntimeTestState() {
@@ -315,43 +332,28 @@ export async function resetRuntimeTestState() {
     }
     if (argv[0] === "/bin/ps") {
       if (exitedCarrierPids.has(pid)) {
-        return { code: 1, stdout: "", stderr: "" };
+        return commandResult("", 1);
       }
       return argv.includes("lstart=")
-        ? { code: 0, stdout: "Tue Nov 14 22:13:20 2023\n", stderr: "" }
-        : {
-            code: 0,
-            stdout: "/System/Applications/FaceTime.app/Contents/MacOS/FaceTime\n",
-            stderr: "",
-          };
+        ? commandResult("Tue Nov 14 22:13:20 2023\n")
+        : commandResult("/System/Applications/FaceTime.app/Contents/MacOS/FaceTime\n");
     }
     if (argv[0] === "/bin/kill" && !mocks.carrierProcessAlive) {
       exitedCarrierPids.add(pid);
     }
-    return { code: 0, stdout: "", stderr: "" };
+    return commandResult();
   });
-  mocks.helper.answerCall.mockResolvedValue(
-    completeAction({ outcome: "answered-muted", muted: true, is_uplink_muted: true }),
-  );
-  mocks.helper.setMuted.mockResolvedValue(
-    completeAction({ outcome: "media-configured", muted: false, is_uplink_muted: false }),
-  );
+  mocks.helper.answerCall.mockResolvedValue(completeAction(mutedResult("answered-muted", true)));
+  mocks.helper.setMuted.mockResolvedValue(completeAction(mutedResult("media-configured", false)));
   mocks.helper.startTransmission.mockResolvedValue(
     completeAction({
-      outcome: "media-active",
-      muted: false,
-      is_uplink_muted: false,
+      ...mutedResult("media-active", false),
       is_sending_audio: true,
       is_sending_transmission: true,
     }),
   );
   mocks.helper.safetyMute.mockResolvedValue(
-    completeAction({
-      outcome: "safe-muted",
-      downlink_muted: true,
-      muted: true,
-      is_uplink_muted: true,
-    }),
+    completeAction({ ...mutedResult("safe-muted", true), downlink_muted: true }),
   );
   mocks.helper.leaveCall.mockResolvedValue(completeAction({ outcome: "termination-requested" }));
   mocks.helper.inspectCall.mockResolvedValue(completeAbsence());

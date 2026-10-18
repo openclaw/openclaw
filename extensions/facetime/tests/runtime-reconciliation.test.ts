@@ -4,18 +4,15 @@ import type { FaceTimeHelperPeer } from "../src/helper-rpc.js";
 import { PendingFaceTimeDialStore } from "../src/pending-dial-store.js";
 import {
   createRuntime,
+  carrierPeer,
+  helperResult,
   mocks,
   pendingDialCancellationResult,
   pendingDialState,
   resetRuntimeTestState,
 } from "./runtime.test-support.js";
 
-const originalPeer: FaceTimeHelperPeer = {
-  bundleIdentifier: "com.apple.FaceTime",
-  processId: 4321,
-  processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
-  connectionGeneration: 1,
-};
+const originalPeer: FaceTimeHelperPeer = { ...carrierPeer, connectionGeneration: 1 };
 const siblingPeer: FaceTimeHelperPeer = {
   ...originalPeer,
   bundleIdentifier: "com.apple.FaceTime.FTConversationService",
@@ -33,15 +30,18 @@ function absentPeer(peer: FaceTimeHelperPeer, retained = false) {
 }
 
 function topologyResult(helperResults: ReturnType<typeof absentPeer>[], generation = 3) {
-  return {
-    topologyComplete: true,
-    topologyGeneration: generation,
-    helpersContacted: helperResults.length,
-    helperResults,
-  };
+  return helperResult(helperResults, true, generation);
 }
 
 const deferred = () => Promise.withResolvers<void>();
+const identifiedCall = (callUUID = "identified-call", proxy_identifier?: string) => ({
+  event: "ft-outbound-call-identified",
+  data: {
+    dial_id: "approved-dial",
+    call_uuid: callUUID,
+    ...(proxy_identifier ? { proxy_identifier } : {}),
+  },
+});
 
 function observeDeletion() {
   const deleted = deferred();
@@ -92,10 +92,8 @@ describe("FaceTime pending dial reconciliation", () => {
   it("preserves newly identified carriers when an older absence reply arrives", async () => {
     const state = await pendingDialState();
     const absence = topologyResult([absentPeer(originalPeer)]);
-    let finishStaleReply = (_result: HelperActionResult) => {};
-    const staleReply = new Promise<HelperActionResult>((resolve) => {
-      finishStaleReply = resolve;
-    });
+    const { promise: staleReply, resolve: finishStaleReply } =
+      Promise.withResolvers<HelperActionResult>();
     let queryPending = false;
     let concurrentQueries = 0;
     mocks.helper.findOutgoingCall
@@ -122,13 +120,7 @@ describe("FaceTime pending dial reconciliation", () => {
       mocks.helperParams?.onConnect(originalPeer.bundleIdentifier);
       await vi.advanceTimersByTimeAsync(250);
       expect(queryPending).toBe(true);
-      await mocks.helperParams?.onMessage(
-        {
-          event: "ft-outbound-call-identified",
-          data: { dial_id: "approved-dial", call_uuid: "identified-call" },
-        },
-        originalPeer,
-      );
+      await mocks.helperParams?.onMessage(identifiedCall(), originalPeer);
       mocks.helperParams?.onConnect(siblingPeer.bundleIdentifier);
       await vi.advanceTimersByTimeAsync(0);
       finishStaleReply(absence);
@@ -155,13 +147,7 @@ describe("FaceTime pending dial reconciliation", () => {
     try {
       mocks.helperParams?.onConnect(originalPeer.bundleIdentifier);
       await vi.advanceTimersByTimeAsync(0);
-      await mocks.helperParams?.onMessage(
-        {
-          event: "ft-outbound-call-identified",
-          data: { dial_id: "approved-dial", call_uuid: "identified-call" },
-        },
-        originalPeer,
-      );
+      await mocks.helperParams?.onMessage(identifiedCall(), originalPeer);
       await vi.advanceTimersByTimeAsync(250);
       expect(await state.lookup("active")).toMatchObject({ callUUID: "identified-call" });
       await vi.advanceTimersByTimeAsync(250);
@@ -216,13 +202,9 @@ describe("FaceTime pending dial reconciliation", () => {
   ])("keeps cancellation pending while $evidence", async ({ helperResults }) => {
     const state = await pendingDialState({ delivery: "cancelling" });
     mocks.helper.findOutgoingCall.mockResolvedValue(topologyResult(helperResults));
-    const cancellation = pendingDialCancellationResult();
-    for (const entry of cancellation.helperResults) {
-      if (entry.cancelled) {
-        Object.assign(entry, { call_uuid: "cancelled-call" });
-      }
-    }
-    mocks.helper.cancelOutgoingCall.mockResolvedValue(cancellation);
+    mocks.helper.cancelOutgoingCall.mockResolvedValue(
+      pendingDialCancellationResult("cancelled-call"),
+    );
     const deleted = observeDeletion();
     const runtime = await createRuntime(state);
     const cancellationPublished = deferred();
@@ -241,14 +223,7 @@ describe("FaceTime pending dial reconciliation", () => {
     });
     try {
       await mocks.helperParams?.onMessage(
-        {
-          event: "ft-outbound-call-identified",
-          data: {
-            dial_id: "approved-dial",
-            call_uuid: "approved-call",
-            proxy_identifier: "approved-proxy",
-          },
-        },
+        identifiedCall("approved-call", "approved-proxy"),
         originalPeer,
       );
       mocks.helperParams?.onConnect(siblingPeer.bundleIdentifier);

@@ -5,22 +5,15 @@ import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startFaceTimeAudioPump } from "../src/audio-pump.js";
 
-class FakePipe extends Writable {
-  writes: Buffer[] = [];
-
-  override _write(
-    chunk: Buffer,
-    _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ) {
-    this.writes.push(Buffer.from(chunk));
-    callback();
-  }
-}
-
 class FakeProcess extends EventEmitter {
   readonly pid = 1234;
-  readonly stdin = new FakePipe();
+  writes: Buffer[] = [];
+  readonly stdin = new Writable({
+    write: (chunk, _encoding, callback) => {
+      this.writes.push(Buffer.from(chunk));
+      callback();
+    },
+  });
   readonly stdout = new EventEmitter();
   readonly stderr = new EventEmitter();
   readonly kills: Array<NodeJS.Signals | undefined> = [];
@@ -41,6 +34,11 @@ vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
 describe("FaceTime native audio bridge", () => {
   let activePump: ReturnType<typeof startFaceTimeAudioPump>;
+  function expectProgress(...items: [string, number][]) {
+    expect(activePump.getPlaybackState()).toEqual(
+      items.map(([itemId, audioEndMs]) => ({ itemId, audioEndMs })),
+    );
+  }
   function createPump(overrides: Partial<Parameters<typeof startFaceTimeAudioPump>[0]> = {}) {
     const processes: FakeProcess[] = [];
     const spawn = spawnMock.mockImplementation(() => {
@@ -54,7 +52,10 @@ describe("FaceTime native audio bridge", () => {
       onInputAudio() {},
       ...overrides,
     });
-    return { pump: activePump, processes, spawn };
+    function processFor(command: string) {
+      return processes[spawn.mock.calls.findIndex(([binary]) => binary.endsWith(command))];
+    }
+    return { pump: activePump, processes, spawn, processFor };
   }
   beforeEach(() => {
     spawnMock.mockReset();
@@ -101,27 +102,27 @@ describe("FaceTime native audio bridge", () => {
 
   it("reports playback drain after the separate output process should be audible", async () => {
     const onPlaybackDrained = vi.fn();
-    const { pump, processes, spawn } = createPump({ onPlaybackDrained });
+    const { pump, processes, spawn, processFor } = createPump({ onPlaybackDrained });
 
     const audio = Buffer.alloc(4_800, 4);
     pump.writeOutputAudio(audio, { itemId: "greeting" });
     const outputIndex = spawn.mock.calls.findIndex((call) => call[0].endsWith("sox"));
     expect(outputIndex).toBeGreaterThanOrEqual(0);
     expect(spawn.mock.calls[outputIndex]?.[1]).toContain("OpenClaw-Feed");
-    expect(processes[outputIndex]?.stdin.writes).toEqual([audio]);
-    expect(processes[0]?.stdin.writes).toEqual([]);
+    expect(processFor("sox")?.writes).toEqual([audio]);
+    expect(processes[0]?.writes).toEqual([]);
     pump.finishOutputAudio();
     expect(pump.playedAudioFrames()).toBe(0);
     expect(pump.queuedAudioFrames()).toBe(2_400);
-    expect(pump.getPlaybackState()).toEqual([{ itemId: "greeting", audioEndMs: 0 }]);
+    expectProgress(["greeting", 0]);
     await vi.advanceTimersByTimeAsync(199);
     expect(onPlaybackDrained).not.toHaveBeenCalled();
-    expect(pump.getPlaybackState()).toEqual([{ itemId: "greeting", audioEndMs: 99 }]);
+    expectProgress(["greeting", 99]);
     await vi.advanceTimersByTimeAsync(1);
     expect(pump.playedAudioFrames()).toBe(2_400);
     expect(pump.queuedAudioFrames()).toBe(0);
     expect(onPlaybackDrained).toHaveBeenCalledExactlyOnceWith();
-    expect(pump.getPlaybackState()).toEqual([]);
+    expectProgress();
   });
 
   it("retains per-item progress across starvation until the response finishes", async () => {
@@ -129,32 +130,23 @@ describe("FaceTime native audio bridge", () => {
     pump.writeOutputAudio(Buffer.alloc(9_600), { itemId: "prefix" });
     pump.writeOutputAudio(Buffer.alloc(38_400), { itemId: "answer" });
     await vi.advanceTimersByTimeAsync(600);
-    expect(pump.getPlaybackState()).toEqual([
-      { itemId: "prefix", audioEndMs: 200 },
-      { itemId: "answer", audioEndMs: 300 },
-    ]);
+    expectProgress(["prefix", 200], ["answer", 300]);
     await vi.advanceTimersByTimeAsync(500);
     expect(pump.queuedAudioFrames()).toBe(0);
-    expect(pump.getPlaybackState()).toEqual([
-      { itemId: "prefix", audioEndMs: 200 },
-      { itemId: "answer", audioEndMs: 800 },
-    ]);
+    expectProgress(["prefix", 200], ["answer", 800]);
 
     pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "answer" });
     await vi.advanceTimersByTimeAsync(150);
-    expect(pump.getPlaybackState()).toEqual([
-      { itemId: "prefix", audioEndMs: 200 },
-      { itemId: "answer", audioEndMs: 850 },
-    ]);
+    expectProgress(["prefix", 200], ["answer", 850]);
     pump.finishOutputAudio();
     await vi.advanceTimersByTimeAsync(50);
-    expect(pump.getPlaybackState()).toEqual([]);
+    expectProgress();
 
     pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "next-answer" });
     await vi.advanceTimersByTimeAsync(200);
-    expect(pump.getPlaybackState()).toEqual([{ itemId: "next-answer", audioEndMs: 100 }]);
+    expectProgress(["next-answer", 100]);
     pump.finishOutputAudio();
-    expect(pump.getPlaybackState()).toEqual([]);
+    expectProgress();
   });
 
   it("invalidates stale drain callbacks when barge-in clears playback", async () => {
@@ -173,7 +165,7 @@ describe("FaceTime native audio bridge", () => {
     await vi.advanceTimersByTimeAsync(200);
     expect(onPlaybackDrained).not.toHaveBeenCalled();
     expect(pump.queuedAudioFrames()).toBe(0);
-    expect(pump.getPlaybackState()).toEqual([]);
+    expectProgress();
   });
 
   it("reports capture-process death as immediate suppression loss", () => {
@@ -198,25 +190,20 @@ describe("FaceTime native audio bridge", () => {
     expect(processes[1]?.kills).toEqual(["SIGKILL"]);
     expect(onError).not.toHaveBeenCalled();
     expect(processes[0]?.kills).toEqual([]);
-    expect(pump.getPlaybackState()).toEqual([]);
-    await pump.stop();
+    expectProgress();
   });
 
   it("strips credential-shaped environment variables from native children", async () => {
     await withEnvAsync({ OPENAI_API_KEY: "secret", SAFE_VALUE: "yes" }, async () => {
-      const { pump, processes, spawn } = createPump();
+      const { pump, spawn, processFor } = createPump();
 
       for (const call of spawn.mock.calls) {
         expect(call[2].env).not.toHaveProperty("OPENAI_API_KEY");
         expect(call[2].env).toHaveProperty("SAFE_VALUE", "yes");
       }
       await pump.stop();
-      const captureIndex = spawn.mock.calls.findIndex((call) => call[0] === "/capture");
-      const outputIndex = spawn.mock.calls.findIndex((call) => call[0].endsWith("sox"));
-      expect(processes[captureIndex]?.stdin.writes).toEqual([
-        Buffer.from([4, 0, 0, 0, 4, 0, 0, 0, 0]),
-      ]);
-      expect(processes[outputIndex]?.kills).toEqual(["SIGKILL"]);
+      expect(processFor("/capture")?.writes).toEqual([Buffer.from([4, 0, 0, 0, 4, 0, 0, 0, 0])]);
+      expect(processFor("sox")?.kills).toEqual(["SIGKILL"]);
     });
   });
 });
