@@ -6,7 +6,10 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { readImageProbeFromHeader } from "../media/image-ops.js";
-import { clearArtifactDownloads, createManagedArtifactDownload } from "./artifact-download-grants.js";
+import {
+  clearArtifactDownloads,
+  createManagedArtifactDownload,
+} from "./artifact-download-grants.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import {
   createFixture,
@@ -24,13 +27,18 @@ const mocks = vi.hoisted(() => ({
   owner: vi.fn(),
   transcript: vi.fn(),
 }));
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: mocks.config }));
-vi.mock("./http-utils.js", () => ({
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  getRuntimeConfig: mocks.config,
+}));
+vi.mock("./http-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-utils.js")>()),
   authorizeGatewayHttpRequestOrReply: mocks.authorize,
   resolveSharedSecretHttpOperatorScopes: mocks.scopes,
   resolveOpenAiCompatibleHttpSenderIsOwner: mocks.owner,
 }));
-vi.mock("./session-transcript-readers.js", () => ({
+vi.mock("./session-transcript-readers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-transcript-readers.js")>()),
   readSessionMessagesMatchingIdAsync: mocks.transcript,
   readSessionMessagesWithSourceAsync: vi.fn(),
 }));
@@ -153,7 +161,11 @@ describe("managed thumbnail conditional HTTP", () => {
     const first = await request(fixture.url);
     expect(first.status).toBe(200);
     expect(first.headers["content-type"]).toBe("image/webp");
-    expect(readImageProbeFromHeader(first.body)).toMatchObject({ format: "webp", width: 16, height: 8 });
+    expect(readImageProbeFromHeader(first.body)).toMatchObject({
+      format: "webp",
+      width: 16,
+      height: 8,
+    });
     const etag = `"${createHash("sha256").update(first.body).digest("base64url")}"`;
     expect(first.headers.etag).toBe(etag);
     expect(first.headers["cache-control"]).toBe(
@@ -194,8 +206,14 @@ describe("managed thumbnail conditional HTTP", () => {
     const smallUrl = `${fixture.url}?width=480`;
     const small = await request(smallUrl, "GET", normal.headers.etag);
     expect(small.status).toBe(200);
-    expect(readImageProbeFromHeader(small.body)).toMatchObject({ format: "webp", width: 480, height: 240 });
-    expect(small.headers.etag).toBe(`"${createHash("sha256").update(small.body).digest("base64url")}"`);
+    expect(readImageProbeFromHeader(small.body)).toMatchObject({
+      format: "webp",
+      width: 480,
+      height: 240,
+    });
+    expect(small.headers.etag).toBe(
+      `"${createHash("sha256").update(small.body).digest("base64url")}"`,
+    );
     expect(small.headers.etag).not.toBe(normal.headers.etag);
     const unchanged = await request(smallUrl, "GET", small.headers.etag);
     expect(unchanged.status).toBe(304);
@@ -210,7 +228,9 @@ describe("managed thumbnail conditional HTTP", () => {
     const first = await request(fixture.url);
     expect(first.headers.etag).toBeTypeOf("string");
     for (let index = 0; index < 129; index++) {
-      await resolveManagedImageThumbnail(`conditional-eviction-${index}`, async () => Buffer.alloc(1));
+      await resolveManagedImageThumbnail(`conditional-eviction-${index}`, async () =>
+        Buffer.alloc(1),
+      );
     }
     const regenerated = await request(fixture.url);
     expect(regenerated.body).toEqual(first.body);
