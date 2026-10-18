@@ -406,19 +406,8 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           }
           // Invocation results need identity, not another copy of the discovery metadata.
           // Keep the full target result in details; forward its already-projected images as content.
-          const invocation = { tool: { id, name, source }, result: modelResult };
-          // A server reached without an earlier discovery response in this run
-          // (an id remembered from an earlier turn) gets its guidance here once.
-          const { instructions: mcpServerInstructions } = runtime.mcpServerInstructionsFor(
-            invocation,
-            [id],
-            {
-              parentToolCallId: toolCallId,
-              undeliveredOnly: true,
-            },
-          );
           const controlResult = formatToolSearchControlResult(
-            mcpServerInstructions ? { ...invocation, mcpServerInstructions } : invocation,
+            { tool: { id, name, source }, result: modelResult },
             runtime,
             { parentToolCallId: toolCallId, images },
           );

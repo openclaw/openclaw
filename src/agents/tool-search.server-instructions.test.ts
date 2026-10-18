@@ -107,6 +107,13 @@ describe("Tool Search MCP server instructions", () => {
     expect(occurrences(text, "RESEARCH_TAIL: on monthly_quota_exceeded, never retry.")).toBe(1);
     expect(occurrences(text, calcGuidance)).toBe(1);
     expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+
+    // Discovery owns delivery; calling a tool returns only its invocation result.
+    const dispatched = await tool(TOOL_CALL_RAW_TOOL_NAME).execute("guidance-dispatch", {
+      id: "research__search",
+      args: {},
+    });
+    expect(modelText(dispatched)).not.toContain("mcpServerInstructions");
   });
 
   it("keeps the plain result list when no returned server publishes guidance", async () => {
@@ -223,37 +230,5 @@ describe("Tool Search MCP server instructions", () => {
       mcpServerInstructions: { calc: calcGuidance },
     });
     expect(modelText(batch).length).toBeLessThanOrEqual(MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS);
-  });
-
-  it("adds guidance to the first dispatch that reaches a server without discovery", async () => {
-    const { tool } = setup();
-    const dispatch = tool(TOOL_CALL_RAW_TOOL_NAME);
-    const first = modelText(
-      await dispatch.execute("dispatch-1", { id: "research__search", args: { q: "x" } }),
-    );
-    const second = modelText(
-      await dispatch.execute("dispatch-2", { id: "research__fetch", args: { id: "1" } }),
-    );
-    const otherServer = modelText(await dispatch.execute("dispatch-3", { id: "calc__run" }));
-
-    expect(occurrences(first, "RESEARCH_TAIL: on monthly_quota_exceeded, never retry.")).toBe(1);
-    expect(second).not.toContain("RESEARCH_GUIDANCE");
-    expect(otherServer).toContain(calcGuidance);
-  });
-
-  it("does not repeat guidance in dispatch after a discovery response delivered it", async () => {
-    const { tool } = setup();
-    await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("search-first", {
-      query: "research__search",
-      limit: 1,
-    });
-    const dispatched = modelText(
-      await tool(TOOL_CALL_RAW_TOOL_NAME).execute("dispatch-after-search", {
-        id: "research__search",
-        args: {},
-      }),
-    );
-    expect(dispatched).not.toContain("RESEARCH_GUIDANCE");
-    expect(dispatched).toContain("mcp:research:research__search");
   });
 });

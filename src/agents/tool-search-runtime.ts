@@ -229,7 +229,6 @@ export class ToolSearchRuntime {
   private callSequence = 0;
   private readonly terminalTargetBatchByParent = new Map<string, boolean>();
   private readonly networkInvocations = new Map<string, { active: number; observed: boolean }>();
-  private readonly deliveredServerInstructions = new Set<string>();
 
   constructor(
     private readonly ctx: ToolSearchToolContext,
@@ -356,9 +355,9 @@ export class ToolSearchRuntime {
   mcpServerInstructionsFor = (
     payload: object,
     ids: readonly string[],
-    options: { parentToolCallId?: string; undeliveredOnly?: boolean; maxChars?: number } = {},
+    options: { parentToolCallId?: string; maxChars?: number } = {},
   ): { instructions?: ToolSearchMcpServerInstructions; omitted: boolean } => {
-    const guidance = this.collectMcpServerGuidance(ids, options.undeliveredOnly);
+    const guidance = this.collectMcpServerGuidance(ids);
     if (guidance.length === 0) {
       return { omitted: false };
     }
@@ -399,30 +398,17 @@ export class ToolSearchRuntime {
         }
       }
     }
-    for (const { server, text } of guidance) {
-      if (instructions[server] === text) {
-        this.deliveredServerInstructions.add(server);
-      }
-    }
     const omitted = guidance.some(({ server }) => !Object.hasOwn(instructions, server));
     return Object.keys(instructions).length > 0 ? { instructions, omitted } : { omitted };
   };
 
-  private collectMcpServerGuidance(
-    ids: readonly string[],
-    undeliveredOnly = false,
-  ): McpServerGuidance[] {
+  private collectMcpServerGuidance(ids: readonly string[]): McpServerGuidance[] {
     const entries = new Map(resolveCatalog(this.ctx).entries.map((entry) => [entry.id, entry]));
     const guidance = new Map<string, McpServerGuidance>();
     for (const id of ids) {
       const entry = entries.get(id);
       const mcp = entry?.mcp;
-      if (
-        entry &&
-        mcp?.serverInstructions &&
-        !guidance.has(mcp.serverName) &&
-        !(undeliveredOnly && this.deliveredServerInstructions.has(mcp.serverName))
-      ) {
+      if (entry && mcp?.serverInstructions && !guidance.has(mcp.serverName)) {
         guidance.set(mcp.serverName, {
           server: mcp.serverName,
           text: mcp.serverInstructions,

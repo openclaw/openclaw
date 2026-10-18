@@ -317,19 +317,16 @@ with no matches returns an empty `candidates` array.
 
 MCP servers can publish usage guidance in their `initialize` result. For tools
 deferred behind Tool Search, OpenClaw keeps that remote text out of the system
-prompt and the directory. Tool Search responses carry it instead, under the
-same untrusted-content wrapper as the rest of the response:
+prompt and the directory. `tool_search` and `tool_describe` responses carry it
+instead, under the same untrusted-content wrapper as the rest of the response:
 
 - `tool_search`, single or batch: `mcpServerInstructions`, an object keyed by
   server name, follows the candidates. Each server returned in the response
   appears once, however many of its tools matched; a single search then returns
   `{ results, mcpServerInstructions }` instead of a bare array.
 - `tool_describe`: the described tool's server, after its schema.
-- `dispatch_action`: the target's server, only when no earlier response in the
-  run delivered its whole text, for example when the id came from an earlier
-  turn. Searches and descriptions carry it every time.
 
-Instructions are never truncated. Candidates and results keep priority, so
+Instructions are never truncated. Candidates and schemas keep priority, so
 server text cannot evict a callable entry. A batch keeps its 4,000-character
 total: guidance shares only the room the fitted candidates leave. Any response
 also stays within its protected-content bound. A server whose whole text does
