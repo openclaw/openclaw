@@ -2802,6 +2802,10 @@ openclaw-chat-ci-details {
   margin: 0 10px 10px;
 }
 
+.shell:not(.shell--mobile-nav) .chat-session-rail__composer.agent-chat__input {
+  margin-bottom: 20px;
+}
+
 /* One control in this row, so it keeps only the inset that stops the send from
    touching the frame. The shared bottom margin is sized for a row of chips. */
 .chat-session-rail__composer.agent-chat__input .agent-chat__composer-footer {
