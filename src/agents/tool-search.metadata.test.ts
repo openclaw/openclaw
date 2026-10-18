@@ -104,6 +104,13 @@ describe("Tool Search metadata provenance", () => {
       { mcp: { instructions: "Cite authority levels for results." } },
     ]);
     expect(modelText(search)).toContain("Cite authority levels for results.");
+    const batch = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("metadata-batch", {
+      queries: [{ query: entry.id, limit: 1 }],
+    });
+    expect(batch.details).toMatchObject({
+      results: [{ candidates: [{ mcp: { instructions: "Cite authority levels for results." } }] }],
+    });
+    expect(modelText(batch)).toContain("Cite authority levels for results.");
 
     const description = await tool(TOOL_DESCRIBE_RAW_TOOL_NAME).execute("metadata-describe", {
       id: entry.id,
@@ -131,8 +138,15 @@ describe("Tool Search metadata provenance", () => {
       safeServerName: "remote",
       toolName: "metadata",
       operation: "tool",
+      instructions: expect.stringMatching(/\.\.\.$/u),
     });
-    expect(details.results[0]?.candidates[0]?.mcp).not.toHaveProperty("instructions");
+    expect(
+      (details.results[0]?.candidates[0]?.mcp as { instructions?: string } | undefined)
+        ?.instructions?.length,
+    ).toBeLessThanOrEqual(512);
+    expect(details.results[0]?.candidates[0]?.instructionsHint).toBe(
+      "Call tool_describe before use to load the complete server instructions.",
+    );
     expect(modelText(result).length).toBeLessThanOrEqual(4_000);
 
     const description = await tool(TOOL_DESCRIBE_RAW_TOOL_NAME).execute("metadata-describe-long", {
@@ -165,6 +179,9 @@ describe("Tool Search metadata provenance", () => {
       expect(text).toContain(candidate.name);
     }
     expect(text).toContain("Long server guidance.");
+    expect(text).toContain(
+      "Call tool_describe before use to load the complete server instructions.",
+    );
   });
 
   it("keeps describe input schemas visible ahead of long MCP instructions", async () => {

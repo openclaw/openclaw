@@ -42,6 +42,8 @@ const catalogMetadata = new WeakMap<
   { toolExecutionAllow?: readonly string[] }
 >();
 const MAX_SEARCH_MCP_INSTRUCTIONS_CHARS = 512;
+const INCOMPLETE_INSTRUCTIONS_HINT =
+  "Call tool_describe before use to load the complete server instructions.";
 
 function compactMcpInstructions(instructions: string | undefined): string | undefined {
   if (!instructions || instructions.length <= MAX_SEARCH_MCP_INSTRUCTIONS_CHARS) {
@@ -427,9 +429,10 @@ export function compactToolSearchCatalogEntry(
 ) {
   const output =
     entry.source === "openclaw" ? compactToolOutputHint(entry.outputSchema) : undefined;
+  const fullInstructions = entry.mcp?.instructions;
   const instructions = options.fullInstructions
-    ? entry.mcp?.instructions
-    : compactMcpInstructions(entry.mcp?.instructions);
+    ? fullInstructions
+    : compactMcpInstructions(fullInstructions);
   // Node provenance is namespace-only metadata; generic Tool Search keeps its
   // existing MCP result shape outside Code Mode.
   const mcp = entry.mcp
@@ -450,6 +453,9 @@ export function compactToolSearchCatalogEntry(
     label: entry.label,
     description: entry.description,
     input: entry.source === "openclaw" ? compactToolInputHint(entry.parameters) : "unknown",
+    ...(!options.fullInstructions && instructions !== fullInstructions
+      ? { instructionsHint: INCOMPLETE_INSTRUCTIONS_HINT }
+      : {}),
     ...(output ? { output } : {}),
   };
 }

@@ -78,6 +78,8 @@ type ToolSearchBatchGroup = {
 const MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS = 180;
 const MAX_BATCH_CANDIDATE_DESCRIPTION_SCAN_CHARS = MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS * 4;
 const MAX_BATCH_CANDIDATE_METADATA_CHARS = 2_000;
+const INCOMPLETE_INSTRUCTIONS_HINT =
+  "Call tool_describe before use to load the complete server instructions.";
 
 function compactBatchCandidateDescription(candidate: ToolSearchCandidate): ToolSearchCandidate {
   // Remote catalog descriptions are untrusted. Bound the scanned prefix before
@@ -131,15 +133,19 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
   if (mcp) {
     remaining -= mcpChars;
   }
-  // Batch discovery only needs callable identity. Full server guidance remains
-  // available through tool_describe, so attacker-sized text cannot evict the
-  // candidate while the response budget is being fitted.
+  // Keep short guidance in batch discovery. If attacker-sized or budget-limited
+  // text cannot fit, retain an explicit pointer to the complete metadata owner.
+  const instructions = mcp ? retain(mcp.instructions) : undefined;
+  const omittedInstructions = Boolean(
+    (candidate.instructionsHint || candidate.mcp?.instructions) && !instructions,
+  );
   const batchMcp = mcp
     ? {
         serverName: mcp.serverName,
         safeServerName: mcp.safeServerName,
         toolName: mcp.toolName,
         operation: mcp.operation,
+        ...(instructions ? { instructions } : {}),
       }
     : undefined;
   const output = retain(candidate.output);
@@ -149,6 +155,7 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
     label,
     mcp: batchMcp,
     output,
+    ...(omittedInstructions ? { instructionsHint: INCOMPLETE_INSTRUCTIONS_HINT } : {}),
   };
 }
 
@@ -298,7 +305,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
       description:
-        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action; use tool_describe only when you need its input schema.",
+        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action. Use tool_describe when you need its input schema or when a result includes instructionsHint; call it before dispatch_action to load the complete server instructions.",
       parameters: resolveSearchParameters(config.searchDefaultLimit),
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const request = readToolSearchRequest(args, config);
@@ -328,7 +335,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_DESCRIBE_RAW_TOOL_NAME,
       label: "Tool Describe",
       description:
-        "Load the full schema and metadata for one search result when its input is not already clear.",
+        "Load the full schema and metadata, including complete server instructions, for one search result. Use this when the input is not already clear or when discovery returned instructionsHint.",
       parameters: describeParameters,
       prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
