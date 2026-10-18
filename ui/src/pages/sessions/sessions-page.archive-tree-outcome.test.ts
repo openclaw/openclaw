@@ -23,24 +23,22 @@ import { createContext, createGateway, createPage } from "./sessions-page.test-s
 
 async function setup(childCount: number, active = false) {
   const modal = createModalDialogTestFixture();
-  const root: GatewaySessionRow = {
-    key: "agent:main:tree-outcome",
-    sessionId: "captured-root-session",
-    kind: "direct",
-    label: "Tree outcome",
-    sharingRole: "owner",
-    hasActiveRun: active,
-  };
-  const children: GatewaySessionRow[] = Array.from({ length: childCount }, (_, index) => ({
-    key: "agent:main:tree-child-" + index,
-    sessionId: "captured-child-session-" + index,
-    parentSessionKey: root.key,
+  const makeRow = (name: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
+    key: `agent:main:${name}`,
+    sessionId: `captured-${name}-session`,
     kind: "direct",
     sharingRole: "owner",
-  }));
-  const rows = [root, ...children];
+    ...extra,
+  });
+  const root = makeRow("tree-outcome", { hasActiveRun: active });
+  const rows = [
+    root,
+    ...Array.from({ length: childCount }, (_, index) =>
+      makeRow(`tree-child-${index}`, { parentSessionKey: root.key }),
+    ),
+  ];
   const serverRows = structuredClone(rows);
-  const failed = children[0]!;
+  const failed = rows[1]!;
   const failureMessage = "Child placement changed after confirmation";
   const pending = createDeferred<SessionsPatchManyResult>();
   const dispatched = createDeferred<SessionsPatchManyParams>();
@@ -121,41 +119,45 @@ async function setup(childCount: number, active = false) {
     toast.remove();
   });
   await sessions.refresh();
+  const archive = () => modal.track(page.archive(root, true));
+  const undo = () => toast.querySelector<HTMLButtonElement>(".app-toast__action");
+  const confirmTree = async (size: number) => {
+    const operation = archive();
+    const actions = await waitForConfirmDialogActions();
+    expect(batches).toHaveLength(0);
+    answerConfirmDialog(actions, "alternative");
+    const first = await dispatched.promise;
+    expect(first.targets).toHaveLength(size);
+    page.remove();
+    pending.resolve(batchResult(first));
+    await operation;
+    // Partial failure stays readable before the successful-only Undo appears.
+    await waitForSolid(() => expect(toast.textContent).toContain(failureMessage));
+    if (!undo()) {
+      const dismiss = toast.querySelector<HTMLButtonElement>(".app-toast__dismiss");
+      expect(dismiss).not.toBeNull();
+      dismiss!.click();
+    }
+    await waitForSolid(() => {
+      expect(toast.textContent).toContain("Archived " + (rows.length - 1) + " sessions");
+      expect(undo()).not.toBeNull();
+    });
+  };
   return {
     root,
     rows,
     failed,
-    failureMessage,
-    pending,
-    dispatched,
     restored,
     batches,
-    request,
-    batchResult,
     client,
     gateway,
-    sessions,
     page,
     toast,
-    archive: () => modal.track(page.archive(root, true)),
+    archive,
+    confirmTree,
     patches: () => request.mock.calls.filter(([method]) => method === "sessions.patch"),
-    undo: () => toast.querySelector<HTMLButtonElement>(".app-toast__action"),
+    undo,
   };
-}
-
-async function revealUndoAfterPartialError(fixture: Awaited<ReturnType<typeof setup>>) {
-  const { toast, undo, rows, failureMessage } = fixture;
-  // A success notification must not replace a partial failure before the operator can read it.
-  await waitForSolid(() => expect(toast.textContent).toContain(failureMessage));
-  if (!undo()) {
-    const dismiss = toast.querySelector<HTMLButtonElement>(".app-toast__dismiss");
-    expect(dismiss).not.toBeNull();
-    dismiss!.click();
-  }
-  await waitForSolid(() => {
-    expect(toast.textContent).toContain("Archived " + (rows.length - 1) + " sessions");
-    expect(undo()).not.toBeNull();
-  });
 }
 
 describe("Sessions page confirmed tree archive outcomes", () => {
@@ -177,22 +179,12 @@ describe("Sessions page confirmed tree archive outcomes", () => {
   });
 
   it("finishes remaining chunks after navigation and exposes partial errors plus successful-only Undo", async () => {
-    // One more than the protocol batch maximum exercises a second confirmed chunk.
     const fixture = await setup(100);
-    const operation = fixture.archive();
-    const actions = await waitForConfirmDialogActions();
-    expect(fixture.batches).toHaveLength(0);
-    answerConfirmDialog(actions, "alternative");
-    const first = await fixture.dispatched.promise;
-    expect(first.targets).toHaveLength(100);
-    fixture.page.remove();
-    fixture.pending.resolve(fixture.batchResult(first));
-    await operation;
+    await fixture.confirmTree(100);
 
     expect(fixture.batches.map((batch) => batch.targets.length)).toEqual([100, 1]);
     expect(fixture.batches[1]?.targets[0]?.key).toBe(fixture.root.key);
     expect(fixture.page.error).toBeNull();
-    await revealUndoAfterPartialError(fixture);
     fixture.undo()!.click();
     await fixture.restored.promise;
     expect(fixture.batches).toHaveLength(3);
@@ -212,13 +204,7 @@ describe("Sessions page confirmed tree archive outcomes", () => {
 
   it("retires the confirmed tree Undo on a same-client reconnect after navigation", async () => {
     const fixture = await setup(2);
-    const operation = fixture.archive();
-    answerConfirmDialog(await waitForConfirmDialogActions(), "alternative");
-    const first = await fixture.dispatched.promise;
-    fixture.page.remove();
-    fixture.pending.resolve(fixture.batchResult(first));
-    await operation;
-    await revealUndoAfterPartialError(fixture);
+    await fixture.confirmTree(3);
 
     fixture.gateway.emit({ phase: "reconnecting", client: null });
     fixture.gateway.emit({ phase: "connected", client: fixture.client });

@@ -84,16 +84,8 @@ describe("Sessions transcript search", () => {
     page.updateTranscriptSearchQuery("  launch code  ");
     const pending = page.runTranscriptSearch();
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(request).toHaveBeenCalledWith("sessions.search", {
-      query: "launch code",
-      limit: 25,
-      scope: {
-        includeGlobal: true,
-        includeUnknown: false,
-        configuredAgentsOnly: true,
-        excludeDock: true,
-      },
-    });
+    const { agentId: _agentId, ...allAgents } = scope;
+    expect(request).toHaveBeenCalledWith(...searchCall("launch code", allAgents));
     await page.updateComplete;
     expect(find("status")?.getAttribute("aria-busy")).toBe("true");
     response.resolve({
