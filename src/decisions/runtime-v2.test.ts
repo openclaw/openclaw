@@ -1,4 +1,5 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { evaluateAttemptDecisionToolPrefilter } from "../agents/embedded-agent-runner/run/attempt-decision-prefilter.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   setRuntimeConfigSnapshot,
@@ -81,6 +82,59 @@ function native(evaluate: DecisionProviderV2["evaluate"]) {
   });
   return { ...builder, record, api };
 }
+
+it.each([1, 2] as const)(
+  "prefilters through a registered V%d provider without narrowing native result facts",
+  async (version) => {
+    const selected = {
+      agents: {
+        defaults: {
+          decisionModel: "fixture/fixture-v1",
+          experimental: { decisionAssistance: true },
+        },
+      },
+    };
+    const evaluate = vi.fn(async () => ({
+      status: "ok" as const,
+      result: {
+        model: "fixture-v1",
+        answers: {
+          missing_request_context: { type: "boolean" as const, probabilityTrue: 0.1 },
+          next_response_needs_tools: { type: "boolean" as const, probabilityTrue: 0.1 },
+        },
+        ...(version === 2 ? { metadata: { requestId: "synthetic" } } : {}),
+        usage: {
+          inputTokens: 4,
+          outputTokens: 2,
+          ...(version === 2
+            ? {
+                costUsd: 0,
+                units: { unit: "decision-units" as const, amount: 2 },
+                raw: { billed: false },
+              }
+            : {}),
+        },
+      },
+    }));
+    const host = version === 1 ? registered(evaluate) : native(evaluate);
+    setRuntimeConfigSnapshot(selected);
+    const result = await evaluateAttemptDecisionToolPrefilter({
+      config: selected,
+      agentId: "main",
+      supportsTurnScopedToolRestrictions: true,
+      assertActive: () => {},
+      userMessage: "Hello",
+      signal: new AbortController().signal,
+    });
+    expect(evaluate).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      shouldPruneTools: true,
+      status: "proposed",
+      reason: "conversational",
+    });
+    expect(host.registry.decisionProviders[0]!.host.inspect(selected).activeRequests).toBe(0);
+  },
+);
 
 it.each([1, 2] as const)(
   "shares V1/V2 priority admission and physical settlement on a V%d provider",
