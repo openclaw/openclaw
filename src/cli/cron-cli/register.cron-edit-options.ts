@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readNonBlankString,
@@ -27,6 +28,27 @@ const assignIf = (
     target[key] = value;
   }
 };
+
+/**
+ * `--command-env` replaces the stored environment instead of merging into it.
+ * Returns the names (never values) of stored variables the new set drops.
+ */
+export function listDroppedCronCommandEnvKeys(
+  existing: CronJob,
+  patch: Record<string, unknown>,
+): string[] {
+  const payload = patch.payload;
+  if (
+    !isRecord(payload) ||
+    payload.kind !== "command" ||
+    !isRecord(payload.env) ||
+    existing.payload.kind !== "command"
+  ) {
+    return [];
+  }
+  const nextEnv = payload.env;
+  return Object.keys(existing.payload.env ?? {}).filter((key) => !Object.hasOwn(nextEnv, key));
+}
 
 export async function resolveCronEditPayloadDeliveryPatch(
   opts: Record<string, unknown>,
