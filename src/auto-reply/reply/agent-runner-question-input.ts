@@ -4,6 +4,7 @@ import {
   QuestionDispatchUnsupportedError,
 } from "../../agents/harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../../agents/harness/gateway-question.js";
+import { MULTI_QUESTION_REPLY_GUIDANCE } from "../../agents/harness/user-input-bridge.js";
 import { readQuestionRejection } from "../../agents/tools/gateway-question-lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
@@ -123,7 +124,7 @@ export async function runReplyQuestionInput(
           detail
             ? `The answer was not accepted: ${detail}.`
             : "The answer was not accepted because a question is still unanswered."
-        } The question is still open, so reply again and answer every question by number or question id.`,
+        } The question is still open, so reply again and answer every question. ${MULTI_QUESTION_REPLY_GUIDANCE}`,
       );
     }
     if (!(error instanceof QuestionAnswerUnconfirmedError)) {

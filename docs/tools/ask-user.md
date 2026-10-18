@@ -51,7 +51,13 @@ You can answer from any supported conversation surface:
 - On a supported messaging channel, a plain-text reply can answer a question
   created by an active OpenClaw run when your current permissions match the
   creator's. Reply with a number, an option label, or your own answer. For
-  multi-select questions, separate choices with commas.
+  multi-select questions, separate choices with commas. For multiple questions,
+  send one answer per line, prefixed by the question number or id, for example:
+
+  ```text
+  1: Lisbon
+  2: 2000
+  ```
 
 Questions from a standalone [attached MCP client](/cli/attach) do not carry an
 OpenClaw run's creator binding. Answer those using the question controls in the

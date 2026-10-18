@@ -8,6 +8,7 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "../../agents/harness/host-private-capabilities.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { buildAgentHarnessQuestionPromptPayload } from "../../agents/harness/user-input-bridge.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
@@ -374,7 +375,15 @@ describe("dispatch input custody after a question response", () => {
       expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
       expect(onResolved).not.toHaveBeenCalled();
 
-      await dispatch("1: Lisbon\n2: 2000", "complete-answer");
+      const correction = vi.mocked(dispatcher.sendFinalReply).mock.calls[0]?.[0]?.text ?? "";
+      const example = correction.split("Example:\n")[1] ?? "";
+      expect(example).toBe("1: <answer for question 1>\n2: <answer for question 2>");
+      const prompt = buildAgentHarnessQuestionPromptPayload({ questionId, questions });
+      expect(prompt.text).toContain(`Example:\n${example}`);
+      const reply = example
+        .replace("<answer for question 1>", "Lisbon")
+        .replace("<answer for question 2>", "2000");
+      await dispatch(reply, "complete-answer");
       expect(broker.get({ id: questionId }).question).toMatchObject({
         status: "answered",
         answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
